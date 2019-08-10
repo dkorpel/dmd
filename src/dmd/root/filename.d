@@ -79,10 +79,18 @@ struct FileName
 nothrow:
     private const(char)[] str;
 
-    ///
+    /// Construct a FileName from a char[]
     extern (D) this(const(char)[] str) pure
     {
         this.str = str.xarraydup;
+    }
+
+    unittest
+    {
+        string s = "/usr";
+        const f = FileName(s);
+        assert(f.str.ptr != s.ptr);
+        assert(f.str == s);
     }
 
     /// Compare two name according to the platform's rules (case sensitive or not)
@@ -105,6 +113,20 @@ nothrow:
         else
         {
             return name1 == name2;
+        }
+    }
+
+    unittest
+    {
+        version (Windows)
+        {
+            assert(FileName.equals(`C:\Users`.ptr, `c:\users`.ptr));
+            assert(!FileName.equals(`C:\Users`[], `C:\Users\`[]));
+            assert(!FileName.equals(`C:\Users`[], `D:\Users`[]));
+        } else {
+            assert(FileName.equals(`/usr/local`.ptr, `/usr/local`.ptr));
+            assert(!FileName.equals(`/usr/local`[], `/usr/local/`[]));
+            assert(!FileName.equals(`/usr/local`[], `/usr/LOCAL`[]));
         }
     }
 
@@ -168,6 +190,13 @@ nothrow:
         const name_ = name.toDString();
         const base_ = base ? base.toDString() : getcwd(null, 0).toDString();
         return absolute(name_) ? name : combine(base_, name_).ptr;
+    }
+
+    unittest
+    {
+        assert(absolute("/"[]) == true);
+        assert(absolute(""[]) == false);
+        assert(absolute("/".ptr) == true);
     }
 
     /********************************
