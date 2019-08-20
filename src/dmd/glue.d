@@ -785,6 +785,7 @@ void FuncDeclaration_toObjFile(FuncDeclaration fd, bool multiobj)
             break;
         }
     }
+    s.Sclass = SCcomdat;
 
     if (fd.inlinedNestedCallees)
     {
