@@ -18,22 +18,29 @@ import core.stdc.string;
 import dmd.root.rmem;
 import dmd.root.rootobject;
 
+/**
+ * An object that can
+ */
 struct OutBuffer
 {
     private ubyte* data;
-    private size_t offset;
+    private size_t offset; // the cursor position
     size_t size;
-    int level;
-    bool doindent;
-    private bool notlinehead;
+    int level; /// the current indentation level
+    bool doindent; /// whether indentation is prepended to each line
+    private bool atLineHead; // whether the cursor is at the start of a line
 
     extern (C++) ~this() pure nothrow
     {
         mem.xfree(data);
     }
 
+    ///
     extern (C++) size_t length() const pure @nogc @safe nothrow { return offset; }
 
+    /**
+     * Return the current buffer data and transfer ownership to the callee.
+     */
     extern (C++) char* extractData() pure nothrow @nogc @safe
     {
         char* p;
@@ -44,6 +51,9 @@ struct OutBuffer
         return p;
     }
 
+    /**
+     * Free the data
+     */
     extern (C++) void destroy() pure nothrow @trusted
     {
         mem.xfree(extractData());
@@ -67,6 +77,9 @@ struct OutBuffer
         offset = size;
     }
 
+    /**
+     * Put the cursor at the start of the output
+     */
     extern (C++) void reset() pure nothrow @nogc @safe
     {
         offset = 0;
@@ -80,12 +93,12 @@ struct OutBuffer
             data[offset .. offset + level] = '\t';
             offset += level;
         }
-        notlinehead = true;
+        atLineHead = false;
     }
 
     void write(const(void)[] buf) pure nothrow
     {
-        if (doindent && !notlinehead)
+        if (doindent && atLineHead)
             indent();
         reserve(buf.length);
         memcpy(this.data + offset, buf.ptr, buf.length);
@@ -116,7 +129,9 @@ struct OutBuffer
         offset += len;
     }
 
-    // write newline
+    /**
+     * Write a newline depending on the host operating system
+     */
     extern (C++) void writenl() pure nothrow
     {
         version (Windows)
@@ -128,18 +143,24 @@ struct OutBuffer
             writeByte('\n');
         }
         if (doindent)
-            notlinehead = false;
+            atLineHead = true;
     }
 
+    /**
+     * Write a single byte to the output
+     */
     extern (C++) void writeByte(uint b) pure nothrow
     {
-        if (doindent && !notlinehead && b != '\n')
+        if (doindent && atLineHead && b != '\n')
             indent();
         reserve(1);
         this.data[offset] = cast(ubyte)b;
         offset++;
     }
 
+    /**
+     * Write a Unicode Code Unit using UTF8 encoding
+     */
     extern (C++) void writeUTF8(uint b) pure nothrow
     {
         reserve(6);
@@ -181,6 +202,9 @@ struct OutBuffer
         offset++;
     }
 
+    /**
+     * Write an UTF16 Code Unit to the output
+     */
     extern (C++) void writewchar(uint w) pure nothrow
     {
         version (Windows)
@@ -193,6 +217,9 @@ struct OutBuffer
         }
     }
 
+    /**
+     * Write a 2-byte word to the output
+     */
     extern (C++) void writeword(uint w) pure nothrow
     {
         version (Windows)
@@ -203,7 +230,7 @@ struct OutBuffer
         {
             uint newline = '\n';
         }
-        if (doindent && !notlinehead && w != newline)
+        if (doindent && atLineHead && w != newline)
             indent();
 
         reserve(2);
@@ -211,6 +238,9 @@ struct OutBuffer
         offset += 2;
     }
 
+    /**
+     * Write a Unicode Code Unit using UTF16 encoding
+     */
     extern (C++) void writeUTF16(uint w) pure nothrow
     {
         reserve(4);
@@ -239,7 +269,7 @@ struct OutBuffer
         {
             bool notnewline = true;
         }
-        if (doindent && !notlinehead && notnewline)
+        if (doindent && atLineHead && notnewline)
             indent();
         reserve(4);
         *cast(uint*)(this.data + offset) = w;
@@ -274,7 +304,7 @@ struct OutBuffer
     extern (C++) void vprintf(const(char)* format, va_list args) nothrow
     {
         int count;
-        if (doindent && !notlinehead)
+        if (doindent && atLineHead)
             indent();
         uint psize = 128;
         for (;;)
@@ -564,6 +594,21 @@ unittest
 unittest
 {
     OutBuffer buf;
-    buf.doindent = true;    
+
+
+
+    buf.doindent = true;
+
+    const(char)[] s = "abc";
+    buf.writestring(s);
+    //writenl();
+    buf.level += 1;
+    buf.indent();
+    buf.writestring("abs");
+
+    assert(buf.peekSlice() == "abc\tabs");
+
+    buf.setsize(4);
+    assert(buf.length == 4);
 
 }
