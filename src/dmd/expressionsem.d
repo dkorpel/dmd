@@ -5822,6 +5822,7 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
         exp.e1 = exp.e1.expressionSemantic(sc);
         exp.e1 = exp.e1.optimize(WANTvalue, /*keepLvalue*/ true);
         exp.e1 = exp.e1.modifiableLvalue(sc, exp.e1);
+        exp.e1 = exp.e1.checkSystemVariableModification(sc);
         exp.type = exp.e1.type;
 
         if (auto ad = isAggregate(exp.e1.type))
@@ -7198,6 +7199,7 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
         }
         exp.e1 = resolveProperties(sc, exp.e1);
         exp.e1 = exp.e1.modifiableLvalue(sc, null);
+        exp.e1 = exp.e1.checkSystemVariableModification(sc);
         if (exp.e1.op == TOK.error)
         {
             result = exp.e1;
@@ -8342,6 +8344,7 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
         }
 
         exp.e1 = exp.e1.modifiableLvalue(sc, exp.e1);
+        exp.e1 = exp.e1.checkSystemVariableModification(sc);
 
         e = exp;
         if (exp.e1.checkScalar() ||
@@ -9098,6 +9101,7 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
                             ex = ex.expressionSemantic(sc);
                             ex = ex.optimize(WANTvalue);
                             ex = ex.modifiableLvalue(sc, ex); // allocate new slot
+                            ex = ex.checkSystemVariableModification(sc);
 
                             ey = new ConstructExp(exp.loc, ex, ey);
                             ey = ey.expressionSemantic(sc);
@@ -9268,6 +9272,7 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
             // e1 is not an lvalue, but we let code generator handle it
 
             auto ale1x = ale.e1.modifiableLvalue(sc, exp.e1);
+            ale1x = ale1x.checkSystemVariableModification(sc);
             if (ale1x.op == TOK.error)
                 return setResult(ale1x);
             ale.e1 = ale1x;
@@ -9347,6 +9352,7 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
             if (se.e1.op == TOK.question && se.e1.type.toBasetype().ty == Tsarray)
             {
                 se.e1 = se.e1.modifiableLvalue(sc, exp.e1);
+                se.e1 = se.e1.checkSystemVariableModification(sc);
                 if (se.e1.op == TOK.error)
                     return setResult(se.e1);
             }
@@ -9372,8 +9378,10 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
 
             e1x = e1x.optimize(WANTvalue, /*keepLvalue*/ true);
 
-            if (exp.op == TOK.assign)
+            if (exp.op == TOK.assign) {
                 e1x = e1x.modifiableLvalue(sc, e1old);
+                e1x = e1x.checkSystemVariableModification(sc);
+            }
 
             if (e1x.op == TOK.error)
             {
@@ -9658,6 +9666,7 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
         else
         {
             exp.e1 = exp.e1.modifiableLvalue(sc, exp.e1);
+            exp.e1 = exp.e1.checkSystemVariableModification(sc);
         }
 
         if ((exp.e1.type.isintegral() || exp.e1.type.isfloating()) && (exp.e2.type.isintegral() || exp.e2.type.isfloating()))
@@ -9718,6 +9727,7 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
         }
 
         exp.e1 = exp.e1.modifiableLvalue(sc, exp.e1);
+        exp.e1 = exp.e1.checkSystemVariableModification(sc);
         if (exp.e1.op == TOK.error)
         {
             result = exp.e1;
@@ -12638,4 +12648,96 @@ bool verifyHookExist(const ref Loc loc, ref Scope sc, Identifier id, string desc
           return true;
     error(loc, "`%s.%s` not found. The current runtime does not support %.*s, or the runtime is corrupt.", module_.toChars(), id.toChars(), cast(int)description.length, description.ptr);
     return false;
+}
+
+/**
+ * Check if an expression is an access to a struct member with the struct
+ * defined from a literal.
+ *
+ * This happens with manifest constants since the initializer is reused as is,
+ * each time the declaration is part of an expression, which means that the
+ * literal used as initializer can become a Lvalue. This Lvalue must not be modifiable.
+ *
+ * Params:
+ *      exp = An expression that's attempted to be written.
+ *            Must be the LHS of an `AssignExp`, `BinAssignExp`, `CatAssignExp`,
+ *            or the expression passed to a modifiable function parameter.
+ * Returns:
+ *      `true` if `expr` is a dot var or a dot identifier touching to a struct literal,
+ *      in which case an error message is issued, and `false` otherwise.
+ */
+private bool checkIfIsStructLiteralDotExpr(Expression exp)
+{
+    // e1.var = ...
+    // e1.ident = ...
+    Expression e1;
+    if (exp.op == TOK.dotVariable)
+        e1 = exp.isDotVarExp().e1;
+    else if (exp.op == TOK.dotIdentifier)
+        e1 = exp.isDotIdExp().e1;
+    else
+        return false;
+
+    // enum SomeStruct ss = { ... }
+    // also true for access from a .init: SomeStruct.init.member = ...
+    if (e1.op != TOK.structLiteral)
+        return false;
+
+    error(exp.loc, "cannot modify constant expression `%s`", exp.toChars());
+    return true;
+}
+
+// TODO
+private Expression checkSystemVariableModification(Expression exp, Scope* sc)
+{
+    if (global.params.systemVariables)
+    {
+        Expression check(Expression e)
+        {
+            Expression visitVar(VarExp ve)
+            {
+                // todo: maybe to alias?
+                return ve.var.storage_class & STC.system ? ve : null;
+            }
+
+            Expression visitPtr(PtrExp pe)
+            {
+                return null; // pe.e1.type.nextOf().isShared() ? pe : null;
+            }
+
+            Expression visitDotVar(DotVarExp dve)
+            {
+                return dve.var.storage_class & STC.system ? dve : null; //visitVar(dve.var); // || check(dve.e1) ? dve : null;
+            }
+
+            Expression visitIndex(IndexExp ie)
+            {
+                return null; //ie.e1.type.nextOf().isShared() ? ie : null;
+            }
+
+            Expression visitComma(CommaExp ce)
+            {
+                return check(ce.e2);
+            }
+
+            switch (e.op)
+            {
+                case TOK.variable:    return visitVar(e.isVarExp());
+                case TOK.star:        return visitPtr(e.isPtrExp());
+                case TOK.dotVariable: return visitDotVar(e.isDotVarExp());
+                case TOK.index:       return visitIndex(e.isIndexExp());
+                case TOK.comma:       return visitComma(e.isCommaExp());
+                default:              return null;
+            }
+        }
+        if (auto res = check(exp)) {
+            if (sc.func && sc.func.setUnsafe())
+            {
+                error(exp.loc, "cannot modify @system variable `%s` in @safe code", exp.toChars());
+                return new ErrorExp();
+            }
+        }
+        return exp;
+    }
+    return exp;
 }

@@ -1,13 +1,28 @@
 
-
-@system int globalInt;
-@system int* globalPtr;
+package:
+@system int  gSystInt;
+@safe   int  gSafeInt;
+@system int* gSystPtr;
+@safe   int* gSafePtr;
 
 void main() @safe {
+
 	//@safe int z;
 
-	alias aliasToGlobal = globalInt;
-	aliasToGlobal++;
+	@system int  systInt;
+	@safe   int  safeInt;
+	@system int* systPtr;
+	@safe   int* safePtr;
+
+	gSafeInt = 0;
+	gSystInt = 0;
+	gSafePtr = null;
+	gSystPtr = null;
+
+	safeInt = 0;
+	systInt = 0;
+	safePtr = null;
+	systPtr = null;
 
 	U u;
 	cast(void) u.x;
@@ -18,6 +33,9 @@ void main() @safe {
 	foreach(attr; __traits(getFunctionAttributes, x)) {
 		pragma(msg, attr);
 	}
+
+	alias aliasToGlobal = gSystInt;
+	aliasToGlobal++;
 }
 
 struct U {
