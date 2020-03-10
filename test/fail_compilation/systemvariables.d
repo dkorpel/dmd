@@ -1,11 +1,13 @@
 
 
-@system int x;
-@system int* y;
+@system int globalInt;
+@system int* globalPtr;
 
 void main() @safe {
-	@safe int z;
-	z++;
+	//@safe int z;
+
+	alias aliasToGlobal = globalInt;
+	aliasToGlobal++;
 
 	U u;
 	cast(void) u.x;
@@ -13,7 +15,7 @@ void main() @safe {
 	cast(void) u.c;
 	u.c = null;
 
-	foreach(attr; __traits(getFunctionAttributes, z)) {
+	foreach(attr; __traits(getFunctionAttributes, x)) {
 		pragma(msg, attr);
 	}
 }

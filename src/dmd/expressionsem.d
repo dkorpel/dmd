@@ -853,6 +853,17 @@ Lagain:
             if (d)
                 d.checkDisabled(loc, sc);
         }
+
+        if (auto sd = s.isDeclaration())
+        {
+            if (global.params.systemVariables && sd.storage_class & STC.system && sd.type.hasPointers())
+            {
+                if (!sc.intypeof && sc.func && !(sc.flags & SCOPE.debug_) && sc.func.setUnsafe())
+                {
+                    error(loc, "cannot access @system variable `%s` of unsafe type in @safe code", sd.toChars());
+                }
+            }
+        }
     }
 
     if (auto em = s.isEnumMember())
