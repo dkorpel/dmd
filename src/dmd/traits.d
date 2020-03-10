@@ -1329,40 +1329,11 @@ Expression semanticTraits(TraitsExp e, Scope* sc)
             mods.push(new StringExp(Loc.initial, str));
         }
 
-        if (TypeFunction tf = toTypeFunction((*e.args)[0], fd))
-        {
-            tf.modifiersApply(&addToMods);
-            tf.attributesApply(&addToMods, TRUSTformatSystem);
+        tf.modifiersApply(&addToMods);
+        tf.attributesApply(&addToMods, TRUSTformatSystem);
 
-            auto tup = new TupleExp(e.loc, mods);
-            return tup.expressionSemantic(sc);
-        }
-
-        auto o = (*e.args)[0];
-        // auto po = isParameter(o); TODO
-        auto s = getDsymbolWithoutExpCtx(o);
-        if (auto vd = s.isVarDeclaration())
-        {
-            if (vd.storage_class & STC.system)
-            {
-                addToMods("@system");
-            }
-            if (vd.storage_class & STC.safe)
-            {
-                addToMods("@safe");
-            }
-            if (vd.storage_class & STC.trusted)
-            {
-                addToMods("@trusted");
-            }
-            auto tup = new TupleExp(e.loc, mods);
-            return tup.expressionSemantic(sc);
-        }
-        else
-        {
-            e.error("first argument is not a function or variable");
-            return new ErrorExp();
-        }
+        auto tup = new TupleExp(e.loc, mods);
+        return tup.expressionSemantic(sc);
     }
     if (e.ident == Id.isReturnOnStack)
     {

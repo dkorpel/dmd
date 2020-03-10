@@ -9378,7 +9378,8 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
 
             e1x = e1x.optimize(WANTvalue, /*keepLvalue*/ true);
 
-            if (exp.op == TOK.assign) {
+            if (exp.op == TOK.assign)
+            {
                 e1x = e1x.modifiableLvalue(sc, e1old);
                 e1x = e1x.checkSystemVariableModification(sc);
             }
@@ -12650,44 +12651,16 @@ bool verifyHookExist(const ref Loc loc, ref Scope sc, Identifier id, string desc
     return false;
 }
 
-/**
- * Check if an expression is an access to a struct member with the struct
- * defined from a literal.
- *
- * This happens with manifest constants since the initializer is reused as is,
- * each time the declaration is part of an expression, which means that the
- * literal used as initializer can become a Lvalue. This Lvalue must not be modifiable.
+/*******************************
+ * Check whether `exp` accesses a variable marked @system.
+ * Prints an error when the scope `sc` only allows `@safe` code.
  *
  * Params:
- *      exp = An expression that's attempted to be written.
- *            Must be the LHS of an `AssignExp`, `BinAssignExp`, `CatAssignExp`,
- *            or the expression passed to a modifiable function parameter.
+ *      exp = expression to check
+ *      sc = current scope
  * Returns:
- *      `true` if `expr` is a dot var or a dot identifier touching to a struct literal,
- *      in which case an error message is issued, and `false` otherwise.
+ *      `exp` on success, an `ErrorExp` on failure
  */
-private bool checkIfIsStructLiteralDotExpr(Expression exp)
-{
-    // e1.var = ...
-    // e1.ident = ...
-    Expression e1;
-    if (exp.op == TOK.dotVariable)
-        e1 = exp.isDotVarExp().e1;
-    else if (exp.op == TOK.dotIdentifier)
-        e1 = exp.isDotIdExp().e1;
-    else
-        return false;
-
-    // enum SomeStruct ss = { ... }
-    // also true for access from a .init: SomeStruct.init.member = ...
-    if (e1.op != TOK.structLiteral)
-        return false;
-
-    error(exp.loc, "cannot modify constant expression `%s`", exp.toChars());
-    return true;
-}
-
-// TODO
 private Expression checkSystemVariableModification(Expression exp, Scope* sc)
 {
     if (global.params.systemVariables)
@@ -12730,11 +12703,12 @@ private Expression checkSystemVariableModification(Expression exp, Scope* sc)
                 default:              return null;
             }
         }
-        if (auto res = check(exp)) {
+        if (auto res = check(exp))
+        {
             if (sc.func && sc.func.setUnsafe())
             {
                 error(exp.loc, "cannot modify @system variable `%s` in @safe code", exp.toChars());
-                return new ErrorExp();
+                return ErrorExp.get();
             }
         }
         return exp;

@@ -54,10 +54,12 @@ bool checkUnsafeAccess(Scope* sc, Expression e, bool readonly, bool printmsg)
         const hasPointers = v.type.hasPointers();
 
         import dmd.globals: global;
-        if (global.params.systemVariables && v.storage_class & STC.system) {
+        if (global.params.systemVariables && v.storage_class & STC.system)
+        {
             if (readonly)
             {
-                if (hasPointers) {
+                if (hasPointers)
+                {
                     if (printmsg)
                         e.error("variable `%s` with unsafe type cannot be read from in `@safe` code",
                             v.toChars());

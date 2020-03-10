@@ -1,4 +1,23 @@
+/*
+REQUIRED_ARGS: -preview=systemvariables
+TEST_OUTPUT:
+---
+fail_compilation/systemvariables.d(23): Error: cannot modify @system variable `gSystInt` in @safe code
+fail_compilation/systemvariables.d(25): Error: cannot access @system variable `gSystPtr` of unsafe type in @safe code
+fail_compilation/systemvariables.d(25): Error: cannot modify @system variable `gSystPtr` in @safe code
+fail_compilation/systemvariables.d(28): Error: cannot modify @system variable `systInt` in @safe code
+fail_compilation/systemvariables.d(30): Error: cannot access @system variable `systPtr` of unsafe type in @safe code
+fail_compilation/systemvariables.d(30): Error: cannot modify @system variable `systPtr` in @safe code
+fail_compilation/systemvariables.d(37): Error: variable `systPtr` with unsafe type cannot be read from in `@safe` code
+fail_compilation/systemvariables.d(40): Error: variable `systInt` is marked @system and cannot be written to in `@safe` code
+fail_compilation/systemvariables.d(40): Error: cannot modify @system variable `u0.systInt` in @safe code
+fail_compilation/systemvariables.d(42): Error: variable `systPtr` is marked @system and cannot be written to in `@safe` code
+fail_compilation/systemvariables.d(42): Error: cannot modify @system variable `u0.systPtr` in @safe code
+fail_compilation/systemvariables.d(60): Error: cannot modify @system variable `gSystInt` in @safe code
+---
+*/
 
+// https://github.com/dlang/DIPs/pull/179
 package:
 @system int  gSystInt;
 @safe   int  gSafeInt;
@@ -20,11 +39,6 @@ void basic() @safe {
 	systInt = 0;
 	safePtr = null;
 	systPtr = null;
-}
-
-void introspection() @safe {
-	@system int x;
-	static assert(__traits(getFunctionAttributes, x)[0] == "@system");
 }
 
 void aggregate() @safe {
@@ -57,11 +71,3 @@ void indirect() @safe {
 	aliasToSystInt++;
 	*x = 3;
 }
-
-/+
-void foo() @safe {
-	U u;
-	u.x = 3;
-	*u.c = 3;
-}
-+/
