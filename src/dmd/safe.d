@@ -50,6 +50,30 @@ bool checkUnsafeAccess(Scope* sc, Expression e, bool readonly, bool printmsg)
     {
         if (sc.intypeof || !sc.func || !sc.func.isSafeBypassingInference())
             return false;
+
+        const hasPointers = v.type.hasPointers();
+
+        import dmd.globals: global;
+        if (global.params.systemVariables && v.storage_class & STC.system) {
+            if (readonly)
+            {
+                if (hasPointers) {
+                    if (printmsg)
+                        e.error("variable `%s` with unsafe type cannot be read from in `@safe` code",
+                            v.toChars());
+                    return true;
+                }
+            }
+            else
+            {
+                if (printmsg)
+                    e.error("variable `%s` is marked @system and cannot be written to in `@safe` code",
+                        v.toChars());
+                return true;
+            }
+
+        }
+
         auto ad = v.toParent2().isAggregateDeclaration();
         if (!ad)
             return false;
@@ -58,7 +82,6 @@ bool checkUnsafeAccess(Scope* sc, Expression e, bool readonly, bool printmsg)
         if (ad.sizeok != Sizeok.done)
             ad.determineSize(ad.loc);
 
-        const hasPointers = v.type.hasPointers();
         if (hasPointers)
         {
             if (v.overlapped && sc.func.setUnsafe())
