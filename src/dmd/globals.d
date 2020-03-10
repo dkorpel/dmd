@@ -144,6 +144,7 @@ extern (C++) struct Param
     bool noSharedAccess;         // read/write access to shared memory objects
     bool previewIn;         // `in` means `[ref] scope const`, accepts rvalues
     bool shortenedMethods; // allow => in normal function declarations
+    bool systemVariables;   // limit access to variables marked @system from @safe code
     bool betterC;           // be a "better C" compiler; no dependency on D runtime
     bool addMain;           // add a default main() function
     bool allInst;           // generate code for all template instantiations

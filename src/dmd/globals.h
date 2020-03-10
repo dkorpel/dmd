@@ -131,11 +131,9 @@ struct Param
     bool useTypeInfo;   // generate runtime type information
     bool useExceptions; // support exception handling
     bool noSharedAccess; // read/write access to shared memory objects
-    bool previewIn;     // `in` means `scope const`, perhaps `ref`, accepts rvalues
     bool shortenedMethods; // allow => in normal function declarations
-    bool betterC;       // be a "better C" compiler; no dependency on D runtime
+    bool systemVariables; // limit access to variables marked @system from @safe code
     bool addMain;       // add a default main() function
-    bool allInst;       // generate code for all template instantiations
     bool fix16997;      // fix integral promotions for unary + - ~ operators
                         // https://issues.dlang.org/show_bug.cgi?id=16997
     bool fixAliasThis;  // if the current scope has an alias this, check it before searching upper scopes
