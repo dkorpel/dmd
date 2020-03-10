@@ -5,10 +5,7 @@ package:
 @system int* gSystPtr;
 @safe   int* gSafePtr;
 
-void main() @safe {
-
-	//@safe int z;
-
+void basic() @safe {
 	@system int  systInt;
 	@safe   int  safeInt;
 	@system int* systPtr;
@@ -23,24 +20,42 @@ void main() @safe {
 	systInt = 0;
 	safePtr = null;
 	systPtr = null;
+}
 
-	U u;
-	cast(void) u.x;
-	u.x = 3;
-	cast(void) u.c;
-	u.c = null;
+void introspection() @safe {
+	@system int x;
+	static assert(__traits(getFunctionAttributes, x)[0] == "@system");
+}
 
-	foreach(attr; __traits(getFunctionAttributes, x)) {
-		pragma(msg, attr);
-	}
+void aggregate() @safe {
+	U u0;
+	cast(void) u0.systInt;
+	cast(void) u0.safeInt;
+	cast(void) u0.systPtr;
+	cast(void) u0.safePtr;
 
-	alias aliasToGlobal = gSystInt;
-	aliasToGlobal++;
+	u0.systInt = 0;
+	u0.safeInt = 0;
+	u0.systPtr = null;
+	u0.safePtr = null;
+
+	U u1;
+	u1 = u0; // allowed
 }
 
 struct U {
-	@system int x;
-	@system char* c;
+	@system int  systInt;
+	@safe   int  safeInt;
+	@system int* systPtr;
+	@safe   int* safePtr;
+}
+
+enum int* x = cast(int*) 3;
+alias aliasToSystInt = gSystInt;
+
+void indirect() @safe {
+	aliasToSystInt++;
+	*x = 3;
 }
 
 /+
