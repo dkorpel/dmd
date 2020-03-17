@@ -1,4 +1,6 @@
 /**
+ * Handle basic blocks.
+ *
  * Compiler implementation of the
  * $(LINK2 http://www.dlang.org, D programming language).
  *
@@ -11,10 +13,6 @@
  */
 
 module dmd.backend.blockopt;
-
-/****************************************************************
- * Handle basic blocks.
- */
 
 version (SPP) {} else
 {

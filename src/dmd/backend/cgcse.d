@@ -1,4 +1,6 @@
 /**
+ * Manage temporaries used to save CSEs in
+ *
  * Compiler implementation of the
  * $(LINK2 http://www.dlang.org, D programming language).
  *

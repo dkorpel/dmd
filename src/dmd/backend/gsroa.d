@@ -1,4 +1,6 @@
 /**
+ * SROA structured replacement of aggregate optimization
+ *
  * Compiler implementation of the
  * $(LINK2 http://www.dlang.org, D programming language).
  *

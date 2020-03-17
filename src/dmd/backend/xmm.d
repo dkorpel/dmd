@@ -1,4 +1,6 @@
 /**
+ * XMM opcodes
+ *
  * Compiler implementation of the
  * $(LINK2 http://www.dlang.org, D programming language).
  *
@@ -11,8 +13,6 @@
 module dmd.backend.xmm;
 
 // Online documentation: https://dlang.org/phobos/dmd_backend_xmm.html
-
-// XMM opcodes
 
 enum
 {

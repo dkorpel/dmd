@@ -1,4 +1,6 @@
 /**
+ * Main loop for code generator
+ *
  * Compiler implementation of the
  * $(LINK2 http://www.dlang.org, D programming language).
  *

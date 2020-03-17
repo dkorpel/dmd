@@ -1,5 +1,6 @@
 
-/* Reflects declarations from the Dwarf 3 spec, not the The D Language Foundation
+/**
+ * Reflects declarations from the Dwarf 3 spec, not the The D Language Foundation
  * dwarf implementation
  *
  * Source: $(LINK2 https://github.com/dlang/dmd/blob/master/src/dmd/backend/dwarf2.d, backend/_dwarf2.d)
