@@ -4282,7 +4282,7 @@ extern (C++) abstract class UnaExp : Expression
 
     }
 
-    override final Expression resolveLoc(const ref Loc loc, Scope* sc)
+    override Expression resolveLoc(const ref Loc loc, Scope* sc)
     {
         e1 = e1.resolveLoc(loc, sc);
         return this;
@@ -4585,6 +4585,13 @@ extern (C++) abstract class BinExp : Expression
 
         //printf("-e0 = %s, be = %s\n", e0.toChars(), be.toChars());
         return Expression.combine(e0, be);
+    }
+
+    override Expression resolveLoc(const ref Loc loc, Scope* sc)
+    {
+        e1 = e1.resolveLoc(loc, sc);
+        e2 = e2.resolveLoc(loc, sc);
+        return this;
     }
 
     override void accept(Visitor v)
@@ -4979,6 +4986,13 @@ extern (C++) final class DotTemplateInstanceExp : UnaExp
         return true;
     }
 
+    override Expression resolveLoc(const ref Loc loc, Scope* sc)
+    {
+        e1 = e1.resolveLoc(loc, sc);
+        assert(0); // TODO
+        //return this;
+    }
+
     override void accept(Visitor v)
     {
         v.visit(this);
@@ -5160,6 +5174,14 @@ extern (C++) final class CallExp : UnaExp
                 e = e.expressionSemantic(sc);
                 return e;
             }
+        }
+        return this;
+    }
+
+    override Expression resolveLoc(const ref Loc loc, Scope* sc) {
+        e1 = e1.resolveLoc(loc, sc);
+        foreach (j, a; *arguments) {
+            a = a.resolveLoc(loc, sc);
         }
         return this;
     }
@@ -6369,13 +6391,6 @@ extern (C++) final class CatExp : BinExp
         super(loc, EXP.concatenate, __traits(classInstanceSize, CatExp), e1, e2);
     }
 
-    override Expression resolveLoc(const ref Loc loc, Scope* sc)
-    {
-        e1 = e1.resolveLoc(loc, sc);
-        e2 = e2.resolveLoc(loc, sc);
-        return this;
-    }
-
     override void accept(Visitor v)
     {
         v.visit(this);
@@ -6804,6 +6819,13 @@ extern (C++) final class CondExp : BinExp
         //printf("-%s\n", toChars());
     }
 
+    override Expression resolveLoc(const ref Loc loc, Scope* sc) {
+        econd = econd.resolveLoc(loc, sc);
+        e1 = e1.resolveLoc(loc, sc);
+        e2 = e2.resolveLoc(loc, sc);
+        return this;
+    }
+
     override void accept(Visitor v)
     {
         v.visit(this);
@@ -6889,6 +6911,7 @@ extern (C++) final class LineInitExp : DefaultInitExp
     override Expression resolveLoc(const ref Loc loc, Scope* sc)
     {
         Expression e = new IntegerExp(loc, loc.linnum, Type.tint32);
+        printf("Resolved %d\n", loc.linnum);
         e = e.castTo(sc, type);
         return e;
     }

@@ -42,6 +42,7 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
         CPPMANGLE cppmangle;
         Loc endloc; // set to location of last right curly
         int inBrackets; // inside [] of array index or slice
+        bool inDefaultInitExp = false; // inside default argument of parameter list
         Loc lookingForElse; // location of lonely if looking for an else
     }
 
@@ -4992,6 +4993,10 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
         StorageClass stc = 0;
         TOK save = TOK.reserved;
 
+        const oldInDefaultInitExp = inDefaultInitExp;
+        inDefaultInitExp = false;
+        scope(exit) inDefaultInitExp = oldInDefaultInitExp;
+
         switch (token.value)
         {
         case TOK.function_:
@@ -6866,25 +6871,10 @@ LagainStc:
      */
     private AST.Expression parseDefaultInitExp()
     {
-        AST.Expression e = null;
-        const tv = peekNext();
-        if (tv == TOK.comma || tv == TOK.rightParenthesis)
-        {
-            switch (token.value)
-            {
-            case TOK.file:           e = new AST.FileInitExp(token.loc, EXP.file); break;
-            case TOK.fileFullPath:   e = new AST.FileInitExp(token.loc, EXP.fileFullPath); break;
-            case TOK.line:           e = new AST.LineInitExp(token.loc); break;
-            case TOK.moduleString:   e = new AST.ModuleInitExp(token.loc); break;
-            case TOK.functionString: e = new AST.FuncInitExp(token.loc); break;
-            case TOK.prettyFunction: e = new AST.PrettyFuncInitExp(token.loc); break;
-            default: goto LExp;
-            }
-            nextToken();
-            return e;
-        }
-        LExp:
-        return parseAssignExp();
+        inDefaultInitExp = true;
+        auto result = parseAssignExp();
+        inDefaultInitExp = false;
+        return result;
     }
 
     /********************
@@ -8048,7 +8038,7 @@ LagainStc:
         case TOK.file:
             {
                 const(char)* s = loc.filename ? loc.filename : mod.ident.toChars();
-                e = new AST.StringExp(loc, s.toDString());
+                e = inDefaultInitExp ? new AST.FileInitExp(loc, TOK.file) : new AST.StringExp(loc, s.toDString());
                 nextToken();
                 break;
             }
@@ -8056,20 +8046,21 @@ LagainStc:
             {
                 assert(loc.isValid(), "__FILE_FULL_PATH__ does not work with an invalid location");
                 const s = FileName.toAbsolute(loc.filename);
-                e = new AST.StringExp(loc, s.toDString());
+                e = inDefaultInitExp ? new AST.FileInitExp(loc, TOK.fileFullPath)
+                    : new AST.StringExp(loc, s.toDString());
                 nextToken();
                 break;
             }
 
         case TOK.line:
-            e = new AST.IntegerExp(loc, loc.linnum, AST.Type.tint32);
+            e = inDefaultInitExp ? new AST.LineInitExp(loc) : new AST.IntegerExp(loc, loc.linnum, AST.Type.tint32);
             nextToken();
             break;
 
         case TOK.moduleString:
             {
                 const(char)* s = md ? md.toChars() : mod.toChars();
-                e = new AST.StringExp(loc, s.toDString());
+                e = inDefaultInitExp ? new AST.ModuleInitExp(loc) : new AST.StringExp(loc, s.toDString());
                 nextToken();
                 break;
             }

@@ -1099,6 +1099,7 @@ extern(C++) Type typeSemantic(Type type, const ref Loc loc, Scope* sc)
             }
             else
             {
+                printf("defaultArgSemantic %s\n", e.toChars());
                 e = inferType(e, fparam.type);
                 Initializer iz = new ExpInitializer(e.loc, e);
                 iz = iz.initializerSemantic(sc, fparam.type, INITnointerpret);

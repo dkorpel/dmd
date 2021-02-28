@@ -1718,7 +1718,7 @@ private bool functionParameters(const ref Loc loc, Scope* sc,
     TypeFunction tf, Expression ethis, Type tthis, Expressions* arguments, FuncDeclaration fd,
     Type* prettype, Expression* peprefix)
 {
-    //printf("functionParameters() %s\n", fd ? fd.toChars() : "");
+    printf("functionParameters() %s\n", fd ? fd.toChars() : "");
     assert(arguments);
     assert(fd || tf.next);
     size_t nargs = arguments ? arguments.dim : 0;
@@ -1797,7 +1797,22 @@ private bool functionParameters(const ref Loc loc, Scope* sc,
                 arg = p.defaultArg;
                 arg = inlineCopy(arg, sc);
                 // __FILE__, __LINE__, __MODULE__, __FUNCTION__, and __PRETTY_FUNCTION__
-                arg = arg.resolveLoc(loc, sc);
+                import dmd.apply;
+
+                extern (C++) final class ResolveInitExp : StoppableVisitor {
+                    alias visit = typeof(super).visit;
+
+                    override void visit(Expression)
+                    {
+                    }
+                    override void visit(DefaultInitExp e)
+                    {
+                        printf("YOOOOOOOOOOOOOO %s %s\n", e.toChars(), e.loc.toChars());
+                        e = e.resolveLoc(loc, sc);
+                        printf("Resolved to %s %s\n", e.toChars(), e.loc.toChars());
+                    }
+                }
+                walkPostorder(arg, new ResolveInitExp());
                 arguments.push(arg);
                 nargs++;
             }
@@ -1805,6 +1820,7 @@ private bool functionParameters(const ref Loc loc, Scope* sc,
             {
                 if (isDefaultInitOp(arg.op))
                 {
+                    printf("Resolve 1788\n");
                     arg = arg.resolveLoc(loc, sc);
                     (*arguments)[i] = arg;
                 }
@@ -12407,6 +12423,11 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
 
     override void visit(LineInitExp e)
     {
+        printf("Line resolved to: %d\n", e.loc.linnum);
+        if (19 == e.loc.linnum) {
+            //assert(0);
+        }
+
         e.type = Type.tint32;
         result = e;
     }
@@ -12420,7 +12441,7 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
 
     override void visit(FuncInitExp e)
     {
-        //printf("FuncInitExp::semantic()\n");
+        printf("FuncInitExp::semantic()\n");
         e.type = Type.tstring;
         if (sc.func)
         {
@@ -12432,7 +12453,7 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
 
     override void visit(PrettyFuncInitExp e)
     {
-        //printf("PrettyFuncInitExp::semantic()\n");
+        printf("PrettyFuncInitExp::semantic()\n");
         e.type = Type.tstring;
         if (sc.func)
         {
