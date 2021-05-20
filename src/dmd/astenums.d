@@ -96,6 +96,7 @@ enum STC : ulong
     returninferred      = (1L << 52),   // 'return' has been inferred and should not be part of mangling
     live                = (1L << 53),   // function @live attribute
     register            = (1L << 54),   // `register` storage class
+    cheatingTheSystem   = (1L << 55),
 
     safeGroup = STC.safe | STC.trusted | STC.system,
     IOR  = STC.in_ | STC.ref_ | STC.out_,

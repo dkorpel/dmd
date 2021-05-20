@@ -118,6 +118,7 @@ extern (C++) struct Param
     bool vgc;               // identify gc usage
     bool vfield;            // identify non-mutable field variables
     bool vcomplex = true;   // identify complex/imaginary type usage
+    bool vpurescope;        // identify cases where `pure` functions incorrectly get `scope` applied to parameters (issue 20150)
     ubyte symdebug;         // insert debug symbolic information
     bool symdebugref;       // insert debug information for all referenced types, too
     bool optimize;          // run optimizer

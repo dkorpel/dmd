@@ -286,7 +286,7 @@ bool checkAssocArrayLiteralEscape(Scope *sc, AssocArrayLiteralExp ae, bool gag)
  * Returns:
  *      `true` if pointers to the stack can escape via assignment
  */
-bool checkParamArgumentEscape(Scope* sc, FuncDeclaration fdc, Parameter par, Expression arg, bool assertmsg, bool gag)
+bool checkParamArgumentEscape(Scope* sc, FuncDeclaration fdc, Parameter par, Expression arg, bool assertmsg, bool gag, bool maySetSystem = true)
 {
     enum log = false;
     if (log) printf("checkParamArgumentEscape(arg: %s par: %s)\n",
@@ -310,7 +310,7 @@ bool checkParamArgumentEscape(Scope* sc, FuncDeclaration fdc, Parameter par, Exp
      */
     void unsafeAssign(VarDeclaration v, const char* desc)
     {
-        if (global.params.useDIP1000 == FeatureState.enabled && sc.func.setUnsafe())
+        if (global.params.useDIP1000 == FeatureState.enabled && (!maySetSystem || sc.func.setUnsafe()))
         {
             if (!gag)
             {
@@ -409,13 +409,15 @@ bool checkParamArgumentEscape(Scope* sc, FuncDeclaration fdc, Parameter par, Exp
 
     foreach (Expression ee; er.byexp)
     {
-        if (sc.func && sc.func.setUnsafe())
-        {
-            if (!gag)
-                error(ee.loc, "reference to stack allocated value returned by `%s` assigned to non-scope parameter `%s`",
-                    ee.toChars(),
-                    par ? par.toChars() : "this");
-            result = true;
+        if (sc.func) {
+            if (!maySetSystem || sc.func.setUnsafe())
+            {
+                if (!gag)
+                    error(ee.loc, "reference to stack allocated value returned by `%s` assigned to non-scope parameter `%s`",
+                        ee.toChars(),
+                        par ? par.toChars() : "this");
+                result = true;
+            }
         }
     }
 

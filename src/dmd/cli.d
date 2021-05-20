@@ -792,6 +792,8 @@ dmd -cov -unittest myprog.d
             "list all variables going into thread local storage"),
         Feature("vmarkdown", "vmarkdown",
             "list instances of Markdown replacements in Ddoc"),
+        Feature("purescope", "vpurescope",
+            "list instances where parameters of `pure` functions are assumed to be `scope`"),
     ];
 
     /// Returns all available reverts

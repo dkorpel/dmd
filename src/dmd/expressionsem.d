@@ -2042,6 +2042,8 @@ private bool functionParameters(const ref Loc loc, Scope* sc,
             //printf("type: %s\n", arg.type.toChars());
             //printf("param: %s\n", p.toChars());
 
+            bool cheatingTheSystem = false;
+
             if (firstArg && p.storageClass & STC.return_)
             {
                 /* Argument value can be assigned to firstArg.
@@ -2050,16 +2052,27 @@ private bool functionParameters(const ref Loc loc, Scope* sc,
                 if (global.params.useDIP1000 == FeatureState.enabled)
                     err |= checkParamArgumentReturn(sc, firstArg, arg, false);
             }
-            else if (tf.parameterEscapes(tthis, p))
+            else if (tf.parameterEscapes(tthis, p, cheatingTheSystem))
             {
                 /* Argument value can escape from the called function.
                  * Check arg to see if it matters.
                  */
                 if (global.params.useDIP1000 == FeatureState.enabled)
                     err |= checkParamArgumentEscape(sc, fd, p, arg, false, false);
-            }
-            else
-            {
+
+            } else {
+                static bool[const(char)*] complained;
+                if (cheatingTheSystem && global.params.vpurescope)
+                {
+                    const serious = checkParamArgumentEscape(sc, fd, p, arg, false, /*gag*/ true, /*maySetSystem*/ false);
+                    const fdName = fd ? fd.toChars() : "<unknown>";
+                    if (serious && fdName !in complained)
+                    {
+                        complained[fdName] = true;
+                        warning(arg.loc, "parameter `%s` of `%s` is cheating `scope`\n", p.toChars(), fdName);
+                    }
+                }
+
                 /* Argument value cannot escape from the called function.
                  */
                 Expression a = arg;
@@ -2106,6 +2119,7 @@ private bool functionParameters(const ref Loc loc, Scope* sc,
                     }
                 }
             }
+
             if (!p.isReference())
                 err |= arg.checkSharedAccess(sc);
 
