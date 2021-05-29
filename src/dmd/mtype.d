@@ -4321,7 +4321,7 @@ extern (C++) final class TypeFunction : TypeNext
      * Returns:
      *  true if escapes via assignment to global or through a parameter
      */
-    bool parameterEscapes(Type tthis, Parameter p, ref bool cheatingTheSystem)
+    bool parameterEscapes(Type tthis, Parameter p, ref bool invalidScopeFromPure)
     {
         /* Scope parameters do not escape.
          * Allow 'lazy' to imply 'scope' -
@@ -4332,7 +4332,7 @@ extern (C++) final class TypeFunction : TypeNext
         const sc = parameterStorageClass(tthis, p);
         if (sc & (STC.scope_ | STC.lazy_))
         {
-            cheatingTheSystem = cast(bool) (sc & STC.cheatingTheSystem);
+            invalidScopeFromPure = cast(bool) (sc & STC.invalidScopeFromPure);
             return false;
         }
         return true;
@@ -4438,11 +4438,11 @@ extern (C++) final class TypeFunction : TypeNext
         {
             // Check escaping through return value
             Type tret = nextOf().toBasetype();
-            if (isref || tret.hasPointers())
+            if (isref || tret.hasPointers()) // TODO: || !isnothrow
             {
                 if (!(stc & STC.scope_))
                 {
-                    stc |= STC.scope_| STC.cheatingTheSystem;
+                    //stc |= STC.scope_| STC.invalidScopeFromPure;
                 }
                 return stc;
             }

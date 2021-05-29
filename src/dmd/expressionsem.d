@@ -2042,7 +2042,7 @@ private bool functionParameters(const ref Loc loc, Scope* sc,
             //printf("type: %s\n", arg.type.toChars());
             //printf("param: %s\n", p.toChars());
 
-            bool cheatingTheSystem = false;
+            bool pureScopeViolation = false;
 
             if (firstArg && p.storageClass & STC.return_)
             {
@@ -2052,7 +2052,7 @@ private bool functionParameters(const ref Loc loc, Scope* sc,
                 if (global.params.useDIP1000 == FeatureState.enabled)
                     err |= checkParamArgumentReturn(sc, firstArg, arg, false);
             }
-            else if (tf.parameterEscapes(tthis, p, cheatingTheSystem))
+            else if (tf.parameterEscapes(tthis, p, pureScopeViolation))
             {
                 /* Argument value can escape from the called function.
                  * Check arg to see if it matters.
@@ -2061,15 +2061,14 @@ private bool functionParameters(const ref Loc loc, Scope* sc,
                     err |= checkParamArgumentEscape(sc, fd, p, arg, false, false);
 
             } else {
-                static bool[const(char)*] complained;
-                if (cheatingTheSystem && global.params.vpurescope)
+                if (pureScopeViolation && global.params.vpurescope)
                 {
-                    const serious = checkParamArgumentEscape(sc, fd, p, arg, false, /*gag*/ true, /*maySetSystem*/ false);
-                    const fdName = fd ? fd.toChars() : "<unknown>";
-                    if (serious && fdName !in complained)
+                    const violation =
+                        checkParamArgumentEscape(sc, fd, p, arg, false, /*gag*/ true, /*maySetSystem*/ false);
+                    if (violation)
                     {
-                        complained[fdName] = true;
-                        warning(arg.loc, "parameter `%s` of `%s` is cheating `scope`\n", p.toChars(), fdName);
+                        const fdName = fd ? fd.toChars() : "<unknown>";
+                        warning(arg.loc, "parameter `%s` of `%s` is cheating `scope`", p.toChars(), fdName);
                     }
                 }
 
