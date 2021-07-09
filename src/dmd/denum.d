@@ -53,6 +53,7 @@ extern (C++) final class EnumDeclaration : ScopeDsymbol
     Visibility visibility;
     Expression maxval;
     Expression minval;
+    private EnumMembers[] membersSorted; //
     Expression defaultval;  // default initializer
     bool isdeprecated;
     bool added;
@@ -199,6 +200,20 @@ extern (C++) final class EnumDeclaration : ScopeDsymbol
             }
         }
         return handleErrors();
+    }
+
+    version(none)
+    EnumDeclaration[] getSortedCases()
+    {
+        if (!sortedMembers)
+        {
+            assert(em.semanticRun >= PASS.semanticdone);
+            assert(memtype.isintegral());
+            //cs.exp.type.isString();
+            sortedMembers = members.copy().sort!((a, b) => true)();
+            //em.value.toInteger();
+        }
+        return sortedMembers;
     }
 
     Type getMemtype(const ref Loc loc)
