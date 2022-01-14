@@ -598,8 +598,7 @@ bool checkAssignEscape(Scope* sc, Expression e, bool gag)
 
 
     // Determine if va is a parameter that is an indirect reference
-    const bool vaIsRef = va && va.storage_class & STC.parameter &&
-        (va.isReference() || va.type.toBasetype().isTypeClass()); // ref, out, or class
+    const bool vaIsRef = va && va.isParameter() && va.isReference();
     if (log && vaIsRef) printf("va is ref `%s`\n", va.toChars());
 
     /* Determine if va is the first parameter, through which other 'return' parameters
