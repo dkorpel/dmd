@@ -236,6 +236,8 @@ struct FieldState
     bool inFlight;      /// bit field is in flight
 }
 
+Dsymbol[] allDsymbols;
+
 /***********************************************************
  */
 extern (C++) class Dsymbol : ASTNode
@@ -259,6 +261,7 @@ extern (C++) class Dsymbol : ASTNode
     {
         //printf("Dsymbol::Dsymbol(%p)\n", this);
         loc = Loc(null, 0, 0);
+        allDsymbols ~= this;
     }
 
     final extern (D) this(Identifier ident) nothrow
@@ -266,6 +269,7 @@ extern (C++) class Dsymbol : ASTNode
         //printf("Dsymbol::Dsymbol(%p, ident)\n", this);
         this.loc = Loc(null, 0, 0);
         this.ident = ident;
+        allDsymbols ~= this;
     }
 
     final extern (D) this(const ref Loc loc, Identifier ident) nothrow
@@ -273,6 +277,7 @@ extern (C++) class Dsymbol : ASTNode
         //printf("Dsymbol::Dsymbol(%p, ident)\n", this);
         this.loc = loc;
         this.ident = ident;
+        allDsymbols ~= this;
     }
 
     static Dsymbol create(Identifier ident) nothrow

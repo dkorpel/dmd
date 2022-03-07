@@ -551,6 +551,26 @@ private int tryMain(size_t argc, const(char)** argv, ref Param params)
         }
     }
 
+    printf("-----------------\n");
+    printf("Symbols: %d\n", cast(int) allDsymbols.length);
+    enum l = Dsymbol.tupleof.length;
+    int[l] defaultCount = 0;
+    int noAttr = 0;
+    foreach(d; allDsymbols) {
+        static foreach(i; 0..l) {
+            if (d.tupleof[i] is d.tupleof[i].init) {
+                defaultCount[i]++;
+            }
+        }
+        if (!d.depdecl && !d.userAttribDecl && !d.cppnamespace) {
+            noAttr++;
+        }
+    }
+    static foreach(i; 0..l) {
+        printf("%20s: %3.2f%%\n", Dsymbol.tupleof[i].stringof.ptr, 100.0 * defaultCount[i] / allDsymbols.length);
+    }
+    printf("no attribute at all: %3.2f%%\n", 100.0 * noAttr / allDsymbols.length);
+
     if (global.params.cxxhdr.doOutput)
         genCppHdrFiles(modules);
 
