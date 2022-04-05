@@ -446,11 +446,6 @@ alias dinteger_t = ulong;
 alias sinteger_t = long;
 alias uinteger_t = ulong;
 
-version (DMDLIB)
-{
-    version = LocOffset;
-}
-
 /**
 A source code location
 
@@ -459,21 +454,29 @@ debug info etc.
 */
 struct Loc
 {
-    /// zero-terminated filename string, either absolute or relative to cwd
-    const(char)* filename;
-    uint linnum; /// line number, starting from 1
-    uint charnum; /// utf8 code unit index relative to start of line, starting from 1
-    version (LocOffset)
-        uint fileOffset; /// utf8 code unit index relative to start of file, starting from 0
+    // Id is a combination of the file index and the file offset
+    uint id = 0;
 
     static immutable Loc initial; /// use for default initialization of const ref Loc's
+
+    pure nothrow @nogc
+    {
+        /// utf8 code unit index relative to start of file, starting from 0
+        uint fileOffset() const { return id; }
+        /// zero-terminated filename string, either absolute or relative to cwd
+        const(char)* filename() const { return ""; }
+        /// line number, starting from 1
+        auto linnum()  const { return uint(0); }
+        /// utf8 code unit index relative to start of line, starting from 1
+        auto charnum() const { return uint(0); }
+    }
 
 nothrow:
     extern (D) this(const(char)* filename, uint linnum, uint charnum) pure
     {
-        this.linnum = linnum;
-        this.charnum = charnum;
-        this.filename = filename;
+        // this.linnum = linnum;
+        // this.charnum = charnum;
+        // this.filename = filename;
     }
 
     extern (C++) const(char)* toChars(

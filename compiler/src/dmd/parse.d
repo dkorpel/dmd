@@ -64,7 +64,7 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
              */
             char* filename = cast(char*)mem.xmalloc(strlen(loc.filename) + 7 + (loc.linnum).sizeof * 3 + 1);
             sprintf(filename, "%s-mixin-%d", loc.filename, cast(int)loc.linnum);
-            scanloc.filename = filename;
+            // scanloc.filename = filename;
         }
 
         mod = _module;

@@ -54,6 +54,48 @@ import dmd.tokens;
 import dmd.utils;
 import dmd.visitor;
 
+/// A source location ready for presentation to the user, as opposed to `Loc`
+package struct DdocLoc
+{
+    const(char)* fileName;
+    uint linnum;
+    uint charnum;
+
+    this(const(char)* fileName, uint linnum, uint charnum)
+    {
+        this.fileName = fileName;
+        this.linnum = linnum;
+        this.charnum = charnum;
+    }
+
+    this(Loc loc)
+    {
+        this.fileName = loc.filename;
+        this.linnum = loc.linnum;
+        this.charnum = loc.charnum;
+        // return DdocLoc(loc.filename, loc.linnum, loc.charnum);
+    }
+
+    //Loc loc;
+    //alias loc this;
+}
+
+/// Returns: `loc` converted to `DdocLoc`
+DdocLoc toDdocLoc(const Loc loc)
+{
+    return DdocLoc(loc.filename, loc.linnum, loc.charnum);
+}
+
+extern (C++) void ddocWarning(const DdocLoc loc, const(char)* format, ...)
+{
+    // TODO
+}
+
+extern (C++) void ddocError(const DdocLoc loc, const(char)* format, ...)
+{
+    // TODO
+}
+
 struct Escape
 {
     const(char)[][char.max] strings;
@@ -104,7 +146,7 @@ private class Section
         assert(0);
     }
 
-    void write(Loc loc, DocComment* dc, Scope* sc, Dsymbols* a, OutBuffer* buf)
+    void write(DdocLoc loc, DocComment* dc, Scope* sc, Dsymbols* a, OutBuffer* buf)
     {
         assert(a.dim);
         if (name.length)
@@ -159,7 +201,7 @@ private class Section
  */
 private final class ParamSection : Section
 {
-    override void write(Loc loc, DocComment* dc, Scope* sc, Dsymbols* a, OutBuffer* buf)
+    override void write(DdocLoc loc, DocComment* dc, Scope* sc, Dsymbols* a, OutBuffer* buf)
     {
         assert(a.dim);
         Dsymbol s = (*a)[0]; // test
@@ -251,7 +293,7 @@ private final class ParamSection : Section
                             }
                             else if (!fparam)
                             {
-                                warning(s.loc, "Ddoc: function declaration has no parameter '%.*s'", cast(int)namelen, namestart);
+                                ddocWarning(DdocLoc(s.loc), "Ddoc: function declaration has no parameter '%.*s'", cast(int)namelen, namestart);
                             }
                             buf.write(namestart[0 .. namelen]);
                         }
@@ -302,7 +344,7 @@ private final class ParamSection : Section
                             cast(int)(tf.parameterList.varargs == VarArg.variadic);
             if (pcount != paramcount)
             {
-                warning(s.loc, "Ddoc: parameter count mismatch, expected %llu, got %llu",
+                ddocWarning(DdocLoc(s.loc), "Ddoc: parameter count mismatch, expected %llu, got %llu",
                         cast(ulong) pcount, cast(ulong) paramcount);
                 if (paramcount == 0)
                 {
@@ -318,7 +360,7 @@ private final class ParamSection : Section
  */
 private final class MacroSection : Section
 {
-    override void write(Loc loc, DocComment* dc, Scope* sc, Dsymbols* a, OutBuffer* buf)
+    override void write(DdocLoc loc, DocComment* dc, Scope* sc, Dsymbols* a, OutBuffer* buf)
     {
         //printf("MacroSection::write()\n");
         DocComment.parseMacros(dc.escapetable, *dc.pmacrotable, body_);
@@ -428,7 +470,7 @@ extern(C++) void gendocfile(Module m)
     if (m.filetype == FileType.ddoc)
     {
         const ploc = m.md ? &m.md.loc : &m.loc;
-        const loc = Loc(ploc.filename ? ploc.filename : srcfilename.ptr,
+        const loc = DdocLoc(ploc.filename ? ploc.filename : srcfilename.ptr,
                         ploc.linnum,
                         ploc.charnum);
 
@@ -567,7 +609,7 @@ void escapeDdocString(OutBuffer* buf, size_t start)
  *    directly preceeded by a backslash with $(LPAREN) or $(RPAREN) instead of
  *    counting them as stray parentheses
  */
-private void escapeStrayParenthesis(Loc loc, OutBuffer* buf, size_t start, bool respectBackslashEscapes)
+private void escapeStrayParenthesis(DdocLoc loc, OutBuffer* buf, size_t start, bool respectBackslashEscapes)
 {
     uint par_open = 0;
     char inCode = 0;
@@ -588,7 +630,7 @@ private void escapeStrayParenthesis(Loc loc, OutBuffer* buf, size_t start, bool 
                 if (par_open == 0)
                 {
                     //stray ')'
-                    warning(loc, "Ddoc: Stray ')'. This may cause incorrect Ddoc output. Use $(RPAREN) instead for unpaired right parentheses.");
+                    ddocWarning(loc, "Ddoc: Stray ')'. This may cause incorrect Ddoc output. Use $(RPAREN) instead for unpaired right parentheses.");
                     buf.remove(u, 1); //remove the )
                     buf.insert(u, "$(RPAREN)"); //insert this instead
                     u += 8; //skip over newly inserted macro
@@ -604,7 +646,7 @@ private void escapeStrayParenthesis(Loc loc, OutBuffer* buf, size_t start, bool 
             {
                 // For this to work, loc must be set to the beginning of the passed
                 // text which is currently not possible
-                // (loc is set to the Loc of the Dsymbol)
+                // (loc is set to the DdocLoc of the Dsymbol)
                 loc.linnum++;
             }
             break;
@@ -666,7 +708,7 @@ private void escapeStrayParenthesis(Loc loc, OutBuffer* buf, size_t start, bool 
                 if (par_open == 0)
                 {
                     //stray '('
-                    warning(loc, "Ddoc: Stray '('. This may cause incorrect Ddoc output. Use $(LPAREN) instead for unpaired left parentheses.");
+                    ddocWarning(loc, "Ddoc: Stray '('. This may cause incorrect Ddoc output. Use $(LPAREN) instead for unpaired left parentheses.");
                     buf.remove(u, 1); //remove the (
                     buf.insert(u, "$(LPAREN)"); //insert this instead
                 }
@@ -1875,11 +1917,11 @@ struct DocComment
     {
         assert(a.dim);
         //printf("DocComment::writeSections()\n");
-        Loc loc = (*a)[0].loc;
+        DdocLoc loc = (*a)[0].loc.toDdocLoc;
         if (Module m = (*a)[0].isModule())
         {
             if (m.md)
-                loc = m.md.loc;
+                loc = m.md.loc.toDdocLoc;
         }
         size_t offset1 = buf.length;
         buf.writestring("$(DDOC_SECTIONS ");
@@ -2319,7 +2361,7 @@ private void removeBlankLineMacro(ref OutBuffer buf, ref size_t iAt, ref size_t 
  *  loc         = the current location within the file
  * Returns: whether a thematic break was replaced
  */
-private bool replaceMarkdownThematicBreak(ref OutBuffer buf, ref size_t i, size_t iLineStart, const ref Loc loc)
+private bool replaceMarkdownThematicBreak(ref OutBuffer buf, ref size_t i, size_t iLineStart, const ref DdocLoc loc)
 {
 
     const slice = buf[];
@@ -2424,7 +2466,7 @@ private void removeAnyAtxHeadingSuffix(ref OutBuffer buf, size_t i)
  *  headingLevel  = the level (1-6) of heading to end. Is set to `0` when this
  *                  function ends.
  */
-private void endMarkdownHeading(ref OutBuffer buf, size_t iStart, ref size_t iEnd, const ref Loc loc, ref int headingLevel)
+private void endMarkdownHeading(ref OutBuffer buf, size_t iStart, ref size_t iEnd, const ref DdocLoc loc, ref int headingLevel)
 {
     char[5] heading = "$(H0 ";
     heading[3] = cast(char) ('0' + headingLevel);
@@ -2486,7 +2528,7 @@ private size_t endAllListsAndQuotes(ref OutBuffer buf, ref size_t i, ref Markdow
  *  downToLevel       = the length within `inlineDelimiters`` to reduce emphasis to
  * Returns: the number of characters added to the buffer by the replacements
  */
-private size_t replaceMarkdownEmphasis(ref OutBuffer buf, const ref Loc loc, ref MarkdownDelimiter[] inlineDelimiters, int downToLevel = 0)
+private size_t replaceMarkdownEmphasis(ref OutBuffer buf, const ref DdocLoc loc, ref MarkdownDelimiter[] inlineDelimiters, int downToLevel = 0)
 {
     size_t replaceEmphasisPair(ref MarkdownDelimiter start, ref MarkdownDelimiter end)
     {
@@ -2868,7 +2910,7 @@ private struct MarkdownList
      *  loc           = the location of the Ddoc within the file
      * Returns: `true` if a list was created
      */
-    bool startItem(ref OutBuffer buf, ref size_t iLineStart, ref size_t i, ref size_t iPrecedingBlankLine, ref MarkdownList[] nestedLists, const ref Loc loc)
+    bool startItem(ref OutBuffer buf, ref size_t iLineStart, ref size_t i, ref size_t iPrecedingBlankLine, ref MarkdownList[] nestedLists, const ref DdocLoc loc)
     {
         buf.remove(iStart, iContentStart - iStart);
 
@@ -3050,7 +3092,7 @@ private struct MarkdownLink
      *                      additional previously unparsed references.
      * Returns: whether a reference link was found and replaced at `i`
      */
-    static bool replaceLink(ref OutBuffer buf, ref size_t i, const ref Loc loc, ref MarkdownDelimiter[] inlineDelimiters, int delimiterIndex, ref MarkdownLinkReferences linkReferences)
+    static bool replaceLink(ref OutBuffer buf, ref size_t i, const ref DdocLoc loc, ref MarkdownDelimiter[] inlineDelimiters, int delimiterIndex, ref MarkdownLinkReferences linkReferences)
     {
         const delimiter = inlineDelimiters[delimiterIndex];
         MarkdownLink link;
@@ -3103,7 +3145,7 @@ private struct MarkdownLink
      *  loc               = the current location in the file
      * Returns: whether a reference link was found and replaced at `i`
      */
-    static bool replaceReferenceDefinition(ref OutBuffer buf, ref size_t i, ref MarkdownDelimiter[] inlineDelimiters, int delimiterIndex, ref MarkdownLinkReferences linkReferences, const ref Loc loc)
+    static bool replaceReferenceDefinition(ref OutBuffer buf, ref size_t i, ref MarkdownDelimiter[] inlineDelimiters, int delimiterIndex, ref MarkdownLinkReferences linkReferences, const ref DdocLoc loc)
     {
         const delimiter = inlineDelimiters[delimiterIndex];
         MarkdownLink link;
@@ -3487,7 +3529,7 @@ private struct MarkdownLink
      *                      an additional reference.
      *  loc               = the current location in the file
      */
-    private void storeAndReplaceDefinition(ref OutBuffer buf, ref size_t i, size_t iEnd, ref MarkdownLinkReferences linkReferences, const ref Loc loc)
+    private void storeAndReplaceDefinition(ref OutBuffer buf, ref size_t i, size_t iEnd, ref MarkdownLinkReferences linkReferences, const ref DdocLoc loc)
     {
         // Remove the definition and trailing whitespace
         iEnd = skipChars(buf, iEnd, " \t\r\n");
@@ -3623,7 +3665,7 @@ private struct MarkdownLinkReferences
      *  loc   = the current location in the file
      * Returns: a link. If the `href` member has a value then the reference is valid.
      */
-    MarkdownLink lookupReference(string label, ref OutBuffer buf, size_t i, const ref Loc loc)
+    MarkdownLink lookupReference(string label, ref OutBuffer buf, size_t i, const ref DdocLoc loc)
     {
         const lowercaseLabel = label.toLowercase();
         if (lowercaseLabel !in references)
@@ -3677,7 +3719,7 @@ private struct MarkdownLinkReferences
      *  loc   = the current location in the file
      * Returns: whether a reference was extracted
      */
-    private void extractReferences(ref OutBuffer buf, size_t i, const ref Loc loc)
+    private void extractReferences(ref OutBuffer buf, size_t i, const ref DdocLoc loc)
     {
         static bool isFollowedBySpace(ref OutBuffer buf, size_t i)
         {
@@ -3944,7 +3986,7 @@ private size_t parseTableDelimiterRow(ref OutBuffer buf, const size_t iStart, bo
  *  columnAlignments = the parsed alignments for each column
  * Returns: the number of characters added by starting the table, or `0` if unchanged
  */
-private size_t startTable(ref OutBuffer buf, size_t iStart, size_t iEnd, const ref Loc loc, bool inQuote, ref MarkdownDelimiter[] inlineDelimiters, out TableColumnAlignment[] columnAlignments)
+private size_t startTable(ref OutBuffer buf, size_t iStart, size_t iEnd, const ref DdocLoc loc, bool inQuote, ref MarkdownDelimiter[] inlineDelimiters, out TableColumnAlignment[] columnAlignments)
 {
     const iDelimiterRowEnd = parseTableDelimiterRow(buf, iEnd + 1, inQuote, columnAlignments);
     if (iDelimiterRowEnd)
@@ -3980,7 +4022,7 @@ private size_t startTable(ref OutBuffer buf, size_t iStart, size_t iEnd, const r
  *  delta     = the number of characters added by replacing the row, or `0` if unchanged
  * Returns: `true` if a table row was found and replaced
  */
-private bool replaceTableRow(ref OutBuffer buf, size_t iStart, size_t iEnd, const ref Loc loc, ref MarkdownDelimiter[] inlineDelimiters, TableColumnAlignment[] columnAlignments, bool headerRow, out size_t delta)
+private bool replaceTableRow(ref OutBuffer buf, size_t iStart, size_t iEnd, const ref DdocLoc loc, ref MarkdownDelimiter[] inlineDelimiters, TableColumnAlignment[] columnAlignments, bool headerRow, out size_t delta)
 {
     delta = 0;
 
@@ -4129,7 +4171,7 @@ private size_t endTable(ref OutBuffer buf, size_t i, ref TableColumnAlignment[] 
  *  columnAlignments = alignments for each column; upon return is set to length `0`
  * Returns: the number of characters added by replacing the row, or `0` if unchanged
  */
-private size_t endRowAndTable(ref OutBuffer buf, size_t iStart, size_t iEnd, const ref Loc loc, ref MarkdownDelimiter[] inlineDelimiters, ref TableColumnAlignment[] columnAlignments)
+private size_t endRowAndTable(ref OutBuffer buf, size_t iStart, size_t iEnd, const ref DdocLoc loc, ref MarkdownDelimiter[] inlineDelimiters, ref TableColumnAlignment[] columnAlignments)
 {
     size_t delta;
     replaceTableRow(buf, iStart, iEnd, loc, inlineDelimiters, columnAlignments, false, delta);
@@ -4147,7 +4189,7 @@ private size_t endRowAndTable(ref OutBuffer buf, size_t iStart, size_t iEnd, con
  *  buf   = an OutBuffer containing the DDoc
  *  offset = the index within buf to start highlighting
  */
-private void highlightText(Scope* sc, Dsymbols* a, Loc loc, ref OutBuffer buf, size_t offset)
+private void highlightText(Scope* sc, Dsymbols* a, DdocLoc loc, ref OutBuffer buf, size_t offset)
 {
     const incrementLoc = loc.linnum == 0 ? 1 : 0;
     loc.linnum += incrementLoc;
@@ -4983,7 +5025,7 @@ private void highlightText(Scope* sc, Dsymbols* a, Loc loc, ref OutBuffer buf, s
     }
 
     if (inCode == '-')
-        error(loc, "unmatched `---` in DDoc comment");
+        ddocError(loc, "unmatched `---` in DDoc comment");
     else if (inCode)
         buf.insert(buf.length, ")");
 
