@@ -4487,7 +4487,7 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
                      *   alias @safe void function() FP2;    // FP2 is not @safe
                      *   alias void function() @safe FP3;
                      */
-                    pAttrs.storageClass &= STC.safeGroup;
+                    // pAttrs.storageClass &= STC.safeGroup;
                 }
                 AST.Dsymbol s = v;
 
