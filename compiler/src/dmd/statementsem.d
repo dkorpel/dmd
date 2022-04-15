@@ -3488,6 +3488,7 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
             sc = sc.push();
             sc.debug_ = true;
             ds.statement = ds.statement.statementSemantic(sc);
+            debugThrowWalker(ds.statement);
             sc.pop();
         }
         result = ds.statement;
@@ -4760,7 +4761,6 @@ private Statements* flatten(Statement statement, Scope* sc)
                 if (dc)
                 {
                     s = new DebugStatement(cs.loc, cs.ifbody);
-                    debugThrowWalker(cs.ifbody);
                 }
                 else
                     s = cs.ifbody;
