@@ -5344,6 +5344,7 @@ extern (C++) final class TypeReturn : TypeQualified
     }
 }
 
+
 /***********************************************************
  */
 extern (C++) final class TypeStruct : Type
@@ -5351,6 +5352,22 @@ extern (C++) final class TypeStruct : Type
     StructDeclaration sym;
     AliasThisRec att = AliasThisRec.fwdref;
     bool inuse = false; // struct currently subject of recursive method call
+
+    private enum Info : ubyte
+    {
+        none = 0,
+        //
+        determined = 0x01,
+        // struct { int * x; }
+        hasPointers = 0x02,
+        // struct { int* x = void; }
+        hasVoidInitPointers = 0x04,
+        // struct { invariant {} }
+        hasInvariant = 0x08,
+    }
+
+    // cached info for `hasPointers` and `hasVoidInitPointers`
+    private Info info = Info.none;
 
     extern (D) this(StructDeclaration sym)
     {
@@ -5532,52 +5549,49 @@ extern (C++) final class TypeStruct : Type
 
     override bool hasPointers()
     {
-        // Probably should cache this information in sym rather than recompute
-        StructDeclaration s = sym;
+        determineInfo();
+        return !!(info & Info.hasPointers);
+    }
 
+    // Compute info that requires inspecting all fields, and cache it
+    private void determineInfo()
+    {
+        if (info & Info.determined)
+            return;
+        StructDeclaration s = sym;
         if (sym.members && !sym.determineFields() && sym.type != Type.terror)
             error(sym.loc, "no size because of forward references");
+
+        if (s.hasInvariant())
+            info |= Info.hasInvariant;
 
         foreach (VarDeclaration v; s.fields)
         {
             if (v.storage_class & STC.ref_ || v.hasPointers())
-                return true;
+                info |= Info.hasPointers;
+
+            if (v._init && v._init.isVoidInitializer() && v.type.hasPointers())
+                info |= Info.hasVoidInitPointers;
+
+            if (!v._init && v.type.hasVoidInitPointers())
+                info |= Info.hasVoidInitPointers;
+
+            if (v.type.hasInvariant())
+                info |= Info.hasInvariant;
         }
-        return false;
+        info |= Info.determined;
     }
 
     override bool hasVoidInitPointers()
     {
-        // Probably should cache this information in sym rather than recompute
-        StructDeclaration s = sym;
-
-        sym.size(Loc.initial); // give error for forward references
-        foreach (VarDeclaration v; s.fields)
-        {
-            if (v._init && v._init.isVoidInitializer() && v.type.hasPointers())
-                return true;
-            if (!v._init && v.type.hasVoidInitPointers())
-                return true;
-        }
-        return false;
+        determineInfo();
+        return !!(info & Info.hasVoidInitPointers);
     }
 
     override bool hasInvariant()
     {
-        // Probably should cache this information in sym rather than recompute
-        StructDeclaration s = sym;
-
-        sym.size(Loc.initial); // give error for forward references
-
-        if (s.hasInvariant())
-            return true;
-
-        foreach (VarDeclaration v; s.fields)
-        {
-            if (v.type.hasInvariant())
-                return true;
-        }
-        return false;
+        determineInfo();
+        return !!(info & Info.hasInvariant);
     }
 
     extern (D) MATCH implicitConvToWithoutAliasThis(Type to)

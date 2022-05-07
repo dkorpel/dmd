@@ -777,6 +777,17 @@ public:
     StructDeclaration *sym;
     AliasThisRec att;
     bool inuse;
+private:
+    enum class Info : uint8_t
+    {
+        none = 0u,
+        determined = 1u,
+        hasPointers = 2u,
+        hasVoidInitPointers = 4u,
+        hasInvariant = 8u,
+    };
+
+    Info info;
 
     static TypeStruct *create(StructDeclaration *sym);
     const char *kind() override;
