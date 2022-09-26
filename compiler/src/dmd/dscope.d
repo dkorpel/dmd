@@ -40,7 +40,7 @@ import dmd.statement;
 import dmd.target;
 import dmd.tokens;
 
-//version=LOGSEARCH;
+// version=LOGSEARCH;
 
 
 // List of flags that can be applied to this `Scope`
@@ -339,9 +339,10 @@ struct Scope
      */
     extern (C++) Dsymbol search(const ref Loc loc, Identifier ident, Dsymbol* pscopesym, int flags = IgnoreNone)
     {
+        printf("\n# Scope.search('%s')\n", ident.toChars());
+        debugPrint();
         version (LOGSEARCH)
         {
-            printf("Scope.search(%p, '%s' flags=x%x)\n", &this, ident.toChars(), flags);
             // Print scope chain
             for (Scope* sc = &this; sc; sc = sc.enclosing)
             {
@@ -770,6 +771,38 @@ struct Scope
             return sa;
         }
     }
+
+    /// Print symbol tables of this scope and its parents. For debugging.
+    void debugPrint()
+    {
+        for (Scope* sc = &this; sc; sc = sc.enclosing)
+        {
+            if (!sc.scopesym)
+                continue;
+            printf("- %p %s", sc, sc.scopesym.toChars());
+
+            if (!sc.scopesym.symtab)
+            {
+                printf(": empty\n");
+                continue;
+            }
+
+
+            printf(": [");
+            bool first = false;
+            foreach (x; sc.scopesym.symtab.tab.asRange())
+            {
+                if (!first)
+                    first = true;
+                else
+                    printf(", ");
+                printf("%s", x.key.toChars());
+            }
+            printf("]\n");
+        }
+        printf("----------------\n");
+    }
+
     @safe @nogc pure nothrow const:
     /**********************************
     * Checks whether the current scope (or any of its parents) is deprecated.

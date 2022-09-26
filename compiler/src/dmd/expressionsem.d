@@ -5495,7 +5495,6 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
 
         void yes()
         {
-            //printf("yes\n");
             if (!e.id)
             {
                 result = IntegerExp.createBool(true);
@@ -5524,6 +5523,7 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
             unSpeculative(sc, s);
 
             result = IntegerExp.createBool(true);
+            assert(0);
         }
         void no()
         {
@@ -5828,6 +5828,8 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
                     }
 
                     unSpeculative(sc, s);
+                    sc.debugPrint();
+                    // HIERO
                 }
                 return yes();
             }
