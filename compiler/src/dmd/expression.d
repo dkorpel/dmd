@@ -1219,7 +1219,9 @@ extern (C++) abstract class Expression : ASTNode
     {
         if (!sc.func)
             return false;
-        if (sc.func == f)
+        // https://issues.dlang.org/show_bug.cgi?id=16528
+        // Break cyclic dependency
+        if (sc.func == f || f.purityInprocess)
             return false;
         if (sc.intypeof == 1)
             return false;
@@ -1454,7 +1456,11 @@ extern (C++) abstract class Expression : ASTNode
      */
     extern (D) final bool checkSafety(Scope* sc, FuncDeclaration f)
     {
-        if (sc.func == f)
+        if (!sc.func)
+            return false;
+        // https://issues.dlang.org/show_bug.cgi?id=16528
+        // Break cyclic dependency
+        if (sc.func == f || f.safetyInprocess)
             return false;
         if (sc.intypeof == 1)
             return false;
@@ -1533,6 +1539,23 @@ extern (C++) abstract class Expression : ASTNode
             return false;
         if (sc.flags & (SCOPE.ctfe | SCOPE.debug_))
             return false;
+
+        // https://issues.dlang.org/show_bug.cgi?id=16528
+        // Break cyclic dependency
+        if (f.nogcInprocess)
+        {
+            if (f.semanticRun < PASS.semantic3 && f._scope)
+            {
+                // This is for backwards compatibility with the old `isNogc()` call
+                // which would call `setGC()` which does semantic on the function
+                // Removing it caused forward reference errors
+                import dmd.semantic2 : semantic2;
+                import dmd.semantic3 : semantic3;
+                f.semantic2(f._scope);
+                f.semantic3(f._scope);
+            }
+            return false;
+        }
 
         if (!f.isNogc())
         {

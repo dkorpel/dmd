@@ -126,7 +126,7 @@ extern (C++) /* CT */ BE canThrow(Expression e, FuncDeclaration func, bool mustN
              * then this expression cannot throw.
              * Note that pure functions can throw.
              */
-            if (ce.f && ce.f == func)
+            if (ce.f && (ce.f == func || ce.f.nothrowInprocess))
                 return;
             Type t = ce.e1.type.toBasetype();
             auto tf = t.isTypeFunction();
