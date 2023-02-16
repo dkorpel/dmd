@@ -1419,7 +1419,7 @@ extern (C++) final class TemplateDeclaration : ScopeDsymbol
             else
                 n = ntargs;
 
-            memcpy(dedargs.tdata(), tiargs.tdata(), n * (*dedargs.tdata()).sizeof);
+            (*dedargs)[][] = (*tiargs)[][];
 
             for (size_t i = 0; i < n; i++)
             {
@@ -4452,8 +4452,8 @@ MATCH deduceType(RootObject o, Scope* sc, Type tparam, TemplateParameters* param
             if (parti)
             {
                 // Make a temporary copy of dedtypes so we don't destroy it
-                auto tmpdedtypes = new Objects(dedtypes.length);
-                memcpy(tmpdedtypes.tdata(), dedtypes.tdata(), dedtypes.length * (void*).sizeof);
+                auto tmpdedtypes = new Objects();
+                tmpdedtypes.pushSlice((*dedtypes)[]);
 
                 auto t = new TypeInstance(Loc.initial, parti);
                 MATCH m = deduceType(t, sc, tparam, parameters, tmpdedtypes);
@@ -4461,7 +4461,7 @@ MATCH deduceType(RootObject o, Scope* sc, Type tparam, TemplateParameters* param
                 {
                     // If this is the first ever match, it becomes our best estimate
                     if (numBaseClassMatches == 0)
-                        memcpy(best.tdata(), tmpdedtypes.tdata(), tmpdedtypes.length * (void*).sizeof);
+                        (*best)[][] = (*tmpdedtypes)[][];
                     else
                         for (size_t k = 0; k < tmpdedtypes.length; ++k)
                         {
@@ -4564,7 +4564,7 @@ MATCH deduceType(RootObject o, Scope* sc, Type tparam, TemplateParameters* param
                 }
 
                 // If we got at least one match, copy the known types into dedtypes
-                memcpy(dedtypes.tdata(), best.tdata(), best.length * (void*).sizeof);
+                (*dedtypes)[][] = (*best)[][];
                 result = MATCH.convert;
                 return;
             }
@@ -7062,7 +7062,7 @@ extern (C++) class TemplateInstance : ScopeDsymbol
                 td_best = td;
                 m_best = m;
                 tdtypes.setDim(dedtypes.length);
-                memcpy(tdtypes.tdata(), dedtypes.tdata(), tdtypes.length * (void*).sizeof);
+                tdtypes[][] = dedtypes[][];
                 return 0;
             });
 
