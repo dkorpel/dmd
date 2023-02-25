@@ -291,7 +291,7 @@ extern (C++) class Dsymbol : ASTNode
 
     override const(char)* toChars() const
     {
-        return ident ? ident.toChars() : "__anonymous";
+        return ident ? ident.toHChars2() : "__anonymous";
     }
 
     // Getters / setters for fields stored in `DsymbolAttributes`

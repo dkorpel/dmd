@@ -754,7 +754,7 @@ extern (C++) abstract class AggregateDeclaration : ScopeDsymbol
                   s.isTemplateDeclaration() ||
                   s.isOverloadSet()))
             {
-                s.error("is not a constructor; identifiers starting with `__` are reserved for the implementation");
+                .error(s.loc, "cannot name symbol `__ctor`; identifiers starting with `__` are reserved for the implementation");
                 errors = true;
                 s = null;
             }

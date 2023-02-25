@@ -390,7 +390,7 @@ extern (C++) abstract class Declaration : Dsymbol
                 if (scx.func == vthis.parent && (scx.flags & SCOPE.contract))
                 {
                     if (!(flag & ModifyFlags.noError))
-                        error(loc, "cannot modify parameter `this` in contract");
+                        .error(loc, "cannot modify member variable `%s` in contract", toPrettyChars());
                     return Modifiable.initialization; // do not report type related errors
                 }
             }
