@@ -823,12 +823,6 @@ extern (C++) abstract class Type : ASTNode
             Tfloat32,
             Tfloat64,
             Tfloat80,
-            Timaginary32,
-            Timaginary64,
-            Timaginary80,
-            Tcomplex32,
-            Tcomplex64,
-            Tcomplex80,
             Tbool,
             Tchar,
             Twchar,
@@ -862,14 +856,6 @@ extern (C++) abstract class Type : ASTNode
         tfloat32 = basic[Tfloat32];
         tfloat64 = basic[Tfloat64];
         tfloat80 = basic[Tfloat80];
-
-        timaginary32 = basic[Timaginary32];
-        timaginary64 = basic[Timaginary64];
-        timaginary80 = basic[Timaginary80];
-
-        tcomplex32 = basic[Tcomplex32];
-        tcomplex64 = basic[Tcomplex64];
-        tcomplex80 = basic[Tcomplex80];
 
         tbool = basic[Tbool];
         tchar = basic[Tchar];
@@ -2643,46 +2629,6 @@ extern (C++) abstract class Type : ASTNode
         if (t.ty == Tenum && !(cast(TypeEnum)t).sym.memtype)
             return false;
 
-        if (t.isimaginary() || t.iscomplex())
-        {
-            Type rt;
-            switch (t.ty)
-            {
-            case Tcomplex32:
-            case Timaginary32:
-                rt = Type.tfloat32;
-                break;
-
-            case Tcomplex64:
-            case Timaginary64:
-                rt = Type.tfloat64;
-                break;
-
-            case Tcomplex80:
-            case Timaginary80:
-                rt = Type.tfloat80;
-                break;
-
-            default:
-                assert(0);
-            }
-            // @@@DEPRECATED_2.117@@@
-            // Deprecated in 2.097 - Can be made an error from 2.117.
-            // The deprecation period is longer than usual as `cfloat`,
-            // `cdouble`, and `creal` were quite widely used.
-            if (t.iscomplex())
-            {
-                deprecation(loc, "use of complex type `%s` is deprecated, use `std.complex.Complex!(%s)` instead",
-                    toChars(), rt.toChars());
-                return true;
-            }
-            else
-            {
-                deprecation(loc, "use of imaginary type `%s` is deprecated, use `%s` instead",
-                    toChars(), rt.toChars());
-                return true;
-            }
-        }
         return false;
     }
 
@@ -3196,36 +3142,6 @@ extern (C++) final class TypeBasic : Type
             flags |= TFlags.floating | TFlags.real_;
             break;
 
-        case Timaginary32:
-            d = Token.toChars(TOK.imaginary32);
-            flags |= TFlags.floating | TFlags.imaginary;
-            break;
-
-        case Timaginary64:
-            d = Token.toChars(TOK.imaginary64);
-            flags |= TFlags.floating | TFlags.imaginary;
-            break;
-
-        case Timaginary80:
-            d = Token.toChars(TOK.imaginary80);
-            flags |= TFlags.floating | TFlags.imaginary;
-            break;
-
-        case Tcomplex32:
-            d = Token.toChars(TOK.complex32);
-            flags |= TFlags.floating | TFlags.complex;
-            break;
-
-        case Tcomplex64:
-            d = Token.toChars(TOK.complex64);
-            flags |= TFlags.floating | TFlags.complex;
-            break;
-
-        case Tcomplex80:
-            d = Token.toChars(TOK.complex80);
-            flags |= TFlags.floating | TFlags.complex;
-            break;
-
         case Tbool:
             d = "bool";
             flags |= TFlags.integral | TFlags.unsigned;
@@ -3284,34 +3200,22 @@ extern (C++) final class TypeBasic : Type
         case Tint32:
         case Tuns32:
         case Tfloat32:
-        case Timaginary32:
             size = 4;
             break;
 
         case Tint64:
         case Tuns64:
         case Tfloat64:
-        case Timaginary64:
             size = 8;
             break;
 
         case Tfloat80:
-        case Timaginary80:
             size = target.realsize;
             break;
 
-        case Tcomplex32:
-            size = 8;
-            break;
-
-        case Tcomplex64:
         case Tint128:
         case Tuns128:
             size = 16;
-            break;
-
-        case Tcomplex80:
-            size = target.realsize * 2;
             break;
 
         case Tvoid:
@@ -3361,16 +3265,6 @@ extern (C++) final class TypeBasic : Type
     override bool isreal()
     {
         return (flags & TFlags.real_) != 0;
-    }
-
-    override bool isimaginary()
-    {
-        return (flags & TFlags.imaginary) != 0;
-    }
-
-    override bool iscomplex()
-    {
-        return (flags & TFlags.complex) != 0;
     }
 
     override bool isscalar()
@@ -3432,10 +3326,6 @@ extern (C++) final class TypeBasic : Type
 
         if (flags & TFlags.integral)
         {
-            // Disallow implicit conversion of integers to imaginary or complex
-            if (tob.flags & (TFlags.imaginary | TFlags.complex))
-                return MATCH.nomatch;
-
             // If converting from integral to integral
             if (tob.flags & TFlags.integral)
             {
@@ -3459,18 +3349,6 @@ extern (C++) final class TypeBasic : Type
                 return MATCH.nomatch;
 
             assert(tob.flags & TFlags.floating || to.ty == Tvector);
-
-            // Disallow implicit conversion from complex to non-complex
-            if (flags & TFlags.complex && !(tob.flags & TFlags.complex))
-                return MATCH.nomatch;
-
-            // Disallow implicit conversion of real or imaginary to complex
-            if (flags & (TFlags.real_ | TFlags.imaginary) && tob.flags & TFlags.complex)
-                return MATCH.nomatch;
-
-            // Disallow implicit conversion to-from real and imaginary
-            if ((flags & (TFlags.real_ | TFlags.imaginary)) != (tob.flags & (TFlags.real_ | TFlags.imaginary)))
-                return MATCH.nomatch;
         }
         return MATCH.convert;
     }
@@ -3482,15 +3360,9 @@ extern (C++) final class TypeBasic : Type
         case Tchar:
         case Twchar:
         case Tdchar:
-        case Timaginary32:
-        case Timaginary64:
-        case Timaginary80:
         case Tfloat32:
         case Tfloat64:
         case Tfloat80:
-        case Tcomplex32:
-        case Tcomplex64:
-        case Tcomplex80:
             return false; // no
         default:
             return true; // yes

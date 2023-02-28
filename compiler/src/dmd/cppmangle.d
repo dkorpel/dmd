@@ -1714,37 +1714,6 @@ extern(C++):
          * Ds       char16_t
          * u <source-name>  # vendor extended type
          */
-        if (t.isimaginary() || t.iscomplex())
-        {
-            // https://issues.dlang.org/show_bug.cgi?id=22806
-            // Complex and imaginary types are represented in the same way as
-            // arrays or vectors in C++.  First substitute the outer type, then
-            // write out the mangle string of the underlying type.
-            if (substitute(t))
-                return;
-            append(t);
-            CV_qualifiers(t);
-
-            if (t.isimaginary())
-                buf.writeByte('G'); // 'G' means imaginary
-            else
-                buf.writeByte('C'); // 'C' means complex
-
-            switch (t.ty)
-            {
-                case Timaginary32:
-                case Tcomplex32:
-                    return Type.tfloat32.accept(this);
-                case Timaginary64:
-                case Tcomplex64:
-                    return Type.tfloat64.accept(this);
-                case Timaginary80:
-                case Tcomplex80:
-                    return Type.tfloat80.accept(this);
-                default:
-                    assert(0);
-            }
-        }
 
         char c;
         char p = 0;

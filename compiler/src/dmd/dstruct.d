@@ -637,7 +637,6 @@ private bool _isZeroInit(Expression exp)
         }
 
         case EXP.float64:
-        case EXP.complex80:
         {
             import dmd.root.ctfloat : CTFloat;
             return (exp.toReal()      is CTFloat.zero) &&

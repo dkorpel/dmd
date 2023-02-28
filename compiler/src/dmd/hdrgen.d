@@ -2016,18 +2016,6 @@ private void expressionPrettyPrint(Expression e, OutBuffer* buf, HdrGenState* hg
         floatToBuffer(e.type, e.value);
     }
 
-    void visitComplex(ComplexExp e)
-    {
-        /* Print as:
-         *  (re+imi)
-         */
-        buf.writeByte('(');
-        floatToBuffer(e.type, creall(e.value));
-        buf.writeByte('+');
-        floatToBuffer(e.type, cimagl(e.value));
-        buf.writestring("i)");
-    }
-
     void visitIdentifier(IdentifierExp e)
     {
         if (hgs.hdrgen || hgs.ddoc)
@@ -2633,7 +2621,6 @@ private void expressionPrettyPrint(Expression e, OutBuffer* buf, HdrGenState* hg
         case EXP.error:         return visitError(e.isErrorExp());
         case EXP.void_:         return visitVoidInit(e.isVoidInitExp());
         case EXP.float64:       return visitReal(e.isRealExp());
-        case EXP.complex80:     return visitComplex(e.isComplexExp());
         case EXP.identifier:    return visitIdentifier(e.isIdentifierExp());
         case EXP.dSymbol:       return visitDsymbol(e.isDsymbolExp());
         case EXP.this_:         return visitThis(e.isThisExp());
@@ -2732,13 +2719,9 @@ void floatToBuffer(Type type, const real_t value, OutBuffer* buf, const bool all
         switch (t.ty)
         {
         case Tfloat32:
-        case Timaginary32:
-        case Tcomplex32:
             buf.writeByte('F');
             break;
         case Tfloat80:
-        case Timaginary80:
-        case Tcomplex80:
             buf.writeByte('L');
             break;
         default:

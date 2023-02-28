@@ -75,13 +75,6 @@ struct ASTCodegen
     alias Twchar                    = dmd.mtype.Twchar;
     alias Tnoreturn                 = dmd.mtype.Tnoreturn;
 
-    alias Timaginary32              = dmd.mtype.Timaginary32;
-    alias Timaginary64              = dmd.mtype.Timaginary64;
-    alias Timaginary80              = dmd.mtype.Timaginary80;
-    alias Tcomplex32                = dmd.mtype.Tcomplex32;
-    alias Tcomplex64                = dmd.mtype.Tcomplex64;
-    alias Tcomplex80                = dmd.mtype.Tcomplex80;
-
     alias ParameterList             = dmd.mtype.ParameterList;
     alias VarArg                    = dmd.mtype.VarArg;
     alias STC                       = dmd.declaration.STC;

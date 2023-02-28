@@ -316,7 +316,6 @@ extern (C++) void Expression_toDt(Expression e, ref DtBuilder dtb)
         switch (e.type.toBasetype().ty)
         {
             case Tfloat32:
-            case Timaginary32:
             {
                 auto fvalue = cast(float)e.value;
                 dtb.nbytes(4, cast(char*)&fvalue);
@@ -324,7 +323,6 @@ extern (C++) void Expression_toDt(Expression e, ref DtBuilder dtb)
             }
 
             case Tfloat64:
-            case Timaginary64:
             {
                 auto dvalue = cast(double)e.value;
                 dtb.nbytes(8, cast(char*)&dvalue);
@@ -332,7 +330,6 @@ extern (C++) void Expression_toDt(Expression e, ref DtBuilder dtb)
             }
 
             case Tfloat80:
-            case Timaginary80:
             {
                 auto evalue = e.value;
                 dtb.nbytes(target.realsize - target.realpad, cast(char*)&evalue);
@@ -342,45 +339,6 @@ extern (C++) void Expression_toDt(Expression e, ref DtBuilder dtb)
 
             default:
                 printf("%s, e.type=%s\n", e.toChars(), e.type.toChars());
-                assert(0);
-        }
-    }
-
-    void visitComplex(ComplexExp e)
-    {
-        //printf("ComplexExp.toDt() '%s'\n", e.toChars());
-        switch (e.type.toBasetype().ty)
-        {
-            case Tcomplex32:
-            {
-                auto fvalue = cast(float)creall(e.value);
-                dtb.nbytes(4, cast(char*)&fvalue);
-                fvalue = cast(float)cimagl(e.value);
-                dtb.nbytes(4, cast(char*)&fvalue);
-                break;
-            }
-
-            case Tcomplex64:
-            {
-                auto dvalue = cast(double)creall(e.value);
-                dtb.nbytes(8, cast(char*)&dvalue);
-                dvalue = cast(double)cimagl(e.value);
-                dtb.nbytes(8, cast(char*)&dvalue);
-                break;
-            }
-
-            case Tcomplex80:
-            {
-                auto evalue = creall(e.value);
-                dtb.nbytes(target.realsize - target.realpad, cast(char*)&evalue);
-                dtb.nzeros(target.realpad);
-                evalue = cimagl(e.value);
-                dtb.nbytes(target.realsize - target.realpad, cast(char*)&evalue);
-                dtb.nzeros(target.realpad);
-                break;
-            }
-
-            default:
                 assert(0);
         }
     }
@@ -627,7 +585,6 @@ extern (C++) void Expression_toDt(Expression e, ref DtBuilder dtb)
         case EXP.address:        return visitAddr          (e.isAddrExp());
         case EXP.int64:          return visitInteger       (e.isIntegerExp());
         case EXP.float64:        return visitReal          (e.isRealExp());
-        case EXP.complex80:      return visitComplex       (e.isComplexExp());
         case EXP.null_:          return visitNull          (e.isNullExp());
         case EXP.string_:        return visitString        (e.isStringExp());
         case EXP.arrayLiteral:   return visitArrayLiteral  (e.isArrayLiteralExp());

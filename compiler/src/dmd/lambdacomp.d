@@ -469,7 +469,6 @@ public:
     override void visit(ArrayLiteralExp) { buf.setsize(0); }
     override void visit(AssocArrayLiteralExp) { buf.setsize(0); }
     override void visit(MixinExp) { buf.setsize(0); }
-    override void visit(ComplexExp) { buf.setsize(0); }
     override void visit(DeclarationExp) { buf.setsize(0); }
     override void visit(DefaultInitExp) { buf.setsize(0); }
     override void visit(DsymbolExp) { buf.setsize(0); }

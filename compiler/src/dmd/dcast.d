@@ -1780,23 +1780,7 @@ Expression castTo(Expression e, Scope* sc, Type t, Type att = null)
     {
         if (!e.type.equals(t))
         {
-            if ((e.type.isreal() && t.isreal()) || (e.type.isimaginary() && t.isimaginary()))
-            {
-                auto result = e.copy();
-                result.type = t;
-                return result;
-            }
-            else
-                return visit(e);
-        }
-        return e;
-    }
-
-    Expression visitComplex(ComplexExp e)
-    {
-        if (!e.type.equals(t))
-        {
-            if (e.type.iscomplex() && t.iscomplex())
+            if ((e.type.isreal() && t.isreal()))
             {
                 auto result = e.copy();
                 result.type = t;
@@ -2622,7 +2606,6 @@ Expression castTo(Expression e, Scope* sc, Type t, Type att = null)
         default                   : return visit(e);
         case EXP.error            : return visitError(e.isErrorExp());
         case EXP.float64          : return visitReal(e.isRealExp());
-        case EXP.complex80        : return visitComplex(e.isComplexExp());
         case EXP.structLiteral    : return visitStructLiteral(e.isStructLiteralExp());
         case EXP.string_          : return visitString(e.isStringExp());
         case EXP.address          : return visitAddr(e.isAddrExp());

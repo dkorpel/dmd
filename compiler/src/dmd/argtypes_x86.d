@@ -97,27 +97,6 @@ extern (C++) TypeTuple toArgTypes_x86(Type t)
             case Tfloat80:
                 t1 = t;
                 break;
-            case Timaginary32:
-                t1 = Type.tfloat32;
-                break;
-            case Timaginary64:
-                t1 = Type.tfloat64;
-                break;
-            case Timaginary80:
-                t1 = Type.tfloat80;
-                break;
-            case Tcomplex32:
-                t1 = Type.tfloat64;
-                t2 = Type.tfloat64;
-                break;
-            case Tcomplex64:
-                t1 = Type.tfloat64;
-                t2 = Type.tfloat64;
-                break;
-            case Tcomplex80:
-                t1 = Type.tfloat80;
-                t2 = Type.tfloat80;
-                break;
             case Tchar:
                 t1 = Type.tuns8;
                 break;
@@ -164,12 +143,9 @@ extern (C++) TypeTuple toArgTypes_x86(Type t)
             switch (t.ty)
             {
             case Tfloat32:
-            case Timaginary32:
                 t = Type.tint32;
                 break;
             case Tfloat64:
-            case Timaginary64:
-            case Tcomplex32:
                 t = Type.tint64;
                 break;
             default:

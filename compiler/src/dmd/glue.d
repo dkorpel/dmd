@@ -1429,12 +1429,6 @@ tym_t totym(Type tx)
         case Tfloat32:  t = TYfloat;    break;
         case Tfloat64:  t = TYdouble;   break;
         case Tfloat80:  t = TYldouble;  break;
-        case Timaginary32: t = TYifloat; break;
-        case Timaginary64: t = TYidouble; break;
-        case Timaginary80: t = TYildouble; break;
-        case Tcomplex32: t = TYcfloat;  break;
-        case Tcomplex64: t = TYcdouble; break;
-        case Tcomplex80: t = TYcldouble; break;
         case Tbool:     t = TYbool;     break;
         case Tchar:     t = TYchar;     break;
         case Twchar:    t = TYwchar_t;  break;

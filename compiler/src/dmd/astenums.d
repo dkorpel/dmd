@@ -188,12 +188,6 @@ enum TY : ubyte
     Tfloat32,
     Tfloat64,
     Tfloat80,
-    Timaginary32,
-    Timaginary64,
-    Timaginary80,
-    Tcomplex32,
-    Tcomplex64,
-    Tcomplex80,
 
     Tbool,
     Tchar,
@@ -241,12 +235,6 @@ alias Tuns64 = TY.Tuns64;
 alias Tfloat32 = TY.Tfloat32;
 alias Tfloat64 = TY.Tfloat64;
 alias Tfloat80 = TY.Tfloat80;
-alias Timaginary32 = TY.Timaginary32;
-alias Timaginary64 = TY.Timaginary64;
-alias Timaginary80 = TY.Timaginary80;
-alias Tcomplex32 = TY.Tcomplex32;
-alias Tcomplex64 = TY.Tcomplex64;
-alias Tcomplex80 = TY.Tcomplex80;
 alias Tbool = TY.Tbool;
 alias Tchar = TY.Tchar;
 alias Twchar = TY.Twchar;
@@ -273,8 +261,6 @@ enum TFlags
     floating     = 2,
     unsigned     = 4,
     real_        = 8,
-    imaginary    = 0x10,
-    complex      = 0x20,
 }
 
 enum PKG : int

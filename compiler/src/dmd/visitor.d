@@ -64,7 +64,6 @@ public:
     void visit(ASTCodegen.FuncAliasDeclaration s) { visit(cast(ASTCodegen.FuncDeclaration)s); }
     void visit(ASTCodegen.ErrorInitializer i) { visit(cast(ASTCodegen.Initializer)i); }
     void visit(ASTCodegen.ErrorExp e) { visit(cast(ASTCodegen.Expression)e); }
-    void visit(ASTCodegen.ComplexExp e) { visit(cast(ASTCodegen.Expression)e); }
     void visit(ASTCodegen.StructLiteralExp e) { visit(cast(ASTCodegen.Expression)e); }
     void visit(ASTCodegen.CompoundLiteralExp e) { visit(cast(ASTCodegen.Expression)e); }
     void visit(ASTCodegen.ObjcClassReferenceExp e) { visit(cast(ASTCodegen.Expression)e); }

@@ -536,11 +536,6 @@ public:
 
             // Noreturn has a different mangling
             case AST.Tnoreturn:
-
-            // _Imaginary is C only.
-            case AST.Timaginary32:
-            case AST.Timaginary64:
-            case AST.Timaginary80:
                 return false;
             default:
                 return true;
@@ -1884,20 +1879,6 @@ public:
                 typeName = "_d_real";
                 hasReal = true;
                 break;
-            case AST.Tcomplex32:  typeName = "_Complex float";  break;
-            case AST.Tcomplex64:  typeName = "_Complex double"; break;
-            case AST.Tcomplex80:
-                typeName = "_Complex _d_real";
-                hasReal = true;
-                break;
-            // ???: This is not strictly correct, but it should be ignored
-            // in all places where it matters most (variables, functions, ...).
-            case AST.Timaginary32: typeName = "float";  break;
-            case AST.Timaginary64: typeName = "double"; break;
-            case AST.Timaginary80:
-                typeName = "_d_real";
-                hasReal = true;
-                break;
             default:
                 //t.print();
                 assert(0);
@@ -1989,12 +1970,6 @@ public:
                 buf.writestring("char");
             else if (ed.ident == DMDType.c_wchar_t)
                 buf.writestring("wchar_t");
-            else if (ed.ident == DMDType.c_complex_float)
-                buf.writestring("_Complex float");
-            else if (ed.ident == DMDType.c_complex_double)
-                buf.writestring("_Complex double");
-            else if (ed.ident == DMDType.c_complex_real)
-                buf.writestring("_Complex long double");
             else
             {
                 //ed.print();

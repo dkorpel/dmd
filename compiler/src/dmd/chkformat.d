@@ -209,12 +209,12 @@ bool checkPrintfFormat(ref const Loc loc, scope const char[] format, scope Expre
 
             case Format.lg:
             case Format.g:      // double
-                if (t.ty != Tfloat64 && t.ty != Timaginary64)
+                if (t.ty != Tfloat64)
                     errorMsg(null, e, "double", t);
                 break;
 
             case Format.Lg:     // long double
-                if (t.ty != Tfloat80 && t.ty != Timaginary80)
+                if (t.ty != Tfloat80)
                     errorMsg(null, e, "real", t);
                 break;
 

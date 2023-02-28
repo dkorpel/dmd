@@ -429,10 +429,6 @@ private size_t expressionHash(Expression e)
     case EXP.float64:
         return CTFloat.hash(e.isRealExp().value);
 
-    case EXP.complex80:
-        auto ce = e.isComplexExp();
-        return mixHash(CTFloat.hash(ce.toReal), CTFloat.hash(ce.toImaginary));
-
     case EXP.identifier:
         return cast(size_t)cast(void*) e.isIdentifierExp().ident;
 

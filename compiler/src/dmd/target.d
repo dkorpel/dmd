@@ -377,18 +377,10 @@ extern (C++) struct Target
         switch (type.ty)
         {
         case TY.Tfloat80:
-        case TY.Timaginary80:
-        case TY.Tcomplex80:
             return target.realalignsize;
-        case TY.Tcomplex32:
-            if (os & Target.OS.Posix)
-                return 4;
-            break;
         case TY.Tint64:
         case TY.Tuns64:
         case TY.Tfloat64:
-        case TY.Timaginary64:
-        case TY.Tcomplex64:
             if (os & Target.OS.Posix)
                 return is64bit ? 8 : 4;
             break;
@@ -812,8 +804,6 @@ extern (C++) struct Target
         if (os == Target.OS.Windows && is64bit)
         {
             // https://msdn.microsoft.com/en-us/library/7572ztz4%28v=vs.100%29.aspx
-            if (tns.ty == TY.Tcomplex32)
-                return true;
             if (tns.isscalar())
                 return false;
 
@@ -926,15 +916,6 @@ extern (C++) struct Target
             }
             //printf("  3 true\n");
             return true;
-        }
-        else if (os & Target.OS.Posix &&
-                 (tf.linkage == LINK.c || tf.linkage == LINK.cpp) &&
-                 tns.iscomplex())
-        {
-            if (tns.ty == TY.Tcomplex32)
-                return false;     // in EDX:EAX, not ST1:ST0
-            else
-                return true;
         }
         else if (os == Target.OS.Windows &&
                  !is64bit &&

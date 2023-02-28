@@ -607,7 +607,6 @@ private:
         char[__traits(classInstanceSize, IntegerExp)] integerexp;
         char[__traits(classInstanceSize, ErrorExp)] errorexp;
         char[__traits(classInstanceSize, RealExp)] realexp;
-        char[__traits(classInstanceSize, ComplexExp)] complexexp;
         char[__traits(classInstanceSize, SymOffExp)] symoffexp;
         char[__traits(classInstanceSize, StringExp)] stringexp;
         char[__traits(classInstanceSize, ArrayLiteralExp)] arrayliteralexp;
@@ -1715,7 +1714,6 @@ extern (C++) abstract class Expression : ASTNode
         inout(ErrorExp)     isErrorExp() { return op == EXP.error ? cast(typeof(return))this : null; }
         inout(VoidInitExp)  isVoidInitExp() { return op == EXP.void_ ? cast(typeof(return))this : null; }
         inout(RealExp)      isRealExp() { return op == EXP.float64 ? cast(typeof(return))this : null; }
-        inout(ComplexExp)   isComplexExp() { return op == EXP.complex80 ? cast(typeof(return))this : null; }
         inout(IdentifierExp) isIdentifierExp() { return op == EXP.identifier ? cast(typeof(return))this : null; }
         inout(DollarExp)    isDollarExp() { return op == EXP.dollar ? cast(typeof(return))this : null; }
         inout(DsymbolExp)   isDsymbolExp() { return op == EXP.dSymbol ? cast(typeof(return))this : null; }
@@ -2217,92 +2215,6 @@ extern (C++) final class RealExp : Expression
     override complex_t toComplex()
     {
         return complex_t(toReal(), toImaginary());
-    }
-
-    override Optional!bool toBool()
-    {
-        return typeof(return)(!!value);
-    }
-
-    override void accept(Visitor v)
-    {
-        v.visit(this);
-    }
-}
-
-/***********************************************************
- * A compile-time complex number (deprecated)
- */
-extern (C++) final class ComplexExp : Expression
-{
-    complex_t value;
-
-    extern (D) this(const ref Loc loc, complex_t value, Type type)
-    {
-        super(loc, EXP.complex80, __traits(classInstanceSize, ComplexExp));
-        this.value = value;
-        this.type = type;
-        //printf("ComplexExp::ComplexExp(%s)\n", toChars());
-    }
-
-    static ComplexExp create(const ref Loc loc, complex_t value, Type type)
-    {
-        return new ComplexExp(loc, value, type);
-    }
-
-    // Same as create, but doesn't allocate memory.
-    static void emplace(UnionExp* pue, const ref Loc loc, complex_t value, Type type)
-    {
-        emplaceExp!(ComplexExp)(pue, loc, value, type);
-    }
-
-    override bool equals(const RootObject o) const
-    {
-        if (this == o)
-            return true;
-        if (auto ne = (cast(Expression)o).isComplexExp())
-        {
-            if (type.toHeadMutable().equals(ne.type.toHeadMutable()) && RealIdentical(creall(value), creall(ne.value)) && RealIdentical(cimagl(value), cimagl(ne.value)))
-            {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    override bool isIdentical(const Expression e) const
-    {
-        if (!equals(e))
-            return false;
-        // equals() regards different NaN values as 'equals'
-        auto c = e.isComplexExp();
-        return CTFloat.isIdentical(creall(value), creall(c.value)) &&
-               CTFloat.isIdentical(cimagl(value), cimagl(c.value));
-    }
-
-    override dinteger_t toInteger()
-    {
-        return cast(sinteger_t)toReal();
-    }
-
-    override uinteger_t toUInteger()
-    {
-        return cast(uinteger_t)toReal();
-    }
-
-    override real_t toReal()
-    {
-        return creall(value);
-    }
-
-    override real_t toImaginary()
-    {
-        return cimagl(value);
-    }
-
-    override complex_t toComplex()
-    {
-        return value;
     }
 
     override Optional!bool toBool()
@@ -4473,132 +4385,6 @@ extern (C++) abstract class BinExp : Expression
             if ((type.isintegral() && t2.isfloating()))
             {
                 warning("`%s %s %s` is performing truncating conversion", type.toChars(), EXPtoString(op).ptr, t2.toChars());
-            }
-        }
-
-        // generate an error if this is a nonsensical *=,/=, or %=, eg real *= imaginary
-        if (op == EXP.mulAssign || op == EXP.divAssign || op == EXP.modAssign)
-        {
-            // Any multiplication by an imaginary or complex number yields a complex result.
-            // r *= c, i*=c, r*=i, i*=i are all forbidden operations.
-            const(char)* opstr = EXPtoString(op).ptr;
-            if (t1.isreal() && t2.iscomplex())
-            {
-                error("`%s %s %s` is undefined. Did you mean `%s %s %s.re`?", t1.toChars(), opstr, t2.toChars(), t1.toChars(), opstr, t2.toChars());
-                return ErrorExp.get();
-            }
-            else if (t1.isimaginary() && t2.iscomplex())
-            {
-                error("`%s %s %s` is undefined. Did you mean `%s %s %s.im`?", t1.toChars(), opstr, t2.toChars(), t1.toChars(), opstr, t2.toChars());
-                return ErrorExp.get();
-            }
-            else if ((t1.isreal() || t1.isimaginary()) && t2.isimaginary())
-            {
-                error("`%s %s %s` is an undefined operation", t1.toChars(), opstr, t2.toChars());
-                return ErrorExp.get();
-            }
-        }
-
-        // generate an error if this is a nonsensical += or -=, eg real += imaginary
-        if (op == EXP.addAssign || op == EXP.minAssign)
-        {
-            // Addition or subtraction of a real and an imaginary is a complex result.
-            // Thus, r+=i, r+=c, i+=r, i+=c are all forbidden operations.
-            if ((t1.isreal() && (t2.isimaginary() || t2.iscomplex())) || (t1.isimaginary() && (t2.isreal() || t2.iscomplex())))
-            {
-                error("`%s %s %s` is undefined (result is complex)", t1.toChars(), EXPtoString(op).ptr, t2.toChars());
-                return ErrorExp.get();
-            }
-            if (type.isreal() || type.isimaginary())
-            {
-                assert(global.errors || t2.isfloating());
-                e2 = e2.castTo(sc, t1);
-            }
-        }
-        if (op == EXP.mulAssign)
-        {
-            if (t2.isfloating())
-            {
-                if (t1.isreal())
-                {
-                    if (t2.isimaginary() || t2.iscomplex())
-                    {
-                        e2 = e2.castTo(sc, t1);
-                    }
-                }
-                else if (t1.isimaginary())
-                {
-                    if (t2.isimaginary() || t2.iscomplex())
-                    {
-                        switch (t1.ty)
-                        {
-                        case Timaginary32:
-                            t2 = Type.tfloat32;
-                            break;
-
-                        case Timaginary64:
-                            t2 = Type.tfloat64;
-                            break;
-
-                        case Timaginary80:
-                            t2 = Type.tfloat80;
-                            break;
-
-                        default:
-                            assert(0);
-                        }
-                        e2 = e2.castTo(sc, t2);
-                    }
-                }
-            }
-        }
-        else if (op == EXP.divAssign)
-        {
-            if (t2.isimaginary())
-            {
-                if (t1.isreal())
-                {
-                    // x/iv = i(-x/v)
-                    // Therefore, the result is 0
-                    e2 = new CommaExp(loc, e2, new RealExp(loc, CTFloat.zero, t1));
-                    e2.type = t1;
-                    Expression e = new AssignExp(loc, e1, e2);
-                    e.type = t1;
-                    return e;
-                }
-                else if (t1.isimaginary())
-                {
-                    Type t3;
-                    switch (t1.ty)
-                    {
-                    case Timaginary32:
-                        t3 = Type.tfloat32;
-                        break;
-
-                    case Timaginary64:
-                        t3 = Type.tfloat64;
-                        break;
-
-                    case Timaginary80:
-                        t3 = Type.tfloat80;
-                        break;
-
-                    default:
-                        assert(0);
-                    }
-                    e2 = e2.castTo(sc, t3);
-                    Expression e = new AssignExp(loc, e1, e2);
-                    e.type = t1;
-                    return e;
-                }
-            }
-        }
-        else if (op == EXP.modAssign)
-        {
-            if (t2.iscomplex())
-            {
-                error("cannot perform modulo complex arithmetic");
-                return ErrorExp.get();
             }
         }
         return this;

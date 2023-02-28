@@ -162,22 +162,16 @@ private immutable char[TMAX] mangleChar =
 [
     Tchar        : 'a',
     Tbool        : 'b',
-    Tcomplex80   : 'c',
     Tfloat64     : 'd',
     Tfloat80     : 'e',
     Tfloat32     : 'f',
     Tint8        : 'g',
     Tuns8        : 'h',
     Tint32       : 'i',
-    Timaginary80 : 'j',
     Tuns32       : 'k',
     Tint64       : 'l',
     Tuns64       : 'm',
     Tnull        : 'n',
-    Timaginary32 : 'o',
-    Timaginary64 : 'p',
-    Tcomplex32   : 'q',
-    Tcomplex64   : 'r',
     Tint16       : 's',
     Tuns16       : 't',
     Twchar       : 'u',
@@ -1004,14 +998,6 @@ public:
     {
         buf.writeByte('e');
         realToMangleBuffer(buf, e.value);
-    }
-
-    override void visit(ComplexExp e)
-    {
-        buf.writeByte('c');
-        realToMangleBuffer(buf, e.toReal());
-        buf.writeByte('c'); // separate the two
-        realToMangleBuffer(buf, e.toImaginary());
     }
 
     override void visit(NullExp e)

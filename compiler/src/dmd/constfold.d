@@ -59,7 +59,6 @@ int isConst(Expression e)
     {
     case EXP.int64:
     case EXP.float64:
-    case EXP.complex80:
         return 1;
     case EXP.null_:
         return 0;
@@ -93,14 +92,6 @@ UnionExp Neg(Type type, Expression e1)
     if (e1.type.isreal())
     {
         emplaceExp!(RealExp)(&ue, loc, -e1.toReal(), type);
-    }
-    else if (e1.type.isimaginary())
-    {
-        emplaceExp!(RealExp)(&ue, loc, -e1.toImaginary(), type);
-    }
-    else if (e1.type.iscomplex())
-    {
-        emplaceExp!(ComplexExp)(&ue, loc, -e1.toComplex(), type);
     }
     else
     {
@@ -139,85 +130,6 @@ UnionExp Add(const ref Loc loc, Type type, Expression e1, Expression e2)
     {
         emplaceExp!(RealExp)(&ue, loc, e1.toReal() + e2.toReal(), type);
     }
-    else if (type.isimaginary())
-    {
-        emplaceExp!(RealExp)(&ue, loc, e1.toImaginary() + e2.toImaginary(), type);
-    }
-    else if (type.iscomplex())
-    {
-        // This rigamarole is necessary so that -0.0 doesn't get
-        // converted to +0.0 by doing an extraneous add with +0.0
-        auto c1 = complex_t(CTFloat.zero);
-        real_t r1 = CTFloat.zero;
-        real_t i1 = CTFloat.zero;
-        auto c2 = complex_t(CTFloat.zero);
-        real_t r2 = CTFloat.zero;
-        real_t i2 = CTFloat.zero;
-        auto v = complex_t(CTFloat.zero);
-        int x;
-        if (e1.type.isreal())
-        {
-            r1 = e1.toReal();
-            x = 0;
-        }
-        else if (e1.type.isimaginary())
-        {
-            i1 = e1.toImaginary();
-            x = 3;
-        }
-        else
-        {
-            c1 = e1.toComplex();
-            x = 6;
-        }
-        if (e2.type.isreal())
-        {
-            r2 = e2.toReal();
-        }
-        else if (e2.type.isimaginary())
-        {
-            i2 = e2.toImaginary();
-            x += 1;
-        }
-        else
-        {
-            c2 = e2.toComplex();
-            x += 2;
-        }
-        switch (x)
-        {
-        case 0 + 0:
-            v = complex_t(r1 + r2);
-            break;
-        case 0 + 1:
-            v = complex_t(r1, i2);
-            break;
-        case 0 + 2:
-            v = complex_t(r1 + creall(c2), cimagl(c2));
-            break;
-        case 3 + 0:
-            v = complex_t(r2, i1);
-            break;
-        case 3 + 1:
-            v = complex_t(CTFloat.zero, i1 + i2);
-            break;
-        case 3 + 2:
-            v = complex_t(creall(c2), i1 + cimagl(c2));
-            break;
-        case 6 + 0:
-            v = complex_t(creall(c1) + r2, cimagl(c2));
-            break;
-        case 6 + 1:
-            v = complex_t(creall(c1), cimagl(c1) + i2);
-            break;
-        case 6 + 2:
-            v = c1 + c2;
-            break;
-        default:
-            assert(0);
-        }
-        emplaceExp!(ComplexExp)(&ue, loc, v, type);
-    }
     else if (SymOffExp soe = e1.isSymOffExp())
     {
         emplaceExp!(SymOffExp)(&ue, loc, soe.var, soe.offset + e2.toInteger());
@@ -248,38 +160,16 @@ UnionExp Mul(const ref Loc loc, Type type, Expression e1, Expression e2)
     {
         auto c = complex_t(CTFloat.zero);
         real_t r = CTFloat.zero;
-        if (e1.type.isreal())
-        {
-            r = e1.toReal();
-            c = e2.toComplex();
-            c = complex_t(r * creall(c), r * cimagl(c));
-        }
-        else if (e1.type.isimaginary())
-        {
-            r = e1.toImaginary();
-            c = e2.toComplex();
-            c = complex_t(-r * cimagl(c), r * creall(c));
-        }
-        else if (e2.type.isreal())
+        if (e2.type.isreal())
         {
             r = e2.toReal();
             c = e1.toComplex();
             c = complex_t(r * creall(c), r * cimagl(c));
         }
-        else if (e2.type.isimaginary())
-        {
-            r = e2.toImaginary();
-            c = e1.toComplex();
-            c = complex_t(-r * cimagl(c), r * creall(c));
-        }
         else
             c = e1.toComplex() * e2.toComplex();
         if (type.isreal())
             emplaceExp!(RealExp)(&ue, loc, creall(c), type);
-        else if (type.isimaginary())
-            emplaceExp!(RealExp)(&ue, loc, cimagl(c), type);
-        else if (type.iscomplex())
-            emplaceExp!(ComplexExp)(&ue, loc, c, type);
         else
             assert(0);
     }
@@ -307,23 +197,9 @@ UnionExp Div(const ref Loc loc, Type type, Expression e1, Expression e2)
             c = e1.toComplex();
             c = complex_t(creall(c) / r, cimagl(c) / r);
         }
-        else if (e2.type.isimaginary())
-        {
-            const r = e2.toImaginary();
-            c = e1.toComplex();
-            c = complex_t(cimagl(c) / r, -creall(c) / r);
-        }
-        else
-        {
-            c = e1.toComplex() / e2.toComplex();
-        }
 
         if (type.isreal())
             emplaceExp!(RealExp)(&ue, loc, creall(c), type);
-        else if (type.isimaginary())
-            emplaceExp!(RealExp)(&ue, loc, cimagl(c), type);
-        else if (type.iscomplex())
-            emplaceExp!(ComplexExp)(&ue, loc, c, type);
         else
             assert(0);
     }
@@ -376,19 +252,10 @@ UnionExp Mod(const ref Loc loc, Type type, Expression e1, Expression e2)
             const r2 = e2.toReal();
             c = complex_t(e1.toReal() % r2, e1.toImaginary() % r2);
         }
-        else if (e2.type.isimaginary())
-        {
-            const i2 = e2.toImaginary();
-            c = complex_t(e1.toReal() % i2, e1.toImaginary() % i2);
-        }
         else
             assert(0);
         if (type.isreal())
             emplaceExp!(RealExp)(&ue, loc, creall(c), type);
-        else if (type.isimaginary())
-            emplaceExp!(RealExp)(&ue, loc, cimagl(c), type);
-        else if (type.iscomplex())
-            emplaceExp!(ComplexExp)(&ue, loc, c, type);
         else
             assert(0);
     }
@@ -453,12 +320,7 @@ UnionExp Pow(const ref Loc loc, Type type, Expression e1, Expression e2)
         else
             neg = false;
         UnionExp ur, uv;
-        if (e1.type.iscomplex())
-        {
-            emplaceExp!(ComplexExp)(&ur, loc, e1.toComplex(), e1.type);
-            emplaceExp!(ComplexExp)(&uv, loc, complex_t(CTFloat.one), e1.type);
-        }
-        else if (e1.type.isfloating())
+        if (e1.type.isfloating())
         {
             emplaceExp!(RealExp)(&ur, loc, e1.toReal(), e1.type);
             emplaceExp!(RealExp)(&uv, loc, CTFloat.one, e1.type);
@@ -488,9 +350,7 @@ UnionExp Pow(const ref Loc loc, Type type, Expression e1, Expression e2)
             emplaceExp!(RealExp)(&one, loc, CTFloat.one, v.type);
             uv = Div(loc, v.type, one.exp(), v);
         }
-        if (type.iscomplex())
-            emplaceExp!(ComplexExp)(&ue, loc, v.toComplex(), type);
-        else if (type.isintegral())
+        if (type.isintegral())
             emplaceExp!(IntegerExp)(&ue, loc, v.toInteger(), type);
         else
             emplaceExp!(RealExp)(&ue, loc, v.toReal(), type);
@@ -790,25 +650,7 @@ UnionExp Equal(EXP op, const ref Loc loc, Type type, Expression e1, Expression e
     {
         r1 = e1.toReal();
         r2 = e2.toReal();
-        goto L1;
-    }
-    else if (e1.type.isimaginary())
-    {
-        r1 = e1.toImaginary();
-        r2 = e2.toImaginary();
-    L1:
-        if (CTFloat.isNaN(r1) || CTFloat.isNaN(r2)) // if unordered
-        {
-            cmp = 0;
-        }
-        else
-        {
-            cmp = (r1 == r2);
-        }
-    }
-    else if (e1.type.iscomplex())
-    {
-        cmp = e1.toComplex() == e2.toComplex();
+        // goto L1; TODO
     }
     else if (e1.type.isintegral() || e1.type.toBasetype().ty == Tpointer)
     {
@@ -891,18 +733,7 @@ UnionExp Cmp(EXP op, const ref Loc loc, Type type, Expression e1, Expression e2)
     {
         r1 = e1.toReal();
         r2 = e2.toReal();
-        goto L1;
-    }
-    else if (e1.type.isimaginary())
-    {
-        r1 = e1.toImaginary();
-        r2 = e2.toImaginary();
-    L1:
-        n = realCmp(op, r1, r2);
-    }
-    else if (e1.type.iscomplex())
-    {
-        assert(0);
+        // goto L1; TODO
     }
     else
     {
@@ -1038,16 +869,6 @@ UnionExp Cast(const ref Loc loc, Type type, Type to, Expression e1)
     {
         real_t value = e1.toReal();
         emplaceExp!(RealExp)(&ue, loc, value, type);
-    }
-    else if (tb.isimaginary())
-    {
-        real_t value = e1.toImaginary();
-        emplaceExp!(RealExp)(&ue, loc, value, type);
-    }
-    else if (tb.iscomplex())
-    {
-        complex_t value = e1.toComplex();
-        emplaceExp!(ComplexExp)(&ue, loc, value, type);
     }
     else if (tb.isscalar())
     {

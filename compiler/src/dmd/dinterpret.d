@@ -1839,11 +1839,6 @@ public:
         result = e;
     }
 
-    override void visit(ComplexExp e)
-    {
-        result = e;
-    }
-
     override void visit(StringExp e)
     {
         debug (LOG)

@@ -52,8 +52,6 @@ extern (C++) TypeTuple toArgTypes_sysv_x64(Type t)
          return TypeTuple.empty;
     case Class.x87:
         return new TypeTuple(Type.tfloat80);
-    case Class.complexX87:
-        return new TypeTuple(Type.tfloat80, Type.tfloat80);
     default:
         break;
     }
@@ -221,22 +219,11 @@ extern (C++) final class ToClassesVisitor : Visitor
             return two(Class.integer, Class.integer);
 
         case Tfloat80:
-        case Timaginary80:
             return two(Class.x87, Class.x87Up);
 
         case Tfloat32:
         case Tfloat64:
-        case Timaginary32:
-        case Timaginary64:
-        case Tcomplex32: // struct { float a, b; }
             return one(Class.sse);
-
-        case Tcomplex64: // struct { double a, b; }
-            return two(Class.sse, Class.sse);
-
-        case Tcomplex80: // struct { real a, b; }
-            result[0 .. 4] = Class.complexX87;
-            return;
 
         default:
             assert(0, "Unexpected basic type");
@@ -362,13 +349,6 @@ extern (C++) final class ToClassesVisitor : Visitor
             {
                 const fEightbyteStart = foffset / 8;
                 const fEightbyteEnd = (foffset + fsize + 7) / 8;
-                if (ftype.ty == Tcomplex32) // may lie in 2 eightbytes
-                {
-                    assert(foffset % 4 == 0);
-                    foreach (ref existingClass; result[fEightbyteStart .. fEightbyteEnd])
-                        existingClass = merge(existingClass, Class.sse);
-                }
-                else
                 {
                     assert(foffset % 8 == 0 ||
                         fEightbyteEnd - fEightbyteStart <= 1 ||

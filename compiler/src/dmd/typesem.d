@@ -2155,12 +2155,7 @@ Expression getProperty(Type t, Scope* scope_, const ref Loc loc, Identifier iden
 
         Expression floatValue(real_t r)
         {
-            if (mt.isreal() || mt.isimaginary())
-                return new RealExp(loc, r, mt);
-            else
-            {
-                return new ComplexExp(loc, complex_t(r, r), mt);
-            }
+            return new RealExp(loc, r, mt);
         }
 
         //printf("TypeBasic::getProperty('%s')\n", ident.toChars());
@@ -2180,14 +2175,8 @@ Expression getProperty(Type t, Scope* scope_, const ref Loc loc, Identifier iden
             case Tchar:        return integerValue(char.max);
             case Twchar:       return integerValue(wchar.max);
             case Tdchar:       return integerValue(dchar.max);
-            case Tcomplex32:
-            case Timaginary32:
             case Tfloat32:     return floatValue(target.FloatProperties.max);
-            case Tcomplex64:
-            case Timaginary64:
             case Tfloat64:     return floatValue(target.DoubleProperties.max);
-            case Tcomplex80:
-            case Timaginary80:
             case Tfloat80:     return floatValue(target.RealProperties.max);
             default:           break;
             }
@@ -2215,14 +2204,8 @@ Expression getProperty(Type t, Scope* scope_, const ref Loc loc, Identifier iden
         {
             switch (mt.ty)
             {
-            case Tcomplex32:
-            case Timaginary32:
             case Tfloat32:     return floatValue(target.FloatProperties.min_normal);
-            case Tcomplex64:
-            case Timaginary64:
             case Tfloat64:     return floatValue(target.DoubleProperties.min_normal);
-            case Tcomplex80:
-            case Timaginary80:
             case Tfloat80:     return floatValue(target.RealProperties.min_normal);
             default:           break;
             }
@@ -2231,12 +2214,6 @@ Expression getProperty(Type t, Scope* scope_, const ref Loc loc, Identifier iden
         {
             switch (mt.ty)
             {
-            case Tcomplex32:
-            case Tcomplex64:
-            case Tcomplex80:
-            case Timaginary32:
-            case Timaginary64:
-            case Timaginary80:
             case Tfloat32:
             case Tfloat64:
             case Tfloat80:     return floatValue(target.RealProperties.nan);
@@ -2247,12 +2224,6 @@ Expression getProperty(Type t, Scope* scope_, const ref Loc loc, Identifier iden
         {
             switch (mt.ty)
             {
-            case Tcomplex32:
-            case Tcomplex64:
-            case Tcomplex80:
-            case Timaginary32:
-            case Timaginary64:
-            case Timaginary80:
             case Tfloat32:
             case Tfloat64:
             case Tfloat80:     return floatValue(target.RealProperties.infinity);
@@ -2263,14 +2234,8 @@ Expression getProperty(Type t, Scope* scope_, const ref Loc loc, Identifier iden
         {
             switch (mt.ty)
             {
-            case Tcomplex32:
-            case Timaginary32:
             case Tfloat32:     return intValue(target.FloatProperties.dig);
-            case Tcomplex64:
-            case Timaginary64:
             case Tfloat64:     return intValue(target.DoubleProperties.dig);
-            case Tcomplex80:
-            case Timaginary80:
             case Tfloat80:     return intValue(target.RealProperties.dig);
             default:           break;
             }
@@ -2279,14 +2244,8 @@ Expression getProperty(Type t, Scope* scope_, const ref Loc loc, Identifier iden
         {
             switch (mt.ty)
             {
-            case Tcomplex32:
-            case Timaginary32:
             case Tfloat32:     return floatValue(target.FloatProperties.epsilon);
-            case Tcomplex64:
-            case Timaginary64:
             case Tfloat64:     return floatValue(target.DoubleProperties.epsilon);
-            case Tcomplex80:
-            case Timaginary80:
             case Tfloat80:     return floatValue(target.RealProperties.epsilon);
             default:           break;
             }
@@ -2295,14 +2254,8 @@ Expression getProperty(Type t, Scope* scope_, const ref Loc loc, Identifier iden
         {
             switch (mt.ty)
             {
-            case Tcomplex32:
-            case Timaginary32:
             case Tfloat32:     return intValue(target.FloatProperties.mant_dig);
-            case Tcomplex64:
-            case Timaginary64:
             case Tfloat64:     return intValue(target.DoubleProperties.mant_dig);
-            case Tcomplex80:
-            case Timaginary80:
             case Tfloat80:     return intValue(target.RealProperties.mant_dig);
             default:           break;
             }
@@ -2311,14 +2264,8 @@ Expression getProperty(Type t, Scope* scope_, const ref Loc loc, Identifier iden
         {
             switch (mt.ty)
             {
-            case Tcomplex32:
-            case Timaginary32:
             case Tfloat32:     return intValue(target.FloatProperties.max_10_exp);
-            case Tcomplex64:
-            case Timaginary64:
             case Tfloat64:     return intValue(target.DoubleProperties.max_10_exp);
-            case Tcomplex80:
-            case Timaginary80:
             case Tfloat80:     return intValue(target.RealProperties.max_10_exp);
             default:           break;
             }
@@ -2327,14 +2274,8 @@ Expression getProperty(Type t, Scope* scope_, const ref Loc loc, Identifier iden
         {
             switch (mt.ty)
             {
-            case Tcomplex32:
-            case Timaginary32:
             case Tfloat32:     return intValue(target.FloatProperties.max_exp);
-            case Tcomplex64:
-            case Timaginary64:
             case Tfloat64:     return intValue(target.DoubleProperties.max_exp);
-            case Tcomplex80:
-            case Timaginary80:
             case Tfloat80:     return intValue(target.RealProperties.max_exp);
             default:           break;
             }
@@ -2343,14 +2284,8 @@ Expression getProperty(Type t, Scope* scope_, const ref Loc loc, Identifier iden
         {
             switch (mt.ty)
             {
-            case Tcomplex32:
-            case Timaginary32:
             case Tfloat32:     return intValue(target.FloatProperties.min_10_exp);
-            case Tcomplex64:
-            case Timaginary64:
             case Tfloat64:     return intValue(target.DoubleProperties.min_10_exp);
-            case Tcomplex80:
-            case Timaginary80:
             case Tfloat80:     return intValue(target.RealProperties.min_10_exp);
             default:           break;
             }
@@ -2359,14 +2294,8 @@ Expression getProperty(Type t, Scope* scope_, const ref Loc loc, Identifier iden
         {
             switch (mt.ty)
             {
-            case Tcomplex32:
-            case Timaginary32:
             case Tfloat32:     return intValue(target.FloatProperties.min_exp);
-            case Tcomplex64:
-            case Timaginary64:
             case Tfloat64:     return intValue(target.DoubleProperties.min_exp);
-            case Tcomplex80:
-            case Timaginary80:
             case Tfloat80:     return intValue(target.RealProperties.min_exp);
             default:           break;
             }
@@ -3205,41 +3134,10 @@ Expression dotExp(Type mt, Scope* sc, Expression e, Identifier ident, int flag)
         {
             switch (mt.ty)
             {
-            case Tcomplex32:
-                t = mt.tfloat32;
-                goto L1;
-
-            case Tcomplex64:
-                t = mt.tfloat64;
-                goto L1;
-
-            case Tcomplex80:
-                t = mt.tfloat80;
-                goto L1;
-            L1:
-                e = e.castTo(sc, t);
-                break;
-
             case Tfloat32:
             case Tfloat64:
             case Tfloat80:
                 break;
-
-            case Timaginary32:
-                t = mt.tfloat32;
-                goto L2;
-
-            case Timaginary64:
-                t = mt.tfloat64;
-                goto L2;
-
-            case Timaginary80:
-                t = mt.tfloat80;
-                goto L2;
-            L2:
-                e = new RealExp(e.loc, CTFloat.zero, t);
-                break;
-
             default:
                 e = mt.Type.getProperty(sc, e.loc, ident, flag);
                 break;
@@ -3250,41 +3148,6 @@ Expression dotExp(Type mt, Scope* sc, Expression e, Identifier ident, int flag)
             Type t2;
             switch (mt.ty)
             {
-            case Tcomplex32:
-                t = mt.timaginary32;
-                t2 = mt.tfloat32;
-                goto L3;
-
-            case Tcomplex64:
-                t = mt.timaginary64;
-                t2 = mt.tfloat64;
-                goto L3;
-
-            case Tcomplex80:
-                t = mt.timaginary80;
-                t2 = mt.tfloat80;
-                goto L3;
-            L3:
-                e = e.castTo(sc, t);
-                e.type = t2;
-                break;
-
-            case Timaginary32:
-                t = mt.tfloat32;
-                goto L4;
-
-            case Timaginary64:
-                t = mt.tfloat64;
-                goto L4;
-
-            case Timaginary80:
-                t = mt.tfloat80;
-                goto L4;
-            L4:
-                e = e.copy();
-                e.type = t;
-                break;
-
             case Tfloat32:
             case Tfloat64:
             case Tfloat80:
@@ -4452,23 +4315,10 @@ extern (C++) Expression defaultInit(Type mt, const ref Loc loc, const bool isCfi
             value = isCfile ? 0 : 0xFFFF;
             break;
 
-        case Timaginary32:
-        case Timaginary64:
-        case Timaginary80:
         case Tfloat32:
         case Tfloat64:
         case Tfloat80:
             return new RealExp(loc, isCfile ? CTFloat.zero : target.RealProperties.nan, mt);
-
-        case Tcomplex32:
-        case Tcomplex64:
-        case Tcomplex80:
-            {
-                // Can't use fvalue + I*fvalue (the im part becomes a quiet NaN).
-                const cvalue = isCfile ? complex_t(CTFloat.zero, CTFloat.zero)
-                                       : complex_t(target.RealProperties.nan, target.RealProperties.nan);
-                return new ComplexExp(loc, cvalue, mt);
-            }
 
         case Tvoid:
             error(loc, "`void` does not have a default initializer");

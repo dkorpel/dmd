@@ -2194,11 +2194,6 @@ private bool functionParameters(const ref Loc loc, Scope* sc,
                 case Tfloat32:
                     arg = arg.castTo(sc, Type.tfloat64);
                     break;
-
-                case Timaginary32:
-                    arg = arg.castTo(sc, Type.timaginary64);
-                    break;
-
                 default:
                     break;
                 }
@@ -2607,15 +2602,6 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
     {
         if (!e.type)
             e.type = Type.tfloat64;
-        else
-            e.type = e.type.typeSemantic(e.loc, sc);
-        result = e;
-    }
-
-    override void visit(ComplexExp e)
-    {
-        if (!e.type)
-            e.type = Type.tcomplex80;
         else
             e.type = e.type.typeSemantic(e.loc, sc);
         result = e;
@@ -10641,29 +10627,6 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
             result = exp.incompatibleTypes();
             return;
         }
-        if ((tb1.isreal() && exp.e2.type.isimaginary()) || (tb1.isimaginary() && exp.e2.type.isreal()))
-        {
-            switch (exp.type.toBasetype().ty)
-            {
-            case Tfloat32:
-            case Timaginary32:
-                exp.type = Type.tcomplex32;
-                break;
-
-            case Tfloat64:
-            case Timaginary64:
-                exp.type = Type.tcomplex64;
-                break;
-
-            case Tfloat80:
-            case Timaginary80:
-                exp.type = Type.tcomplex80;
-                break;
-
-            default:
-                assert(0);
-            }
-        }
         result = exp;
     }
 
@@ -10798,29 +10761,6 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
         {
             result = exp.incompatibleTypes();
             return;
-        }
-        if ((t1.isreal() && t2.isimaginary()) || (t1.isimaginary() && t2.isreal()))
-        {
-            switch (exp.type.ty)
-            {
-            case Tfloat32:
-            case Timaginary32:
-                exp.type = Type.tcomplex32;
-                break;
-
-            case Tfloat64:
-            case Timaginary64:
-                exp.type = Type.tcomplex64;
-                break;
-
-            case Tfloat80:
-            case Timaginary80:
-                exp.type = Type.tcomplex80;
-                break;
-
-            default:
-                assert(0);
-            }
         }
         result = exp;
         return;
@@ -11073,43 +11013,6 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
             {
                 exp.type = t1;
             }
-            else if (t1.isimaginary())
-            {
-                if (t2.isimaginary())
-                {
-                    switch (t1.toBasetype().ty)
-                    {
-                    case Timaginary32:
-                        exp.type = Type.tfloat32;
-                        break;
-
-                    case Timaginary64:
-                        exp.type = Type.tfloat64;
-                        break;
-
-                    case Timaginary80:
-                        exp.type = Type.tfloat80;
-                        break;
-
-                    default:
-                        assert(0);
-                    }
-
-                    // iy * iv = -yv
-                    exp.e1.type = exp.type;
-                    exp.e2.type = exp.type;
-                    e = new NegExp(exp.loc, exp);
-                    e = e.expressionSemantic(sc);
-                    result = e;
-                    return;
-                }
-                else
-                    exp.type = t2; // t2 is complex
-            }
-            else if (t2.isimaginary())
-            {
-                exp.type = t1; // t1 is complex
-            }
         }
         else if (!target.isVectorOpSupported(tb, exp.op, exp.e2.type.toBasetype()))
         {
@@ -11181,35 +11084,6 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
             else if (t2.isreal())
             {
                 exp.type = t1;
-            }
-            else if (t1.isimaginary())
-            {
-                if (t2.isimaginary())
-                {
-                    switch (t1.toBasetype().ty)
-                    {
-                    case Timaginary32:
-                        exp.type = Type.tfloat32;
-                        break;
-
-                    case Timaginary64:
-                        exp.type = Type.tfloat64;
-                        break;
-
-                    case Timaginary80:
-                        exp.type = Type.tfloat80;
-                        break;
-
-                    default:
-                        assert(0);
-                    }
-                }
-                else
-                    exp.type = t2; // t2 is complex
-            }
-            else if (t2.isimaginary())
-            {
-                exp.type = t1; // t1 is complex
             }
         }
         else if (!target.isVectorOpSupported(tb, exp.op, exp.e2.type.toBasetype()))
@@ -12340,26 +12214,6 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
                 return;
             }
 
-            switch (exp.e1.type.toBasetype().ty)
-            {
-            case Tcomplex32:
-            case Tcomplex64:
-            case Tcomplex80:
-                exp.e2 = exp.e2.castTo(sc, exp.e1.type);
-                break;
-            default:
-                break;
-            }
-            switch (exp.e2.type.toBasetype().ty)
-            {
-            case Tcomplex32:
-            case Tcomplex64:
-            case Tcomplex80:
-                exp.e1 = exp.e1.castTo(sc, exp.e2.type);
-                break;
-            default:
-                break;
-            }
             if (exp.type.toBasetype().ty == Tarray)
             {
                 exp.e1 = exp.e1.castTo(sc, exp.type);
@@ -12423,7 +12277,7 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
             if (
                 (t.ty == Tint32 || t.ty == Tuns32) && target.c.longsize == 4 ||
                 (t.ty == Tint64 || t.ty == Tuns64) && target.c.longsize == 8 ||
-                (t.ty == Tfloat64 || t.ty == Timaginary64 || t.ty == Tcomplex64) && target.c.long_doublesize == 8
+                (t.ty == Tfloat64) && target.c.long_doublesize == 8
                )
                 continue;
 

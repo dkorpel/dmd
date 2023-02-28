@@ -590,8 +590,6 @@ static:
         if (hasHiddenArgument)
             return setMsgSendSymbol!("_objc_msgSend_stret")(TYhfunc);
         // not sure if DMD can handle this
-        else if (returnType.ty == Tcomplex80)
-            return setMsgSendSymbol!("_objc_msgSend_fp2ret");
         else if (returnType.ty == Tfloat80)
             return setMsgSendSymbol!("_objc_msgSend_fpret");
         else
@@ -773,14 +771,8 @@ static:
             case Tint64: return "q";
             case Tuns64: return "Q";
             case Tfloat32: return "f";
-            case Tcomplex32: return "jf";
             case Tfloat64: return "d";
-            case Tcomplex64: return "jd";
             case Tfloat80: return "D";
-            case Tcomplex80: return "jD";
-            case Timaginary32: assert(false, assertMessage);
-            case Timaginary64: assert(false, assertMessage);
-            case Timaginary80: assert(false, assertMessage);
             default: return "?"; // unknown
             // TODO: add "*" char*, "#" Class, "@" id, ":" SEL
             // TODO: add "^"<type> indirection and "^^" double indirection

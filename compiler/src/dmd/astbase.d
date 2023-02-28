@@ -2573,12 +2573,6 @@ struct ASTBase
         extern (C++) __gshared Type tfloat32;
         extern (C++) __gshared Type tfloat64;
         extern (C++) __gshared Type tfloat80;
-        extern (C++) __gshared Type timaginary32;
-        extern (C++) __gshared Type timaginary64;
-        extern (C++) __gshared Type timaginary80;
-        extern (C++) __gshared Type tcomplex32;
-        extern (C++) __gshared Type tcomplex64;
-        extern (C++) __gshared Type tcomplex80;
         extern (C++) __gshared Type tbool;
         extern (C++) __gshared Type tchar;
         extern (C++) __gshared Type twchar;
@@ -2699,12 +2693,6 @@ struct ASTBase
                 Tfloat32,
                 Tfloat64,
                 Tfloat80,
-                Timaginary32,
-                Timaginary64,
-                Timaginary80,
-                Tcomplex32,
-                Tcomplex64,
-                Tcomplex80,
                 Tbool,
                 Tchar,
                 Twchar,
@@ -2738,14 +2726,6 @@ struct ASTBase
             tfloat32 = basic[Tfloat32];
             tfloat64 = basic[Tfloat64];
             tfloat80 = basic[Tfloat80];
-
-            timaginary32 = basic[Timaginary32];
-            timaginary64 = basic[Timaginary64];
-            timaginary80 = basic[Timaginary80];
-
-            tcomplex32 = basic[Tcomplex32];
-            tcomplex64 = basic[Tcomplex64];
-            tcomplex80 = basic[Tcomplex80];
 
             tbool = basic[Tbool];
             tchar = basic[Tchar];
@@ -3499,36 +3479,6 @@ struct ASTBase
             case Tfloat80:
                 d = Token.toChars(TOK.float80);
                 flags |= TFlags.floating | TFlags.real_;
-                break;
-
-            case Timaginary32:
-                d = Token.toChars(TOK.imaginary32);
-                flags |= TFlags.floating | TFlags.imaginary;
-                break;
-
-            case Timaginary64:
-                d = Token.toChars(TOK.imaginary64);
-                flags |= TFlags.floating | TFlags.imaginary;
-                break;
-
-            case Timaginary80:
-                d = Token.toChars(TOK.imaginary80);
-                flags |= TFlags.floating | TFlags.imaginary;
-                break;
-
-            case Tcomplex32:
-                d = Token.toChars(TOK.complex32);
-                flags |= TFlags.floating | TFlags.complex;
-                break;
-
-            case Tcomplex64:
-                d = Token.toChars(TOK.complex64);
-                flags |= TFlags.floating | TFlags.complex;
-                break;
-
-            case Tcomplex80:
-                d = Token.toChars(TOK.complex80);
-                flags |= TFlags.floating | TFlags.complex;
                 break;
 
             case Tbool:
