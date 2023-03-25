@@ -3780,7 +3780,7 @@ public:
     TRUST trust;
     PURE purity;
     int8_t inuse;
-    Array<Expression* >* fargs;
+    ArgumentList inferenceArguments;
     static TypeFunction* create(Array<Parameter* >* parameters, Type* treturn, uint8_t varargs, LINK linkage, StorageClass stc = 0);
     const char* kind() const override;
     TypeFunction* syntaxCopy() override;

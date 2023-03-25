@@ -4260,7 +4260,7 @@ extern (C++) final class TypeFunction : TypeNext
     TRUST trust;                // level of trust
     PURE purity = PURE.impure;
     byte inuse;
-    Expressions* fargs;         // function arguments
+    ArgumentList inferenceArguments; // function arguments to determine `auto ref` in type semantic
 
     extern (D) this(ParameterList pl, Type treturn, LINK linkage, StorageClass stc = 0)
     {
@@ -4333,7 +4333,7 @@ extern (C++) final class TypeFunction : TypeNext
         t.isInOutParam = isInOutParam;
         t.isInOutQual = isInOutQual;
         t.trust = trust;
-        t.fargs = fargs;
+        t.inferenceArguments = inferenceArguments;
         t.isctor = isctor;
         return t;
     }
@@ -4502,7 +4502,7 @@ extern (C++) final class TypeFunction : TypeNext
             // Klunky to change these
             auto tf = new TypeFunction(t.parameterList, t.next, t.linkage, 0);
             tf.mod = t.mod;
-            tf.fargs = fargs;
+            tf.inferenceArguments = inferenceArguments;
             tf.purity = t.purity;
             tf.isnothrow = t.isnothrow;
             tf.isnogc = t.isnogc;
@@ -4583,7 +4583,7 @@ extern (C++) final class TypeFunction : TypeNext
         t.isInOutParam = false;
         t.isInOutQual = false;
         t.trust = trust;
-        t.fargs = fargs;
+        t.inferenceArguments = inferenceArguments;
         t.isctor = isctor;
         return t.merge();
     }
@@ -4688,7 +4688,7 @@ extern (C++) final class TypeFunction : TypeNext
                 *pMessage = buf.extractChars();
             return MATCH.nomatch;
         }
-        auto resolvedArgs = resolveNamedArgs(argumentList, pMessage);
+        auto resolvedArgs = resolveNamedArgs(argumentList, pMessage, false);
         Expression[] args;
         if (!resolvedArgs)
         {
@@ -4804,16 +4804,20 @@ extern (C++) final class TypeFunction : TypeNext
      * Params:
      *      argumentList = array of function arguments
      *      pMessage = address to store error message, or `null`
+     *      tupleVariadic = last parameter is template tuple variadic: `f(T...)(T args)`
+     *      checkErrors = check for errors, such as unassigned / multiply assigned parameters
      * Returns: re-ordered argument list, or `null` on error
      */
-    extern(D) Expressions* resolveNamedArgs(ArgumentList argumentList, const(char)** pMessage)
+    extern(D) Expressions* resolveNamedArgs(ArgumentList argumentList, const(char)** pMessage, bool tupleVariadic, bool checkErrors = true)
     {
+        //printf("+resolveNamedArgs(%s) args = %s\n", toChars(), argumentList.arguments ? argumentList.arguments.toChars() : "null");
         Expression[] args = argumentList.arguments ? (*argumentList.arguments)[] : null;
         Identifier[] names = argumentList.names ? (*argumentList.names)[] : null;
         auto newArgs = new Expressions(parameterList.length);
         newArgs.zero();
         size_t ci = 0;
         bool hasNamedArgs = false;
+        const bool isVariadic = (parameterList.varargs != VarArg.none) || tupleVariadic;
         foreach (i, arg; args)
         {
             if (!arg)
@@ -4836,7 +4840,7 @@ extern (C++) final class TypeFunction : TypeNext
             }
             if (ci >= newArgs.length)
             {
-                if (!parameterList.varargs)
+                if (checkErrors && !isVariadic)
                 {
                     // Without named args, let the caller diagnose argument overflow
                     if (hasNamedArgs && pMessage)
@@ -4847,7 +4851,7 @@ extern (C++) final class TypeFunction : TypeNext
                     newArgs.push(null);
             }
 
-            if ((*newArgs)[ci])
+            if (checkErrors && (*newArgs)[ci])
             {
                 if (pMessage)
                     *pMessage = getMatchError("parameter `%s` assigned twice", parameterList[ci].toChars());
@@ -4860,7 +4864,15 @@ extern (C++) final class TypeFunction : TypeNext
             if (arg || parameterList[i].defaultArg)
                 continue;
 
-            if (parameterList.varargs != VarArg.none && i + 1 == newArgs.length)
+            if (isVariadic && i + 1 == newArgs.length)
+                continue;
+
+            // dtemplate sets `defaultArg=null` to avoid semantic on default arguments,
+            // don't complain about missing arguments in that case
+            if (this.incomplete)
+                continue;
+
+            if (!checkErrors)
                 continue;
 
             if (pMessage)
@@ -4875,6 +4887,7 @@ extern (C++) final class TypeFunction : TypeNext
             --e;
         }
         newArgs.setDim(e);
+        //printf("-resolveNamedArgs() newArgs=%s\n", newArgs.toChars());
         return newArgs;
     }
 
@@ -7118,9 +7131,9 @@ bool isCopyable(Type t)
             assert(ctor);
             scope el = new IdentifierExp(Loc.initial, Id.p); // dummy lvalue
             el.type = cast() ts;
-            Expressions args;
+            Expressions* args = new Expressions();
             args.push(el);
-            FuncDeclaration f = resolveFuncCall(Loc.initial, null, ctor, null, cast()ts, ArgumentList(&args), FuncResolveFlag.quiet);
+            FuncDeclaration f = resolveFuncCall(Loc.initial, null, ctor, null, cast()ts, ArgumentList(args), FuncResolveFlag.quiet);
             if (!f || f.storage_class & STC.disable)
                 return false;
         }

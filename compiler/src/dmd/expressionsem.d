@@ -1796,7 +1796,7 @@ private bool functionParameters(const ref Loc loc, Scope* sc,
     if (argumentList.names)
     {
         const(char)* msg = null;
-        auto resolvedArgs = tf.resolveNamedArgs(argumentList, &msg);
+        auto resolvedArgs = tf.resolveNamedArgs(argumentList, &msg, false);
         if (!resolvedArgs)
         {
             // while errors are usually already caught by `tf.callMatch`,

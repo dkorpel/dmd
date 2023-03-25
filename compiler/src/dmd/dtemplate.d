@@ -1081,7 +1081,7 @@ extern (C++) final class TemplateDeclaration : ScopeDsymbol
             return MATCH.nomatch;
 
         size_t parameters_dim = parameters.length;
-        int variadic = isVariadic() !is null;
+        const bool variadic = isVariadic() !is null;
 
         // If more arguments than parameters, no match
         if (ti.tiargs.length > parameters_dim && !variadic)
@@ -1169,13 +1169,6 @@ extern (C++) final class TemplateDeclaration : ScopeDsymbol
             if (fd)
             {
                 TypeFunction tf = fd.type.isTypeFunction().syntaxCopy();
-                if (argumentList.hasNames)
-                    return nomatch();
-                Expressions* fargs = argumentList.arguments;
-                // TODO: Expressions* fargs = tf.resolveNamedArgs(argumentList, null);
-                // if (!fargs)
-                //     return nomatch();
-
                 fd = new FuncDeclaration(fd.loc, fd.endloc, fd.ident, fd.storage_class, tf);
                 fd.parent = ti;
                 fd.inferRetType = true;
@@ -1188,7 +1181,7 @@ extern (C++) final class TemplateDeclaration : ScopeDsymbol
                 tf.incomplete = true;
 
                 // Resolve parameter types and 'auto ref's.
-                tf.fargs = fargs;
+                tf.inferenceArguments = argumentList;
                 uint olderrors = global.startGagging();
                 fd.type = tf.typeSemantic(loc, paramscope);
                 global.endGagging(olderrors);
@@ -1466,9 +1459,6 @@ extern (C++) final class TemplateDeclaration : ScopeDsymbol
         fparameters = fd.getParameterList();
         nfparams = fparameters.length; // number of function parameters
         nfargs = argumentList.length; // number of function arguments
-        if (argumentList.hasNames)
-            return matcherror(); // TODO: resolve named args
-        Expressions* fargs = argumentList.arguments; // TODO: resolve named args
 
         /* Check for match of function arguments with variadic template
          * parameter, such as:
@@ -1582,6 +1572,7 @@ extern (C++) final class TemplateDeclaration : ScopeDsymbol
             //printf("\ttp = %p, fptupindex = %d, found = %d, declaredTuple = %s\n", tp, fptupindex, fptupindex != IDX_NOTFOUND, declaredTuple ? declaredTuple.toChars() : NULL);
             size_t argi = 0;
             size_t nfargs2 = nfargs; // nfargs + supplied defaultArgs
+            auto fargs = argumentList.arguments;
             for (size_t parami = 0; parami < nfparams; parami++)
             {
                 Parameter fparam = fparameters[parami];
@@ -2237,7 +2228,7 @@ extern (C++) final class TemplateDeclaration : ScopeDsymbol
             sc2.minst = sc.minst;
             sc2.stc |= fd.storage_class & STC.deprecated_;
 
-            fd = doHeaderInstantiation(ti, sc2, fd, tthis, fargs);
+            fd = doHeaderInstantiation(ti, sc2, fd, tthis, argumentList);
 
             sc2 = sc2.pop();
             sc2 = sc2.pop();
@@ -2369,7 +2360,7 @@ extern (C++) final class TemplateDeclaration : ScopeDsymbol
     /*************************************************
      * Limited function template instantiation for using fd.leastAsSpecialized()
      */
-    extern (D) FuncDeclaration doHeaderInstantiation(TemplateInstance ti, Scope* sc2, FuncDeclaration fd, Type tthis, Expressions* fargs)
+    extern (D) FuncDeclaration doHeaderInstantiation(TemplateInstance ti, Scope* sc2, FuncDeclaration fd, Type tthis, ArgumentList argumentList)
     {
         assert(fd);
         version (none)
@@ -2386,7 +2377,7 @@ extern (C++) final class TemplateDeclaration : ScopeDsymbol
 
         assert(fd.type.ty == Tfunction);
         auto tf = fd.type.isTypeFunction();
-        tf.fargs = fargs;
+        tf.inferenceArguments = argumentList;
 
         if (tthis)
         {
@@ -2470,10 +2461,11 @@ extern (C++) final class TemplateDeclaration : ScopeDsymbol
      * see if there already exists an instance.
      * If so, return that existing instance.
      */
-    extern (D) TemplateInstance findExistingInstance(TemplateInstance tithis, Expressions* fargs)
+    extern (D) TemplateInstance findExistingInstance(TemplateInstance tithis, ArgumentList argumentList)
     {
         //printf("findExistingInstance() %s\n", tithis.toChars());
-        tithis.fargs = fargs;
+        tithis.fargs = argumentList.arguments;
+        // tithis.fnames = argumentList.names;
         auto tibox = TemplateInstanceBox(tithis);
         auto p = tibox in instances;
         debug (FindExistingInstance) ++(p ? nFound : nNotFound);
