@@ -208,7 +208,7 @@ Objects* opToArg(Scope* sc, EXP op)
 }
 
 // Try alias this on first operand
-private Expression checkAliasThisForLhs(AggregateDeclaration ad, Scope* sc, BinExp e)
+private Expression checkAliasThisForLhs(AggregateDeclaration ad, Scope* sc, BinExp e, ref Type att)
 {
     if (!ad || !ad.aliasthis)
         return null;
@@ -216,7 +216,7 @@ private Expression checkAliasThisForLhs(AggregateDeclaration ad, Scope* sc, BinE
     /* Rewrite (e1 op e2) as:
      *      (e1.aliasthis op e2)
      */
-    if (isRecursiveAliasThis(e.att1, e.e1.type))
+    if (isRecursiveAliasThis(att, e.e1.type))
         return null;
     //printf("att %s e1 = %s\n", Token.toChars(e.op), e.e1.type.toChars());
     BinExp be = cast(BinExp)e.copy();
@@ -236,15 +236,16 @@ private Expression checkAliasThisForLhs(AggregateDeclaration ad, Scope* sc, BinE
     return result;
 }
 
+/// ditto
 // Try alias this on second operand
-private Expression checkAliasThisForRhs(AggregateDeclaration ad, Scope* sc, BinExp e)
+private Expression checkAliasThisForRhs(AggregateDeclaration ad, Scope* sc, BinExp e, ref Type att)
 {
     if (!ad || !ad.aliasthis)
         return null;
     /* Rewrite (e1 op e2) as:
      *      (e1 op e2.aliasthis)
      */
-    if (isRecursiveAliasThis(e.att2, e.e2.type))
+    if (isRecursiveAliasThis(att, e.e2.type))
         return null;
     //printf("att %s e2 = %s\n", Token.toChars(e.op), e.e2.type.toChars());
     BinExp be = cast(BinExp)e.copy();
@@ -853,7 +854,7 @@ Expression op_overload(Expression e, Scope* sc, EXP* pop = null)
             Expression rewrittenLhs;
             if (!(e.op == EXP.assign && ad2 && ad1 == ad2)) // https://issues.dlang.org/show_bug.cgi?id=2943
             {
-                if (Expression result = checkAliasThisForLhs(ad1, sc, e))
+                if (Expression result = checkAliasThisForLhs(ad1, sc, e, e.att1))
                 {
                     /* https://issues.dlang.org/show_bug.cgi?id=19441
                      *
@@ -889,7 +890,7 @@ Expression op_overload(Expression e, Scope* sc, EXP* pop = null)
             }
             if (!(e.op == EXP.assign && ad1 && ad1 == ad2)) // https://issues.dlang.org/show_bug.cgi?id=2943
             {
-                if (Expression result = checkAliasThisForRhs(ad2, sc, e))
+                if (Expression result = checkAliasThisForRhs(ad2, sc, e, e.att2))
                     return result;
             }
             if (rewrittenLhs)
@@ -1269,11 +1270,11 @@ Expression op_overload(Expression e, Scope* sc, EXP* pop = null)
                 return build_overload(e.loc, sc, e.e1, e.e2, m.lastf ? m.lastf : s);
             }
         L1:
-            result = checkAliasThisForLhs(ad1, sc, e);
+            result = checkAliasThisForLhs(ad1, sc, e, e.att1);
             if (result || !s) // no point in trying Rhs alias-this if there's no overload of any kind in lhs
                 return result;
 
-            return checkAliasThisForRhs(isAggregate(e.e2.type), sc, e);
+            return checkAliasThisForRhs(isAggregate(e.e2.type), sc, e, e.att2);
         }
 
     if (pop)
@@ -1401,8 +1402,8 @@ private Expression compare_overload(BinExp e, Scope* sc, Identifier id, EXP* pop
      */
     if ((e.op == EXP.equal || e.op == EXP.notEqual) && ad1 == ad2)
         return null;
-    Expression result = checkAliasThisForLhs(ad1, sc, e);
-    return result ? result : checkAliasThisForRhs(isAggregate(e.e2.type), sc, e);
+    Expression result = checkAliasThisForLhs(ad1, sc, e, e.att1);
+    return result ? result : checkAliasThisForRhs(isAggregate(e.e2.type), sc, e, e.att2);
 }
 
 /***********************************

@@ -2245,8 +2245,11 @@ class BinExp : public Expression
 public:
     Expression* e1;
     Expression* e2;
-    Type* att1;
-    Type* att2;
+    union
+    {
+        Type* att1;
+        Type* att2;
+    };
     BinExp* syntaxCopy() override;
     void setNoderefOperands();
     void accept(Visitor* v) override;
@@ -5340,7 +5343,7 @@ private:
         char nullexp[30LLU];
         char dotvarexp[49LLU];
         char addrexp[40LLU];
-        char indexexp[74LLU];
+        char indexexp[66LLU];
         char sliceexp[65LLU];
         char vectorexp[53LLU];
     };
