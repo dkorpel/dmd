@@ -34,11 +34,6 @@ import dmd.tokens;
 
 nothrow:
 
-version (DMDLIB)
-{
-    version = LocOffset;
-}
-
 /***********************************************************
  * Values to use for various magic identifiers
  */
@@ -3159,8 +3154,7 @@ class Lexer
     final Loc loc() @nogc
     {
         scanloc.charnum = cast(ushort)(1 + p - line);
-        version (LocOffset)
-            scanloc.fileOffset = cast(uint)(p - base);
+        scanloc.fileOffset = cast(uint)(p - base);
         return scanloc;
     }
 

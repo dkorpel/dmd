@@ -17,11 +17,6 @@ import dmd.common.outbuffer;
 import dmd.root.array;
 import dmd.root.filename;
 
-version (DMDLIB)
-{
-    version = LocOffset;
-}
-
 /// How code locations are formatted for diagnostic reporting
 enum MessageStyle : ubyte
 {
@@ -37,11 +32,12 @@ debug info etc.
 */
 struct Loc
 {
+    private uint locoffset; // offset into lineTable[]
+
     private uint _linnum;
-    private uint _charnum;
-    private uint fileIndex; // index into filenames[], starting from 1 (0 means no filename)
-    version (LocOffset)
-        uint fileOffset; /// utf8 code unit index relative to start of file, starting from 0
+    private ushort _charnum;
+    private ushort fileIndex; // index into filenames[], starting from 1 (0 means no filename)
+    private uint _fileOffset;
 
     static immutable Loc initial; /// use for default initialization of const ref Loc's
 
@@ -93,6 +89,18 @@ nothrow:
     extern (C++) uint linnum(uint num) @nogc @safe
     {
         return _linnum = num;
+    }
+
+    /// utf8 code unit index relative to start of file, starting from 0
+    extern (C++) uint fileOffset() @nogc @safe
+    {
+        return _fileOffset;
+    }
+
+    /// ditto
+    extern (C++) uint fileOffset(uint offset) @nogc @safe
+    {
+        return _fileOffset = offset;
     }
 
     /***
@@ -210,3 +218,20 @@ nothrow:
         return fileIndex != 0;
     }
 }
+
+struct LineEntry
+{
+	uint offset;
+	int line;
+}
+
+struct FileEntry
+{
+	uint offset;
+    const(char)* filename;
+}
+
+__gshared Array!(LineEntry) lineTable;
+__gshared Array!(FileEntry) fileTable;
+
+
