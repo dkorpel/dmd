@@ -80,15 +80,27 @@ nothrow:
     }
 
     /// line number, starting from 1
-    extern (C++) uint linnum() const @nogc @safe
+    extern (C++) uint linnum() const @nogc @trusted
     {
+        const o = this.fileOffset();
+        foreach (i, e; lineTable[o .. $])
+        {
+            if (e.offset != o)
+                break;
+            if (e.line != 0)
+                return e.line;
+        }
+
         return _linnum;
     }
 
     /// ditto
-    extern (C++) uint linnum(uint num) @nogc @safe
+    extern (C++) uint linnum(uint num) @nogc @trusted
     {
-        return _linnum = num;
+        _linnum = num;
+        lineTable[] ~= LineEntry(this._fileOffset, num);
+
+        return _linnum;
     }
 
     /// utf8 code unit index relative to start of file, starting from 0
@@ -231,7 +243,32 @@ struct FileEntry
     const(char)* filename;
 }
 
-__gshared Array!(LineEntry) lineTable;
-__gshared Array!(FileEntry) fileTable;
+__gshared LineEntry[] lineTable;
+__gshared FileEntry[] fileTable;
 
+LineEntry find(int offset) {
+    size_t lo = 0;
+    size_t hi = lineTable.length - 1;
+    while (lo <= hi) {
+        const mid = (lo + hi) / 2;
+        if (offset < lineTable[mid].offset)
+            hi = mid - 1;
+        else if (offset > lineTable[mid].offset)
+            lo = mid + 1;
+        else
+            return lineTable[mid];
+    }
+    return lineTable[hi];
+}
 
+unittest {
+    Loc loc;
+    loc.filename = "foo.d";
+    loc.linnum = 1;
+    loc.charnum = 2;
+
+    assert(loc.filename == "foo.d");
+    assert(loc.linnum == 1);
+    assert(loc.charnum == 2);
+    // assert(loc.toString() == "foo.d(1,2)");
+}
