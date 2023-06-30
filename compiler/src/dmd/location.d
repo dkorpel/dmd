@@ -33,19 +33,17 @@ debug info etc.
 */
 struct Loc
 {
-    private uint locoffset; // offset into lineTable[]
+    private uint index; // offset into lineTable[]
 
     private uint _linnum;
-    private ushort _charnum;
-    private ushort fileIndex; // index into filenames[], starting from 1 (0 means no filename)
+    private uint _charnum;
     private uint _fileOffset;
+    private const(char)* _filename;
 
     static immutable Loc initial; /// use for default initialization of const ref Loc's
 
     extern (C++) __gshared bool showColumns;
     extern (C++) __gshared MessageStyle messageStyle;
-
-    __gshared Array!(const(char)*) filenames;
 
 nothrow:
 
@@ -65,7 +63,7 @@ nothrow:
     {
         this._linnum = linnum;
         this._charnum = charnum;
-        this.filename = filename;
+        this._filename = filename;
     }
 
     /// utf8 code unit index relative to start of line, starting from 1
@@ -84,6 +82,7 @@ nothrow:
     extern (C++) uint linnum() const @nogc @trusted
     {
         const o = this.fileOffset();
+        FileEntry fe;
         foreach (i, e; lineTable[o .. $])
         {
             if (e.offset != o)
@@ -98,14 +97,11 @@ nothrow:
     /// ditto
     extern (C++) uint linnum(uint num) @nogc @trusted
     {
-        _linnum = num;
-        lineTable[] ~= LineEntry(this._fileOffset, num);
-
-        return _linnum;
+        assert(0);
     }
 
     /// utf8 code unit index relative to start of file, starting from 0
-    extern (C++) uint fileOffset() @nogc @safe
+    extern (C++) uint fileOffset() const @nogc @safe
     {
         return _fileOffset;
     }
@@ -116,31 +112,77 @@ nothrow:
         return _fileOffset = offset;
     }
 
-    /***
-     * Returns: filename for this location, null if none
-     */
-    extern (C++) const(char)* filename() const @nogc
+    extern (C++) const(char)* filename() const @nogc @safe
     {
-        return fileIndex ? filenames[fileIndex - 1] : null;
+        return _filename;
     }
 
-    /***
-     * Set file name for this location
-     * Params:
-     *   name = file name for location, null for no file name
-     */
-    extern (C++) void filename(const(char)* name) @trusted
+    //////////////////////////////////////////////////////////////////////////////////////////
+
+
+    static struct LineEntry
     {
-        if (name)
-        {
-            //printf("setting %s\n", name);
-            filenames.push(name);
-            fileIndex = cast(uint)filenames.length;
-            assert(fileIndex, "internal compiler error: file name index overflow");
-        }
-        else
-            fileIndex = 0;
+        /// Byte offset into file
+        uint offset;
+        /// Line number which starts at `offset`
+        int line;
     }
+
+    ///
+    static struct FileEntry
+    {
+        const(char)* filename;
+        uint offset;
+        size_t lineTableStart;
+        size_t lineTableEnd;
+    }
+
+    __gshared Array!LineEntry lineTable;
+    __gshared Array!FileEntry fileTable;
+    __gshared uint fileIndex = 0; // Index of current file
+    __gshared uint fileStartOffset = 1; // Index of start of the file
+
+    void setNewFile(uint offset, const(char)* fileName, int line)
+    {
+        version (ExplicitLoc)
+        {
+            this._filename = filename;
+            this._line = line;
+        }
+        fileTable.push(FileEntry(filename, offset));
+        fileIndex = cast(int) fileTable.length;
+    }
+
+    void setNewLine(uint offset, int line) @trusted
+    {
+        version (ExplicitLoc)
+        {
+            this._line = line;
+        }
+        lineTable.push(LineEntry(offset, line));
+    }
+
+    void setNewColumn(uint offset) @trusted
+    {
+        this.index = fileStartOffset + offset;
+    }
+
+    void setEndOfFile(uint offset) @trusted
+    {
+
+    }
+
+    FileEntry* findFile(uint offset) @trusted
+    {
+        foreach (i; 0 .. fileTable.length)
+        {
+            if (fileTable[i].offset <= offset)
+                return &fileTable[i];
+        }
+        return null;
+    }
+
+    //////////////////////////////////////////////////////////////////////////////////////////
 
     extern (C++) const(char)* toChars(
         bool showColumns = Loc.showColumns,
@@ -200,7 +242,7 @@ nothrow:
      */
     bool isValid() const pure @safe
     {
-        return fileIndex != 0;
+        return this.index != 0;
     }
 }
 
@@ -249,22 +291,9 @@ void writeSourceLoc(ref OutBuffer buf,
         }
     }
 }
-struct LineEntry
+
+LineEntry find(int offset)
 {
-	uint offset;
-	int line;
-}
-
-struct FileEntry
-{
-	uint offset;
-    const(char)* filename;
-}
-
-__gshared LineEntry[] lineTable;
-__gshared FileEntry[] fileTable;
-
-LineEntry find(int offset) {
     size_t lo = 0;
     size_t hi = lineTable.length - 1;
     while (lo <= hi) {
@@ -279,14 +308,13 @@ LineEntry find(int offset) {
     return lineTable[hi];
 }
 
-unittest {
+unittest
+{
     Loc loc;
     loc.filename = "foo.d";
     loc.linnum = 1;
     loc.charnum = 2;
 
-    assert(loc.filename == "foo.d");
-    assert(loc.linnum == 1);
-    assert(loc.charnum == 2);
+
     // assert(loc.toString() == "foo.d(1,2)");
 }

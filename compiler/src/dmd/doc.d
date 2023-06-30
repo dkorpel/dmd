@@ -436,7 +436,7 @@ void gendocfile(Module m, const char[] ddoctext, const char* datetime, ErrorSink
         const ploc = m.md ? &m.md.loc : &m.loc;
         Loc loc = *ploc;
         if (!loc.filename)
-            loc.filename = srcfilename.ptr;
+            assert(0); // loc.filename = srcfilename.ptr;
 
         size_t commentlen = m.comment ? strlen(cast(char*)m.comment) : 0;
         Dsymbols a;
