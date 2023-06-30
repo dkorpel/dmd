@@ -64,6 +64,7 @@ class Lexer
 
     Loc scanloc;            // for error messages
     Loc prevloc;            // location of token before current
+    int linnum;             // current line number
 
     const(char)* p;         // current character
 
@@ -126,7 +127,8 @@ class Lexer
         ErrorSink errorSink,
         const CompileEnv* compileEnv) scope
     {
-        scanloc = Loc(filename, 1, 1);
+        // scanloc = Loc(filename, 1, 1);
+        scanloc.setNewFile(cast(uint) begoffset, filename, 1);
         // debug printf("Lexer::Lexer(%p)\n", base);
         // debug printf("lexer.filename = %s\n", filename);
         token = Token.init;
@@ -224,7 +226,8 @@ class Lexer
         tokenizeNewlines = true;
         inTokenStringConstant = 0;
         lastDocLine = 0;
-        scanloc = Loc("#defines", 1, 1);
+        scanloc.setNewFile(0, "#defines", 1);
+        // scanloc = Loc("#defines", 1, 1);
     }
 
     /**********************************
@@ -335,6 +338,7 @@ class Lexer
             case 0:
             case 0x1A:
                 t.value = TOK.endOfFile; // end of file
+                scanloc.setEndOfFile(cast(uint)(p - base));
                 // Intentionally not advancing `p`, such that subsequent calls keep returning TOK.endOfFile.
                 return;
             case ' ':
@@ -3281,9 +3285,10 @@ class Lexer
             case TOK.endOfLine:
                 if (!inTokenStringConstant)
                 {
-                    this.scanloc.linnum = linnum;
                     if (filespec)
-                        this.scanloc.filename = filespec;
+                        this.scanloc.setNewFile(cast(uint) (p - base), filespec, linnum);
+                    else
+                        this.scanloc.setNewLine(cast(uint) (p - base), linnum);
                 }
                 return;
             case TOK.file:
@@ -3581,10 +3586,11 @@ class Lexer
     /**************************
      * `p` should be at start of next line
      */
-    private void endOfLine() @nogc @safe
+    private void endOfLine() @safe
     {
-        scanloc.linnum = scanloc.linnum + 1;
+        linnum += 1;
         line = p;
+        scanloc.setNewLine(cast(uint)(p - base), linnum);
     }
 
     /****************************
