@@ -188,19 +188,17 @@ else
 static if (__VERSION__ < 2092)
     extern (C++) void error(const(char)* filename, uint linnum, uint charnum, const(char)* format, ...)
     {
-        const loc = Loc(filename, linnum, charnum);
         va_list ap;
         va_start(ap, format);
-        verrorReport(loc, format, ap, ErrorKind.error);
+        verrorReport(filename, linnum, charnum, format, ap, ErrorKind.error);
         va_end(ap);
     }
 else
     pragma(printf) extern (C++) void error(const(char)* filename, uint linnum, uint charnum, const(char)* format, ...)
     {
-        const loc = Loc(filename, linnum, charnum);
         va_list ap;
         va_start(ap, format);
-        verrorReport(loc, format, ap, ErrorKind.error);
+        verrorReport(filename, linnum, charnum, format, ap, ErrorKind.error);
         va_end(ap);
     }
 
@@ -417,15 +415,20 @@ else
 // Encapsulates an error as described by its location, format message, and kind.
 private struct ErrorInfo
 {
-    this(const ref Loc loc, const ErrorKind kind, const(char)* p1 = null, const(char)* p2 = null) @safe @nogc pure nothrow
+    this(const(char)* filename, int linnum, int charnum, const ErrorKind kind, const(char)* p1 = null, const(char)* p2 = null) @safe @nogc pure nothrow
     {
-        this.loc = loc;
+        this.filename = filename;
+        this.linnum = linnum;
+        this.charnum = charnum;
         this.p1 = p1;
         this.p2 = p2;
         this.kind = kind;
     }
 
-    const Loc loc;              // location of error
+    const(char)* filename;
+    int linnum;
+    int charnum;
+    // const Loc loc;              // location of error
     Classification headerColor; // color to set `header` output to
     const(char)* p1;            // additional message prefix
     const(char)* p2;            // additional message prefix
@@ -448,7 +451,12 @@ private struct ErrorInfo
  */
 extern (C++) void verrorReport(const ref Loc loc, const(char)* format, va_list ap, ErrorKind kind, const(char)* p1 = null, const(char)* p2 = null)
 {
-    auto info = ErrorInfo(loc, kind, p1, p2);
+    verrorReport(loc.filename, loc.linnum, loc.charnum, format, ap, kind, p1, p2);
+}
+
+extern (C++) void verrorReport(const(char)* filename, int linnum, int charnum, const(char)* format, va_list ap, ErrorKind kind, const(char)* p1 = null, const(char)* p2 = null)
+{
+    auto info = ErrorInfo(filename, linnum, charnum, kind, p1, p2);
     final switch (info.kind)
     {
     case ErrorKind.error:
@@ -514,7 +522,7 @@ extern (C++) void verrorReport(const ref Loc loc, const(char)* format, va_list a
         break;
 
     case ErrorKind.message:
-        const p = info.loc.toChars();
+        const p = locToChars(info.filename, info.linnum, info.charnum);
         if (*p)
         {
             fprintf(stdout, "%s: ", p);
@@ -542,7 +550,7 @@ extern (C++) void verrorReport(const ref Loc loc, const(char)* format, va_list a
  */
 extern (C++) void verrorReportSupplemental(const ref Loc loc, const(char)* format, va_list ap, ErrorKind kind)
 {
-    auto info = ErrorInfo(loc, kind);
+    auto info = ErrorInfo(loc.filename, loc.charnum, loc.linnum, kind);
     info.supplemental = true;
     switch (info.kind)
     {
