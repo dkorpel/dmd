@@ -33,12 +33,15 @@ debug info etc.
 */
 struct Loc
 {
-    private uint index; // offset into lineTable[]
+    private uint index = 0; // offset into lineTable[]
 
-    private uint _linnum;
-    private uint _charnum;
-    private uint _fileOffset;
-    private const(char)* _filename;
+    version (ExplicitLoc)
+    {
+        private uint _linnum;
+        private uint _charnum;
+        private uint _fileOffset;
+        private const(char)* _filename;
+    }
 
     static immutable Loc initial; /// use for default initialization of const ref Loc's
 
@@ -59,11 +62,14 @@ nothrow:
         this.messageStyle = messageStyle;
     }
 
-    extern (C++) this(const(char)* filename, uint linnum, uint charnum) @safe
+    version(none) extern (C++) this(const(char)* filename, uint linnum, uint charnum) @safe
     {
-        this._linnum = linnum;
-        this._charnum = charnum;
-        this._filename = filename;
+        version (ExplicitLoc)
+        {
+            this._linnum = linnum;
+            this._charnum = charnum;
+            this._filename = filename;
+        }
     }
 
     /// utf8 code unit index relative to start of line, starting from 1
