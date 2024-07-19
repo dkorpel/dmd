@@ -1,10 +1,12 @@
 /*
 TEST_OUTPUT:
 ---
-fail_compilation/diag15974.d(21): Error: variable `f` cannot be read at compile time
-fail_compilation/diag15974.d(21):        called from here: `format("%s", f)`
-fail_compilation/diag15974.d(26): Error: variable `f` cannot be read at compile time
-fail_compilation/diag15974.d(26):        called from here: `format("%s", f)`
+fail_compilation/diag15974.d(23): Error: variable `f` cannot be read at compile time
+fail_compilation/diag15974.d(23):        called from here: `format("%s", f)`
+fail_compilation/diag15974.d(23):        while evaluating `mixin(format("%s", f))`
+fail_compilation/diag15974.d(28): Error: variable `f` cannot be read at compile time
+fail_compilation/diag15974.d(28):        called from here: `format("%s", f)`
+fail_compilation/diag15974.d(28):        while evaluating `mixin(format("%s", f))`
 ---
 */
 

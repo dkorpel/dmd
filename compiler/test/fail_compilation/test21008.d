@@ -15,6 +15,7 @@ fail_compilation/test21008.d(117): Error: function `factory` is not callable usi
 fail_compilation/test21008.d(117):        too few arguments, expected 1, got 0
 $p:druntime/import/object.d$($n$):        `object.Object.factory(string classname)` declared here
 fail_compilation/test21008.d(105):        called from here: `handleMiddlewareAnnotation()`
+fail_compilation/test21008.d(105):        while evaluating `mixin(handleMiddlewareAnnotation)`
 ---
 */
 

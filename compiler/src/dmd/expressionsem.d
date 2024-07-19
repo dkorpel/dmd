@@ -137,16 +137,24 @@ private bool isNeedThisScope(Scope* sc, Declaration d)
  *      buf = append generated string to buffer
  *      sc = context
  *      exps = array of Expressions
+ *      loc = location of the pragma / mixin where this conversion was requested, for supplemental error
+ *      fmt = format string for supplemental error. May contain 1 `%s` which prints the faulty expression
  * Returns:
  *      true on error
  */
-bool expressionsToString(ref OutBuffer buf, Scope* sc, Expressions* exps)
+bool expressionsToString(ref OutBuffer buf, Scope* sc, Expressions* exps, Loc loc, const(char)* fmt)
 {
     if (!exps)
         return false;
 
     foreach (ex; *exps)
     {
+        bool error()
+        {
+            if (loc != Loc.initial)
+                errorSupplemental(loc, fmt, ex.toChars());
+            return true;
+        }
         if (!ex)
             continue;
         auto sc2 = sc.startCTFE();
@@ -159,13 +167,13 @@ bool expressionsToString(ref OutBuffer buf, Scope* sc, Expressions* exps)
         // allowed to contain types as well as expressions
         auto e4 = ctfeInterpretForPragmaMsg(e3);
         if (!e4 || e4.op == EXP.error)
-            return true;
+            return error();
 
         // expand tuple
         if (auto te = e4.isTupleExp())
         {
-            if (expressionsToString(buf, sc, te.exps))
-                return true;
+            if (expressionsToString(buf, sc, te.exps, loc, fmt))
+                return error();
             continue;
         }
         // char literals exp `.toStringExp` return `null` but we cant override it
@@ -178,7 +186,9 @@ bool expressionsToString(ref OutBuffer buf, Scope* sc, Expressions* exps)
             e4 = new ArrayLiteralExp(ex.loc, tsa, ie);
         }
 
-        if (StringExp se = e4.toStringExp())
+        StringExp se = e4.toStringExp();
+
+        if (se && se.type.nextOf().ty.isSomeChar)
             buf.writestring(se.toUTF8(sc).peekString());
         else
             buf.writestring(e4.toString());
@@ -333,6 +343,7 @@ StringExp toUTF8(StringExp se, Scope* sc)
         Expression e = castTo(se, sc, Type.tchar.arrayOf());
         e = e.optimize(WANTvalue);
         auto result = e.isStringExp();
+        assert(result);
         assert(result.sz == 1);
         return result;
     }
@@ -7598,7 +7609,7 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
     private Expression compileIt(MixinExp exp, Scope *sc)
     {
         OutBuffer buf;
-        if (expressionsToString(buf, sc, exp.exps))
+        if (expressionsToString(buf, sc, exp.exps, exp.loc, "while evaluating `mixin(%s)`"))
             return null;
 
         uint errors = global.errors;

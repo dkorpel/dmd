@@ -8,6 +8,7 @@ TEST_OUTPUT:
 fail_compilation/imports/a13131elec.d(10): Error: template instance `elecConnOf!gconn` template `elecConnOf` is not defined
 -B
 -A
+fail_compilation/imports/a13131checkpoint.d(3):        while evaluating `mixin(createGlobalsMixins)`
 ---
 */
 

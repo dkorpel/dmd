@@ -1788,7 +1788,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
     {
         //printf("MixinDeclaration::compileIt(loc = %d) %s\n", cd.loc.linnum, cd.exp.toChars());
         OutBuffer buf;
-        if (expressionsToString(buf, sc, cd.exps))
+        if (expressionsToString(buf, sc, cd.exps, cd.loc, "while evaluating `mixin(%s)`"))
             return null;
 
         const errors = global.errors;
