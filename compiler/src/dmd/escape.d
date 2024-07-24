@@ -840,8 +840,6 @@ bool checkAssignEscape(ref Scope sc, Expression e, bool gag, bool byRef)
                 va.storage_class |= STC.return_ | STC.returninferred;
             return;
         }
-        if (e1.op == EXP.structLiteral)
-            return;
 
         result |= sc.setUnsafeDIP1000(gag, ae.loc, "reference to local variable `%s` assigned to non-scope `%s`", v, e1);
     }
