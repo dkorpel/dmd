@@ -4805,7 +4805,7 @@ extern (C++) class TemplateInstance : ScopeDsymbol
             assert(tempdecl._scope);
             // Deduce tdtypes
             tdtypes.setDim(tempdecl.parameters.length);
-            if (!matchWithInstance(sc, tempdecl, this, tdtypes, argumentList, 2))
+            if (!matchWithInstance(sc, tempdecl, this, tdtypes, argumentList, 2, null))
             {
                 .error(loc, "%s `%s` incompatible arguments for template instantiation", kind, toPrettyChars);
                 return false;
@@ -4855,7 +4855,7 @@ extern (C++) class TemplateInstance : ScopeDsymbol
                 dedtypes.zero();
                 assert(td.semanticRun != PASS.initial);
 
-                MATCH m = matchWithInstance(sc, td, this, dedtypes, argumentList, 0);
+                MATCH m = matchWithInstance(sc, td, this, dedtypes, argumentList, 0, null);
                 //printf("matchWithInstance = %d\n", m);
                 if (m == MATCH.nomatch) // no match at all
                     return 0;

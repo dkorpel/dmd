@@ -17155,7 +17155,7 @@ private bool needsTypeInference(TemplateInstance ti, Scope* sc, int flag = 0)
                         return 1;
                     }
                 }
-                MATCH m = matchWithInstance(sc, td, ti, dedtypes, ArgumentList(), 0);
+                MATCH m = matchWithInstance(sc, td, ti, dedtypes, ArgumentList(), 0, null);
                 if (m == MATCH.nomatch)
                     return 0;
             }

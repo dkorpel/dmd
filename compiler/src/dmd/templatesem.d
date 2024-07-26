@@ -221,7 +221,7 @@ void templateDeclarationSemantic(Scope* sc, TemplateDeclaration tempdecl)
  * Returns: match level.
  */
 public
-MATCH matchWithInstance(Scope* sc, TemplateDeclaration td, TemplateInstance ti, ref Objects dedtypes, ArgumentList argumentList, int flag)
+MATCH matchWithInstance(Scope* sc, TemplateDeclaration td, TemplateInstance ti, ref Objects dedtypes, ArgumentList argumentList, int flag, ErrorSink eSink)
 {
     enum LOGM = 0;
     static if (LOGM)
@@ -234,7 +234,7 @@ MATCH matchWithInstance(Scope* sc, TemplateDeclaration td, TemplateInstance ti, 
         if (ti.tiargs.length)
             printf("ti.tiargs.length = %d, [0] = %p\n", ti.tiargs.length, (*ti.tiargs)[0]);
     }
-    MATCH nomatch()
+    MATCH nomatch(const(char)* msg)
     {
         static if (LOGM)
         {
@@ -256,11 +256,7 @@ MATCH matchWithInstance(Scope* sc, TemplateDeclaration td, TemplateInstance ti, 
     // If more arguments than parameters, no match
     if (ti.tiargs.length > parameters_dim && !variadic)
     {
-        static if (LOGM)
-        {
-            printf(" no match: more arguments than parameters\n");
-        }
-        return MATCH.nomatch;
+        return nomatch("more template arguments than parameters");
     }
 
     assert(dedtypes_dim == parameters_dim);
@@ -296,7 +292,7 @@ MATCH matchWithInstance(Scope* sc, TemplateDeclaration td, TemplateInstance ti, 
             {
                 printf("\tmatchArg() for parameter %i failed\n", i);
             }
-            return nomatch();
+            return nomatch("matchArg() for parameter %i failed");
         }
 
         if (m2 < m)
@@ -308,7 +304,7 @@ MATCH matchWithInstance(Scope* sc, TemplateDeclaration td, TemplateInstance ti, 
         {
             // in TemplateDeclaration.semantic, and
             // then we don't need to make sparam if flags == 0
-            return nomatch();
+            return nomatch("failed to insert parameter");
         }
     }
 
@@ -357,13 +353,13 @@ MATCH matchWithInstance(Scope* sc, TemplateDeclaration td, TemplateInstance ti, 
             fd.type = tf.typeSemantic(td.loc, paramscope);
             global.endGagging(olderrors);
             if (fd.type.ty != Tfunction)
-                return nomatch();
+                return nomatch("not a function");
             fd.originalType = fd.type; // for mangling
         }
 
         // TODO: dedtypes => ti.tiargs ?
         if (!evaluateConstraint(td, ti, sc, paramscope, &dedtypes, fd))
-            return nomatch();
+            return nomatch("failing constraint");
     }
 
     static if (LOGM)
@@ -653,7 +649,7 @@ MATCH leastAsSpecialized(Scope* sc, TemplateDeclaration td, TemplateDeclaration 
     Objects dedtypes = Objects(td2.parameters.length);
 
     // Attempt a type deduction
-    MATCH m = matchWithInstance(sc, td2, ti, dedtypes, argumentList, 1);
+    MATCH m = matchWithInstance(sc, td2, ti, dedtypes, argumentList, 1, null);
     if (m > MATCH.nomatch)
     {
         /* A non-variadic template is more specialized than a
@@ -722,10 +718,12 @@ extern (D) MATCHpair deduceFunctionTemplateMatch(TemplateDeclaration td, Templat
     // Set up scope for parameters
     Scope* paramscope = createScopeForTemplateParameters(td, ti,sc);
 
-    MATCHpair nomatch()
+    MATCHpair nomatch(const(char)* msg)
     {
+        if (msg)
+            printf("\tnomatch: %s\n", msg);
+        // assert(0);
         paramscope.pop();
-        //printf("\tnomatch\n");
         return MATCHpair(MATCH.nomatch, MATCH.nomatch);
     }
 
@@ -771,7 +769,7 @@ extern (D) MATCHpair deduceFunctionTemplateMatch(TemplateDeclaration td, Templat
         if (ntargs > n)
         {
             if (!tp)
-                return nomatch();
+                return nomatch("more template arguments than parameters");
 
             /* The extra initial template arguments
              * now form the tuple argument.
@@ -799,13 +797,13 @@ extern (D) MATCHpair deduceFunctionTemplateMatch(TemplateDeclaration td, Templat
             MATCH m = (*td.parameters)[i].matchArg(instLoc, paramscope, dedargs, i, td.parameters, *dedtypes, &sparam);
             //printf("\tdeduceType m = %d\n", m);
             if (m == MATCH.nomatch)
-                return nomatch();
+                return nomatch("argument i doesn't match");
             if (m < matchTiargs)
                 matchTiargs = m;
 
             sparam.dsymbolSemantic(paramscope);
             if (!paramscope.insert(sparam))
-                return nomatch();
+                return nomatch("duplicate parameter maybe?");
         }
         if (n < td.parameters.length && !declaredTuple)
         {
@@ -869,8 +867,8 @@ extern (D) MATCHpair deduceFunctionTemplateMatch(TemplateDeclaration td, Templat
                 if (!tp.ident.equals(tid.ident) || tid.idents.length)
                     continue;
 
-                if (fparameters.varargs != VarArg.none) // variadic function doesn't
-                    return nomatch(); // go with variadic template
+                if (fparameters.varargs != VarArg.none)
+                    return nomatch("variadic function doesn't go with variadic template");
 
                 goto L1;
             }
@@ -896,7 +894,7 @@ extern (D) MATCHpair deduceFunctionTemplateMatch(TemplateDeclaration td, Templat
                 Type t = new TypeIdentifier(Loc.initial, ttp.ident);
                 MATCH m = deduceType(tthis, paramscope, t, *td.parameters, *dedtypes);
                 if (m == MATCH.nomatch)
-                    return nomatch();
+                    return nomatch("mismatching parameter");
                 if (m < match)
                     match = m; // pick worst match
             }
@@ -932,7 +930,7 @@ extern (D) MATCHpair deduceFunctionTemplateMatch(TemplateDeclaration td, Templat
                 mod = MODmerge(thismod, mod);
             MATCH m = MODmethodConv(thismod, mod);
             if (m == MATCH.nomatch)
-                return nomatch();
+                return nomatch("`this` doesn't match mutability thingies");
             if (m < match)
                 match = m;
         }
@@ -1022,7 +1020,7 @@ extern (D) MATCHpair deduceFunctionTemplateMatch(TemplateDeclaration td, Templat
                     }
 
                     if (nfargs2 - argi < rem)
-                        return nomatch();
+                        return nomatch("overflow of ???");
                     declaredTuple.objects.setDim(nfargs2 - argi - rem);
                     foreach (i; 0 .. declaredTuple.objects.length)
                     {
@@ -1030,10 +1028,10 @@ extern (D) MATCHpair deduceFunctionTemplateMatch(TemplateDeclaration td, Templat
 
                         // Check invalid arguments to detect errors early.
                         if (farg.op == EXP.error || farg.type.ty == Terror)
-                            return nomatch();
+                            return nomatch("invalid argument");
 
                         if (!fparam.isLazy() && farg.type.ty == Tvoid)
-                            return nomatch();
+                            return nomatch("void argument");
 
                         Type tt;
                         MATCH m;
@@ -1047,7 +1045,7 @@ extern (D) MATCHpair deduceFunctionTemplateMatch(TemplateDeclaration td, Templat
                             m = deduceTypeHelper(farg.type, tt, tid);
                         }
                         if (m == MATCH.nomatch)
-                            return nomatch();
+                            return nomatch("huh????");
                         if (m < match)
                             match = m;
 
@@ -1069,7 +1067,7 @@ extern (D) MATCHpair deduceFunctionTemplateMatch(TemplateDeclaration td, Templat
                     for (size_t i = 0; i < declaredTuple.objects.length; i++)
                     {
                         if (!isType(declaredTuple.objects[i]))
-                            return nomatch();
+                            return nomatch("not a type tuple");
                     }
                 }
                 assert(declaredTuple);
@@ -1106,11 +1104,11 @@ extern (D) MATCHpair deduceFunctionTemplateMatch(TemplateDeclaration td, Templat
                             if (fparam.defaultArg)
                                 break;
 
-                            return nomatch();
+                            return nomatch("missing argument");
                         }
                         farg = fargs[argi];
                         if (!farg.implicitConvTo(p.type))
-                            return nomatch();
+                            return nomatch("argument type mismatch");
                     }
                     continue;
                 }
@@ -1169,7 +1167,7 @@ extern (D) MATCHpair deduceFunctionTemplateMatch(TemplateDeclaration td, Templat
                                 MATCH m2 = tparam.matchArg(instLoc, paramscope, dedargs, i, td.parameters, *dedtypes, null);
                                 //printf("m2 = %d\n", m2);
                                 if (m2 == MATCH.nomatch)
-                                    return nomatch();
+                                    return nomatch("specialization or smth");
                                 if (m2 < matchTiargs)
                                     matchTiargs = m2; // pick worst match
                                 if (!(*dedtypes)[i].equals(oded))
@@ -1232,7 +1230,7 @@ extern (D) MATCHpair deduceFunctionTemplateMatch(TemplateDeclaration td, Templat
                 assert(farg);
                 // Check invalid arguments to detect errors early.
                 if (farg.op == EXP.error || farg.type.ty == Terror)
-                    return nomatch();
+                    return nomatch("error arguments");
 
                 Type att = null;
             Lretry:
@@ -1244,7 +1242,7 @@ extern (D) MATCHpair deduceFunctionTemplateMatch(TemplateDeclaration td, Templat
                 Type argtype = farg.type;
 
                 if (!fparam.isLazy() && argtype.ty == Tvoid && farg.op != EXP.function_)
-                    return nomatch();
+                    return nomatch("non lazy void shizzle");
 
                 // https://issues.dlang.org/show_bug.cgi?id=12876
                 // Optimize argument to allow CT-known length matching
@@ -1367,15 +1365,15 @@ extern (D) MATCHpair deduceFunctionTemplateMatch(TemplateDeclaration td, Templat
                             // Allow implicit conversion to ref
                         }
                         else
-                            return nomatch();
+                            return nomatch("`ref` parameter with rvalue argument");
                     }
                 }
                 if (m > MATCH.nomatch && (fparam.storageClass & STC.out_))
                 {
                     if (!farg.isLvalue())
-                        return nomatch();
+                        return nomatch("`out` parameter without lvalue");
                     if (!farg.type.isMutable()) // https://issues.dlang.org/show_bug.cgi?id=11916
-                        return nomatch();
+                        return nomatch("const `out` variable");
                 }
                 if (m == MATCH.nomatch && fparam.isLazy() && prmtype.ty == Tvoid && farg.type.ty != Tvoid)
                     m = MATCH.convert;
@@ -1397,7 +1395,7 @@ extern (D) MATCHpair deduceFunctionTemplateMatch(TemplateDeclaration td, Templat
              * matches TypeFunction.callMatch()
              */
             if (!(fparameters.varargs == VarArg.typesafe && parami + 1 == nfparams))
-                return nomatch();
+                return nomatch("no varargs");
 
             /* Check for match with function parameter T...
              */
@@ -1413,7 +1411,7 @@ extern (D) MATCHpair deduceFunctionTemplateMatch(TemplateDeclaration td, Templat
                     {
                         dinteger_t sz = tsa.dim.toInteger();
                         if (sz != fargs.length - argi)
-                            return nomatch();
+                            return nomatch("array length mismatch");
                     }
                     else if (TypeAArray taa = tb.isTypeAArray())
                     {
@@ -1443,13 +1441,13 @@ extern (D) MATCHpair deduceFunctionTemplateMatch(TemplateDeclaration td, Templat
                             global.endGagging(errors);
 
                             if (!e)
-                                return nomatch();
+                                return nomatch("static array dimension not found");
 
                             e = e.ctfeInterpret();
                             e = e.implicitCastTo(sco, Type.tsize_t);
                             e = e.optimize(WANTvalue);
                             if (!dim.equals(e))
-                                return nomatch();
+                                return nomatch("static array dimension no matchies");
                         }
                         else
                         {
@@ -1457,19 +1455,19 @@ extern (D) MATCHpair deduceFunctionTemplateMatch(TemplateDeclaration td, Templat
                             TemplateParameter tprm = (*td.parameters)[i];
                             TemplateValueParameter tvp = tprm.isTemplateValueParameter();
                             if (!tvp)
-                                return nomatch();
+                                return nomatch("not a template value parameter");
                             Expression e = cast(Expression)(*dedtypes)[i];
                             if (e)
                             {
                                 if (!dim.equals(e))
-                                    return nomatch();
+                                    return nomatch("dim not equals");
                             }
                             else
                             {
                                 Type vt = tvp.valType.typeSemantic(Loc.initial, sc);
                                 MATCH m = dim.implicitConvTo(vt);
                                 if (m == MATCH.nomatch)
-                                    return nomatch();
+                                    return nomatch("no implicit conversion...");
                                 (*dedtypes)[i] = dim;
                             }
                         }
@@ -1512,7 +1510,7 @@ extern (D) MATCHpair deduceFunctionTemplateMatch(TemplateDeclaration td, Templat
                             inoutMatch |= wm;
                         }
                         if (m == MATCH.nomatch)
-                            return nomatch();
+                            return nomatch("Array xxx");
                         if (m < match)
                             match = m;
                     }
@@ -1523,13 +1521,13 @@ extern (D) MATCHpair deduceFunctionTemplateMatch(TemplateDeclaration td, Templat
                 goto Lmatch;
 
             default:
-                return nomatch();
+                return nomatch("unknown Txxx");
             }
             assert(0);
         }
         // printf(". argi = %d, nfargs = %d, nfargs2 = %d, argsConsumed = %d\n", cast(int) argi, cast(int) nfargs, cast(int) nfargs2, cast(int) argsConsumed);
         if (argsConsumed != nfargs2 && fparameters.varargs == VarArg.none)
-            return nomatch();
+            return nomatch("stray arguments?");
     }
 
 Lmatch:
@@ -1572,7 +1570,7 @@ Lmatch:
                 MATCH m2 = tparam.matchArg(instLoc, paramscope, dedargs, i, td.parameters, *dedtypes, null);
                 //printf("m2 = %d\n", m2);
                 if (m2 == MATCH.nomatch)
-                    return nomatch();
+                    return nomatch("oded oarg");
                 if (m2 < matchTiargs)
                     matchTiargs = m2; // pick worst match
                 if (!(*dedtypes)[i].equals(oded))
@@ -1601,7 +1599,7 @@ Lmatch:
                     oded = new Tuple();
                 }
                 else
-                    return nomatch();
+                    return nomatch("template tuple parameter aaaaah");
             }
             if (isError(oded))
                 return matcherror();
@@ -1619,7 +1617,7 @@ Lmatch:
                 MATCH m2 = tparam.matchArg(instLoc, paramscope, dedargs, i, td.parameters, *dedtypes, null);
                 //printf("m2 = %d\n", m2);
                 if (m2 == MATCH.nomatch)
-                    return nomatch();
+                    return nomatch("specialization default param shizzle");
                 if (m2 < matchTiargs)
                     matchTiargs = m2; // pick worst match
                 if (!(*dedtypes)[i].equals(oded))
@@ -1660,13 +1658,13 @@ Lmatch:
         sc2 = sc2.pop();
 
         if (!fd)
-            return nomatch();
+            return nomatch("no header instantiation");
     }
 
     if (td.constraint)
     {
         if (!evaluateConstraint(td, ti, sc, paramscope, dedargs, fd))
-            return nomatch();
+            return nomatch("constraint doesn't evaluate to true");
     }
 
     version (none)
@@ -2128,7 +2126,7 @@ void functionResolve(ref MatchAccumulator m, Dsymbol dstart, Loc loc, Scope* sc,
             auto ti = new TemplateInstance(loc, td, tiargs);
             Objects dedtypes = Objects(td.parameters.length);
             assert(td.semanticRun != PASS.initial);
-            MATCH mta = matchWithInstance(sc, td, ti, dedtypes, argumentList, 0);
+            MATCH mta = matchWithInstance(sc, td, ti, dedtypes, argumentList, 0, null);
             //printf("matchWithInstance = %d\n", mta);
             if (mta == MATCH.nomatch || mta < ta_last)   // no match or less match
                 return 0;
