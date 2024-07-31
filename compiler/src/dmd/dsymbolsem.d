@@ -4103,7 +4103,7 @@ private extern(C++) class AddMemberVisitor : Visitor
     Scope* sc;
     ScopeDsymbol sds;
 
-    this(Scope* sc, ScopeDsymbol sds)
+    this(Scope* sc, ScopeDsymbol sds) @safe
     {
         this.sc = sc;
         this.sds = sds;
@@ -6062,7 +6062,7 @@ private extern(C++) class SearchVisitor : Visitor
     SearchOptFlags flags;
     Dsymbol result;
 
-    this(const ref Loc loc, Identifier ident, SearchOptFlags flags)
+    this(const ref Loc loc, Identifier ident, SearchOptFlags flags) @safe
     {
         this.loc = loc;
         this.ident = ident;
@@ -6668,7 +6668,7 @@ private extern(C++) class SetScopeVisitor : Visitor
     alias visit = typeof(super).visit;
     Scope* sc;
 
-    this(Scope* sc)
+    this(Scope* sc) @safe
     {
         this.sc = sc;
     }
@@ -6811,7 +6811,7 @@ extern(C++) class ImportAllVisitor : Visitor
     alias visit = typeof(super).visit;
     Scope* sc;
 
-    this(Scope* sc)
+    this(Scope* sc) @safe
     {
         this.sc = sc;
     }
@@ -7054,7 +7054,7 @@ private extern(C++) class SetFieldOffsetVisitor : Visitor
     FieldState* fieldState;
     bool isunion;
 
-    this(AggregateDeclaration ad, FieldState* fieldState, bool isunion)
+    this(AggregateDeclaration ad, FieldState* fieldState, bool isunion) @safe
     {
         this.ad = ad;
         this.fieldState = fieldState;

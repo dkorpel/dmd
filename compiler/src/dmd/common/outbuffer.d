@@ -248,7 +248,7 @@ struct OutBuffer
      * Writes a 16 bit value, no reserve check.
      */
     nothrow
-    void write16n(int v)
+    void write16n(int v) @safe
     {
         auto x = cast(ushort) v;
         data[offset] = x & 0x00FF;
@@ -367,7 +367,7 @@ struct OutBuffer
     }
 
     // Position buffer to accept the specified number of bytes at offset
-    void position(size_t where, size_t nbytes) nothrow
+    void position(size_t where, size_t nbytes) nothrow @safe
     {
         if (where + nbytes > data.length)
         {
@@ -711,7 +711,7 @@ struct OutBuffer
     }
 
     // Peek at slice of data without taking ownership
-    extern (D) ubyte[] peekSlice() pure nothrow
+    extern (D) ubyte[] peekSlice() pure nothrow @safe
     {
         return data[0 .. offset];
     }

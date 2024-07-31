@@ -1554,7 +1554,7 @@ struct TargetCPP
      * Returns:
      *      string mangling of C++ thunk, or null if unhandled
      */
-    extern (C++) const(char)* thunkMangle(FuncDeclaration fd, int offset)
+    extern (C++) const(char)* thunkMangle(FuncDeclaration fd, int offset) @safe
     {
         return null;
     }
