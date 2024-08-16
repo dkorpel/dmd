@@ -2203,3 +2203,118 @@ void printCppSources (in const(char)[][] compiled)
         }
     }
 }
+
+module compiler.test.testoutput;
+
+import std;
+import std.ascii : isWhite;
+
+enum ErrorKind
+{
+    error,
+    deprecation,
+    warning,
+    supplemental,
+}
+
+void findExpectedErrors(string testContents, ref string[][size_t] expectedErrors)
+{
+    string[] lines = [];
+    size_t lineNumber = 0;
+
+    void flush()
+    {
+        if (!lines.empty)
+        {
+            expectedErrors[lineNumber] = lines;
+            lines = [];
+        }
+    }
+
+    foreach (string line; testContents.splitter('\n').map!strip)
+    {
+        lineNumber++;
+        if (line.skipOver("//"))
+        {
+            line.skipOver!isWhite;
+            ErrorKind kind;
+            if (line.skipOver("ERROR:"))
+                lines ~= "Error: " ~ line.strip;
+            else if (line.skipOver("DEPRECATED:"))
+                lines ~= "Deprecation: " ~ line.strip;
+            else if (line.skipOver("WARNING:"))
+                lines ~= "Warning: " ~ line.strip;
+            else if (line.skipOver("SUPPLEMENTAL:"))
+                lines ~= line.strip;
+            else
+                continue;
+        }
+        else
+        {
+            flush();
+        }
+    }
+    flush();
+}
+
+string findActualErrors(string errorOutput, string fileName, ref string[][size_t] expectedErrors)
+{
+    string remainder;
+    for (auto r = errorOutput.splitter('\n'); !r.empty; r.popFront())
+    {
+        string line = r.front;
+        if (line.skipOver(fileName) && line.skipOver("("))
+        {
+            size_t lineNo = 0;
+            lineNo = line.parse!int.ifThrown(0);
+            if (lineNo == 0)
+                continue;
+            if (line.skipOver("): "))
+            {
+                /+auto kind = ErrorKind.supplemental;
+                if (line.skipOver("Error:"))
+                    kind = ErrorKind.error;
+                if (line.skipOver("Warning:"))
+                    kind = ErrorKind.warning;
+                if (line.skipOver("Deprecation:"))
+                    kind = ErrorKind.deprecation;
+                +/
+
+                expectedErrors.update(lineNo, () => [line], (ref string[] lines) => lines ~= line.strip);
+            }
+
+        }
+        else
+            remainder ~= line;
+    }
+    return null;
+}
+
+unittest
+{
+    string[][size_t] expectedErrors;
+
+    findExpectedErrors("
+    asd
+
+    asd
+
+// ERROR: delegate `iasm1.test6.__foreachbody1` label `L1` is undefined
+//  more
+
+    ", expectedErrors);
+
+    writeln(expectedErrors);
+
+
+    string[][size_t] actualErrors;
+    findActualErrors("
+ABC
+fail_compilation/iasm1.d(8): Error: delegate `iasm1.test6.__foreachbody1` label `L1` is undefined
+fail_compilation/iasm1.d(8):        supplemental shiz
+DEF
+    ", "fail_compilation/iasm1.d", actualErrors);
+
+    writeln(actualErrors);
+}
+
