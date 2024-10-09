@@ -2318,7 +2318,7 @@ private bool checkNogc(FuncDeclaration f, ref Loc loc, Scope* sc)
     if (isRootTraitsCompilesScope(sc) ? !sc.func.isNogcBypassingInference() : !sc.func.setGCCall(f))
         return false;
 
-    if (loc.linnum == 0) // e.g. implicitly generated dtor
+    if (loc == Loc.initial) // e.g. implicitly generated dtor
         loc = sc.func.loc;
 
     // Lowered non-@nogc'd hooks will print their own error message inside of nogc.d (NOGCVisitor.visit(CallExp e)),
@@ -7707,8 +7707,9 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
         const len = buf.length;
         const str = buf.extractChars()[0 .. len];
         const bool doUnittests = global.params.parsingUnittestsRequired();
-        auto loc = adjustLocForMixin(str, exp.loc, global.params.mixinOut);
-        scope p = new Parser!ASTCodegen(loc, sc._module, str, false, global.errorSink, &global.compileEnv, doUnittests);
+        scope p = new Parser!ASTCodegen(sc._module, str, false, global.errorSink, &global.compileEnv, doUnittests);
+        adjustLocForMixin(str, exp.loc, *p.baseLoc, global.params.mixinOut);
+        p.linnum = p.baseLoc.startLine;
         p.nextToken();
         //printf("p.loc.linnum = %d\n", p.loc.linnum);
 

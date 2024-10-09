@@ -672,9 +672,9 @@ private void verrorPrint(const(char)* format, va_list ap, ref ErrorInfo info)
     if (diagnosticHandler !is null)
     {
         Loc diagLoc;
-        diagLoc.linnum = info.loc.line;
-        diagLoc.charnum = info.loc.charnum;
-        diagLoc.filename = (info.loc.filename ~ '\0').ptr;
+        // diagLoc.linnum = info.loc.line;
+        // diagLoc.charnum = info.loc.charnum;
+        // diagLoc.filename = (info.loc.filename ~ '\0').ptr;
         if (diagnosticHandler(diagLoc, info.headerColor, header, format, ap, info.p1, info.p2))
             return;
     }

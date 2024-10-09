@@ -794,7 +794,7 @@ extern (C++) final class Module : Package
             checkCompiledImport();
             members = p.parseModule();
             assert(!p.md); // C doesn't have module declarations
-            numlines = p.scanloc.linnum;
+            numlines = p.linnum;
         }
         else
         {
@@ -818,7 +818,7 @@ extern (C++) final class Module : Package
             checkCompiledImport();
 
             members = p.parseModuleContent();
-            numlines = p.scanloc.linnum;
+            numlines = p.linnum;
         }
 
         /* The symbol table into which the module is to be inserted.

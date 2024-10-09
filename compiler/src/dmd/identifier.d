@@ -218,12 +218,13 @@ nothrow:
     extern (D) static Identifier generateIdWithLoc(string prefix, const ref Loc loc)
     {
         // generate `<prefix>_L<line>_C<col>`
+        auto sl = SourceLoc(loc);
         OutBuffer idBuf;
         idBuf.writestring(prefix);
         idBuf.writestring("_L");
-        idBuf.print(loc.linnum);
+        idBuf.print(sl.line);
         idBuf.writestring("_C");
-        idBuf.print(loc.charnum);
+        idBuf.print(sl.column);
 
         /**
          * Make sure the identifiers are unique per filename, i.e., per module/mixin
