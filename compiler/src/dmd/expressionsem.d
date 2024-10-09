@@ -7717,7 +7717,7 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
         const str = buf.extractChars()[0 .. len];
         const bool doUnittests = global.params.parsingUnittestsRequired();
         auto loc = adjustLocForMixin(str, exp.loc, global.params.mixinOut);
-        scope p = new Parser!ASTCodegen(loc, sc._module, str, false, global.errorSink, &global.compileEnv, doUnittests);
+        scope p = new Parser!ASTCodegen(exp.loc, sc._module, str, false, global.errorSink, &global.compileEnv, doUnittests);
         p.nextToken();
         //printf("p.loc.linnum = %d\n", p.loc.linnum);
 

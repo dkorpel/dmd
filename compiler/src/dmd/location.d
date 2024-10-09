@@ -18,11 +18,6 @@ import dmd.root.array;
 import dmd.root.filename;
 import dmd.root.string: toDString;
 
-version (DMDLIB)
-{
-    version = LocOffset;
-}
-
 /// How code locations are formatted for diagnostic reporting
 enum MessageStyle : ubyte
 {
@@ -38,18 +33,12 @@ debug info etc.
 */
 struct Loc
 {
-    private uint _linnum;
-    private uint _charnum;
-    private uint fileIndex; // index into filenames[], starting from 1 (0 means no filename)
-    version (LocOffset)
-        uint fileOffset; /// utf8 code unit index relative to start of file, starting from 0
+    private uint index = 0; // offset into lineTable[]
 
     static immutable Loc initial; /// use for default initialization of const ref Loc's
 
     extern (C++) __gshared bool showColumns;
     extern (C++) __gshared MessageStyle messageStyle;
-
-    __gshared Array!(const(char)*) filenames;
 
 nothrow:
 
@@ -65,35 +54,28 @@ nothrow:
         this.messageStyle = messageStyle;
     }
 
-    extern (C++) this(const(char)* filename, uint linnum, uint charnum) @safe
+    static Loc singleFilename(const char* filename)
     {
-        this._linnum = linnum;
-        this._charnum = charnum;
-        this.filename = filename;
+        Loc result;
+        // result.filename = filename;
+        return result;
     }
 
     /// utf8 code unit index relative to start of line, starting from 1
     extern (C++) uint charnum() const @nogc @safe
     {
-        return _charnum;
-    }
-
-    /// ditto
-    extern (C++) uint charnum(uint num) @nogc @safe
-    {
-        return _charnum = num;
+        return SourceLoc(this).line;
     }
 
     /// line number, starting from 1
-    extern (C++) uint linnum() const @nogc @safe
+    extern (C++) uint linnum() const @nogc @trusted
     {
-        return _linnum;
+        return SourceLoc(this).line;
     }
 
-    /// ditto
-    extern (C++) uint linnum(uint num) @nogc @safe
+    void seekNextLine()
     {
-        return _linnum = num;
+        assert(0);
     }
 
     /***
@@ -101,25 +83,7 @@ nothrow:
      */
     extern (C++) const(char)* filename() const @nogc
     {
-        return fileIndex ? filenames[fileIndex - 1] : null;
-    }
-
-    /***
-     * Set file name for this location
-     * Params:
-     *   name = file name for location, null for no file name
-     */
-    extern (C++) void filename(const(char)* name) @trusted
-    {
-        if (name)
-        {
-            //printf("setting %s\n", name);
-            filenames.push(name);
-            fileIndex = cast(uint)filenames.length;
-            assert(fileIndex, "internal compiler error: file name index overflow");
-        }
-        else
-            fileIndex = 0;
+        return SourceLoc(this).filename.ptr; // _filename;
     }
 
     extern (C++) const(char)* toChars(
@@ -180,7 +144,7 @@ nothrow:
      */
     bool isValid() const pure @safe
     {
-        return fileIndex != 0;
+        return this.index != 0;
     }
 }
 
@@ -242,17 +206,100 @@ struct SourceLoc
     alias linnum = line;
     alias charnum = column;
 
-    this(const(char)[] filename, uint line, uint column) nothrow
+    this(const(char)[] filename, uint line, uint column) nothrow @nogc pure @safe
     {
         this.filename = filename;
         this.line = line;
         this.column = column;
     }
 
-    this(Loc loc) nothrow
+    this(Loc loc) nothrow @nogc @trusted
     {
-        this.filename = loc.filename.toDString();
-        this.line = loc.linnum;
-        this.column = loc.charnum;
+        if (loc.index == 0)
+            return;
+
+        import std.stdio;
+        // debug writeln("Looking for ", loc.index, " in ", locFileTable);
+        foreach (i, ref locFile; locFileTable)
+        {
+            if (locFile.startIndex >= loc.index)
+            {
+                this = locFile.getSourceLoc(loc.index - locFile.startIndex);
+                return;
+            }
+        }
+        // return null;
+        // this.filename = loc.filename.toDString();
+        // this.line = loc.linnum;
+        // this.column = loc.charnum;
     }
+}
+
+///
+struct BaseLoc
+{
+@safe nothrow:
+
+    const(char)* filename;
+    uint startIndex; // Loc's with this index start here
+    uint startLine = 1;
+    uint[] lines;
+
+    this(const(char)* filename, size_t size) @system
+    {
+        this.filename = filename;
+        this.startIndex = locIndex;
+        locIndex += size;
+        locFileTable ~= this;
+    }
+
+    /// Register that a new line starts at `offset`
+    void newLine(uint offset)
+    {
+        lines ~= offset;
+    }
+
+    Loc getLoc(uint offset) @nogc
+    {
+        Loc result;
+        result.index = startIndex + offset;
+        return result;
+    }
+
+    /// Handles #file and #line directives
+    void addSubstitution(uint offset, const(char)* filename, uint linnum)
+    {
+        // TODO
+    }
+
+    SourceLoc getSourceLoc(uint offset) @nogc @system
+    {
+        // assert(offset < )
+        foreach (i; 0 .. lines.length)
+        {
+            if (lines[i] >= offset)
+                return SourceLoc(filename.toDString, cast(uint) (i + startLine), offset - lines[i - 1]);
+        }
+        // assert(0);
+        return SourceLoc("past end of line", 9, 9);
+    }
+}
+
+__gshared uint locIndex = 1; // Index of start of the file
+__gshared BaseLoc[] locFileTable;
+
+version(none) LineEntry find(int offset)
+{
+    size_t lo = 0;
+    size_t hi = lineTable.length - 1;
+    while (lo <= hi) {
+        const mid = (lo + hi) / 2;
+        if (offset < lineTable[mid].offset)
+            hi = mid - 1;
+        else if (offset > lineTable[mid].offset)
+            lo = mid + 1;
+        else
+            return lineTable[mid];
+    }
+    return lineTable[hi];
 }

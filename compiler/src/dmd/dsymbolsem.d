@@ -5864,7 +5864,7 @@ Loc adjustLocForMixin(const(char)[] input, ref const Loc loc, ref Output mixinOu
     {
         const lines = mixinOut.bufferLines;
         writeMixin(input, loc, mixinOut.bufferLines, *mixinOut.buffer);
-        result = Loc(mixinOut.name.ptr, lines + 2, loc.charnum);
+        // result = Loc(mixinOut.name.ptr, lines + 2, loc.charnum);
     }
     else if (loc.filename)
     {
@@ -5874,7 +5874,7 @@ Loc adjustLocForMixin(const(char)[] input, ref const Loc loc, ref Output mixinOu
         auto len = strlen(loc.filename) + 7 + (loc.linnum).sizeof * 3 + 1;
         char* filename = cast(char*)mem.xmalloc(len);
         snprintf(filename, len, "%s-mixin-%d", loc.filename, cast(int)loc.linnum);
-        result = Loc(filename, loc.linnum, loc.charnum);
+        // result = Loc(filename, loc.linnum, loc.charnum);
     }
     else
         result = loc;
