@@ -281,6 +281,10 @@ MATCH implicitConvTo(Expression e, Type t)
             {
                 return MATCH.convert;
             }
+
+            // Help transition 32-bit code to 64-bit by allowing `.length` to convert to `int` and the like
+            if (e.type.size == 8 && t.size == 4)
+                return MATCH.convert;
         }
         return MATCH.nomatch;
     }
