@@ -9331,6 +9331,11 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
 
         // Check for unsafe casts
         string msg;
+        if (exp.e1.type.isIntegral && !exp.e1.isIntegerExp && !exp.e1.isNegExp && exp.e1.type.size != exp.to.size && exp.to.isTypePointer)
+        {
+            .warning(exp.loc, "casting `%s` of size %d to pointer is dangerous", exp.e1.toChars, cast(int) exp.e1.type.size);
+        }
+
         if (!isSafeCast(ex, t1b, tob, msg))
         {
             if (sc.setUnsafe(false, exp.loc,
