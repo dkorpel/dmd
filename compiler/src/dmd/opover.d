@@ -129,6 +129,19 @@ Objects* opToArg(Scope* sc, EXP op)
     return tiargs;
 }
 
+bool needSem(EXP op)
+{
+    switch (op)
+    {
+        case EXP.lessOrEqual:
+        case EXP.greaterThan:
+        case EXP.greaterOrEqual:
+        case EXP.lessThan:
+            return true;
+        default: return false;
+    }
+}
+
 // Try alias this on first operand
 private Expression checkAliasThisForLhs(AggregateDeclaration ad, Scope* sc, BinExp e)
 {
@@ -150,7 +163,7 @@ private Expression checkAliasThisForLhs(AggregateDeclaration ad, Scope* sc, BinE
         return null;
 
     Expression result;
-    if (be.op == EXP.concatenateAssign)
+    if (!needSem(be.op))
         result = be.op_overload(sc);
     else
         result = be.trySemantic(sc);
@@ -175,7 +188,7 @@ private Expression checkAliasThisForRhs(AggregateDeclaration ad, Scope* sc, BinE
         return null;
 
     Expression result;
-    if (be.op == EXP.concatenateAssign)
+    if (!needSem(be.op))
         result = be.op_overload(sc);
     else
         result = be.trySemantic(sc);
