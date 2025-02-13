@@ -63,6 +63,7 @@ struct HdrGenState
     bool vcg_ast;       /// write out codegen-ast
     bool skipConstraints;  // skip constraints when doing templates
     bool showOneMember = true;
+    bool errorMsg;      /// true if formatting for inside an error message
 
     bool fullQual;      /// fully qualify types when printing
     int tpltMember;
@@ -94,6 +95,54 @@ void genhdrfile(Module m, bool doFuncBodies, ref OutBuffer buf)
     hgs.importcHdr = (m.filetype == FileType.c);
     hgs.doFuncBodies = doFuncBodies;
     toCBuffer(m, buf, hgs);
+}
+
+public const(char)* toErrMsg(const Expression e)
+{
+    HdrGenState hgs;
+    hgs.errorMsg = true;
+    OutBuffer buf;
+    toCBuffer(e, buf, hgs);
+    truncate(buf, 60);
+
+    return buf.extractChars();
+}
+
+private void truncate(ref OutBuffer buf, size_t size)
+{
+    foreach (i; 0 .. buf.length)
+    {
+        if (buf[i] == '\n')
+            buf.peekSlice[i] = ' ';
+    }
+
+    // strip trailing whitespace
+    while (buf.length && buf[$-1] == ' ')
+        buf.setsize(buf.length - 1);
+
+    if (buf.length > size)
+    {
+        buf.setsize(size - 3);
+        buf.writestring("...");
+    }
+}
+
+public const(char)* toErrMsg(const Dsymbol d)
+{
+    if (d.isFuncDeclaration() || d.isTemplateInstance())
+    {
+        if (d.ident && d.ident.toString.startsWith("__"))
+        {
+            HdrGenState hgs;
+            hgs.errorMsg = true;
+            OutBuffer buf;
+            toCBuffer(cast() d, buf, hgs);
+            truncate(buf, 80);
+            return buf.extractChars();
+        }
+    }
+
+    return d.toChars();
 }
 
 /***************************************
@@ -1772,7 +1821,7 @@ void toCBuffer(Dsymbol s, ref OutBuffer buf, ref HdrGenState hgs)
             buf.writestring("__error");
             return;
         }
-        if (f.tok != TOK.reserved)
+        if (f.tok != TOK.reserved && !hgs.errorMsg)
         {
             buf.writestring(f.kind());
             buf.writeByte(' ');
@@ -1789,8 +1838,9 @@ void toCBuffer(Dsymbol s, ref OutBuffer buf, ref HdrGenState hgs)
             buf.writeByte(' ');
             buf.writestring(str);
         }
-        tf.attributesApply(&printAttribute);
 
+        if (!hgs.errorMsg)
+            tf.attributesApply(&printAttribute);
 
         CompoundStatement cs = f.fbody.isCompoundStatement();
         Statement s1;
