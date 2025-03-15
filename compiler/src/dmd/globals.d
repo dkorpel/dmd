@@ -163,6 +163,7 @@ extern (C++) struct Param
     bool trace;             // insert profiling hooks
     bool tracegc;           // instrument calls to 'new'
     bool vcg_ast;           // write-out codegen-ast
+    bool lsp;               // Language Server Protocol
     bool useUnitTests;          // generate unittest code
     bool useUnitTestsRootOnly;          // generate unittest code for root modules only
     bool useInline = false;     // inline expand functions
