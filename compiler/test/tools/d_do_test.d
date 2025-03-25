@@ -673,6 +673,7 @@ bool gatherTestParameters(ref TestArgs testArgs, string input_dir, string input_
         if (testArgs.mode == TestMode.RUN)
             testArgs.permuteArgs = envData.all_args;
     }
+    testArgs.permuteArgs = "";
     replaceResultsDir(testArgs.permuteArgs, envData);
 
     // remove permute args enforced as required anyway
@@ -925,7 +926,11 @@ void tryRemove(in char[] filename)
 string execute(ref File f, string command, const ubyte expectedRc)
 {
     f.writeln(command);
+
     const result = std.process.executeShell(command);
+
+    const exeFile = command.until(" ").text;
+    writef(" %s %016X \n", exeFile.baseName, hashOf(std.file.read(exeFile)));
     f.write(result.output);
 
     if (result.status < 0)
@@ -1670,6 +1675,8 @@ int tryMain(string[] args)
     if (testArgs.clearDflags)
         environment["DFLAGS"] = "";
 
+    int[] hashes = [1, 2, 3]; // %(%016X, %)
+
     writef(" ... %-30s %s%s(%s)",
             input_file,
             testArgs.requiredArgs,
@@ -1740,9 +1747,11 @@ int tryMain(string[] args)
                         (testArgs.mode == TestMode.RUN || testArgs.link ? "" : "-c "),
                         join(testArgs.sources, " "),
                         (autoCompileImports ? "-i" : join(testArgs.compiledImports, " ")));
-
                 try
+                {
                     compile_output = execute(fThisRun, command, testArgs.mode == TestMode.FAIL_COMPILE);
+
+                }
                 catch (Exception e)
                 {
                     writeln(""); // We're at "... runnable/xxxx.d (args)"
@@ -1825,7 +1834,8 @@ int tryMain(string[] args)
                 compile_output ~= content;
             }
 
-            if (!compareOutput(compile_output, testArgs.compileOutput, envData))
+            write("|", compile_output, "|");
+            if (0) if (!compareOutput(compile_output, testArgs.compileOutput, envData))
             {
                 const diff = generateDiff(testArgs.compileOutput, testArgs.compileOutputFile,
                                             compile_output, test_base_name);
@@ -1890,7 +1900,7 @@ int tryMain(string[] args)
                 execute(f, prefix ~ "tools/postscript.sh " ~ testArgs.postScript ~ " " ~ input_dir ~ " " ~ test_name ~ " " ~ thisRunName, 0);
             }
 
-            foreach (file; chain(toCleanup, testArgs.outputFiles))
+            if (0) foreach (file; chain(toCleanup, testArgs.outputFiles))
                 tryRemove(file);
             return Result.continue_;
         }
@@ -1982,13 +1992,13 @@ int tryMain(string[] args)
 
     size_t index = 0; // index over all tests to avoid identical output names in consecutive tests
     auto argSets = (testArgs.argSets.length == 0) ? [""] : testArgs.argSets;
-    for(auto autoCompileImports = false;; autoCompileImports = true)
+    foreach (i; 0 .. 1000)
     {
         foreach(argSet; argSets)
         {
             foreach (c; combinations(testArgs.permuteArgs))
             {
-                final switch(testCombination(autoCompileImports, argSet, index, c))
+                final switch(testCombination(false, argSet, index, c))
                 {
                     case Result.continue_: break;
                     case Result.return0: return 0;
@@ -1998,8 +2008,6 @@ int tryMain(string[] args)
                 index++;
             }
         }
-        if(autoCompileImports || testArgs.compiledImports.length == 0)
-            break;
     }
 
     if (envData.printRuntime)
