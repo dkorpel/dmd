@@ -780,14 +780,6 @@ elem* toElem(Expression e, ref IRState irs)
             }
             else
                 e = el_var(s);
-
-            if (se.type.isTypeClass())
-            {
-                auto boundsCheck = irs.nullCheck ?
-                    el_bin(OPoror, TYvoid, el_same(e), buildRangeError(irs, se.loc)) : null;
-
-                e = el_combine(boundsCheck, e);
-            }
         }
         else
         {
@@ -3284,6 +3276,11 @@ elem* toElem(Expression e, ref IRState irs)
 
                 assert(ethis);
                 ep = el_same(ethis);
+
+                // auto boundsCheck = irs.nullCheck ?
+                //     el_bin(OPoror, TYvoid, ep, buildRangeError(irs, de.loc)) : null;
+                // ep = el_combine(boundsCheck, ep);
+
                 ep = el_una(OPind, TYnptr, ep);
                 uint vindex = de.func.vtblIndex;
 
@@ -3582,7 +3579,7 @@ elem* toElem(Expression e, ref IRState irs)
             e.Ety = TYimmutPtr;     // pointer to immutable
         }
 
-        auto boundsCheck = irs.nullCheck ?
+        auto boundsCheck = (1 && irs.nullCheck) ?
             el_bin(OPoror, TYvoid, el_same(e), buildRangeError(irs, pe.loc)) : null;
 
         e = el_combine(boundsCheck, el_una(OPind, totym(pe.type), e));
@@ -3750,10 +3747,9 @@ elem* toElem(Expression e, ref IRState irs)
 
     elem* visitCast(CastExp ce)
     {
-        version (none)
+        version (all)
         {
-            printf("CastExp.toElem()\n");
-            ce.print();
+            printf("%s CastExp.toElem(%s)\n", ce.toChars, ce.loc.toChars);
             printf("\tfrom: %s\n", ce.e1.type.toChars());
             printf("\tto  : %s\n", ce.to.toChars());
         }
@@ -5726,6 +5722,13 @@ elem* callfunc(Loc loc,
                 ethis = el_copytotmp(ex);
                 eside = el_combine(ex, eside);
             }
+
+            if (ad.isClassDeclaration())
+            {
+                auto boundsCheck = irs.nullCheck ?
+                    el_bin(OPoror, TYvoid, el_same(ethis), buildRangeError(irs, loc)) : null;
+                ethis = el_combine(boundsCheck, ethis);
+            }
         }
         else
         {
@@ -5998,6 +6001,9 @@ extern (D) elem* fixArgumentEvaluationOrder(elem*[] elems)
             e = e.E2;
             elems[i] = e;
         }
+
+        import std.stdio;
+        writeln("e.oper: ", e.Eoper);
 
         switch (e.Eoper)
         {

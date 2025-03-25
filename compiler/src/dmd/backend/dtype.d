@@ -298,9 +298,11 @@ debug
  *      pointer to newly created type.
  */
 @nogc
-type* type_fake(tym_t ty)
+type* type_fake(tym_t ty) @trusted
 {   type* t;
 
+    if (ty < 97)
+        printf("ty = %s\n", tystring[ty]);
     assert(ty != TYstruct);
 
     t = type_alloc(ty);

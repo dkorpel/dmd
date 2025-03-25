@@ -614,7 +614,14 @@ elem* exp2_copytotemp(elem* e)
     if ((ty == TYstruct || ty == TYarray) && e.ET)
         t = e.ET;
     else
+    {
+        if (ty == TYstruct)
+        {
+            e.Esrcpos.print("eh?");
+            // printf("%s", e.Esrcpos.toChars);
+        }
         t = type_fake(ty);
+    }
 
     Symbol* stmp = symbol_genauto(t);
     elem* eeq = el_bin(OPeq,e.Ety,el_var(stmp),e);
