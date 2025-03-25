@@ -111,15 +111,19 @@ struct IRState
         return symbol;
     }
 
+    bool arrayBoundsCheck() { return resolveCheckenable(params.useArrayBounds); }
+
+    bool nullCheck() { return resolveCheckenable(params.useArrayBounds); }
+
     /**********************
      * Returns:
      *    true if do array bounds checking for the current function
      */
-    bool arrayBoundsCheck()
+    bool resolveCheckenable(CHECKENABLE enable)
     {
         if (m.filetype == FileType.c)
             return false;
-        final switch (params.useArrayBounds)
+        final switch (enable)
         {
         case CHECKENABLE.off:
             return false;

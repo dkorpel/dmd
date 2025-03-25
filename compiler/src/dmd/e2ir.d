@@ -780,6 +780,14 @@ elem* toElem(Expression e, ref IRState irs)
             }
             else
                 e = el_var(s);
+
+            if (se.type.isTypeClass())
+            {
+                auto boundsCheck = irs.nullCheck ?
+                    el_bin(OPoror, TYvoid, el_same(e), buildRangeError(irs, se.loc)) : null;
+
+                e = el_combine(boundsCheck, e);
+            }
         }
         else
         {
@@ -3573,7 +3581,12 @@ elem* toElem(Expression e, ref IRState irs)
         {
             e.Ety = TYimmutPtr;     // pointer to immutable
         }
-        e = el_una(OPind,totym(pe.type),e);
+
+        auto boundsCheck = irs.nullCheck ?
+            el_bin(OPoror, TYvoid, el_same(e), buildRangeError(irs, pe.loc)) : null;
+
+        e = el_combine(boundsCheck, el_una(OPind, totym(pe.type), e));
+
         if (tybasic(e.Ety) == TYstruct)
         {
             e.ET = Type_toCtype(pe.type);
