@@ -1,3 +1,4 @@
+// REQUIRED_ARGS: -L/Brepro
 /*_ exe1.c   Mon Nov 20 1989   Modified by: Walter Bright */
 /* Copyright (c) 1985-1995 by Symantec                  */
 /* All Rights Reserved                                  */

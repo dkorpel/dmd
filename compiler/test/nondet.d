@@ -18,13 +18,15 @@ void main()
         write("#");
         of[i] = "x"~i.text~".obj";
         as[i] = "x"~i.text~".asm";
-        execute([`C:\Users\Dennis\Repos\dmd\generated\windows\debug\64\dmd.exe`, "testi.i", "-lib", "-of=tmp.lib"]);
-        asms[i] = execute([dumpbin, "/DISASM", "tmp.lib"]).output;
-        xxds[i] = execute(["xxd", "tmp.lib"]).output;
-        rename("tmp.lib", of[i]);
+        enum tmpName = "tmp.exe";
+        auto res = execute([`C:\Users\Dennis\Repos\dmd\generated\windows\release\64\dmd.exe`, "-m64", "runnable/exe1.c", "-L/Brepro", "-of="~tmpName]);
+        assert(res.status == 0);
+        // asms[i] = execute([dumpbin, "/DISASM", tmpName]).output;
+        xxds[i] = execute(["xxd", tmpName]).output;
+        rename(tmpName, of[i]);
         datas[i] = cast(ubyte[]) std.file.read(of[i]);
 
-        version(none) if (datas[i] != datas[0])
+        if (datas[i] != datas[0])
         {
             writeln("FILE ", i, " differs");
             std.file.write("a.txt", xxds[i]);
@@ -32,13 +34,13 @@ void main()
             execute(["diff", "a.txt", "b.txt"]).output.writeln;
         }
 
-        if (asms[i] != asms[0])
+        version(none) if (asms[i] != asms[0])
         {
             writeln("ASM ", i, " differs");
             execute(["diff", asms[i], asms[0]]).output.writeln;
             return;
         }
     }
-
+    writeln();
     writeln("Different files:", datas[].sort.uniq.walkLength);
 }

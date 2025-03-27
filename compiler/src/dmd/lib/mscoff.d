@@ -362,7 +362,6 @@ final class LibMSCoff : Library
                 static assert(0, "unsupported operating system");
 
             time_t file_time = 0;
-            time(&file_time);
             om.file_time = cast(long)file_time;
             om.file_mode = (1 << 15) | (6 << 6) | (4 << 3) | (4 << 0); // 0100644
         }
@@ -495,7 +494,6 @@ private:
         om.offset = 8;
         om.name = "";
         time_t file_time = 0;
-        .time(&file_time);
         om.file_time = cast(long)file_time;
         om.user_id = 0;
         om.group_id = 0;

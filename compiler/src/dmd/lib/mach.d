@@ -259,7 +259,7 @@ final class LibMach : Library
             else
                 static assert(0, "unsupported operating system");
 
-            time(&om.file_time);
+            //time(&om.file_time);
             om.file_mode = (1 << 15) | (6 << 6) | (4 << 3) | (4 << 0); // 0100644
         }
         objmodules.push(om);
@@ -395,7 +395,7 @@ private:
         om.length = cast(uint)(hoffset - (8 + MachLibHeader.sizeof));
         om.offset = 8;
         om.name = "";
-        .time(&om.file_time);
+        //.time(&om.file_time);
 
         version (Posix)
         {
