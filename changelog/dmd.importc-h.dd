@@ -1,0 +1,19 @@
+ImportC now recognizes .h files just like .c or .i files
+
+This means you no longer need to create a .c file with `#include` to import C headers from D code, you can now import them directly.
+
+---
+import stdio;
+
+void main()
+{
+    printf("Hello world\n");
+}
+---
+
+For example on a Linux setup with stdio.h in /usr/include:
+
+$(CONSOLE
+dmd -I/usr/include -run ../test/test_.d
+Hello world
+)

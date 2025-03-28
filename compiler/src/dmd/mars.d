@@ -1881,6 +1881,7 @@ bool createModule(const(char)* file, ref Strings libmodules, ref Param params, c
         FileName.equals(ext, hdr_ext ) ||
         FileName.equals(ext, dd_ext  ) ||
         FileName.equals(ext, c_ext   ) ||
+        FileName.equals(ext, h_ext   ) ||
         FileName.equals(ext, i_ext   ))
     {
         // strip off .ext

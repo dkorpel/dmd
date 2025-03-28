@@ -263,12 +263,17 @@ nothrow:
             }
         }
 
-        /* ImportC: No D modules found, now search along paths[] for .i file, then .c file.
+        /* ImportC: No D modules found, now search along paths[] for a .i .h or .c file in that order
          */
         const si = FileName.forceExt(filename, i_ext);
         if (FileName.exists(si) == 1)
             return si;
         scope(exit) FileName.free(si.ptr);
+
+        const sh = FileName.forceExt(filename, h_ext);
+        if (FileName.exists(sh) == 1)
+            return sh;
+        scope(exit) FileName.free(sh.ptr);
 
         const sc = FileName.forceExt(filename, c_ext);
         if (FileName.exists(sc) == 1)
@@ -279,6 +284,14 @@ nothrow:
             const p = entry.path.toDString();
 
             const(char)[] n = FileName.combine(p, si);
+            if (FileName.exists(n) == 1)
+            {
+                whichPathFoundThis = pathIndex;
+                return n;
+            }
+            FileName.free(n.ptr);
+
+            n = FileName.combine(p, sh);
             if (FileName.exists(n) == 1)
             {
                 whichPathFoundThis = pathIndex;
