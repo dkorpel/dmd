@@ -524,6 +524,11 @@ int testregisterptr()
 
 /********************************/
 
+// https://github.com/dlang/dmd/issues/21112
+static char CLEAR[] = "\ec";
+
+/********************************/
+
 int printf(const char*, ...);
 
 int main()

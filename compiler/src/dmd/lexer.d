@@ -1486,6 +1486,9 @@ class Lexer
         case 'b':
             c = 8;
             goto Lconsume;
+        case 'e':
+            c = 0x1B;
+            goto Lconsume;
         case 'f':
             c = 12;
             goto Lconsume;
@@ -3633,6 +3636,7 @@ unittest
     test(`0`, '\0');
     test(`a`, '\a');
     test(`b`, '\b');
+    test(`e`, 0x1B);
     test(`f`, '\f');
     test(`n`, '\n');
     test(`r`, '\r');
