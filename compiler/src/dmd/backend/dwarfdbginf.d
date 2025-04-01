@@ -3208,7 +3208,7 @@ static if (1)
 
         if (config.objfmt == OBJ_MACH)
         {
-            char[16 + (except_table_num).sizeof * 3 + 1] name = void;
+            char[16 + (except_table_num).sizeof * 3 + 1] name;
             const length = snprintf(name.ptr, name.length, "GCC_except_table%d", ++except_table_num);
             type* t = tspvoid;
             t.Tcount++;

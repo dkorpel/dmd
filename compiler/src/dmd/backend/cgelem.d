@@ -2899,7 +2899,7 @@ private bool optim_loglog(ref elem* pe)
     uint ty = e.Ety;
 
     import dmd.common.smallbuffer : SmallBuffer;
-    elem*[100] tmp = void;
+    elem*[100] tmp;
     auto sb = SmallBuffer!(elem*)(n, tmp[]);
     elem*[] array = sb[];
 

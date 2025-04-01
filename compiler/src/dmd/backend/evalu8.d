@@ -283,7 +283,7 @@ elem* evalu8(elem* e, Goal goal)
     targ_int i1,i2;
     targ_llong l1,l2;
     targ_ldouble d1,d2;
-    elem esave = void;
+    elem esave;
 
     static bool unordered(T)(T d1, T d2) { return isnan(d1) || isnan(d2); }
 

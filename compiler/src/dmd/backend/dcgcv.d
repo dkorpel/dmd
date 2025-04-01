@@ -1531,7 +1531,7 @@ private void cv4_outsym(Symbol* s)
     tym_t tym;
     const(char)* id;
     ubyte* debsym = null;
-    ubyte[64] buf = void;
+    ubyte[64] buf;
 
     //printf("cv4_outsym(%s)\n",s.Sident.ptr);
     symbol_debug(s);

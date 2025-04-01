@@ -280,7 +280,7 @@ IDXSTR MachObj_addstr(OutBuffer* strtab, const(char)* str)
 private IDXSTR mach_addmangled(Symbol* s)
 {
     //printf("mach_addmangled(%s)\n", s.Sident);
-    char[DEST_LEN] dest = void;
+    char[DEST_LEN] dest;
     char* destr;
     const(char)* name;
     IDXSTR namidx;
@@ -1938,7 +1938,7 @@ void MachObj_alias(const(char)* n1,const(char)* n2)
 @trusted
 private extern (D) char* unsstr (uint value)
 {
-    __gshared char[64] buffer = void;
+    __gshared char[64] buffer;
 
     snprintf (buffer.ptr, buffer.length, "%d", value);
     return buffer.ptr;
@@ -2216,7 +2216,7 @@ int MachObj_common_block(Symbol* s,targ_size_t size,targ_size_t count)
     // support for hidden comdefs not implemented
     assert(!(s.Sflags & SFLhidden));
 
-    Comdef comdef = void;
+    Comdef comdef;
     comdef.sym = s;
     comdef.size = size;
     comdef.count = cast(int)count;
@@ -2347,7 +2347,7 @@ size_t MachObj_bytes(int seg, targ_size_t offset, size_t nbytes, const(void)* p)
 void MachObj_addrel(int seg, targ_size_t offset, Symbol* targsym,
         uint targseg, int rtype, int val = 0)
 {
-    Relocation rel = void;
+    Relocation rel;
     rel.offset = offset;
     rel.targsym = targsym;
     rel.targseg = targseg;
@@ -2579,7 +2579,7 @@ int MachObj_reftoident(int seg, targ_size_t offset, Symbol* s, targ_size_t val,
                 //printf("MachObj_reftoident: seg = %d, offset = x%x, s = %s, val = x%x, pointersSeg = %d\n", seg, cast(int)offset, s.Sident.ptr, cast(int)val, pointersSeg);
                 if (flags & CFindirect)
                 {
-                    Relocation rel = void;
+                    Relocation rel;
                     rel.offset = offset;
                     rel.targsym = null;
                     rel.targseg = pointersSeg;

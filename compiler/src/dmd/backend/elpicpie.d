@@ -357,7 +357,7 @@ private Symbol* el_alloc_localgot()
     if (I32 && !localgot)
     {
         //printf("el_alloc_localgot()\n");
-        char[15] name = void;
+        char[15] name;
         __gshared int tmpnum;
         const length = snprintf(name.ptr, name.length, "_LOCALGOT%d".ptr, tmpnum++);
         type* t = type_fake(TYnptr);

@@ -350,7 +350,7 @@ nothrow:
         dt.DTn = 4;
 
         union U { char* cp; int* lp; }
-        U u = void;
+        U u;
         u.cp = cast(char*)dt.DTdata.ptr;
         *u.lp = value;
 
@@ -375,7 +375,7 @@ nothrow:
         dt.DTn = _tysize[TYnptr];
 
         union U { char* cp; int* lp; }
-        U u = void;
+        U u;
         u.cp = cast(char*)dt.DTdata.ptr;
         *u.lp = cast(int)value;
         if (_tysize[TYnptr] == 8)

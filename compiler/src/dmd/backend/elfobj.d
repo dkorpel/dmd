@@ -288,7 +288,7 @@ IDXSTR ElfObj_addstr(OutBuffer* strtab, const(char)* str)
 private IDXSTR elf_addmangled(Symbol* s)
 {
     //printf("elf_addmangled(%s)\n", s.Sident.ptr);
-    char[DEST_LEN] buf = void;
+    char[DEST_LEN] buf;
 
     IDXSTR namidx = cast(IDXSTR)elfobj.symtab_strings.length();
     char[] desta = obj_mangle2(*s, buf);
@@ -2041,7 +2041,7 @@ static if (0)
 
 private extern (D) char* unsstr(uint value)
 {
-    __gshared char[64] buffer = void;
+    __gshared char[64] buffer;
 
     snprintf(buffer.ptr, buffer.length, "%d", value);
     return buffer.ptr;
@@ -2579,7 +2579,7 @@ void ElfObj_addrel(int seg, targ_size_t offset, uint type,
             // elf_newsection() may reallocate the string buffer.
             char* section_name = cast(char*)GET_SECTION_NAME(secidx);
             size_t len = strlen(section_name) + 1;
-            char[20] buf2 = void;
+            char[20] buf2;
             auto sb = SmallBuffer!char(len, buf2[]);
             char* p = sb.ptr;
             memcpy(p, section_name, len);

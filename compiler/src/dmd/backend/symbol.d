@@ -302,7 +302,7 @@ Funcsym* symbol_funcalias(Funcsym* sf)
 Symbol* symbol_generate(SC sclass,type* t)
 {
     __gshared int tmpnum;
-    char[4 + tmpnum.sizeof * 3 + 1] name = void;
+    char[4 + tmpnum.sizeof * 3 + 1] name;
 
     //printf("symbol_generate(_TMP%d)\n", tmpnum);
     const length = snprintf(name.ptr,name.length,"_TMP%d",tmpnum++);

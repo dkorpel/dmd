@@ -1148,7 +1148,7 @@ int el_countCommas(const(elem)* e)
 elem* el_convfloat(ref GlobalOptimizer go, elem* e)
 {
     //printf("el_convfloat()\n"); elem_print(e);
-    ubyte[32] buffer = void;
+    ubyte[32] buffer;
 
     assert(config.inline8087);
 
@@ -2452,7 +2452,7 @@ void elem_print_const(const elem* e)
             version (CRuntime_Microsoft)
             {
                 const buffer_len = 3 + 3 * (targ_ldouble).sizeof + 1;
-                char[buffer_len] buffer = void;
+                char[buffer_len] buffer;
                 static if (is(typeof(e.Vldouble) == real))
                     ld_sprint(buffer.ptr, buffer_len, 'g', longdouble_soft(e.Vldouble));
                 else

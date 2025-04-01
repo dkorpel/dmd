@@ -342,7 +342,7 @@ if (enable) // disable while we test the inliner
         enum tmp_length = 3;
     else
         enum tmp_length = 6;
-    SymInfo[tmp_length] tmp = void;
+    SymInfo[tmp_length] tmp;
 
     import dmd.common.smallbuffer : SmallBuffer;
     auto sb = SmallBuffer!(SymInfo)(3 * sia_length, tmp[]);

@@ -524,7 +524,7 @@ char* getEAimpl(ubyte rex, uint c, int do_xmm, uint vlen)
     ubyte modrgrm,mod,reg,rm;
     uint opcode;
     const(char)* p;
-    char[BUFMAX] EA = void;
+    char[BUFMAX] EA;
 
     __gshared char[BUFMAX] EAb;
     __gshared const char*[6] ptr = ["","byte ptr ","word ptr ","dword ptr ",
@@ -1842,7 +1842,7 @@ void disassemble(uint c)
     const(char)* sep;
     const(char)* s2;
     const(char)* s3;
-    char[BUFMAX] buf = void;
+    char[BUFMAX] buf;
 
     mixin PatternFunctions;
     enum MOV = "mov";

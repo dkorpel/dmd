@@ -49,7 +49,7 @@ Symbol* except_gentables()
         if (cgstate.Alloca.size)
             error(Srcpos.init, "cannot mix `core.std.stdlib.alloca()` and exception handling in `%s()`", &funcsym_p.Sident[0]);
 
-        char[13+5+1] name = void;
+        char[13+5+1] name;
         __gshared int tmpnum;
         const len = snprintf(name.ptr, name.length, "_HandlerTable%d", tmpnum++);
 

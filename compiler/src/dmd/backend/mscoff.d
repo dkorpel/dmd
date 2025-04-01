@@ -293,7 +293,7 @@ union auxent
     }
     S x_section;
 
-    char[18] filler = void;
+    char[18] filler;
 }
 
 static assert(auxent.sizeof == 18);
