@@ -657,8 +657,8 @@ void MsCoffObj_term(const(char)[] objfilename)
 
     // Write out the bytes for the header
 
-    BIGOBJ_HEADER header = void;
-    IMAGE_FILE_HEADER header_old = void;
+    BIGOBJ_HEADER header;
+    IMAGE_FILE_HEADER header_old;
 
     uint symtable_offset;
 
@@ -2103,7 +2103,7 @@ void MsCoffObj_addrel(segidx_t seg, targ_size_t offset, Symbol* targsym,
         symbuf.write((&targsym)[0 .. 1]);
     }
 
-    Relocation rel = void;
+    Relocation rel;
     rel.offset = offset;
     rel.targsym = targsym;
     rel.targseg = targseg;

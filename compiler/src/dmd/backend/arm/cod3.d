@@ -1723,7 +1723,7 @@ uint codout(int seg, code* c, Barray!ubyte* disasmBuf, ref targ_size_t framehand
     debug
     if (debugc) printf("codout(%p), Coffset = x%llx\n",c,cast(ulong)Offset(seg));
 
-    MiniCodeBuf ggen = void;
+    MiniCodeBuf ggen;
     ggen.index = 0;
     ggen.offset = cast(uint)Offset(seg);
     ggen.seg = seg;

@@ -1815,7 +1815,7 @@ void doswitch(ref CGstate cg, ref CodeBuilder cdb, block* b)
         // Put into casevals[0..ncases] so we can sort then slice
 
         import dmd.common.smallbuffer : SmallBuffer;
-        CaseVal[10] tmp = void;
+        CaseVal[10] tmp;
         auto sb = SmallBuffer!(CaseVal)(ncases, tmp[]);
         CaseVal[] casevals = sb[];
 
@@ -7033,7 +7033,7 @@ nothrow:
     int seg;
     Barray!ubyte* disasmBuf;
     targ_size_t framehandleroffset;
-    ubyte[256] bytes; // = void;
+    ubyte[256] bytes; //;
 
     this(int seg)
     {
@@ -7139,7 +7139,7 @@ uint codout(int seg, code* c, Barray!ubyte* disasmBuf, ref targ_size_t framehand
     debug
     if (debugc) printf("codout(%p), Coffset = x%llx\n",c,cast(ulong)Offset(seg));
 
-    MiniCodeBuf ggen = void;
+    MiniCodeBuf ggen;
     ggen.index = 0;
     ggen.offset = cast(uint)Offset(seg);
     ggen.seg = seg;
