@@ -4,30 +4,52 @@ import std;
 
 string dumpbin = `C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.42.34433\bin\Hostx86\x86\dumpbin.exe`;
 
+// C:/Program Files/Microsoft Visual Studio/2022/Community/Common7/IDE/devenv.exe
+
 void main()
 {
-    enum tries = 50;
+    enum tries = 300;
     string[tries] of;
     string[tries] as;
     string[tries] asms;
     string[tries] xxds;
+    string[tries] outputs;
     // string[tries] diffs;
     ubyte[][tries] datas;
     foreach (i; 0 .. tries)
     {
         write("#");
-        of[i] = "x"~i.text~".obj";
         as[i] = "x"~i.text~".asm";
         enum tmpName = "tmp.exe";
-        auto res = execute([`C:\Users\Dennis\Repos\dmd\generated\windows\release\64\dmd.exe`, "-m64", "runnable/exe1.c", "-L/Brepro", "-of="~tmpName]);
-        assert(res.status == 0);
-        // asms[i] = execute([dumpbin, "/DISASM", tmpName]).output;
-        xxds[i] = execute(["xxd", tmpName]).output;
-        rename(tmpName, of[i]);
-        datas[i] = cast(ubyte[]) std.file.read(of[i]);
+        auto res = execute([`C:\Users\Dennis\Repos\dmd\generated\windows\release\64\dmd.exe`,
+            "-conf=",
+            "-m64",
+            "-L/Brepro",
+            `-I"C:\Users\Dennis\Repos\dmd\compiler\test\..\..\druntime\import`,
+            `-I"C:\Users\Dennis\Repos\dmd\compiler\test\..\..\..\phobos"`,
+            `-odC:\Users\Dennis\Repos\dmd\compiler\test\test_results\runnable\c`,
+            //`-ofC:\Users\Dennis\Repos\dmd\compiler\test\test_results\runnable\c\exe1_2.exe`,
+            "runnable/exe1.c",
+            "-of="~tmpName
+        ], ["LIB": `C:\Users\Dennis\Repos\dmd\compiler\test\..\..\..\phobos`]);
+        assert(res.status == 0, res.output);
+        outputs[i] = res.output;
+        datas[i] = cast(ubyte[]) std.file.read(tmpName);
+
+        void update()
+        {
+            of[i] = "x"~i.text~".exe";
+            rename(tmpName, of[i]);
+            asms[i] = execute([dumpbin, "/DISASM", tmpName]).output;
+            xxds[i] = execute(["xxd", tmpName]).output;
+        }
+
+        if (i == 0)
+            update();
 
         if (datas[i] != datas[0])
         {
+            update();
             writeln("FILE ", i, " differs");
             std.file.write("a.txt", xxds[i]);
             std.file.write("b.txt", xxds[0]);

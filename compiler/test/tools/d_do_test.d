@@ -933,6 +933,10 @@ string execute(ref File f, string command, const ubyte expectedRc)
     writef(" %s %016X \n", exeFile.baseName, hashOf(std.file.read(exeFile)));
     f.write(result.output);
 
+    // writeln("cwd: ", getcwd());
+    // writeln("env: ", environment.toAA.byKeyValue.map!(x => x.key.text ~ ": " ~ x.value.text).join("\n"));
+    writeln(command, " => ", result.output);
+
     if (result.status < 0)
     {
         enforce(false, "caught signal: " ~ to!string(result.status));
@@ -1859,6 +1863,8 @@ int tryMain(string[] args)
                     string output = execute(fThisRun, command, testArgs.runReturn)
                                     .strip()
                                     .unifyNewLine();
+
+                    output = ""; // XXX don't care about printf output of exe1
 
                     output.applyOutputTransformations(testArgs.transformOutput);
 

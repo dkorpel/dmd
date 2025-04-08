@@ -1086,7 +1086,7 @@ void stackoffsets(ref CGstate cg, ref symtab_t symtab, bool estimate)
     bool doAutoOpt = estimate && config.flags4 & CFG4optimized;
 
     // Put autos in another array so we can do optimizations on the stack layout
-    Symbol*[10] autotmp = void;
+    Symbol*[10] autotmp;
     Symbol** autos = null;
     if (doAutoOpt)
     {
