@@ -1036,8 +1036,10 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
                                 err = !(se.upr && se.upr.isConst() && se.upr.toInteger() <= maxLen);
                         }
                         if (err)
+                        {
                             deprecation(fs.loc, "foreach: loop index implicitly converted from `size_t` to `%s`",
                                        tindex.toChars());
+                        }
                     }
                 }
 
@@ -1183,6 +1185,12 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
                     cs.push(new ExpStatement(loc, vinit));
                 cs.push(new ExpStatement(loc, tmp));
                 cs.push(new ExpStatement(loc, fs.key));
+
+                Type tindex = (*fs.parameters)[0].type;
+                auto maxLen = new IntegerExp(IntRange.fromType(tindex).imax.value);
+                auto rangeCondition = new CmpExp(EXP.lessOrEqual, loc, new DotIdExp(loc, new VarExp(loc, tmp), Id.length), maxLen);
+                auto rangeCheck = new AssertExp(loc, rangeCondition, new StringExp(loc, "array length out of range of loop index"));
+                cs.push(new ExpStatement(loc, rangeCheck));
                 Statement forinit = new CompoundDeclarationStatement(loc, cs);
 
                 Expression cond;
