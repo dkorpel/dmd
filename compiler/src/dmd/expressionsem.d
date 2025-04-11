@@ -3466,15 +3466,18 @@ private bool functionParameters(Loc loc, Scope* sc,
                     tf.parameterList.varargs == VarArg.KRvariadic)
                 {
                     const(char)* p = tf.linkage == LINK.c ? "extern(C)" : "extern(C++)";
-                    if (arg.type.ty == Tarray)
+                    if (!fd || !fd.printf)
                     {
-                        error(arg.loc, "cannot pass dynamic arrays to `%s` vararg functions", p);
-                        err = true;
-                    }
-                    if (arg.type.ty == Tsarray)
-                    {
-                        error(arg.loc, "cannot pass static arrays to `%s` vararg functions", p);
-                        err = true;
+                        if (arg.type.ty == Tarray)
+                        {
+                            error(arg.loc, "cannot pass dynamic arrays to `%s` vararg functions", p);
+                            err = true;
+                        }
+                        if (arg.type.ty == Tsarray)
+                        {
+                            error(arg.loc, "cannot pass static arrays to `%s` vararg functions", p);
+                            err = true;
+                        }
                     }
                 }
             }
