@@ -44,6 +44,7 @@ extern (C) void main()
     test18457();
     test20737();
     ctfeOnly();
+    testTryCatch();
 }
 
 /*******************************************/
@@ -240,4 +241,49 @@ int[] ctfeOnlyArray(int a, int b) @__ctfe {
 void ctfeOnlyAppend(ref int[] result, int value) @__ctfe {
     // Due to @__ctfe this will not codegen and therefore no error
     result ~= value;
+}
+
+void notExplicitlyNothrow() {}
+
+void testTryCatch()
+{
+    bool success = false;
+    bool finallyReached = false;
+    {
+        // The `catch (Exception)` clause is removed since the try body is assumed
+        // to never throw an Exception, so the `throw e;` inside it (dead code) is fine.
+        try
+        {
+            notExplicitlyNothrow();
+        }
+        catch (Exception e)
+        {
+            throw e;
+        }
+        finally
+        {
+            finallyReached = true;
+        }
+        scope (success) { success = true; }
+        scope (failure) { throw new Error(); }
+    }
+    assert(success);
+    assert(finallyReached);
+
+    // `catch (Throwable)` / `catch (Error)` clauses are kept, not removed, so an Error
+    // bubbling up from separately compiled non-nothrow code can still be caught.
+    bool throwableHandlerReached = false;
+    try
+    {
+        notExplicitlyNothrow();
+    }
+    catch (Error e)
+    {
+        throwableHandlerReached = true;
+    }
+    catch (Throwable e)
+    {
+        throwableHandlerReached = true;
+    }
+    assert(!throwableHandlerReached);
 }

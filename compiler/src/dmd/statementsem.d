@@ -3440,13 +3440,6 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
     void visitTryCatch(TryCatchStatement tcs)
     {
         //printf("TryCatchStatement.semantic()\n");
-
-        if (!global.params.useExceptions)
-        {
-            error(tcs.loc, "cannot use try-catch statements with `%s`", global.params.betterC ? "-betterC".ptr : "-nothrow".ptr);
-            return setError();
-        }
-
         if (!ClassDeclaration.throwable)
         {
             error(tcs.loc, "cannot use try-catch statements because `object.Throwable` was not declared");
@@ -3459,6 +3452,28 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
 
         tcs.tryBody = sc.tryBody;   // chain on the in-flight tryBody
         tcs._body = tcs._body.semanticScope(sc, null, null, tcs);
+
+        /* With exceptions disabled (`-betterC` / `-nothrow`), the try body is assumed to
+         * never throw an `Exception`, so `Exception`-derived catch clauses are dead code.
+         * Remove them up-front, *before* their handlers are analyzed, so that statements
+         * only valid in the recoverable-exception path (e.g. `throw` of an `Exception`) are
+         * not rejected. `catch (Throwable)` / `catch (Error)` clauses are kept and analyzed
+         * normally, since an `Error` can still be thrown in `nothrow` code.
+         */
+        if (!global.params.useExceptions && ClassDeclaration.exception)
+        {
+            foreach_reverse (i; 0 .. tcs.catches.length)
+            {
+                Catch c = (*tcs.catches)[i];
+                if (!c.type)
+                    continue;   // catch-all is equivalent to catch(Throwable), keep it
+                Type ct = c.type.typeSemantic(c.loc, sc);
+                if (ct == Type.terror)
+                    continue;   // let the regular catch semantic report the error
+                if (ct.toBasetype().implicitConvTo(ClassDeclaration.exception.type))
+                    tcs.catches.remove(i);
+            }
+        }
 
         /* Even if body is empty, still do semantic analysis on catches
          */
@@ -3593,13 +3608,6 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
 
         if (oss.tok != TOK.onScopeExit)
         {
-            // https://issues.dlang.org/show_bug.cgi?id=23159
-            if (!global.params.useExceptions)
-            {
-                error(oss.loc, "`%s` cannot be used with `-%s`", Token.toChars(oss.tok), SwitchScopeGuard);
-                return setError();
-            }
-
             // scope(success) and scope(failure) are rewritten to try-catch(-finally) statement,
             // so the generated catch block cannot be placed in finally block.
             // See also Catch::semantic.
@@ -3625,6 +3633,14 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
             sc.sbreak = null;
             sc.scontinue = null;
         }
+        if (!global.params.useExceptions && oss.tok == TOK.onScopeFailure)
+        {
+            // With exceptions disabled, no recoverable `Exception` can be thrown,
+            // so `scope (failure)` never runs and can be elided entirely.
+            sc.pop();
+            result = new CompoundStatement(oss.loc).statementSemantic(sc);
+            return;
+        }
         oss.statement = oss.statement.semanticNoScope(sc);
         sc.pop();
 
@@ -3642,7 +3658,7 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
          */
 
         //printf("ThrowStatement::semantic()\n");
-        if (throwSemantic(ts.loc, ts.exp, sc))
+        if (throwSemantic(ts.loc, ts.exp, sc, ts.internalThrow))
         {
             sc.ctorflow.orCSX(CSX.halt);
             result = ts;
@@ -3874,9 +3890,12 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
  *
  * Returns: true if the `throw` is valid, or false if an error was found
  */
-public bool throwSemantic(Loc loc, ref Expression exp, Scope* sc)
+public bool throwSemantic(Loc loc, ref Expression exp, Scope* sc, bool internalThrow = false)
 {
-    if (!global.params.useExceptions)
+    // Compiler-generated rethrows (e.g. from scope guards or NRVO destructors) re-propagate
+    // an already-caught `Throwable`. They are allowed with exceptions disabled, just like
+    // `catch (Throwable)` clauses are, and are treated as `nothrow` by `blockExit`.
+    if (!global.params.useExceptions && !internalThrow)
     {
         const(char)* s = SwitchExceptions ? SwitchExceptions : global.params.betterC ? "betterC".ptr : "nothrow".ptr;
         loc.error("cannot use `throw` statements with `-%s`", s);
