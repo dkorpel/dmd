@@ -116,6 +116,7 @@ extern (C++) Type getTypeInfoType(Loc loc, Type t, Scope* sc)
     {
         // Find module that will go all the way to an object file
         Module m = sc._module.importedFrom;
+        assert(m);
         m.members.push(t.vtinfo);
     }
     return t.vtinfo.type;
