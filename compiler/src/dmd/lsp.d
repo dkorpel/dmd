@@ -8,7 +8,7 @@ See_Also: https://microsoft.github.io/language-server-protocol/
 module dmd.lsp;
 
 // dmd -main -unittest -i -J../.. -Jdmd/res -run dmd/lsp.d
-// bdmdr && cat ../test/lspinput.txt | dmdr -lsp
+// bdmdd && cat ../test/testlspinput.txt | dmdd -lsp
 // echo -e "Content-Length: 49\r\n\r\n{\"jsonrpc\":\"2.0\",\"method\":\"initialize\",\"id\":1}" | nc -U /tmp/lsp-socket
 
 import core.stdc.stdio;
@@ -120,6 +120,7 @@ ASTNode findCursorObject(Params params)
         fprintf(stderr, "[!] parse erorrs!\n");
         return null;
     }
+    m.importedFrom = m;
     m.importAll(null);
     m.dsymbolSemantic(null);
     m.semantic2(null);
@@ -205,7 +206,11 @@ void lspRespond(JsonRpc result)
 
     if (result.method == "initialize")
     {
-        buf.writestring(`{"capabilities":{"definitionProvider":true,"hoverProvider":true}}`);
+        buf.writestring(`{"capabilities":{
+            "definitionProvider":true,
+            "hoverProvider":true,
+            "textDocumentSync":1
+            }}`);
     }
     else if (result.method == "textDocument/definition")
     {
@@ -283,6 +288,22 @@ void lspRespond(JsonRpc result)
             buf.printf("null");
         }
     }
+    else if (result.method == "textDocument/completion")
+    {
+        // auto-complete
+    }
+    else if (result.method == "textDocument/signatureHelp")
+    {
+        // show parameters when opening a f() for a function call
+    }
+    else if (result.method == "textDocument/publishDiagnostics")
+    {
+        // show errors
+    }
+    else if (result.method == "textDocument/documentSymbol")
+    {
+        // list functions, types, variables in a file
+    }
     else if (result.method == "initialized")
     {
         return; // Not required to respond
@@ -294,7 +315,7 @@ void lspRespond(JsonRpc result)
     }
 
     buf.printf(`}`);
-    fprintf(stderr, "[!] send response of length %d: %s\n", cast(int) buf.length, buf.peekChars());
+    // fprintf(stderr, "[!] send response of length %d: %s\n", cast(int) buf.length, buf.peekChars());
     printf("Content-Length: %d\r\n\r\n", cast(int) buf.length);
     printf("%s", buf.extractChars());
     fflush(stdout);

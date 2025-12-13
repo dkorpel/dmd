@@ -189,8 +189,8 @@ version (DigitalMars)
     void installMemErrHandler()
     {
         // (only available on some platforms on DMD)
-        const shouldDoMemoryError = getenv("DMD_INSTALL_MEMERR_HANDLER");
-        if (shouldDoMemoryError !is null && *shouldDoMemoryError == '1')
+        // const shouldDoMemoryError = getenv("DMD_INSTALL_MEMERR_HANDLER");
+        // if (shouldDoMemoryError !is null && *shouldDoMemoryError == '1')
         {
             import etc.linux.memoryerror;
             static if (is(typeof(registerMemoryErrorHandler())))
