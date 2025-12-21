@@ -1656,7 +1656,7 @@ Lnextlis:
 
         case OPpair:
         case OPrpair:                   // don't move these, as they do not do computation
-            movelis(go, n.E1,b,l,pdomexit);
+            movelis(go, bo, n.E1,b,l,pdomexit);
             n = n.E2;
             goto Lnextlis;
 
@@ -1680,7 +1680,7 @@ L3:
             elem* n11;
 
             if (OTbinary(op))
-                movelis(go, n.E2, b, l, pdomexit);
+                movelis(go, bo, n.E2, b, l, pdomexit);
 
             // Do lvalue only if it is an expression
             if (n1.Eoper == OPvar)
@@ -1688,7 +1688,7 @@ L3:
             n11 = n1.E1;
             if (OTbinary(n1.Eoper))
             {
-                movelis(go, n11, b, l, pdomexit);
+                movelis(go, bo, n11, b, l, pdomexit);
                 n = n1.E2;
             }
             // If *(x + c), just make x the LI, not the (x + c).
@@ -1703,7 +1703,7 @@ L3:
             }
             else
                 n = n11;
-            movelis(go, n,b,l,pdomexit);
+            movelis(go, bo, n,b,l,pdomexit);
             if (b.Btry || !(n1.Eoper == OPvar && symbol_isintab(n1.Vsym)))
             {
                 //printf("assign to global => domexit |= 2\n");
@@ -1729,7 +1729,7 @@ L3:
         }
         else if (OTbinary(op))
         {
-            movelis(go, n.E1,b,l,pdomexit);
+            movelis(go, bo, n.E1,b,l,pdomexit);
             n = n.E2;
         }
         goto Lnextlis;
@@ -3788,7 +3788,7 @@ bool loopunroll(ref GlobalOptimizer go, ref BlockOpt bo, ref Loop l)
      */
     elem* einitial;
     elem* eincrement;
-    if (!findloopparameters(go, etail, einitial, eincrement))
+    if (!findloopparameters(go, bo, etail, einitial, eincrement))
     {
         if (log) printf("\tnot findloopparameters()\n");
         return false;

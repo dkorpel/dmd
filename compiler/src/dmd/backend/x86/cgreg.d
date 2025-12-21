@@ -262,7 +262,7 @@ private void el_weights(int bi,elem* e,uint weight)
  */
 
 @trusted
-private int cgreg_benefit(Symbol* s, reg_t reg, Symbol* retsym)
+private int cgreg_benefit(ref BlockOpt bo, Symbol* s, reg_t reg, Symbol* retsym)
 {
     int benefit;
     int benefit2;
@@ -770,7 +770,7 @@ struct Reg              // data for trial register assignment
 }
 
 @trusted
-int cgreg_assign(Symbol* retsym)
+int cgreg_assign(ref BlockOpt bo, Symbol* retsym)
 {
     int flag = false;                   // assume no changes
     const bool AArch64 = cgstate.AArch64;
@@ -952,7 +952,7 @@ static if (0 && TARGET_LINUX)
                 !((1UL << reg) & BYTEREGS))
                     continue;
 
-            int benefit = cgreg_benefit(s,reg,retsym);
+            int benefit = cgreg_benefit(bo, s,reg,retsym);
 
             debug if (debugr)
             {   printf(" %s",regstring[reg]);

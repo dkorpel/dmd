@@ -83,7 +83,7 @@ void codgen(Symbol* sfunc, ref BlockOpt bo)
     assert(sfunc == funcsym_p);
     assert(cseg == funcsym_p.Sseg);
 
-    cgreg_init();
+    cgreg_init(bo);
     CSE.initialize();
     cgstate.Alloca.initialize();
     cgstate.anyiasm = 0;
@@ -198,7 +198,7 @@ void codgen(Symbol* sfunc, ref BlockOpt bo)
 
             assert(bo.dfo);
 
-            cgreg_reset();
+            cgreg_reset(bo);
             foreach (i, b; bo.dfo[])
             {
                 cgstate.dfoidx = cast(int)i;
@@ -234,10 +234,10 @@ void codgen(Symbol* sfunc, ref BlockOpt bo)
         if (!(cgstate.allregs & mask(PICREG)) && !cgstate.gotref)
         {
             cgstate.allregs |= mask(PICREG);            // EBX can now be used
-            cgreg_assign(cgstate.retsym);
+            cgreg_assign(bo, cgstate.retsym);
             cgstate.pass = BackendPass.reg;
         }
-        else if (cgreg_assign(cgstate.retsym))          // if we found some registers
+        else if (cgreg_assign(bo, cgstate.retsym))          // if we found some registers
             cgstate.pass = BackendPass.reg;
         else
             cgstate.pass = BackendPass.final_;
@@ -384,7 +384,7 @@ void codgen(Symbol* sfunc, ref BlockOpt bo)
     if (cgstate.usednteh & NTEH_try)
     {
         // Do this before code is emitted because we patch some instructions
-        nteh_filltables();
+        nteh_filltables(bo);
     }
 
     // Compute starting offset for switch tables
@@ -519,7 +519,7 @@ static if (0)
             if (cgstate.usednteh & (EHtry | EHcleanup) &&   // saw BC.try_ or BC._try or OPddtor
                 config.ehmethod == EHmethod.EH_DM)
             {
-                except_gentables();
+                except_gentables(bo);
             }
             if (config.ehmethod == EHmethod.EH_DWARF)
             {

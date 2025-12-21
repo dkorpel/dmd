@@ -286,11 +286,11 @@ void optfunc(ref GlobalOptimizer go, ref BlockOpt bo)
          * https://issues.dlang.org/show_bug.cgi?id=23857
          */
         if (iter == 1)
-            scanForInlines(funcsym_p);
+            scanForInlines(bo, funcsym_p);
 
         if (go.mfoptim & MFdc)
             blockopt(go, bo, 0);            // do block optimization
-        out_regcand(&globsym);          // recompute register candidates
+        out_regcand(bo, &globsym);          // recompute register candidates
         go.changes = 0;                 // no changes yet
         sliceStructs(globsym, bo.startblock);
         if (go.mfoptim & MFcnp)

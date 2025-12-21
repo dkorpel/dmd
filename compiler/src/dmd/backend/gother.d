@@ -133,7 +133,7 @@ private __gshared
 void constprop(ref GlobalOptimizer go, ref BlockOpt bo)
 {
     rd_compute(go, bo, eqrelinc);
-    intranges(go, eqrelinc.rellist, eqrelinc.inclist);        // compute integer ranges
+    intranges(go, bo, eqrelinc.rellist, eqrelinc.inclist);        // compute integer ranges
     eqeqranges(eqrelinc.eqeqlist);       // see if we can eliminate some relationals
 
     eqrelinc.reset();           // reset for next time
@@ -180,7 +180,7 @@ private void rd_compute(ref GlobalOptimizer go, ref BlockOpt bo, ref EqRelInc eq
             continue;                   // not reliable for this block
         if (b.Belem)
         {
-            constantPropagation(go, b, eqrelinc);
+            constantPropagation(go, bo, b, eqrelinc);
 
             debug
             if (!(vec_equal(b.Binrd,b.Boutrd)))
@@ -219,7 +219,7 @@ private void rd_compute(ref GlobalOptimizer go, ref BlockOpt bo, ref EqRelInc eq
  *      eqrelinc  = fill with data collected
  */
 @trusted
-private void constantPropagation(ref GlobalOptimizer go, block* thisblock, ref EqRelInc eqrelinc)
+private void constantPropagation(ref GlobalOptimizer go, ref BlockOpt bo, block* thisblock, ref EqRelInc eqrelinc)
 {
     void conpropwalk(elem* n,vec_t IN)
     {
@@ -287,7 +287,7 @@ private void constantPropagation(ref GlobalOptimizer go, block* thisblock, ref E
                         Barray!(elem*) rdl;
                         listrds(go, IN,t,null,&rdl);
                         if (!(config.flags & CFGnowarning)) // if warnings are enabled
-                            chkrd(t,rdl);
+                            chkrd(bo, t,rdl);
                         if (auto e = chkprop(go, t, rdl))
                         {   // Replace (t op= exp) with (t = e op exp)
 
@@ -383,7 +383,7 @@ private void constantPropagation(ref GlobalOptimizer go, block* thisblock, ref E
             listrds(go, IN,n,null,&rdl);
 
             if (!(config.flags & CFGnowarning))     // if warnings are enabled
-                chkrd(n,rdl);
+                chkrd(bo, n,rdl);
             elem* e = chkprop(go, n, rdl);
             if (e)
             {   tym_t nty;
@@ -404,7 +404,7 @@ private void constantPropagation(ref GlobalOptimizer go, block* thisblock, ref E
  */
 
 @trusted
-private void chkrd(elem* n, Barray!(elem*) rdlist)
+private void chkrd(ref BlockOpt bo, elem* n, Barray!(elem*) rdlist)
 {
     Symbol* sv;
     int unambig;
@@ -933,7 +933,7 @@ private void intranges(ref GlobalOptimizer go, ref BlockOpt bo, ref Elemdatas re
  */
 
 @trusted
-public bool findloopparameters(ref GlobalOptimizer go, elem* erel, ref elem* rdeq, ref elem* rdinc)
+public bool findloopparameters(ref GlobalOptimizer go, ref BlockOpt bo, elem* erel, ref elem* rdeq, ref elem* rdinc)
 {
     if (debugc) printf("findloopparameters()\n");
     const bool log = false;
@@ -1077,7 +1077,7 @@ private int loopcheck(block* start,block* inc,block* rel)
 @trusted
 public void copyprop(ref GlobalOptimizer go, ref BlockOpt bo)
 {
-    out_regcand(&globsym);
+    out_regcand(bo, &globsym);
     if (debugc) printf("copyprop()\n");
     assert(bo.dfo);
 

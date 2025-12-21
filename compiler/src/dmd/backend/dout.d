@@ -755,7 +755,7 @@ debug
  */
 
 @trusted
-void out_regcand(symtab_t* psymtab)
+void out_regcand(ref BlockOpt bo, symtab_t* psymtab)
 {
     //printf("out_regcand()\n");
     const bool ifunc = (tybasic(funcsym_p.ty()) == TYifunc);
@@ -881,18 +881,8 @@ private void out_regcand_walk(elem* e, ref bool addressOfParam)
  * generate code for it,
  * and write it out.
  */
-
 @trusted
-void writefunc(Symbol* sfunc)
-{
-    import dmd.backend.var : go, bo;
-    cstate.CSpsymtab = &globsym;
-    writefunc2(sfunc, go, bo);
-    cstate.CSpsymtab = null;
-}
-
-@trusted
-private void writefunc2(Symbol* sfunc, ref GlobalOptimizer go, ref BlockOpt bo)
+void writefunc(Symbol* sfunc, ref GlobalOptimizer go, ref BlockOpt bo)
 {
     func_t* f = sfunc.Sfunc;
 
@@ -1066,7 +1056,7 @@ private void writefunc2(Symbol* sfunc, ref GlobalOptimizer go, ref BlockOpt bo)
     }
 
     //printf("codgen()\n");
-    codgen(sfunc);                  // generate code
+    codgen(sfunc, bo);                  // generate code
     //printf("after codgen for %s Coffset %x\n",sfunc.Sident.ptr,Offset(cseg));
     sfunc.Sfunc.Fstartblock = bo.startblock;
     bool saveForInlining = canInlineFunction(sfunc);

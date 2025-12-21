@@ -65,7 +65,7 @@ import dmd.backend.dt;
 import dmd.backend.el;
 import dmd.backend.global;
 import dmd.backend.obj;
-import dmd.backend.var : bo;
+import dmd.backend.blockopt : BlockOpt;
 import dmd.backend.oper;
 import dmd.backend.rtlsym;
 import dmd.backend.symtab;
@@ -81,7 +81,7 @@ void elem_setLoc(elem* e, Loc loc) nothrow
     e.Esrcpos = toSrcpos(loc);
 }
 
-void Statement_toIR(Statement s, ref IRState irs)
+void Statement_toIR(Statement s, ref IRState irs, ref BlockOpt bo)
 {
     /* Generate a block for each label
      */
@@ -96,10 +96,10 @@ void Statement_toIR(Statement s, ref IRState irs)
         }
 
     StmtState stmtstate;
-    Statement_toIR(s, irs, &stmtstate);
+    Statement_toIR(s, irs, &stmtstate, bo);
 }
 
-void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
+void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate, ref BlockOpt bo)
 {
     static import dmd.backend.blockopt;
 
@@ -155,7 +155,7 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
         if (s.ifbody)
         {
             if (!s.isIfCtfeBlock())         // __ctfe is always false at runtime
-                Statement_toIR(s.ifbody, irs, &mystate);
+                Statement_toIR(s.ifbody, irs, &mystate, bo);
         }
         blx.curblock.appendSucc(bexit);
 
@@ -163,7 +163,7 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
         {
             block_next(blx, BC.goto_, null);
             bcond.appendSucc(blx.curblock);
-            Statement_toIR(s.elsebody, irs, &mystate);
+            Statement_toIR(s.elsebody, irs, &mystate, bo);
             blx.curblock.appendSucc(bexit);
         }
         else
@@ -199,8 +199,8 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
         BlockState* blx = irs.blx;
 
         StmtState mystate = StmtState(stmtstate, s);
-        mystate.breakBlock = block_calloc(blx);
-        mystate.contBlock = block_calloc(blx);
+        mystate.breakBlock = block_calloc(blx, bo);
+        mystate.contBlock = block_calloc(blx, bo);
 
         block* bpre = blx.curblock;
         block_next(blx, BC.goto_, null);
@@ -210,7 +210,7 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
         mystate.contBlock.appendSucc(mystate.breakBlock);
 
         if (s._body)
-            Statement_toIR(s._body, irs, &mystate);
+            Statement_toIR(s._body, irs, &mystate, bo);
         blx.curblock.appendSucc(mystate.contBlock);
 
         block_next(blx, BC.goto_, mystate.contBlock);
@@ -229,11 +229,11 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
         BlockState* blx = irs.blx;
 
         StmtState mystate = StmtState(stmtstate, s);
-        mystate.breakBlock = block_calloc(blx);
-        mystate.contBlock = block_calloc(blx);
+        mystate.breakBlock = block_calloc(blx, bo);
+        mystate.contBlock = block_calloc(blx, bo);
 
         if (s._init)
-            Statement_toIR(s._init, irs, &mystate);
+            Statement_toIR(s._init, irs, &mystate, bo);
         block* bpre = blx.curblock;
         block_next(blx,BC.goto_,null);
         block* bcond = blx.curblock;
@@ -255,7 +255,7 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
         }
 
         if (s._body)
-            Statement_toIR(s._body, irs, &mystate);
+            Statement_toIR(s._body, irs, &mystate, bo);
         /* End of the body goes to the continue block
          */
         blx.curblock.appendSucc(mystate.contBlock);
@@ -363,7 +363,7 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
         block_next(blx, BC.goto_, bdest);
         bc.appendSucc(blx.curblock);
         if (s.statement)
-            Statement_toIR(s.statement, irs, &mystate);
+            Statement_toIR(s.statement, irs, &mystate, bo);
     }
 
     /**************************************
@@ -380,7 +380,7 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
 
         /* Block for where "break" goes to
          */
-        mystate.breakBlock = block_calloc(blx);
+        mystate.breakBlock = block_calloc(blx, bo);
 
         /* Block for where "default" goes to.
          * If there is a default statement, then that is where default goes.
@@ -388,7 +388,7 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
          *   default: break;
          * by making the default block the same as the break block.
          */
-        mystate.defaultBlock = s.sdefault ? block_calloc(blx) : mystate.breakBlock;
+        mystate.defaultBlock = s.sdefault ? block_calloc(blx, bo) : mystate.breakBlock;
 
         const numcases = s.cases ? s.cases.length : 0;
 
@@ -397,7 +397,7 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
         if (numcases)
             foreach (cs; *s.cases)
             {
-                cs.extra = cast(void*)block_calloc(blx);
+                cs.extra = cast(void*)block_calloc(blx, bo);
             }
 
         incUsage(irs, s.loc);
@@ -431,7 +431,7 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
             block_next(blx, BC.goto_, null);
             b.appendSucc(mystate.defaultBlock);
 
-            Statement_toIR(s._body, irs, &mystate);
+            Statement_toIR(s._body, irs, &mystate, bo);
 
             /* Have the end of the switch body fall through to the block
              * following the switch statement.
@@ -469,7 +469,7 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
                 mystate.switchBlock.Bswitch[i] = cs.exp.toInteger();
         }
 
-        Statement_toIR(s._body, irs, &mystate);
+        Statement_toIR(s._body, irs, &mystate, bo);
 
         /* Have the end of the switch body fall through to the block
          * following the switch statement.
@@ -490,7 +490,7 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
         if (!isAssertFalse(s.statement))
             incUsage(irs, s.loc);
         if (s.statement)
-            Statement_toIR(s.statement, irs, stmtstate);
+            Statement_toIR(s.statement, irs, stmtstate, bo);
     }
 
     void visitDefault(DefaultStatement s)
@@ -503,7 +503,7 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
         if (!isAssertFalse(s.statement))
             incUsage(irs, s.loc);
         if (s.statement)
-            Statement_toIR(s.statement, irs, stmtstate);
+            Statement_toIR(s.statement, irs, stmtstate, bo);
     }
 
     void visitGotoDefault(GotoDefaultStatement s)
@@ -732,7 +732,7 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
         foreach (s2; *s.statements)
         {
             if (s2)
-                Statement_toIR(s2, irs, stmtstate);
+                Statement_toIR(s2, irs, stmtstate, bo);
         }
     }
 
@@ -752,7 +752,7 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
         BlockState* blx = irs.blx;
 
         StmtState mystate = StmtState(stmtstate, s);
-        mystate.breakBlock = block_calloc(blx);
+        mystate.breakBlock = block_calloc(blx, bo);
 
         block* bpre = blx.curblock;
         block_next(blx, BC.goto_, null);
@@ -766,9 +766,9 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
         {
             if (s2)
             {
-                mystate.contBlock = block_calloc(blx);
+                mystate.contBlock = block_calloc(blx, bo);
 
-                Statement_toIR(s2, irs, &mystate);
+                Statement_toIR(s2, irs, &mystate, bo);
 
                 bdox = blx.curblock;
                 block_next(blx, BC.goto_, mystate.contBlock);
@@ -795,7 +795,7 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
         if (mystate.prev.ident)
             mystate.ident = mystate.prev.ident;
 
-        Statement_toIR(s.statement, irs, &mystate);
+        Statement_toIR(s.statement, irs, &mystate, bo);
 
         if (mystate.breakBlock)
             block_goto(blx,BC.goto_,mystate.breakBlock);
@@ -828,7 +828,7 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
         }
         // Execute with block
         if (s._body)
-            Statement_toIR(s._body, irs, stmtstate);
+            Statement_toIR(s._body, irs, stmtstate, bo);
     }
 
 
@@ -883,11 +883,11 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
         tryblock.jcatchvar = symbol_genauto(type_fake(mTYvolatile | TYnptr));
 
         blx.tryblock = tryblock;
-        block* breakblock = block_calloc(blx);
+        block* breakblock = block_calloc(blx, bo);
         block_goto(blx,BC._try,null);
         if (s._body)
         {
-            Statement_toIR(s._body, irs, &mystate);
+            Statement_toIR(s._body, irs, &mystate, bo);
         }
         blx.tryblock = tryblock.Btry;
 
@@ -898,7 +898,7 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
         blx.scope_index = previndex;
 
         // create new break block that follows all the catches
-        block* breakblock2 = block_calloc(blx);
+        block* breakblock2 = block_calloc(blx, bo);
 
         blx.curblock.appendSucc(breakblock2);
         block_next(blx,BC.goto_,null);
@@ -954,7 +954,7 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
             tryblock.appendSucc(bcatch);
             block_goto(blx, BC.jcatch, null);
 
-            block* defaultblock = block_calloc(blx);
+            block* defaultblock = block_calloc(blx, bo);
 
             block* bswitch = blx.curblock;
             bswitch.Belem = el_combine(el_combine(e1, e2),
@@ -1049,10 +1049,10 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
                         ecc.type = Type.tvoid;
                         Statement sf = ExpStatement.create(Loc.initial, ecc);
                         Statement stf = TryFinallyStatement.create(Loc.initial, cs.handler, sf);
-                        Statement_toIR(stf, irs, &catchState);
+                        Statement_toIR(stf, irs, &catchState, bo);
                     }
                     else
-                        Statement_toIR(cs.handler, irs, &catchState);
+                        Statement_toIR(cs.handler, irs, &catchState, bo);
                 }
                 blx.curblock.appendSucc(breakblock2);
                 if (i + 1 == numcases)
@@ -1121,7 +1121,7 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
                         ex = el_bin(OPeq, tym, ex, el_var(toSymbol(cs.var)));
                         block_appendexp(irs.blx.curblock, ex);
                     }
-                    Statement_toIR(cs.handler, irs, &catchState);
+                    Statement_toIR(cs.handler, irs, &catchState, bo);
                 }
                 blx.curblock.appendSucc(breakblock2);
                 block_next(blx, BC.goto_, null);
@@ -1169,21 +1169,21 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
 
         StmtState bodyirs = StmtState(stmtstate, s);
 
-        block* finallyblock = block_calloc(blx);
+        block* finallyblock = block_calloc(blx, bo);
 
         tryblock.appendSucc(finallyblock);
         finallyblock.bc = BC._finally;
         bodyirs.finallyBlock = finallyblock;
 
         if (s._body)
-            Statement_toIR(s._body, irs, &bodyirs);
+            Statement_toIR(s._body, irs, &bodyirs, bo);
         blx.tryblock = tryblock.Btry;     // back to previous tryblock
 
         setScopeIndex(blx,blx.curblock,previndex);
         blx.scope_index = previndex;
 
-        block* breakblock = block_calloc(blx);
-        block* retblock = block_calloc(blx);
+        block* breakblock = block_calloc(blx, bo);
+        block* retblock = block_calloc(blx, bo);
 
         if (config.ehmethod == EHmethod.EH_DWARF && !(blx.funcsym.Sfunc.Fflags3 & Feh_none))
         {
@@ -1241,7 +1241,7 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
 
             setScopeIndex(blx, blx.curblock, previndex);
             if (s.finalbody)
-                Statement_toIR(s.finalbody, irs, &finallyState);
+                Statement_toIR(s.finalbody, irs, &finallyState, bo);
             block_goto(blx, BC.goto_, retblock);
 
             block_next(blx, BC._ret, breakblock);
@@ -1305,7 +1305,7 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
 
             setScopeIndex(blx, blx.curblock, previndex);
             if (s.finalbody)
-                Statement_toIR(s.finalbody, irs, &finallyState);
+                Statement_toIR(s.finalbody, irs, &finallyState, bo);
             block_goto(blx, BC.goto_, retblock);
 
             block_next(blx,BC._ret,breakblock);
@@ -1325,7 +1325,7 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
 
             setScopeIndex(blx, blx.curblock, previndex);
             if (s.finalbody)
-                Statement_toIR(s.finalbody, irs, &finallyState);
+                Statement_toIR(s.finalbody, irs, &finallyState, bo);
             block_goto(blx, BC.goto_, retblock);
 
             block_next(blx,BC._ret,null);
@@ -1493,7 +1493,7 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
  *      startblock = first block in function
  */
 
-void insertFinallyBlockCalls(block* startblock)
+void insertFinallyBlockCalls(block* startblock, ref BlockOpt bo)
 {
     int flagvalue = 0;          // 0 is forunwind_resume
     block* bcret = null;
@@ -1668,12 +1668,12 @@ void insertFinallyBlockCalls(block* startblock)
  *      startblock = first block in function
  */
 
-void insertFinallyBlockGotos(block* startblock)
+void insertFinallyBlockGotos(block* startblock, ref BlockOpt bo)
 {
     enum log = false;
 
     // Insert all the goto's
-    insertFinallyBlockCalls(startblock);
+    insertFinallyBlockCalls(startblock, bo);
 
     /* Remove all the BC._try, BC._finally, BC._lpad and BC._ret
      * blocks.
@@ -1753,7 +1753,7 @@ private void setScopeIndex(BlockState* blx, block* b, int scope_index)
  * Allocate a new block, and set the tryblock.
  */
 
-private block* block_calloc(BlockState* blx) @trusted
+private block* block_calloc(BlockState* blx, ref BlockOpt bo) @trusted
 {
     block* b = dmd.backend.global.block_calloc(bo);
     b.Btry = blx.tryblock;

@@ -42,7 +42,8 @@ import dmd.backend.dt;
 import dmd.backend.el;
 import dmd.backend.global;
 import dmd.backend.obj;
-import dmd.backend.var : bo;
+import dmd.backend.var : go;
+import dmd.backend.blockopt : BlockOpt;
 import dmd.backend.oper;
 import dmd.backend.rtlsym;
 import dmd.backend.symtab;
@@ -620,6 +621,8 @@ void FuncDeclaration_toObjFile(FuncDeclaration fd, bool multiobj)
     Label*[void*] labels = null;
     IRState irs = IRState(m, fd, &varsInScope, &deferToObj, &labels, &global.params, &target, global.errorSink);
 
+    BlockOpt bo;
+
     Symbol* shidden = null;
     Symbol* sthis = null;
     tym_t tyf = tybasic(s.Stype.Tty);
@@ -891,7 +894,7 @@ void FuncDeclaration_toObjFile(FuncDeclaration fd, bool multiobj)
         s.Sfunc.Fflags3 |= Fjmonitor;
     }
 
-    Statement_toIR(sbody, irs);
+    Statement_toIR(sbody, irs, bo);
 
     if (global.errors)
     {
@@ -920,9 +923,9 @@ void FuncDeclaration_toObjFile(FuncDeclaration fd, bool multiobj)
         }
     }
     if (config.ehmethod == EHmethod.EH_NONE || f.Fflags3 & Feh_none)
-        insertFinallyBlockGotos(f.Fstartblock);
+        insertFinallyBlockGotos(f.Fstartblock, bo);
     else if (config.ehmethod == EHmethod.EH_DWARF)
-        insertFinallyBlockCalls(f.Fstartblock);
+        insertFinallyBlockCalls(f.Fstartblock, bo);
 
     // If static constructor
     if (auto sctor = fd.isSharedStaticCtorDeclaration())        // must come first because it derives from StaticCtorDeclaration
@@ -978,7 +981,7 @@ void FuncDeclaration_toObjFile(FuncDeclaration fd, bool multiobj)
         return;
     }
 
-    writefunc(s); // hand off to backend
+    writefunc(s, go, bo); // hand off to backend
 
     buildCapture(fd);
 
@@ -1053,7 +1056,7 @@ void FuncDeclaration_toObjFile(FuncDeclaration fd, bool multiobj)
             startBlk.Bnext = next;
             next.bc = BC.ret;
             //Emit in binary
-            writefunc(newConstructor);
+            writefunc(newConstructor, go, bo);
             //Mark as a CONSTRUCTOR because our thunk implements the destructor
             objmod.setModuleCtorDtor(newConstructor, true);
         }
@@ -1203,6 +1206,7 @@ private Symbol* callFuncsAndGates(Module m, Symbol*[] sctors, StaticDtorDeclarat
         return null;
 
     Symbol* sctor = null;
+    BlockOpt bo;
 
     __gshared type* t;
     if (!t)
@@ -1238,7 +1242,7 @@ private Symbol* callFuncsAndGates(Module m, Symbol*[] sctors, StaticDtorDeclarat
     b.Belem = ector;
     sctor.Sfunc.Fstartline.Sfilename = m.arg.xarraydup.ptr;
     sctor.Sfunc.Fstartblock = b;
-    writefunc(sctor); // hand off to backend
+    writefunc(sctor, go, bo); // hand off to backend
 
     return sctor;
 }
@@ -1321,6 +1325,8 @@ private void genObjFile(Module m, bool multiobj, bool doppelganger)
     //EEcontext* ee = env.getEEcontext();
 
     //printf("Module.genobjfile(multiobj = %d) %s\n", multiobj, m.toChars());
+
+    BlockOpt bo;
 
     import dmd.timetrace;
     timeTraceBeginEvent(TimeTraceEventType.codegenModule);
@@ -1505,7 +1511,7 @@ private void genObjFile(Module m, bool multiobj, bool doppelganger)
             b.Belem = glue.eictor;
             msictor.Sfunc.Fstartline.Sfilename = m.arg.xarraydup.ptr;
             msictor.Sfunc.Fstartblock = b;
-            writefunc(msictor);
+            writefunc(msictor, go, bo);
         }
 
         msctor = callFuncsAndGates(m, glue.sctors[], glue.ectorgates[], "__modctor");

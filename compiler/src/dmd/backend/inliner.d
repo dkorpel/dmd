@@ -31,6 +31,7 @@ import core.stdc.ctype;
 import core.stdc.string;
 import core.stdc.stdlib;
 
+import dmd.backend.blockopt : BlockOpt;
 import dmd.backend.cdef;
 import dmd.backend.cc;
 import dmd.backend.el;
@@ -152,7 +153,7 @@ bool canInlineFunction(Symbol* sfunc)
  */
 
 @trusted
-void scanForInlines(Symbol* sfunc)
+void scanForInlines(ref BlockOpt bo, Symbol* sfunc)
 {
     if (log) debug printf("scanForInlines(%s)\n",prettyident(sfunc));
     //symbol_debug(sfunc);

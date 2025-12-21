@@ -501,7 +501,7 @@ debug
 
                 debug assert(f);
                 blocklist_free(bo, &f.Fstartblock);
-                freesymtab(f.Flocsym[].ptr,0,f.Flocsym.length);
+                freesymtab(f.Flocsym[].ptr,0,f.Flocsym.length, bo);
 
                 f.Flocsym.dtor();
               if (CPP)
@@ -561,7 +561,7 @@ debug
                         printf("freeing members %p\n",s.Sstruct.Sfldlst);
 
                     list_free(&s.Sstruct.Sfldlst,FPNULL);
-                    symbol_free(s.Sstruct.Sroot);
+                    symbol_free(s.Sstruct.Sroot, bo);
                     struct_free(s.Sstruct);
                   }
 static if (0)       /* Don't complain anymore about these, ANSI C says  */
@@ -604,7 +604,7 @@ static if (0)
             if (s.Sdt)
                 dt_free(s.Sdt);
             type_free(t);
-            symbol_free(s.Sl);
+            symbol_free(s.Sl, bo);
             sr = s.Sr;
 debug
 {
@@ -697,7 +697,7 @@ SYMIDX symbol_insert(ref symtab_t symtab, Symbol* s, SYMIDX n)
  */
 
 @trusted
-void freesymtab(Symbol** stab,SYMIDX n1,SYMIDX n2)
+void freesymtab(Symbol** stab, SYMIDX n1, SYMIDX n2, ref BlockOpt bo)
 {
     if (!stab)
         return;
@@ -719,7 +719,7 @@ void freesymtab(Symbol** stab,SYMIDX n1,SYMIDX n2)
             }
             s.Sl = s.Sr = null;
             s.Ssymnum = SYMIDX.max;
-            symbol_free(s);
+            symbol_free(s, bo);
             s = null;
         }
     }
