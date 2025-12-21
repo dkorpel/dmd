@@ -740,7 +740,7 @@ private void eqeqranges(ref Elemdatas eqeqlist)
  */
 
 @trusted
-private void intranges(ref GlobalOptimizer go, ref Elemdatas rellist, ref Elemdatas inclist)
+private void intranges(ref GlobalOptimizer go, ref BlockOpt bo, ref Elemdatas rellist, ref Elemdatas inclist)
 {
     block* rb;
     block* ib;
@@ -1776,7 +1776,7 @@ private void accumda(elem* n,vec_t DEAD, vec_t POSS)
  * Be careful not to compute live ranges for members of structures (CLMOS).
  */
 @trusted
-public void deadvar()
+public void deadvar(ref BlockOpt bo)
 {
         assert(bo.dfo);
 

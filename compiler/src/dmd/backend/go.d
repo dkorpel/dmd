@@ -366,7 +366,7 @@ void optfunc(ref GlobalOptimizer go, ref BlockOpt bo)
     if (go.mfoptim & MFcse)
         builddags(go, bo);            /* common subexpressions         */
     if (go.mfoptim & MFdv)
-        deadvar();                  /* eliminate dead variables      */
+        deadvar(bo);                  /* eliminate dead variables      */
 
     debug if (debugb)
     {

@@ -904,7 +904,7 @@ restart:
                 {
                     //if (dfo[i] != l.Lhead)
                         //domexit |= 2;
-                    movelis(go, bo.dfo[i].Belem, bo.dfo[i], l, domexit);
+                    movelis(go, bo, bo.dfo[i].Belem, bo.dfo[i], l, domexit);
                 }
             }
         }
@@ -1487,7 +1487,7 @@ private bool refs(Symbol* v,elem* n,elem* nstop)
  */
 
 @trusted
-private void movelis(ref GlobalOptimizer go, elem* n, block* b, ref Loop l, ref uint pdomexit)
+private void movelis(ref GlobalOptimizer go, ref BlockOpt bo, elem* n, block* b, ref Loop l, ref uint pdomexit)
 {
     vec_t tmp;
     elem* ne;
@@ -1514,9 +1514,9 @@ Lnextlis:
         {
             uint domexit;
 
-            movelis(go, n.E1,b,l,pdomexit);        // always executed
+            movelis(go, bo, n.E1, b, l, pdomexit);        // always executed
             domexit = pdomexit & ~1;   // sometimes executed
-            movelis(go, n.E2,b,l,domexit);
+            movelis(go, bo, n.E2, b, l, domexit);
             pdomexit |= domexit & 2;
             goto Lret;
         }

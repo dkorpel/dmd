@@ -18,6 +18,7 @@ import core.stdc.stdlib;
 import core.stdc.string;
 
 import dmd.backend.barray;
+import dmd.backend.blockopt;
 import dmd.backend.cc;
 import dmd.backend.cdef;
 import dmd.backend.code;
@@ -39,7 +40,7 @@ package(dmd) @property @nogc nothrow auto @trusted NPTRSIZE() { return _tysize[T
  */
 
 @trusted
-Symbol* except_gentables()
+Symbol* except_gentables(ref BlockOpt bo)
 {
     //printf("except_gentables()\n");
     if (config.ehmethod == EHmethod.EH_DM && !(funcsym_p.Sfunc.Fflags3 & Feh_none))
@@ -57,7 +58,7 @@ Symbol* except_gentables()
         symbol_keep(s);
         //symbol_debug(s);
 
-        except_fillInEHTable(s);
+        except_fillInEHTable(s, bo);
 
         outdata(s);                 // output the scope table
 
@@ -85,7 +86,7 @@ Symbol* except_gentables()
  * }
  */
 @trusted
-void except_fillInEHTable(Symbol* s)
+void except_fillInEHTable(Symbol* s, ref BlockOpt bo)
 {
     uint fsize = NPTRSIZE;             // target size of function pointer
     auto dtb = DtBuilder(0);

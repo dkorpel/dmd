@@ -19,6 +19,7 @@ import core.stdc.stdio;
 import core.stdc.stdlib;
 import core.stdc.string;
 
+import dmd.backend.blockopt;
 import dmd.backend.cc;
 import dmd.backend.cdef;
 import dmd.backend.code;
@@ -76,7 +77,7 @@ regm_t BYTEREGS() { return I64 ? ALLREGS
  *      sfunc = function to generate code for
  */
 @trusted
-void codgen(Symbol* sfunc)
+void codgen(Symbol* sfunc, ref BlockOpt bo)
 {
     //printf("codgen('%s')\n",funcsym_p.Sident.ptr);
     assert(sfunc == funcsym_p);

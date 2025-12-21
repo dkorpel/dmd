@@ -17,6 +17,7 @@ import core.stdc.stdio;
 import core.stdc.stdlib;
 import core.stdc.string;
 
+import dmd.backend.blockopt;
 import dmd.backend.cdef;
 import dmd.backend.cc;
 import dmd.backend.el;
@@ -53,7 +54,7 @@ ref int WEIGHTS(int bi, int si) { return weights[bi * globsym.length + si]; }
  */
 
 @trusted
-void cgreg_init()
+void cgreg_init(ref BlockOpt bo)
 {
     if (!(config.flags4 & CFG4optimized))
         return;
@@ -173,7 +174,7 @@ void cgreg_term()
  */
 
 @trusted
-void cgreg_reset()
+void cgreg_reset(ref BlockOpt bo)
 {
     foreach (ref r; regrange[])
         if (!r)

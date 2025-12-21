@@ -18,6 +18,7 @@ module dmd.backend.x86.nteh;
 import core.stdc.stdio;
 import core.stdc.string;
 
+import dmd.backend.blockopt;
 import dmd.backend.cc;
 import dmd.backend.cdef;
 import dmd.backend.code;
@@ -110,11 +111,11 @@ private Symbol* nteh_scopetable()
  */
 
 @trusted
-void nteh_filltables()
+void nteh_filltables(ref BlockOpt bo)
 {
     Symbol* s = s_table;
     symbol_debug(s);
-    except_fillInEHTable(s);
+    except_fillInEHTable(s, bo);
 }
 
 /****************************

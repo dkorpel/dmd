@@ -31,7 +31,6 @@ import dmd.backend.code;
 import dmd.backend.ty;
 
 import dmd.backend.barray;
-import dmd.backend.var : bo;
 
 static if (NTEXCEPTIONS)
     enum SCPP_OR_NTEXCEPTIONS = true;

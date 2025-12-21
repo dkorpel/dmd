@@ -17,6 +17,7 @@ import core.stdc.stdio;
 import core.stdc.stdlib;
 import core.stdc.string;
 
+import dmd.backend.blockopt;
 import dmd.backend.cdef;
 import dmd.backend.cc;
 import dmd.backend.cgcv;
@@ -30,7 +31,6 @@ import dmd.backend.oper;
 import dmd.backend.symtab;
 import dmd.backend.ty;
 import dmd.backend.type;
-import dmd.backend.var : bo;
 
 
 nothrow:
@@ -93,9 +93,9 @@ debug
 private __gshared Symbol* keep;
 
 @trusted
-void symbol_term()
+void symbol_term(ref BlockOpt bo)
 {
-    symbol_free(keep);
+    symbol_free(keep, bo);
 }
 
 /****************************************
@@ -479,7 +479,7 @@ Symbol* lookupsym(const(char)* p)
 }
 
 @trusted
-void symbol_free(Symbol* s)
+void symbol_free(Symbol* s, ref BlockOpt bo)
 {
     while (s)                           /* if symbol exists             */
     {   Symbol* sr;
@@ -525,11 +525,11 @@ debug
                 if (f.Foversym && f.Foversym.Sfunc)
                 {   f.Foversym.Sfunc.Fflags &= ~Fnotparent;
                     f.Foversym.Sfunc.Fclass = null;
-                    symbol_free(f.Foversym);
+                    symbol_free(f.Foversym, bo);
                 }
 
                 if (f.Fexplicitspec)
-                    symbol_free(f.Fexplicitspec);
+                    symbol_free(f.Fexplicitspec, bo);
 
                 /* If operator function, remove from list of such functions */
                 if (f.Fflags & Foperator)
