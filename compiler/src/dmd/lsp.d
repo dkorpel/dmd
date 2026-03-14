@@ -318,7 +318,7 @@ void lspRespond(JsonRpc result)
     }
     else if (result.method == "textDocument/didChange")
     {
-        // With textDocumentSync: Full (1), contentChanges[0].text is the complete new content
+        // textDocumentSync: Full (1) — contentChanges[0].text is the complete new content
         openDocuments[result.params.textDocument.uri] = result.params.contentChanges.text;
         return; // notification, no response
     }
@@ -535,7 +535,8 @@ struct Uri
 
 struct ContentChange
 {
-    string text; // the full new content (for textDocumentSync Full mode)
+    Range range; // changed range (for textDocumentSync Incremental mode)
+    string text; // full new content (textDocumentSync Full mode)
 }
 
 struct Position
@@ -595,7 +596,7 @@ unittest
     assert(didOpen.params.textDocument.uri == "file:///foo.d");
     assert(didOpen.params.textDocument.text == "module foo;\nint x = 5;\n");
 
-    // textDocument/didChange: contentChanges[0].text contains the new full content
+    // textDocument/didChange: contentChanges[0].text is the full new content (Full sync)
     JsonRpc didChange;
     jsonParse(didChange, `{"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"file:///foo.d","version":2},"contentChanges":[{"text":"module foo;\nint x = 42;\n"}]}}`, eSink);
     assert(didChange.method == "textDocument/didChange");
