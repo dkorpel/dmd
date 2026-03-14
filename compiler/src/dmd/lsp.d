@@ -97,6 +97,9 @@ extern(C++) class LspVisitor : SemanticTimeTransitiveVisitor
     }
 }
 
+/// In-memory document store: URI -> content (kept in sync via textDocument/did* notifications)
+string[string] openDocuments;
+
 /// Find the AST node under the object
 ASTNode findCursorObject(Params params)
 {
@@ -108,6 +111,10 @@ ASTNode findCursorObject(Params params)
     auto id = Identifier.idPool(p);
     // fprintf(stderr, "loc = %s\n", loc.toChars);
     Module m = new Module(loc, sl.filename, id, /*ddoc*/ true, false);
+
+    // Use in-memory content if available (avoids reading unsaved file from disk)
+    if (auto content = params.textDocument.uri in openDocuments)
+        m.src = cast(const(ubyte)[]) (*content ~ "\0\0\0\0");
 
     if (!m.read(loc))
     {
@@ -304,6 +311,26 @@ void lspRespond(JsonRpc result)
     {
         // list functions, types, variables in a file
     }
+    else if (result.method == "textDocument/didOpen")
+    {
+        openDocuments[result.params.textDocument.uri] = result.params.textDocument.text;
+        return; // notification, no response
+    }
+    else if (result.method == "textDocument/didChange")
+    {
+        // With textDocumentSync: Full (1), contentChanges[0].text is the complete new content
+        openDocuments[result.params.textDocument.uri] = result.params.contentChanges.text;
+        return; // notification, no response
+    }
+    else if (result.method == "textDocument/didClose")
+    {
+        openDocuments.remove(result.params.textDocument.uri);
+        return; // notification, no response
+    }
+    else if (result.method == "textDocument/didSave")
+    {
+        return; // content already up to date from didChange; no response needed
+    }
     else if (result.method == "initialized")
     {
         return; // Not required to respond
@@ -490,6 +517,7 @@ struct Params
     Uri textDocument;
     Position position;
     string rootPath; // main folder that is open in editor
+    ContentChange contentChanges; // maps contentChanges[0].text for textDocument/didChange
 
     // struct Capabilities
     // {
@@ -502,6 +530,12 @@ struct Params
 struct Uri
 {
     string uri;
+    string text; // populated in textDocument/didOpen
+}
+
+struct ContentChange
+{
+    string text; // the full new content (for textDocumentSync Full mode)
 }
 
 struct Position
@@ -553,4 +587,18 @@ unittest
 
     string initialize = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":20036,"clientInfo":{"name":"Sublime Text LSP","version":"2.3.0"},"rootUri":"file:///home/dennis/repos/dmd","rootPath":"/home/dennis/repos/dmd","workspaceFolders":[{"name":"dmd","uri":"file:///home/dennis/repos/dmd"}],"capabilities":{"general":{"regularExpressions":{"engine":"ECMAScript"},"markdown":{"parser":"Python-Markdown","version":"3.2.2"}},"textDocument":{"synchronization":{"dynamicRegistration":true,"didSave":true,"willSave":true,"willSaveWaitUntil":true},"hover":{"dynamicRegistration":true,"contentFormat":["markdown","plaintext"]},"completion":{"dynamicRegistration":true,"completionItem":{"snippetSupport":true,"deprecatedSupport":true,"documentationFormat":["markdown","plaintext"],"tagSupport":{"valueSet":[1]},"resolveSupport":{"properties":["detail","documentation","additionalTextEdits"]},"insertReplaceSupport":true,"insertTextModeSupport":{"valueSet":[2]},"labelDetailsSupport":true},"completionItemKind":{"valueSet":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25]},"insertTextMode":2,"completionList":{"itemDefaults":["editRange","insertTextFormat","data"]}},"signatureHelp":{"dynamicRegistration":true,"contextSupport":true,"signatureInformation":{"activeParameterSupport":true,"documentationFormat":["markdown","plaintext"],"parameterInformation":{"labelOffsetSupport":true}}},"references":{"dynamicRegistration":true},"documentHighlight":{"dynamicRegistration":true},"documentSymbol":{"dynamicRegistration":true,"hierarchicalDocumentSymbolSupport":true,"symbolKind":{"valueSet":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26]},"tagSupport":{"valueSet":[1]}},"documentLink":{"dynamicRegistration":true,"tooltipSupport":true},"formatting":{"dynamicRegistration":true},"rangeFormatting":{"dynamicRegistration":true,"rangesSupport":true},"declaration":{"dynamicRegistration":true,"linkSupport":true},"definition":{"dynamicRegistration":true,"linkSupport":true},"typeDefinition":{"dynamicRegistration":true,"linkSupport":true},"implementation":{"dynamicRegistration":true,"linkSupport":true},"codeAction":{"dynamicRegistration":true,"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["quickfix","refactor","refactor.extract","refactor.inline","refactor.rewrite","source.fixAll","source.organizeImports"]}},"dataSupport":true,"isPreferredSupport":true,"resolveSupport":{"properties":["edit"]}},"rename":{"dynamicRegistration":true,"prepareSupport":true,"prepareSupportDefaultBehavior":1},"colorProvider":{"dynamicRegistration":true},"publishDiagnostics":{"relatedInformation":true,"tagSupport":{"valueSet":[1,2]},"versionSupport":true,"codeDescriptionSupport":true,"dataSupport":true},"diagnostic":{"dynamicRegistration":true,"relatedDocumentSupport":true},"selectionRange":{"dynamicRegistration":true},"foldingRange":{"dynamicRegistration":true,"foldingRangeKind":{"valueSet":["comment","imports","region"]}},"codeLens":{"dynamicRegistration":true},"inlayHint":{"dynamicRegistration":true,"resolveSupport":{"properties":["textEdits","label.command"]}},"semanticTokens":{"dynamicRegistration":true,"requests":{"range":true,"full":{"delta":true}},"tokenTypes":["namespace","type","class","enum","interface","struct","typeParameter","parameter","variable","property","enumMember","event","function","method","macro","keyword","modifier","comment","string","number","regexp","operator","decorator","label"],"tokenModifiers":["declaration","definition","readonly","static","deprecated","abstract","async","modification","documentation","defaultLibrary"],"formats":["relative"],"overlappingTokenSupport":false,"multilineTokenSupport":true,"augmentsSyntaxTokens":true},"callHierarchy":{"dynamicRegistration":true},"typeHierarchy":{"dynamicRegistration":true}},"workspace":{"applyEdit":true,"didChangeConfiguration":{"dynamicRegistration":true},"executeCommand":{},"workspaceEdit":{"documentChanges":true,"failureHandling":"abort"},"workspaceFolders":true,"symbol":{"dynamicRegistration":true,"resolveSupport":{"properties":["location.range"]},"symbolKind":{"valueSet":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26]},"tagSupport":{"valueSet":[1]}},"configuration":true,"codeLens":{"refreshSupport":true},"inlayHint":{"refreshSupport":true},"semanticTokens":{"refreshSupport":true},"diagnostics":{"refreshSupport":true}},"window":{"showDocument":{"support":true},"showMessage":{"messageActionItem":{"additionalPropertiesSupport":true}},"workDoneProgress":true}},"initializationOptions":{}}}`;
     jsonParse(result, initialize, eSink);
+
+    // textDocument/didOpen: params.textDocument.text contains the full file content
+    JsonRpc didOpen;
+    jsonParse(didOpen, `{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///foo.d","languageId":"d","version":1,"text":"module foo;\nint x = 5;\n"}}}`, eSink);
+    assert(didOpen.method == "textDocument/didOpen");
+    assert(didOpen.params.textDocument.uri == "file:///foo.d");
+    assert(didOpen.params.textDocument.text == "module foo;\nint x = 5;\n");
+
+    // textDocument/didChange: contentChanges[0].text contains the new full content
+    JsonRpc didChange;
+    jsonParse(didChange, `{"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"file:///foo.d","version":2},"contentChanges":[{"text":"module foo;\nint x = 42;\n"}]}}`, eSink);
+    assert(didChange.method == "textDocument/didChange");
+    assert(didChange.params.textDocument.uri == "file:///foo.d");
+    assert(didChange.params.contentChanges.text == "module foo;\nint x = 42;\n");
 }
