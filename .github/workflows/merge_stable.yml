@@ -1,0 +1,97 @@
+# Automatically merge pull requests targeting master into the stable branch.
+# A PR opts in by adding the label 'merge-to-stable'.
+# On merge, this workflow cherry-picks all commits from the PR onto stable
+# and opens a new PR targeting stable for review.
+
+name: Merge to stable
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - master
+
+jobs:
+  merge-to-stable:
+    if: >
+      github.event.pull_request.merged == true &&
+      contains(github.event.pull_request.labels.*.name, 'merge-to-stable')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Cherry-pick PR commits onto stable
+        id: cherry_pick
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE:  ${{ github.event.pull_request.title }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          BASE_SHA:  ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+
+          BRANCH="merge-to-stable/pr-${PR_NUMBER}"
+          git checkout -b "$BRANCH" origin/stable
+
+          # Collect the commits that belong to this PR (excluding the merge commit).
+          # github.event.pull_request.base.sha is the last commit on master before the PR.
+          COMMITS=$(git log --reverse --pretty=format:'%H' "${BASE_SHA}..${MERGE_SHA}^1" 2>/dev/null || true)
+          if [ -z "$COMMITS" ]; then
+            # Single-commit PR: just use the merge commit's first parent
+            COMMITS=$(git log --reverse --pretty=format:'%H' "${BASE_SHA}..${MERGE_SHA}" -- 2>/dev/null || echo "${MERGE_SHA}")
+          fi
+
+          FAILED=0
+          for SHA in $COMMITS; do
+            git cherry-pick "$SHA" || { FAILED=1; break; }
+          done
+
+          if [ "$FAILED" -eq 1 ]; then
+            echo "conflict=true" >> "$GITHUB_OUTPUT"
+            git cherry-pick --abort || true
+          else
+            echo "conflict=false"  >> "$GITHUB_OUTPUT"
+            git push origin "$BRANCH"
+          fi
+
+          echo "branch=$BRANCH"     >> "$GITHUB_OUTPUT"
+          echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "pr_title=$PR_TITLE"   >> "$GITHUB_OUTPUT"
+
+      - name: Open stable PR (no conflicts)
+        if: steps.cherry_pick.outputs.conflict == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH:    ${{ steps.cherry_pick.outputs.branch }}
+          PR_NUMBER: ${{ steps.cherry_pick.outputs.pr_number }}
+          PR_TITLE:  ${{ steps.cherry_pick.outputs.pr_title }}
+        run: |
+          gh pr create \
+            --base stable \
+            --head "$BRANCH" \
+            --title "[stable] ${PR_TITLE}" \
+            --body "Automatic backport of #${PR_NUMBER} to \`stable\`.
+
+          Cherry-picked by the *merge-to-stable* workflow."
+
+      - name: Comment on original PR (conflict)
+        if: steps.cherry_pick.outputs.conflict == 'true'
+        env:
+          GH_TOKEN:  ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.cherry_pick.outputs.pr_number }}
+        run: |
+          gh pr comment "$PR_NUMBER" --body \
+            "The automatic backport to \`stable\` failed due to merge conflicts.
+            Please cherry-pick the commits manually and open a PR targeting \`stable\`."
