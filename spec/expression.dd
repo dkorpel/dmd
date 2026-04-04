@@ -1525,6 +1525,18 @@ $(H4 $(LNAME2 cast_static_array, Static Arrays))
             ---
         )
 
+    $(P An arithmetic type can be cast to a static array of length 1 when
+        their sizes are equal. The cast is a reinterpret cast.)
+
+        $(SPEC_RUNNABLE_EXAMPLE_RUN
+        ---
+        int x = 42;
+        int[1] a = cast(int[1]) x;
+        assert(a[0] == 42);
+        assert(b == 42);
+        ---
+        )
+
 $(H4 $(LNAME2 cast_integers, Integers))
 
     $(P Casting an integer to a smaller integral will truncate the

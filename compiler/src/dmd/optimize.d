@@ -913,7 +913,11 @@ Expression optimize(Expression e, int result, bool keepLvalue = false)
                 if (e.e1.type.equals(e.type) && e.type.equals(e.to))
                     ret = e.e1;
                 else
-                    ret = Cast(e.loc, e.type, e.to, e.e1).copy();
+                {
+                    Expression castResult = Cast(e.loc, e.type, e.to, e.e1).copy();
+                    if (castResult.op != EXP.cantExpression)
+                        ret = castResult;
+                }
             }
         }
         //printf(" returning6 %s\n", ret.toChars());

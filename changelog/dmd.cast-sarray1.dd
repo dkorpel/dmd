@@ -1,0 +1,9 @@
+Casting a primitive to a length-1 static array is now allowed
+
+Casting an arithmetic type to a static array of length 1 with matching size is
+now permitted as a reinterpret cast.
+
+```D
+int x = 42;
+uint[1] a = cast(uint[1]) x; // now allowed
+```

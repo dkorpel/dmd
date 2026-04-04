@@ -4717,6 +4717,17 @@ elem* toElemCast(CastExp ce, elem* e, bool isLvalue, ref IRState irs)
         }
     }
 
+    // Casting a primitive to a length-1 static array with matching size
+    // https://github.com/dlang/dmd/issues/22269
+    if (tty == Tsarray && fty != Tsarray)
+    {
+        // arithmetic -> T[1]: put value in memory, reinterpret as static array
+        e = addressElem(e, tfrom);
+        e = el_una(OPind, TYarray, e);
+        e.ET = Type_toCtype(t);
+        return Lret(ce, e);
+    }
+
     ftym = tybasic(e.Ety);
     ttym = tybasic(totym(t));
     if (ftym == ttym)

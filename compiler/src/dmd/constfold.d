@@ -1048,6 +1048,11 @@ UnionExp Cast(Loc loc, Type type, Type to, Expression e1)
     {
         cantExp(ue);
     }
+    else if (tb.ty == Tsarray)
+    {
+        // reinterpret cast of a constant to a static array; handle at runtime
+        cantExp(ue);
+    }
     else if (tb.ty == Tstruct && e1.op == EXP.int64)
     {
         // Struct = 0;

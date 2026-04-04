@@ -711,6 +711,11 @@ bool isLvalue(Expression _this)
         //printf("e1.type = %s, to.type = %s\n", e1.type.toChars(), to.toChars());
         if (_this.rvalue || !_this.e1.isLvalue())
             return false;
+        // https://github.com/dlang/dmd/issues/22269
+        // cast(T[1]) arithmetic_lvalue is an lvalue
+        if (_this.to.ty == Tsarray && _this.to.isTypeSArray().dim.toInteger() == 1 &&
+            (_this.e1.type.isIntegral() || _this.e1.type.isFloating()) && _this.e1.type.ty != Tvector)
+            return true;
         return (_this.to.ty == Tsarray && (_this.e1.type.ty == Tvector || _this.e1.type.ty == Tsarray)) ||
             (_this.to.ty == Taarray && _this.e1.type.ty == Taarray) ||
             _this.e1.type.mutableOf.unSharedOf().equals(_this.to.mutableOf().unSharedOf());

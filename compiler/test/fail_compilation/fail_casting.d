@@ -53,10 +53,9 @@ void test10646()
 /*
 TEST_OUTPUT:
 ---
-fail_compilation/fail_casting.d(69): Error: cannot cast expression `x` of type `int[1]` to `int`
-fail_compilation/fail_casting.d(70): Error: cannot cast expression `x` of type `int` to `int[1]`
-fail_compilation/fail_casting.d(71): Error: cannot cast expression `x` of type `float[1]` to `int`
-fail_compilation/fail_casting.d(72): Error: cannot cast expression `x` of type `int` to `float[1]`
+fail_compilation/fail_casting.d(68): Error: cannot cast expression `x` of type `int[1]` to `int`
+fail_compilation/fail_casting.d(70): Error: cannot cast expression `x` of type `float[1]` to `int`
+fail_compilation/fail_casting.d(71): Error: cannot cast expression `x` of type `int` to `long[1]`
 fail_compilation/fail_casting.d(75): Error: cannot cast expression `x` of type `int[]` to `int`
 fail_compilation/fail_casting.d(76): Error: cannot cast expression `x` of type `int` to `int[]`
 fail_compilation/fail_casting.d(77): Error: cannot cast expression `x` of type `float[]` to `int`
@@ -65,10 +64,11 @@ fail_compilation/fail_casting.d(78): Error: cannot cast expression `x` of type `
 */
 void test11484()
 {
-    // Tsarray <--> integer
+    // https://github.com/dlang/dmd/issues/22269
     { int[1]   x; auto y = cast(int     ) x; }
     { int      x; auto y = cast(int[1]  ) x; }
     { float[1] x; auto y = cast(int     ) x; }
+    { int      x; auto y = cast(long[1] ) x; }
     { int      x; auto y = cast(float[1]) x; }
 
     // Tarray <--> integer

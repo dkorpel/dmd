@@ -2231,6 +2231,14 @@ Expression castTo(Expression e, Scope* sc, Type t, Type att = null)
             return ok();
         }
 
+        // casting a primitive to a length-1 static array with matching size
+        // https://github.com/dlang/dmd/issues/22269
+        if (t1b_isA && tob.ty == Tsarray)
+        {
+            if (tob.isTypeSArray().dim.toInteger() == 1 && t1b.size(e.loc) == tob.size(e.loc))
+                return ok();
+        }
+
         // arithmetic values vs. references or fat values
         if (tob_isA && (t1b_isR || t1b_isFV) || t1b_isA && (tob_isR || tob_isFV))
         {
