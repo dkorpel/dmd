@@ -4603,7 +4603,13 @@ public:
             --ctfeGlobals.stackTraceCallsToSuppress;
             return;
         }
-        errorSupplemental(callingExp.loc, "called from here: `%s`", callingExp.toChars());
+        {
+            import dmd.common.outbuffer : OutBuffer;
+            OutBuffer buf;
+            buf.writestring(callingExp.toChars());
+            truncateForError(buf, 80);
+            errorSupplemental(callingExp.loc, "called from here: `%s`", buf.extractChars());
+        }
         // Quit if it's not worth trying to compress the stack trace
         if (ctfeGlobals.callDepth < 6 || global.params.v.verbose)
             return;

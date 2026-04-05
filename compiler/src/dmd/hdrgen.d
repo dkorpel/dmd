@@ -131,20 +131,53 @@ const(char)* toErrMsg(const Expression e)
 /// ditto
 const(char)* toErrMsg(const Dsymbol d)
 {
+    bool isLambdaSymbol = false;
     if (d.isFuncDeclaration() || d.isTemplateInstance())
     {
         if (d.ident && d.ident.toString.startsWith("__") && !d.isCtorDeclaration())
         {
-            HdrGenState hgs;
-            hgs.errorMsg = true;
-            OutBuffer buf;
-            toCBuffer(cast() d, buf, hgs);
-            truncateForError(buf, 80);
-            return buf.extractChars();
+            isLambdaSymbol = true;
         }
     }
 
+    // Function literals (e.g. `delegate int(int i) { ... }`) can be multi-line,
+    // so use truncateForError to collapse them to a single line for error messages.
+    if (isLambdaSymbol || d.isFuncLiteralDeclaration())
+    {
+        HdrGenState hgs;
+        hgs.errorMsg = true;
+        OutBuffer buf;
+        toCBuffer(cast() d, buf, hgs);
+        truncateForError(buf, 80);
+        return buf.extractChars();
+    }
+
     return d.toChars();
+}
+
+/**
+ * Returns: true if the function literal will be printed using `=> expr` lambda
+ * syntax rather than block `{ }` syntax. Used to decide whether to add
+ * parentheses when the literal is used as a call expression callee.
+ */
+private bool willUseLambdaForm(const FuncLiteralDeclaration f)
+{
+    if (!f.fbody) return false;
+    auto cs = (cast() f.fbody).isCompoundStatement();
+    Statement s1;
+    if (f.semanticRun >= PASS.semantic3done && cs)
+    {
+        s1 = (*cs.statements)[cs.statements.length - 1];
+        // Multi-statement body: won't use lambda form (see Bug 2 fix in visitFuncLiteralDeclaration)
+        if (s1)
+            if (auto cs2 = s1.isCompoundStatement())
+                if (cs2.statements.length > 1)
+                    return false;
+    }
+    else
+        s1 = !cs ? cast() f.fbody : null;
+    auto rs = s1 ? s1.endsWithReturnStatement() : null;
+    return rs !is null && rs.exp !is null;
 }
 
 /**
@@ -153,7 +186,7 @@ const(char)* toErrMsg(const Dsymbol d)
  *   buf = buffer with text to modify
  *   maxLength = truncate text when it exceeds this length
  */
-private void truncateForError(ref OutBuffer buf, size_t maxLength)
+void truncateForError(ref OutBuffer buf, size_t maxLength)
 {
     // Remove newlines, escape backticks ` by doubling them
     for (size_t i = 0; i < buf.length; i++)
@@ -1882,6 +1915,13 @@ void toCBuffer(Dsymbol s, ref OutBuffer buf, ref HdrGenState hgs)
         if (f.semanticRun >= PASS.semantic3done && cs)
         {
             s1 = (*cs.statements)[cs.statements.length - 1];
+            // https://github.com/dlang/dmd/issues/21806
+            // Don't use lambda form if the body is a compound statement with multiple
+            // statements, as that would silently drop all but the last statement
+            if (s1)
+                if (auto cs2 = s1.isCompoundStatement())
+                    if (cs2.statements.length > 1)
+                        s1 = null;
         }
         else
             s1 = !cs ? f.fbody : null;
@@ -2884,7 +2924,23 @@ private void expressionPrettyPrint(Expression e, ref OutBuffer buf, ref HdrGenSt
                 expressionToBuffer(e.loweredFrom, buf, hgs);
                 return;
             }
-            expToBuffer(e.e1, precedence[e.op], buf, hgs);
+            // https://github.com/dlang/dmd/issues/21806
+            // A lambda using => syntax must be parenthesized when called, to avoid
+            // `() => expr()` being parsed as `() => (expr())` instead of `(() => expr)()`
+            // Block-form `() { }` is fine without parens.
+            if (auto fe = e.e1.isFuncExp())
+            {
+                if (willUseLambdaForm(fe.fd))
+                {
+                    buf.put('(');
+                    fe.expressionToBuffer(buf, hgs);
+                    buf.put(')');
+                }
+                else
+                    expToBuffer(e.e1, precedence[e.op], buf, hgs);
+            }
+            else
+                expToBuffer(e.e1, precedence[e.op], buf, hgs);
         }
         buf.put('(');
         argsToBuffer(e.arguments, buf, hgs, null, e.names);

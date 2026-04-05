@@ -1,5 +1,5 @@
 /* TEST_OUTPUT:
-TRANSFORM_OUTPUT: remove_lines(called from here)
+TRANSFORM_OUTPUT: remove_lines(called from here) remove_lines(^[^f])
 ---
 fail_compilation\aaerrors.d-mixin-29(29): Error: `assert(aai[1] == 0)` failed
 fail_compilation\aaerrors.d-mixin-30(30): Error: `assert((aai[1] = 1) == 0)` failed
