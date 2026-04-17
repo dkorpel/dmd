@@ -6180,7 +6180,6 @@ public:
     Expression* cond;
     Expression* msg;
     const char* msgstr;
-    bool condEvaluated;
     DisableDeclaration* syntaxCopy(Dsymbol* s) override;
     void accept(Visitor* v) override;
 };

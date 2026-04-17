@@ -9099,9 +9099,8 @@ private extern(C++) class NewScopeVisitor : Visitor
     override void visit(DisableDeclaration dd)
     {
         // Evaluate condition once; cache result in dd.stc
-        if (!dd.condEvaluated && dd.cond !is null)
+        if (dd.cond && !dd.cond.type)
         {
-            dd.condEvaluated = true;
             auto condSc = sc.startCTFE();
             auto cond = dd.cond.expressionSemantic(condSc);
             condSc = condSc.endCTFE();

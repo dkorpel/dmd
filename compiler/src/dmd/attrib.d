@@ -188,7 +188,6 @@ extern (C++) final class DisableDeclaration : StorageClassDeclaration
     Expression cond;         /// optional bool condition; null = always disabled
     Expression msg;          /// optional error message expression
     const(char)* msgstr;     /// cached string representation of msg
-    bool condEvaluated;      /// whether condition has been evaluated
 
     extern (D) this(Expression cond, Expression msg, Dsymbols* decl) @safe
     {
