@@ -83,6 +83,7 @@ public:
     //==============================================================================================
     // Miscellaneous
     void visit(AST.DeprecatedDeclaration s) { visit(cast(AST.StorageClassDeclaration)s); }
+    void visit(AST.DisableDeclaration s) { visit(cast(AST.StorageClassDeclaration)s); }
     void visit(AST.StaticIfDeclaration s) { visit(cast(AST.ConditionalDeclaration)s); }
     void visit(AST.EnumMember s) { visit(cast(AST.VarDeclaration)s); }
     void visit(AST.Module s) { visit(cast(AST.Package)s); }

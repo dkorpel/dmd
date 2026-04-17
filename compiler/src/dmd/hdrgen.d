@@ -1119,6 +1119,26 @@ void toCBuffer(Dsymbol s, ref OutBuffer buf, ref HdrGenState hgs)
         visitAttribDeclaration(d);
     }
 
+    void visitDisableDeclaration(DisableDeclaration d)
+    {
+        buf.put("@disable");
+        if (d.cond || d.msg)
+        {
+            buf.put("(");
+            if (d.cond)
+                d.cond.expressionToBuffer(buf, hgs);
+            if (d.msg)
+            {
+                if (d.cond)
+                    buf.put(", ");
+                d.msg.expressionToBuffer(buf, hgs);
+            }
+            buf.put(")");
+        }
+        buf.put(" ");
+        visitAttribDeclaration(d);
+    }
+
     void visitLinkDeclaration(LinkDeclaration d)
     {
         buf.put("extern (");
@@ -2020,6 +2040,7 @@ void toCBuffer(Dsymbol s, ref OutBuffer buf, ref HdrGenState hgs)
         void visit(AttribDeclaration d)        { visitAttribDeclaration(d); }
         void visit(StorageClassDeclaration d)  { visitStorageClassDeclaration(d); }
         void visit(DeprecatedDeclaration d)    { visitDeprecatedDeclaration(d); }
+        void visit(DisableDeclaration d)       { visitDisableDeclaration(d); }
         void visit(LinkDeclaration d)          { visitLinkDeclaration(d); }
         void visit(CPPMangleDeclaration d)     { visitCPPMangleDeclaration(d); }
         void visit(VisibilityDeclaration d)    { visitVisibilityDeclaration(d); }

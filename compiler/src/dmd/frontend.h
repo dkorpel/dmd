@@ -43,6 +43,7 @@ class Identifier;
 struct Scope;
 struct DsymbolAttributes;
 class DeprecatedDeclaration;
+class DisableDeclaration;
 class CPPNamespaceDeclaration;
 class UserAttributeDeclaration;
 class Module;
@@ -573,9 +574,11 @@ public:
     static Dsymbol* create(Identifier* ident);
     const char* toChars() const final override;
     DeprecatedDeclaration* depdecl();
+    DisableDeclaration* disabledecl();
     CPPNamespaceDeclaration* cppnamespace();
     UserAttributeDeclaration* userAttribDecl();
     DeprecatedDeclaration* depdecl(DeprecatedDeclaration* dd);
+    DisableDeclaration* disabledecl(DisableDeclaration* dd);
     CPPNamespaceDeclaration* cppnamespace(CPPNamespaceDeclaration* ns);
     UserAttributeDeclaration* userAttribDecl(UserAttributeDeclaration* uad);
     virtual const char* toPrettyCharsHelper();
@@ -1276,6 +1279,7 @@ public:
     virtual void visit(typename AST::ConditionalDeclaration s);
     virtual void visit(typename AST::StaticForeachDeclaration s);
     virtual void visit(typename AST::DeprecatedDeclaration s);
+    virtual void visit(typename AST::DisableDeclaration s);
     virtual void visit(typename AST::StaticIfDeclaration s);
     virtual void visit(typename AST::EnumMember s);
     virtual void visit(typename AST::Module s);
@@ -5350,6 +5354,7 @@ struct ASTCodegen final
     using CPPNamespaceDeclaration = ::CPPNamespaceDeclaration;
     using ConditionalDeclaration = ::ConditionalDeclaration;
     using DeprecatedDeclaration = ::DeprecatedDeclaration;
+    using DisableDeclaration = ::DisableDeclaration;
     using ForwardingAttribDeclaration = ::ForwardingAttribDeclaration;
     using LinkDeclaration = ::LinkDeclaration;
     using MixinDeclaration = ::MixinDeclaration;
@@ -6169,6 +6174,17 @@ public:
     void accept(Visitor* v) override;
 };
 
+class DisableDeclaration final : public StorageClassDeclaration
+{
+public:
+    Expression* cond;
+    Expression* msg;
+    const char* msgstr;
+    bool condEvaluated;
+    DisableDeclaration* syntaxCopy(Dsymbol* s) override;
+    void accept(Visitor* v) override;
+};
+
 class LinkDeclaration final : public AttribDeclaration
 {
 public:
@@ -6957,6 +6973,7 @@ struct Scope final
     Visibility visibility;
     STC stc;
     DeprecatedDeclaration* depdecl;
+    DisableDeclaration* disabledecl;
     bool ctor() const;
     bool ctor(bool v);
     bool noAccessCheck() const;
@@ -7039,6 +7056,7 @@ public:
         inlining(),
         visibility(Visibility((Visibility::Kind)5u, nullptr)),
         depdecl(),
+        disabledecl(),
         bitFields(0u),
         bitFields2(),
         previews(),
@@ -7049,7 +7067,7 @@ public:
         argStruct()
     {
     }
-    Scope(Scope* enclosing, Module* _module = nullptr, ScopeDsymbol* scopesym = nullptr, FuncDeclaration* func = nullptr, VarDeclaration* varDecl = nullptr, Dsymbol* parent = nullptr, LabelStatement* slabel = nullptr, SwitchStatement* switchStatement = nullptr, void* switchCases = nullptr, Statement* tryBody = nullptr, TryFinallyStatement* tryFinally = nullptr, ScopeGuardStatement* scopeGuard = nullptr, Statement* sbreak = nullptr, Statement* scontinue = nullptr, ForeachStatement* fes = nullptr, Scope* callsc = nullptr, Loc callLoc = Loc(), Dsymbol* inunion = nullptr, VarDeclaration* lastVar = nullptr, ErrorSink* eSink = nullptr, Module* minst = nullptr, TemplateInstance* tinst = nullptr, CtorFlow ctorflow = CtorFlow(), AlignDeclaration* aligndecl = nullptr, CPPNamespaceDeclaration* namespace_ = nullptr, LINK linkage = (LINK)1u, CPPMANGLE cppmangle = (CPPMANGLE)0u, PragmaDeclaration* inlining = nullptr, Visibility visibility = Visibility((Visibility::Kind)5u, nullptr), STC stc = (STC)0LLU, DeprecatedDeclaration* depdecl = nullptr, uint16_t bitFields = 0u, uint16_t bitFields2 = 0u, Previews previews = Previews(), UserAttributeDeclaration* userAttribDecl = nullptr, void* lastdc = nullptr, void* anchorCounts = nullptr, Identifier* prevAnchor = nullptr, AliasDeclaration* aliasAsg = nullptr, StructDeclaration* argStruct = nullptr) :
+    Scope(Scope* enclosing, Module* _module = nullptr, ScopeDsymbol* scopesym = nullptr, FuncDeclaration* func = nullptr, VarDeclaration* varDecl = nullptr, Dsymbol* parent = nullptr, LabelStatement* slabel = nullptr, SwitchStatement* switchStatement = nullptr, void* switchCases = nullptr, Statement* tryBody = nullptr, TryFinallyStatement* tryFinally = nullptr, ScopeGuardStatement* scopeGuard = nullptr, Statement* sbreak = nullptr, Statement* scontinue = nullptr, ForeachStatement* fes = nullptr, Scope* callsc = nullptr, Loc callLoc = Loc(), Dsymbol* inunion = nullptr, VarDeclaration* lastVar = nullptr, ErrorSink* eSink = nullptr, Module* minst = nullptr, TemplateInstance* tinst = nullptr, CtorFlow ctorflow = CtorFlow(), AlignDeclaration* aligndecl = nullptr, CPPNamespaceDeclaration* namespace_ = nullptr, LINK linkage = (LINK)1u, CPPMANGLE cppmangle = (CPPMANGLE)0u, PragmaDeclaration* inlining = nullptr, Visibility visibility = Visibility((Visibility::Kind)5u, nullptr), STC stc = (STC)0LLU, DeprecatedDeclaration* depdecl = nullptr, DisableDeclaration* disabledecl = nullptr, uint16_t bitFields = 0u, uint16_t bitFields2 = 0u, Previews previews = Previews(), UserAttributeDeclaration* userAttribDecl = nullptr, void* lastdc = nullptr, void* anchorCounts = nullptr, Identifier* prevAnchor = nullptr, AliasDeclaration* aliasAsg = nullptr, StructDeclaration* argStruct = nullptr) :
         enclosing(enclosing),
         _module(_module),
         scopesym(scopesym),
@@ -7081,6 +7099,7 @@ public:
         visibility(visibility),
         stc(stc),
         depdecl(depdecl),
+        disabledecl(disabledecl),
         bitFields(bitFields),
         bitFields2(bitFields2),
         previews(previews),

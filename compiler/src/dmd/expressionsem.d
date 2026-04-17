@@ -18740,7 +18740,24 @@ bool checkDisabled(Declaration d, Loc loc, Scope* sc, bool isAliasedDeclaration 
             return true;
         }
     }
-    .error(loc, "%s `%s` cannot be used because it is annotated with `@disable`", d.kind, d.toPrettyChars);
+
+    // Check for custom message from disabledecl
+    const(char)* msg = null;
+    for (Dsymbol p = d; p; p = p.parent)
+    {
+        if (p.disabledecl)
+        {
+            msg = p.disabledecl.getDisableMessage();
+            if (msg) break;
+        }
+    }
+
+    if (msg)
+        .error(loc, "%s `%s` cannot be used because it is annotated with `@disable` - %s",
+               d.kind, d.toPrettyChars, msg);
+    else
+        .error(loc, "%s `%s` cannot be used because it is annotated with `@disable`",
+               d.kind, d.toPrettyChars);
     return true;
 }
 

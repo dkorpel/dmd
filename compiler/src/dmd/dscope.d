@@ -183,6 +183,7 @@ extern (C++) struct Scope
     STC stc;                        /// storage class
 
     DeprecatedDeclaration depdecl;  /// customized deprecation message
+    DisableDeclaration disabledecl; /// customized @disable message
 
     import dmd.common.bitfields : generateBitFields;
     mixin(generateBitFields!(FlagBitFields, ushort));

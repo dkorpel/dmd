@@ -175,6 +175,44 @@ extern (C++) final class DeprecatedDeclaration : StorageClassDeclaration
 }
 
 /***********************************************************
+ * `@disable` attribute applied to Dsymbols with optional condition and message.
+ *
+ * `@disable` - always disabled
+ * `@disable(cond)` - disabled when cond evaluates to true
+ * `@disable(cond, msg)` - disabled when cond is true, with custom error message
+ *
+ * `@disable(<cond>, <msg>) <decl...>`
+ */
+extern (C++) final class DisableDeclaration : StorageClassDeclaration
+{
+    Expression cond;         /// optional bool condition; null = always disabled
+    Expression msg;          /// optional error message expression
+    const(char)* msgstr;     /// cached string representation of msg
+    bool condEvaluated;      /// whether condition has been evaluated
+
+    extern (D) this(Expression cond, Expression msg, Dsymbols* decl) @safe
+    {
+        super(STC.disable, decl);
+        this.cond = cond;
+        this.msg = msg;
+    }
+
+    override DisableDeclaration syntaxCopy(Dsymbol s)
+    {
+        assert(!s);
+        return new DisableDeclaration(
+            cond ? cond.syntaxCopy() : null,
+            msg  ? msg.syntaxCopy()  : null,
+            Dsymbol.arraySyntaxCopy(decl));
+    }
+
+    override void accept(Visitor v)
+    {
+        v.visit(this);
+    }
+}
+
+/***********************************************************
  * Linkage attribute applied to Dsymbols, e.g.
  * `extern(C) void foo()`.
  *

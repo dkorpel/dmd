@@ -1596,6 +1596,28 @@ const(char)* getMessage(DeprecatedDeclaration dd)
     return dd.msgstr;
 }
 
+const(char)* getDisableMessage(DisableDeclaration dd)
+{
+    if (!dd.msg)
+        return null;
+    if (auto sc = dd._scope)
+    {
+        dd._scope = null;
+
+        sc = sc.startCTFE();
+        dd.msg = dd.msg.expressionSemantic(sc);
+        dd.msg = resolveProperties(sc, dd.msg);
+        sc = sc.endCTFE();
+        dd.msg = dd.msg.ctfeInterpret();
+
+        if (auto se = dd.msg.toStringExp())
+            dd.msgstr = se.toStringz().ptr;
+        else
+            error(dd.msg.loc, "compile time string expected, not `%s`", dd.msg.toErrMsg());
+    }
+    return dd.msgstr;
+}
+
 bool checkDeprecated(Dsymbol d, Loc loc, Scope* sc)
 {
     if (global.params.useDeprecated == DiagnosticReporting.off)
@@ -8218,6 +8240,8 @@ private extern(C++) class SetScopeVisitor : Visitor
         d._scope = sc;
         if (sc.depdecl)
             d.depdecl = sc.depdecl;
+        if (sc.disabledecl)
+            d.disabledecl = sc.disabledecl;
         if (!d.userAttribDecl)
             d.userAttribDecl = sc.userAttribDecl;
     }
@@ -8285,6 +8309,14 @@ private extern(C++) class SetScopeVisitor : Visitor
     override void visit(DeprecatedDeclaration dd)
     {
         //printf("DeprecatedDeclaration::setScope() %p\n", this);
+        if (dd.decl)
+            visit(cast(Dsymbol)dd); // for forward reference
+        visit(cast(AttribDeclaration)dd);
+    }
+
+    override void visit(DisableDeclaration dd)
+    {
+        //printf("DisableDeclaration::setScope() %p\n", this);
         if (dd.decl)
             visit(cast(Dsymbol)dd); // for forward reference
         visit(cast(AttribDeclaration)dd);
@@ -9061,6 +9093,39 @@ private extern(C++) class NewScopeVisitor : Visitor
         if (scx == sc)
             scx = sc.push();
         scx.depdecl = dpd;
+        sc = scx;
+    }
+
+    override void visit(DisableDeclaration dd)
+    {
+        // Evaluate condition once; cache result in dd.stc
+        if (!dd.condEvaluated && dd.cond !is null)
+        {
+            dd.condEvaluated = true;
+            auto condSc = sc.startCTFE();
+            auto cond = dd.cond.expressionSemantic(condSc);
+            condSc = condSc.endCTFE();
+            cond = cond.ctfeInterpret();
+            if (auto ie = cond.isIntegerExp())
+            {
+                if (!ie.getInteger())
+                    dd.stc = STC.none;   // condition false: not disabled
+            }
+            else if (!cond.isErrorExp())
+                error(dd.cond.loc, "compile time bool expression expected, not `%s`", dd.cond.toErrMsg());
+        }
+
+        auto oldsc = sc;
+        visit((cast(StorageClassDeclaration)dd));  // propagates dd.stc (STC.disable or STC.none)
+        auto scx = sc;
+        sc = oldsc;
+        // If still disabled and has message, propagate disabledecl on scope
+        if ((dd.stc & STC.disable) && dd.msg !is null)
+        {
+            if (scx == sc)
+                scx = sc.push();
+            scx.disabledecl = dd;
+        }
         sc = scx;
     }
 

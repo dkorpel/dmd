@@ -605,6 +605,13 @@ private extern(C++) final class Semantic2Visitor : Visitor
         visit(cast(AttribDeclaration)dd);
     }
 
+    override void visit(DisableDeclaration dd)
+    {
+        if (dd.msg !is null)
+            getDisableMessage(dd);
+        visit(cast(AttribDeclaration)dd);
+    }
+
     override void visit(AlignDeclaration ad)
     {
         ad.getAlignment(sc);

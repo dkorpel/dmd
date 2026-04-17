@@ -1317,6 +1317,24 @@ struct ASTBase
         }
     }
 
+    extern (C++) final class DisableDeclaration : StorageClassDeclaration
+    {
+        Expression cond;
+        Expression msg;
+
+        extern (D) this(Expression cond, Expression msg, Dsymbols* decl)
+        {
+            super(STC.disable, decl);
+            this.cond = cond;
+            this.msg = msg;
+        }
+
+        override void accept(Visitor v)
+        {
+            v.visit(this);
+        }
+    }
+
     extern (C++) final class StaticIfDeclaration : ConditionalDeclaration
     {
         extern (D) this(Loc loc, Condition condition, Dsymbols* decl, Dsymbols* elsedecl)

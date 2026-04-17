@@ -324,6 +324,31 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
     }
 
     /************************************
+     * Parse @disable(cond) or @disable(cond, msg) arguments
+     * Params:
+     *   cond = parsed bool condition expression
+     *   msg = parsed optional error message expression
+     * Returns:
+     *   true if arguments were parsed, false otherwise
+     */
+    private bool parseDisableArgs(out AST.Expression cond, out AST.Expression msg)
+    {
+        if (peek(&token).value != TOK.leftParenthesis)
+            return false;
+
+        nextToken();  // consume 'disable' identifier
+        check(TOK.leftParenthesis);
+        cond = parseAssignExp();
+        if (token.value == TOK.comma)
+        {
+            nextToken();
+            msg = parseAssignExp();
+        }
+        check(TOK.rightParenthesis);
+        return true;
+    }
+
+    /************************************
      * Parse declarations and definitions
      * Params:
      *  once = !=0 means parse exactly one decl or def
@@ -720,6 +745,20 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
                 {
                     AST.Expressions* exps = null;
                     stc = parseAttribute(exps);
+
+                    // Special handling for @disable(args)
+                    if (stc == STC.disable)
+                    {
+                        AST.Expression disableCond = null;
+                        AST.Expression disableMsg = null;
+                        if (parseDisableArgs(disableCond, disableMsg))
+                        {
+                            a = parseBlock(pLastDecl, pAttrs);
+                            s = new AST.DisableDeclaration(disableCond, disableMsg, a);
+                            break;
+                        }
+                    }
+
                     if (stc)
                         goto Lstc; // it's a predefined attribute
                     // no redundant/conflicting check for UDAs

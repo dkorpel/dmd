@@ -286,6 +286,8 @@ private struct DsymbolAttributes
     CPPNamespaceDeclaration cppnamespace;
     /// customized deprecation message
     DeprecatedDeclaration depdecl_;
+    /// customized @disable message
+    DisableDeclaration disabledecl_;
     /// user defined attributes
     UserAttributeDeclaration userAttribDecl;
 }
@@ -430,6 +432,7 @@ extern (C++) class Dsymbol : ASTNode
         }
 
         inout(DeprecatedDeclaration) depdecl() inout { return atts ? atts.depdecl_ : null; }
+        inout(DisableDeclaration) disabledecl() inout { return atts ? atts.disabledecl_ : null; }
         inout(CPPNamespaceDeclaration) cppnamespace() inout { return atts ? atts.cppnamespace : null; }
         inout(UserAttributeDeclaration) userAttribDecl() inout { return atts ? atts.userAttribDecl : null; }
 
@@ -438,6 +441,13 @@ extern (C++) class Dsymbol : ASTNode
             if (!dd && !atts)
                 return null;
             return getAtts().depdecl_ = dd;
+        }
+
+        DisableDeclaration disabledecl(DisableDeclaration dd)
+        {
+            if (!dd && !atts)
+                return null;
+            return getAtts().disabledecl_ = dd;
         }
 
         CPPNamespaceDeclaration cppnamespace(CPPNamespaceDeclaration ns)
