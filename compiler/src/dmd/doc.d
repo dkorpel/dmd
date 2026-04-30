@@ -1525,7 +1525,12 @@ void emitComment(Dsymbol s, ref OutBuffer buf, Scope* sc)
             if (td.visible().kind == Visibility.Kind.private_ || sc.visibility.kind == Visibility.Kind.private_)
                 return;
             if (!td.comment)
+            {
+                td.computeOneMember();
+                if (td.onemember)
+                    td.onemember.accept(this);
                 return;
+            }
             if (Dsymbol ss = getEponymousMember(td))
             {
                 ss.accept(this);
