@@ -111,7 +111,6 @@ extern(C++) class LspVisitor : SemanticTimeTransitiveVisitor
 /// Find the AST node under the object
 ASTNode findCursorObject(ref Lsp lsp, Params params)
 {
-
     {
         Type_init();
         Module._init();
@@ -154,8 +153,8 @@ ASTNode findCursorObject(ref Lsp lsp, Params params)
 
     {
         Type_init();
-        FuncDeclaration.lastMain = null;
         Module.deinitialize();
+        FuncDeclaration.lastMain = null;
 
         // global.deinitialize();
         // target.deinitialize();
@@ -216,13 +215,24 @@ int lspMain()
         }
 
         // Fill buffer up to contentLength
+        if (contentLength > buffer.length)
+            buffer.length = contentLength;
         char[] json = buffer[0 .. contentLength];
-        fread(json.ptr, char.sizeof, json.length, stdin);
-        if (ferror(stdin))
+        size_t totalRead = 0;
+        while (totalRead < json.length)
         {
-            import core.stdc.errno;
-            eSink.error(Loc.initial, "errno = %d", errno); // error(Loc.initial, "cannot read from stdin, errno = %d", errno);
-            return errno;
+            size_t n = fread(json.ptr + totalRead, char.sizeof, json.length - totalRead, stdin);
+            if (n == 0)
+            {
+                if (ferror(stdin))
+                {
+                    import core.stdc.errno;
+                    eSink.error(Loc.initial, "errno = %d", errno);
+                    return errno;
+                }
+                break; // EOF mid-message
+            }
+            totalRead += n;
         }
 
         // fprintf(stderr, "[!] Content length = %d\n", cast(int) contentLength);
@@ -252,6 +262,12 @@ void lspRespond(ref Lsp lsp, JsonRpc result)
     {
         if (auto obj = findCursorObject(lsp, result.params))
         {
+            fprintf(stderr, obj);
+
+            if (auto d = obj.isDeclaration())
+            {
+
+            }
             if (auto e = obj.isExpression())
             {
                 if (auto ve = e.isVarExp())
