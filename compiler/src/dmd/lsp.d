@@ -29,6 +29,7 @@ import dmd.globals;
 import dmd.identifier;
 import dmd.lexer;
 import dmd.location;
+import dmd.typesem : Type_init;
 import dmd.root.filename;
 import dmd.root.string;
 import dmd.rootobject;
@@ -37,6 +38,16 @@ import dmd.semantic3;
 import dmd.target;
 import dmd.tokens;
 import dmd.visitor;
+
+
+struct Lsp
+{
+    // dmd.globals.Param params;
+
+    /// In-memory document store: URI -> content (kept in sync via textDocument/did* notifications)
+    string[string] openDocuments;
+}
+
 
 extern(C++) class LspVisitor : SemanticTimeTransitiveVisitor
 {
@@ -97,12 +108,16 @@ extern(C++) class LspVisitor : SemanticTimeTransitiveVisitor
     }
 }
 
-/// In-memory document store: URI -> content (kept in sync via textDocument/did* notifications)
-string[string] openDocuments;
-
 /// Find the AST node under the object
-ASTNode findCursorObject(Params params)
+ASTNode findCursorObject(ref Lsp lsp, Params params)
 {
+
+    {
+        Type_init();
+        Module._init();
+        Loc._init();
+    }
+
     SourceLoc sl = toSourceLoc(params.textDocument.uri, params.position);
     const(char)[] p = FileName.name(sl.filename); // strip path
     auto ext = FileName.ext(sl.filename);
@@ -113,7 +128,7 @@ ASTNode findCursorObject(Params params)
     Module m = new Module(loc, sl.filename, id, /*ddoc*/ true, false);
 
     // Use in-memory content if available (avoids reading unsaved file from disk)
-    if (auto content = params.textDocument.uri in openDocuments)
+    if (auto content = params.textDocument.uri in lsp.openDocuments)
         m.src = cast(const(ubyte)[]) (*content ~ "\0\0\0\0");
 
     if (!m.read(loc))
@@ -135,6 +150,19 @@ ASTNode findCursorObject(Params params)
 
     scope visitor = new LspVisitor(sl.line, sl.column);
     visitor.visit(m);
+
+
+    {
+        Type_init();
+        FuncDeclaration.lastMain = null;
+        Module.deinitialize();
+
+        // global.deinitialize();
+        // target.deinitialize();
+        // Expression.deinitialize();
+        // Dsymbol.deinitialize();
+    }
+
     return visitor.result;
 }
 
@@ -166,6 +194,7 @@ int lspMain()
         }
     }
 
+    Lsp lsp;
     scope eSink = new ErrorSinkLsp();
     // scope eSink = new ErrorSinkNull;
 
@@ -201,12 +230,12 @@ int lspMain()
         JsonRpc result;
         jsonParse(result, json, eSink);
         fprintf(stderr, "[!] Responding to %.*s\n", cast(int) result.method.length, result.method.ptr);
-        lspRespond(result);
+        lspRespond(lsp, result);
     }
     return 0;
 }
 
-void lspRespond(JsonRpc result)
+void lspRespond(ref Lsp lsp, JsonRpc result)
 {
     OutBuffer buf;
     buf.printf(`{"jsonrpc":"2.0","id":%d,"result":`, result.id);
@@ -221,7 +250,7 @@ void lspRespond(JsonRpc result)
     }
     else if (result.method == "textDocument/definition")
     {
-        if (auto obj = findCursorObject(result.params))
+        if (auto obj = findCursorObject(lsp, result.params))
         {
             if (auto e = obj.isExpression())
             {
@@ -242,7 +271,7 @@ void lspRespond(JsonRpc result)
     else if (result.method == "textDocument/hover")
     {
         // fprintf(stderr, "[!] found! %s", v.toChars);
-        if (auto obj = findCursorObject(result.params))
+        if (auto obj = findCursorObject(lsp, result.params))
         {
             buf.printf(`{"contents":{"kind":"markdown","value":"`);
 
@@ -313,18 +342,18 @@ void lspRespond(JsonRpc result)
     }
     else if (result.method == "textDocument/didOpen")
     {
-        openDocuments[result.params.textDocument.uri] = result.params.textDocument.text;
+        lsp.openDocuments[result.params.textDocument.uri] = result.params.textDocument.text;
         return; // notification, no response
     }
     else if (result.method == "textDocument/didChange")
     {
         // textDocumentSync: Full (1) — contentChanges[0].text is the complete new content
-        openDocuments[result.params.textDocument.uri] = result.params.contentChanges.text;
+        lsp.openDocuments[result.params.textDocument.uri] = result.params.contentChanges.text;
         return; // notification, no response
     }
     else if (result.method == "textDocument/didClose")
     {
-        openDocuments.remove(result.params.textDocument.uri);
+        lsp.openDocuments.remove(result.params.textDocument.uri);
         return; // notification, no response
     }
     else if (result.method == "textDocument/didSave")
@@ -351,7 +380,8 @@ void lspRespond(JsonRpc result)
 void writeJsonString(ref OutBuffer buf, const(char)[] str)
 {
     foreach (c; str)
-        buf.writeCharLiteral(c);
+        writeCharLiteral(c, &buf.put);
+        //buf.writeCharLiteral(c);
 }
 
 /// Returns: whether you can access Token.intvalue from a token of `tok` kind
