@@ -45,7 +45,7 @@ void backend_init(const ref Param params, const ref DMDparams driverParams, cons
 {
     //printf("backend_init()\n");
     exefmt_t exfmt;
-    bool is64 = target.isX86_64 || target.isAArch64;
+    bool is64 = target.isX86_64 || target.isAArch64 || (target.isWasm && target.isX86_64);
     switch (target.os)
     {
         case Target.OS.Windows: exfmt = is64 ? EX_WIN64     : EX_WIN32;   break;
@@ -56,6 +56,7 @@ void backend_init(const ref Param params, const ref DMDparams driverParams, cons
         case Target.OS.Solaris: exfmt = is64 ? EX_SOLARIS64 : EX_SOLARIS; break;
         case Target.OS.DragonFlyBSD: assert(is64); exfmt = EX_DRAGONFLYBSD64; break;
         case Target.OS.Hurd:    exfmt = is64 ? EX_HURD64    : EX_HURD; break;
+        case Target.OS.WASM: exfmt = EX_WASM; break;
         default: assert(0);
     }
 
