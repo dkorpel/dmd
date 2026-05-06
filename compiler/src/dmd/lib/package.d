@@ -38,6 +38,7 @@ class Library
             case Target.ObjectFormat.elf:   lib = LibElf_factory();     break;
             case Target.ObjectFormat.macho: lib = LibMach_factory();    break;
             case Target.ObjectFormat.coff:  lib = LibMSCoff_factory();  break;
+            case Target.ObjectFormat.wasm:  assert(0, "WASM library format not supported"); break;
         }
         lib.lib_ext = lib_ext;
         lib.eSink = eSink;
