@@ -597,6 +597,31 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
         return true;
     }
 
+    // ---- Bool conversion (while/for conditions) --------------------------
+    case OPbool:
+    {
+        genElem(cg, e.E1);
+        // Convert to bool: nonzero → 1, zero → 0
+        // WASM i32: x != 0 is equivalent to i32.const 0; i32.ne
+        const ty = tybasic(e.E1.Ety);
+        if (ty == TYllong || ty == TYullong)
+        {
+            cg.emit(OP_I64_EQZ);   // i64 → i32 (1 if zero)
+            cg.emit(OP_I32_EQZ);   // invert: 1 if nonzero
+        }
+        else
+        {
+            cg.emit(OP_I32_CONST); cg.emitSLEB(0);
+            cg.emit(OP_I32_NE);
+        }
+        return true;
+    }
+
+    // ---- Bit-8 (bool to byte) --------------------------------------------
+    case OPb_8:
+        genElem(cg, e.E1);  // bool is already 0/1 as i32
+        return true;
+
     // ---- Halt / assert failure -------------------------------------------
     case OPhalt:
         cg.emit(OP_UNREACHABLE);
@@ -605,6 +630,15 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
     // ---- Void / no-op ---------------------------------------------------
     case OPvoid:
         return false;
+
+    // ---- Info node (optimizer annotation, no code) -----------------------
+    case OPinfo:
+        return genElem(cg, e.E2);  // only the right child has the value
+
+    // ---- Sizeof (compile-time constant, should be folded) ----------------
+    case OPsizeof:
+        cg.emit(OP_I32_CONST); cg.emitSLEB(cast(int) e.Vlong);
+        return true;
 
     // ---- Post-increment / post-decrement ---------------------------------
     case OPpostinc: case OPpostdec:
@@ -956,76 +990,92 @@ private void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn) @
         }
         else if (b.bc == BC.iftrue)
         {
-            // Emit condition, then branch
-            block* taken    = succ(b, 0);  // true branch
-            block* nottaken = succ(b, 1);  // false branch
-
-            if (b.Belem)
-                genElem(cg, b.Belem);
-            else
-                { cg.emit(OP_I32_CONST); cg.emitSLEB(0); }
-
+            block* taken    = succ(b, 0);
+            block* nottaken = succ(b, 1);
             int takenIdx    = blockIdx(taken);
             int nottakenIdx = blockIdx(nottaken);
 
-            // Back edge: loop continue
-            if (takenIdx <= bi)
+            // Find enclosing loop (if any)
+            size_t outerLoop = stack.length;
+            foreach_reverse (size_t fi, ref const Frame f; stack)
+                if (f.isLoop) { outerLoop = fi; break; }
+            int exitBlockIdx = (outerLoop < stack.length) ? stack[outerLoop - 1].closeAfter + 1 : -1;
+
+            if (takenIdx <= cast(int)bi)
             {
-                // true → loop back, false → next (fall through or loop exit)
+                // Back edge: condition true → loop continue
+                if (b.Belem) genElem(cg, b.Belem);
+                else { cg.emit(OP_I32_CONST); cg.emitSLEB(0); }
                 size_t lf = loopFrame(takenIdx);
                 if (lf < stack.length)
                 {
-                    // br_if $loop (continue) — condition already on stack
                     cg.emit(OP_BR_IF); cg.emitULEB(brDepth(lf));
-                    // false case: if nottaken is outside loop, emit br $exit
+                    // false → exit loop
                     if (nottakenIdx > info[takenIdx].loopEnd)
                     {
                         size_t ef = blockFrame(nottakenIdx);
                         if (ef < stack.length) { cg.emit(OP_BR); cg.emitULEB(brDepth(ef)); }
                     }
                 }
-                else
-                    cg.emit(OP_DROP);
+                else cg.emit(OP_DROP);
             }
-            else if (nottakenIdx <= bi)
+            else if (nottakenIdx <= cast(int)bi)
             {
-                // false → loop back, true → next
+                // Back edge: condition false → loop continue
+                if (b.Belem) genElem(cg, b.Belem);
+                else { cg.emit(OP_I32_CONST); cg.emitSLEB(0); }
                 cg.emit(OP_I32_EQZ);
                 size_t lf = loopFrame(nottakenIdx);
                 if (lf < stack.length) { cg.emit(OP_BR_IF); cg.emitULEB(brDepth(lf)); }
                 else cg.emit(OP_DROP);
             }
-            else
+            else if (outerLoop < stack.length &&
+                     (nottakenIdx == exitBlockIdx || takenIdx == exitBlockIdx))
             {
-                // Forward branch — loop exit or if/else
-                size_t outerLoop = stack.length;  // sentinel
-                foreach_reverse (size_t fi, ref const Frame f; stack)
-                    if (f.isLoop) { outerLoop = fi; break; }
-
-                int exitBlockIdx = (outerLoop < stack.length) ? stack[outerLoop - 1].closeAfter + 1 : -1;
-
-                if (nottakenIdx == exitBlockIdx || (nottakenIdx > bi + 1 && takenIdx == bi + 1))
+                // Loop exit condition (condition block is loop header or part of loop)
+                if (b.Belem) genElem(cg, b.Belem);
+                else { cg.emit(OP_I32_CONST); cg.emitSLEB(0); }
+                if (nottakenIdx == exitBlockIdx)
                 {
-                    // Condition true → continue inline, false → break out of loop
+                    // condition true → stay in loop, false → exit
                     cg.emit(OP_I32_EQZ);
-                    if (outerLoop < stack.length)
-                        { cg.emit(OP_BR_IF); cg.emitULEB(brDepth(outerLoop - 1)); }
-                    else
-                        cg.emit(OP_DROP);
-                }
-                else if (takenIdx == exitBlockIdx || (takenIdx > bi + 1 && nottakenIdx == bi + 1))
-                {
-                    // Condition true → break, false → continue inline
-                    if (outerLoop < stack.length)
-                        { cg.emit(OP_BR_IF); cg.emitULEB(brDepth(outerLoop - 1)); }
-                    else
-                        cg.emit(OP_DROP);
+                    cg.emit(OP_BR_IF); cg.emitULEB(brDepth(outerLoop - 1));
                 }
                 else
                 {
-                    // if/else: forward branch, no loop involved — just drop for now
-                    cg.emit(OP_IF); cg.emit(WASM_VOID_BLOCK);
-                    cg.emit(OP_END);
+                    // condition true → exit, false → stay
+                    cg.emit(OP_BR_IF); cg.emitULEB(brDepth(outerLoop - 1));
+                }
+            }
+            else
+            {
+                // Pure forward if/else (no loop involved).
+                // Open a block BEFORE emitting the condition so we can br_if out.
+                if (takenIdx == cast(int)bi + 1)
+                {
+                    // True path is inline; false path at nottakenIdx.
+                    // block $skip ... cond; eqz; br_if 0 ... [true path] ... end $skip
+                    stack ~= Frame(false, nottakenIdx - 1);
+                    cg.emit(OP_BLOCK); cg.emit(WASM_VOID_BLOCK);
+                    if (b.Belem) genElem(cg, b.Belem);
+                    else { cg.emit(OP_I32_CONST); cg.emitSLEB(0); }
+                    cg.emit(OP_I32_EQZ);
+                    cg.emit(OP_BR_IF); cg.emitULEB(0);
+                }
+                else if (nottakenIdx == cast(int)bi + 1)
+                {
+                    // False path is inline; true path at takenIdx.
+                    // block $skip ... cond; br_if 0 ... [false path] ... end $skip
+                    stack ~= Frame(false, takenIdx - 1);
+                    cg.emit(OP_BLOCK); cg.emit(WASM_VOID_BLOCK);
+                    if (b.Belem) genElem(cg, b.Belem);
+                    else { cg.emit(OP_I32_CONST); cg.emitSLEB(0); }
+                    cg.emit(OP_BR_IF); cg.emitULEB(0);
+                }
+                else
+                {
+                    // Both branches non-immediate — complex; just evaluate.
+                    if (b.Belem) { bool v = genElem(cg, b.Belem); if (v) cg.emit(OP_DROP); }
                 }
             }
             continue;
@@ -1043,7 +1093,20 @@ private void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn) @
                 size_t lf = loopFrame(targetIdx);
                 if (lf < stack.length) { cg.emit(OP_BR); cg.emitULEB(brDepth(lf)); }
             }
-            // Forward goto: fall through to target (blocks are in order)
+            else if (targetIdx > bi + 1)
+            {
+                // Forward goto that skips blocks — need to br out of if-block.
+                // Find the shallowest non-loop block frame that encompasses targetIdx.
+                foreach_reverse (size_t fi, ref const Frame f; stack)
+                {
+                    if (!f.isLoop && f.closeAfter >= targetIdx - 1)
+                    {
+                        cg.emit(OP_BR); cg.emitULEB(brDepth(fi));
+                        break;
+                    }
+                }
+            }
+            // targetIdx == bi+1: fall through naturally
             continue;
         }
 
