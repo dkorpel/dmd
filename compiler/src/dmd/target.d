@@ -1436,7 +1436,7 @@ extern (C++) struct Target
      *  true if generating code for POSIX
      */
     extern (D) @property bool isPOSIX() scope const nothrow @nogc @safe
-    out(result) { assert(result || os == Target.OS.Windows); }
+    out(result) { assert(result || os == Target.OS.Windows || os == Target.OS.WASM); }
     do
     {
         return (os & Target.OS.Posix) != 0;
