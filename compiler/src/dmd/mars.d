@@ -397,6 +397,10 @@ void setDefaultLibraries(const ref Target target, ref const(char)[] defaultlibna
         {
             defaultlibname = "phobos2";
         }
+        else if (target.os == Target.OS.WASM)
+        {
+            defaultlibname = null;
+        }
         else
         {
             assert(0, "fix this");

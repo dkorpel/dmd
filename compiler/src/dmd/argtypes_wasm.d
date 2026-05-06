@@ -11,7 +11,9 @@
 
 module dmd.argtypes_wasm;
 
+import dmd.astenums;
 import dmd.mtype;
+import dmd.typesem;
 
 /****************************************************
  * Break down a D type into basic types for WebAssembly ABI.
@@ -26,26 +28,39 @@ import dmd.mtype;
  */
 TypeTuple toArgTypes_wasm(Type t)
 {
-    //printf("toArgTypes_wasm() %s\n", t.toChars());
     if (t == Type.terror)
         return new TypeTuple(t);
 
-    const size = cast(size_t) t.size();
-    if (size == 0)
+    const sz = cast(size_t) t.size();
+    if (sz == 0)
         return null;
 
-    // WASM MVP: keep it simple - pass small types directly, pass large types by reference
-    // In practice, aggregates larger than 8 bytes (one i64) should be passed by reference
     Type tb = t.toBasetype();
+    switch (tb.ty)
+    {
+        // integer primitives
+        case Tint8:  case Tuns8:
+        case Tint16: case Tuns16:
+        case Tint32: case Tuns32:
+        case Tint64: case Tuns64:
+        case Tint128: case Tuns128:
+        case Tbool: case Tchar: case Twchar: case Tdchar:
+        // floating point
+        case Tfloat32: case Tfloat64: case Tfloat80:
+        case Timaginary32: case Timaginary64: case Timaginary80:
+        case Tcomplex32: case Tcomplex64: case Tcomplex80:
+        // pointer-like
+        case Tpointer: case Tnull: case Tfunction:
+            return new TypeTuple(t);
 
-    // Pass primitives directly
-    if (tb.isintegral() || tb.isfloating() || tb.isPointer())
+        default:
+            break;
+    }
+
+    // Small aggregates (1-8 bytes): pass directly
+    if (sz <= 8)
         return new TypeTuple(t);
 
-    // Small aggregates (1-8 bytes): pass in registers
-    if (size <= 8)
-        return new TypeTuple(t);
-
-    // Large aggregates: pass by reference (empty indicates indirect passing)
+    // Large aggregates: pass by reference (empty signals indirect passing)
     return TypeTuple.empty;
 }
