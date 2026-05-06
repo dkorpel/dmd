@@ -1735,6 +1735,8 @@ private bool entryPointFunctions(Obj objmod, FuncDeclaration fd)
             case Target.ObjectFormat.coff:
                 objmod.external_def("main");
                 break;
+            case Target.ObjectFormat.wasm:
+                break;
         }
         if (const libname = finalDefaultlibname())
             obj_includelib(libname);

@@ -1019,7 +1019,7 @@ bool parseCommandlineAndConfig(const(char)[][] argv, out Param params, ref Strin
     if (char* p = getenv("DDOCFILE"))
         global.params.ddoc.files.shift(p);
 
-    if (target.isX86_64 != isX86_64 && !target.isAArch64)
+    if (target.isX86_64 != isX86_64 && !target.isAArch64 && !target.isWasm)
         eSink.error(Loc.initial, "the architecture must not be changed in the %s section of %.*s",
               envsection.ptr, cast(int)global.inifilename.length, global.inifilename.ptr);
 
