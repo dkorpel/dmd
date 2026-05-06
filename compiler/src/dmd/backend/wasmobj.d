@@ -547,17 +547,18 @@ void WasmObj_setcodeseg(int seg) @trusted
 
 seg_data* WasmObj_tlsseg() @trusted
 {
-    return null;
+    // WASM MVP has no TLS; map thread-local storage to the data segment
+    return SegData[WASM_DATA];
 }
 
 seg_data* WasmObj_tlsseg_bss() @trusted
 {
-    return null;
+    return SegData[WASM_UDATA];
 }
 
 seg_data* WasmObj_tlsseg_data() @trusted
 {
-    return null;
+    return SegData[WASM_DATA];
 }
 
 void WasmObj_export_symbol(Symbol* s, uint argsize) @trusted
