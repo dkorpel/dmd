@@ -1,5 +1,12 @@
 /**
- * WebAssembly object module writer stub.
+ * WebAssembly binary module writer.
+ *
+ * Implements the Obj interface for the WebAssembly binary format.
+ * Produces a valid .wasm file containing type, function, export, memory,
+ * and data sections.  Function bodies are stubs (unreachable) until a
+ * dedicated WASM code-generator is hooked in.
+ *
+ * Spec: https://webassembly.github.io/spec/core/binary/index.html
  *
  * Copyright:   Copyright (C) 1999-2026 by The D Language Foundation, All Rights Reserved
  * License:     $(LINK2 https://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
@@ -8,302 +15,753 @@
 
 module dmd.backend.wasmobj;
 
+import core.stdc.string : strlen, strcmp;
+
 import dmd.backend.cc;
 import dmd.backend.cdef;
 import dmd.backend.code;
 import dmd.backend.el;
 import dmd.backend.obj;
+import dmd.backend.ty;
+import dmd.backend.type;
 
 import dmd.common.outbuffer;
 
+// Segment indices used by the backend (must match cdef.d enum segfl_t values)
+private enum : int { WASM_CODE = 1, WASM_DATA = 2, WASM_CDATA = 3, WASM_UDATA = 4 }
+
+// Allocate a seg_data entry in SegData at the given index
+private void pushSegData(int idx) nothrow @trusted
+{
+    import dmd.backend.barray : Rarray;
+    while (SegData.length <= idx)
+    {
+        seg_data** p = SegData.push();
+        *p = new seg_data();
+        (*p).SDseg = cast(int)(SegData.length - 1);
+        (*p).SDbuf = new OutBuffer();
+    }
+}
+
 nothrow:
 
-Obj WasmObj_init(OutBuffer* objbuf, const(char)* filename, const(char)* csegname)
+// ---------------------------------------------------------------------------
+// WASM binary encoding constants
+// ---------------------------------------------------------------------------
+
+enum : ubyte
 {
-    assert(0, "WASM object format not yet implemented");
+    WASM_MAGIC_0 = 0x00,
+    WASM_MAGIC_1 = 0x61,   // 'a'
+    WASM_MAGIC_2 = 0x73,   // 's'
+    WASM_MAGIC_3 = 0x6D,   // 'm'
+
+    WASM_VERSION_0 = 0x01,
+    WASM_VERSION_1 = 0x00,
+    WASM_VERSION_2 = 0x00,
+    WASM_VERSION_3 = 0x00,
 }
 
-void WasmObj_initfile(const(char)* filename, const(char)* csegname, const(char)* modname)
+// Section IDs
+enum WasmSection : ubyte
 {
-    assert(0, "WASM object format not yet implemented");
+    custom   = 0,
+    type_    = 1,
+    import_  = 2,
+    function_= 3,
+    table    = 4,
+    memory   = 5,
+    global   = 6,
+    export_  = 7,
+    start    = 8,
+    element  = 9,
+    code     = 10,
+    data     = 11,
 }
 
-void WasmObj_termfile()
+// Value types
+enum : ubyte
 {
-    assert(0, "WASM object format not yet implemented");
+    WASM_I32  = 0x7F,
+    WASM_I64  = 0x7E,
+    WASM_F32  = 0x7D,
+    WASM_F64  = 0x7C,
+    WASM_VOID = 0x40,   // used in blocktype for void blocks
 }
 
-void WasmObj_term(const(char)[] objfilename)
+// Export kinds
+enum : ubyte
 {
-    assert(0, "WASM object format not yet implemented");
+    WASM_EXPORT_FUNC   = 0x00,
+    WASM_EXPORT_TABLE  = 0x01,
+    WASM_EXPORT_MEM    = 0x02,
+    WASM_EXPORT_GLOBAL = 0x03,
 }
 
-void WasmObj_linnum(Srcpos srcpos, int seg, targ_size_t offset)
+// Instructions
+enum : ubyte
 {
-    assert(0, "WASM object format not yet implemented");
+    WASM_UNREACHABLE = 0x00,
+    WASM_END         = 0x0B,
 }
 
-int WasmObj_codeseg(const char* name, int suffix)
+// ---------------------------------------------------------------------------
+// LEB128 encoding helpers
+// ---------------------------------------------------------------------------
+
+// Append unsigned LEB128
+private void appendULEB128(OutBuffer* buf, uint val) @trusted
 {
-    assert(0, "WASM object format not yet implemented");
+    do
+    {
+        ubyte b = val & 0x7F;
+        val >>= 7;
+        if (val != 0)
+            b |= 0x80;
+        buf.writeByte(b);
+    } while (val != 0);
 }
 
-void WasmObj_startaddress(Symbol* s)
+// Append a name string (length-prefixed)
+private void appendName(OutBuffer* buf, const(char)[] name) @trusted
 {
-    assert(0, "WASM object format not yet implemented");
+    appendULEB128(buf, cast(uint) name.length);
+    buf.write(name.ptr[0 .. name.length]);
 }
 
-bool WasmObj_includelib(scope const(char)[] name)
+// ---------------------------------------------------------------------------
+// Data structures
+// ---------------------------------------------------------------------------
+
+// WASM function type: params and result
+struct WasmFuncType
 {
-    assert(0, "WASM object format not yet implemented");
+    ubyte[] params;   // value types of parameters
+    ubyte[] results;  // value types of return values (0 or 1 for MVP)
 }
 
-bool WasmObj_linkerdirective(scope const(char)* p)
+// Recorded function definition
+struct WasmFunc
 {
-    assert(0, "WASM object format not yet implemented");
+    uint typeIdx;    // index into typeSection
+    Symbol* sym;     // the D symbol
+    bool exported;
+    bool isImport;
+    const(char)[] importModule;  // for imports: module name
+    const(char)[] importName;    // for imports: field name
 }
 
-bool WasmObj_allowZeroSize()
+// Data segment (initialized global data)
+struct WasmDataSeg
 {
-    assert(0, "WASM object format not yet implemented");
+    uint offset;       // linear memory offset
+    OutBuffer data;    // raw bytes
 }
 
-void WasmObj_exestr(const(char)* p)
+// ---------------------------------------------------------------------------
+// Module state
+// ---------------------------------------------------------------------------
+
+struct WasmModule
 {
-    assert(0, "WASM object format not yet implemented");
+    OutBuffer* objbuf;         // the output buffer (owned by caller)
+
+    // Collected entries
+    WasmFuncType[] funcTypes;  // de-duplicated type table
+    WasmFunc[] funcs;          // all functions (imports first, then defined)
+    uint numImports;           // number of import functions
+    WasmDataSeg[] dataSegs;    // data segments
+    WasmDataSeg* activeSeg;    // current data segment being filled
+
+    uint memoryPageCount;      // number of 64 KiB memory pages
+    bool needsMemory;          // true if any data segments exist
+
+    // Scratch OutBuffer for section payloads
+    OutBuffer scratch;
+
+nothrow:
+
+    // Return or create a type index for the given func type
+    uint internType(const WasmFuncType ft)
+    {
+        foreach (size_t i, ref const WasmFuncType e; funcTypes)
+        {
+            if (e.params == ft.params && e.results == ft.results)
+                return cast(uint) i;
+        }
+        funcTypes ~= WasmFuncType(ft.params.dup, ft.results.dup);
+        return cast(uint)(funcTypes.length - 1);
+    }
 }
 
-void WasmObj_user(const(char)* p)
+// ---------------------------------------------------------------------------
+// Global module instance (one per compilation unit)
+// ---------------------------------------------------------------------------
+
+private WasmModule* wmod;
+
+// ---------------------------------------------------------------------------
+// WASM value type for a backend type
+// ---------------------------------------------------------------------------
+
+private ubyte wasmValType(tym_t ty) @trusted
 {
-    assert(0, "WASM object format not yet implemented");
+    switch (tybasic(ty))
+    {
+        case TYbool:
+        case TYchar: case TYschar: case TYuchar:
+        case TYchar8: case TYchar16:
+        case TYshort: case TYwchar_t: case TYushort:
+        case TYenum:
+        case TYint: case TYuint:
+        case TYlong: case TYulong:
+        case TYdchar:
+        case TYnptr: case TYptr: case TYnullptr: case TYref: case TYnref:
+        case TYsptr: case TYcptr: case TYf16ptr: case TYfptr:
+        case TYhptr: case TYvptr: case TYfgPtr:
+            return WASM_I32;
+
+        case TYllong: case TYullong:
+        case TYcent: case TYucent:
+            return WASM_I64;
+
+        case TYfloat: case TYifloat:
+            return WASM_F32;
+
+        case TYdouble: case TYdouble_alias: case TYidouble:
+        case TYreal: case TYireal:
+            return WASM_F64;
+
+        default:
+            return WASM_I32;   // aggregate / unknown: pass by pointer
+    }
 }
 
-void WasmObj_compiler(const(char)* p)
+// Build a WasmFuncType from a backend function type
+private WasmFuncType buildFuncType(type* t) @trusted
 {
-    assert(0, "WASM object format not yet implemented");
+    WasmFuncType ft;
+
+    // Parameters
+    param_t* p = t.Tparamtypes;
+    while (p)
+    {
+        if (p.Ptype && tybasic(p.Ptype.Tty) != TYvoid)
+            ft.params ~= wasmValType(p.Ptype.Tty);
+        p = p.Pnext;
+    }
+
+    // Return type
+    type* ret = t.Tnext;
+    if (ret && tybasic(ret.Tty) != TYvoid)
+        ft.results ~= wasmValType(ret.Tty);
+
+    return ft;
 }
 
-void WasmObj_wkext(Symbol* s1, Symbol* s2)
+// ---------------------------------------------------------------------------
+// Section writers
+// ---------------------------------------------------------------------------
+
+private void writeSection(OutBuffer* out_, WasmSection id, OutBuffer* payload) @trusted
 {
-    assert(0, "WASM object format not yet implemented");
+    out_.writeByte(cast(ubyte) id);
+    appendULEB128(out_, cast(uint) payload.length());
+    out_.write(payload.peekSlice());
 }
 
-void WasmObj_alias(const(char)* n1, const(char)* n2)
+private void emitTypeSection(OutBuffer* out_) @trusted
 {
-    assert(0, "WASM object format not yet implemented");
+    OutBuffer* s = &wmod.scratch;
+    s.reset();
+    appendULEB128(s, cast(uint) wmod.funcTypes.length);
+    foreach (ref const WasmFuncType ft; wmod.funcTypes)
+    {
+        s.writeByte(0x60);  // func type indicator
+        appendULEB128(s, cast(uint) ft.params.length);
+        foreach (ubyte v; ft.params)
+            s.writeByte(v);
+        appendULEB128(s, cast(uint) ft.results.length);
+        foreach (ubyte v; ft.results)
+            s.writeByte(v);
+    }
+    if (wmod.funcTypes.length)
+        writeSection(out_, WasmSection.type_, s);
 }
 
-void WasmObj_staticctor(Symbol* s, int dtor, int seg)
+private void emitImportSection(OutBuffer* out_) @trusted
 {
-    assert(0, "WASM object format not yet implemented");
+    if (!wmod.numImports)
+        return;
+    OutBuffer* s = &wmod.scratch;
+    s.reset();
+    appendULEB128(s, wmod.numImports);
+    foreach (ref const WasmFunc f; wmod.funcs[0 .. wmod.numImports])
+    {
+        appendName(s, f.importModule);
+        appendName(s, f.importName);
+        s.writeByte(WASM_EXPORT_FUNC);  // import kind: function
+        appendULEB128(s, f.typeIdx);
+    }
+    writeSection(out_, WasmSection.import_, s);
 }
 
-void WasmObj_staticdtor(Symbol* s)
+private void emitFunctionSection(OutBuffer* out_) @trusted
 {
-    assert(0, "WASM object format not yet implemented");
+    uint defined = cast(uint)(wmod.funcs.length - wmod.numImports);
+    if (!defined)
+        return;
+    OutBuffer* s = &wmod.scratch;
+    s.reset();
+    appendULEB128(s, defined);
+    foreach (ref const WasmFunc f; wmod.funcs[wmod.numImports .. $])
+        appendULEB128(s, f.typeIdx);
+    writeSection(out_, WasmSection.function_, s);
 }
 
-void WasmObj_setModuleCtorDtor(Symbol* s, bool isCtor)
+private void emitMemorySection(OutBuffer* out_) @trusted
 {
-    assert(0, "WASM object format not yet implemented");
+    if (!wmod.needsMemory)
+        return;
+    OutBuffer* s = &wmod.scratch;
+    s.reset();
+    appendULEB128(s, 1);         // one memory
+    s.writeByte(0x00);           // flags: no maximum
+    appendULEB128(s, wmod.memoryPageCount ? wmod.memoryPageCount : 1);
+    writeSection(out_, WasmSection.memory, s);
 }
 
-void WasmObj_ehtables(Symbol* sfunc, uint size, Symbol* ehsym)
+private void emitExportSection(OutBuffer* out_) @trusted
 {
-    assert(0, "WASM object format not yet implemented");
+    OutBuffer* s = &wmod.scratch;
+    s.reset();
+    uint count = 0;
+    foreach (ref const WasmFunc f; wmod.funcs)
+    {
+        if (f.exported)
+            ++count;
+    }
+    if (!count)
+        return;
+    appendULEB128(s, count);
+    foreach (size_t i, ref const WasmFunc f; wmod.funcs)
+    {
+        if (!f.exported)
+            continue;
+        const(char)[] name = f.sym ? f.sym.Sident.ptr[0 .. strlen(f.sym.Sident.ptr)] : f.importName;
+        appendName(s, name);
+        s.writeByte(WASM_EXPORT_FUNC);
+        appendULEB128(s, cast(uint) i);
+    }
+    writeSection(out_, WasmSection.export_, s);
 }
 
-void WasmObj_ehsections()
+private void emitCodeSection(OutBuffer* out_) @trusted
 {
-    assert(0, "WASM object format not yet implemented");
+    uint defined = cast(uint)(wmod.funcs.length - wmod.numImports);
+    if (!defined)
+        return;
+    OutBuffer* s = &wmod.scratch;
+    s.reset();
+    appendULEB128(s, defined);
+    foreach (ref const WasmFunc f; wmod.funcs[wmod.numImports .. $])
+    {
+        // Function body: local count=0 + unreachable + end  (3 bytes)
+        appendULEB128(s, 3);            // body size in bytes
+        appendULEB128(s, 0);            // local declarations count
+        s.writeByte(WASM_UNREACHABLE);  // placeholder body
+        s.writeByte(WASM_END);
+    }
+    writeSection(out_, WasmSection.code, s);
 }
 
-void WasmObj_moduleinfo(Symbol* scc)
+private void emitDataSection(OutBuffer* out_) @trusted
 {
-    assert(0, "WASM object format not yet implemented");
+    if (!wmod.dataSegs.length)
+        return;
+    OutBuffer* s = &wmod.scratch;
+    s.reset();
+    appendULEB128(s, cast(uint) wmod.dataSegs.length);
+    foreach (ref WasmDataSeg ds; wmod.dataSegs)
+    {
+        s.writeByte(0x00);           // active segment, memory 0
+        // offset initializer: i32.const <offset> end
+        s.writeByte(0x41);           // i32.const
+        appendULEB128(s, ds.offset);
+        s.writeByte(WASM_END);
+        appendULEB128(s, cast(uint) ds.data.length());
+        s.write(ds.data.peekSlice());
+    }
+    writeSection(out_, WasmSection.data, s);
 }
 
-int WasmObj_comdat(Symbol* s)
+// ---------------------------------------------------------------------------
+// Obj interface implementation
+// ---------------------------------------------------------------------------
+
+Obj WasmObj_init(OutBuffer* objbuf, const(char)* filename, const(char)* csegname) @trusted
 {
-    assert(0, "WASM object format not yet implemented");
+    wmod = new WasmModule();
+    wmod.objbuf = objbuf;
+
+    // Initialize the SegData array with placeholder entries for the standard
+    // segment indices (CODE=1, DATA=2, CDATA=3, UDATA=4) so the backend's
+    // segment-offset bookkeeping doesn't crash.
+    SegData.reset();
+    SegData.push();  // index 0 reserved
+    pushSegData(WASM_UDATA);  // push indices 1-4
+
+    return new Obj();
 }
 
-int WasmObj_comdatsize(Symbol* s, targ_size_t symsize)
+void WasmObj_initfile(const(char)* filename, const(char)* csegname, const(char)* modname) @trusted
 {
-    assert(0, "WASM object format not yet implemented");
 }
 
-void WasmObj_setcodeseg(int seg)
+void WasmObj_termfile() @trusted
 {
-    assert(0, "WASM object format not yet implemented");
 }
 
-seg_data* WasmObj_tlsseg()
+void WasmObj_term(const(char)[] objfilename) @trusted
 {
-    assert(0, "WASM object format not yet implemented");
+    OutBuffer* out_ = wmod.objbuf;
+
+    // WASM magic + version
+    out_.writeByte(WASM_MAGIC_0);
+    out_.writeByte(WASM_MAGIC_1);
+    out_.writeByte(WASM_MAGIC_2);
+    out_.writeByte(WASM_MAGIC_3);
+    out_.writeByte(WASM_VERSION_0);
+    out_.writeByte(WASM_VERSION_1);
+    out_.writeByte(WASM_VERSION_2);
+    out_.writeByte(WASM_VERSION_3);
+
+    emitTypeSection(out_);
+    emitImportSection(out_);
+    emitFunctionSection(out_);
+    emitMemorySection(out_);
+    emitExportSection(out_);
+    emitCodeSection(out_);
+    emitDataSection(out_);
+
+    wmod = null;
 }
 
-seg_data* WasmObj_tlsseg_bss()
+void WasmObj_linnum(Srcpos srcpos, int seg, targ_size_t offset) @trusted
 {
-    assert(0, "WASM object format not yet implemented");
 }
 
-seg_data* WasmObj_tlsseg_data()
+int WasmObj_codeseg(const char* name, int suffix) @trusted
 {
-    assert(0, "WASM object format not yet implemented");
+    return 0;
 }
 
-void WasmObj_export_symbol(Symbol* s, uint argsize)
+void WasmObj_startaddress(Symbol* s) @trusted
 {
-    assert(0, "WASM object format not yet implemented");
 }
 
-void WasmObj_pubdef(int seg, Symbol* s, targ_size_t offset)
+bool WasmObj_includelib(scope const(char)[] name) @trusted
 {
-    assert(0, "WASM object format not yet implemented");
+    return false;
 }
 
-void WasmObj_pubdefsize(int seg, Symbol* s, targ_size_t offset, targ_size_t symsize)
+bool WasmObj_linkerdirective(scope const(char)* p) @trusted
 {
-    assert(0, "WASM object format not yet implemented");
+    return false;
 }
 
-int WasmObj_external_def(const(char)* name)
+bool WasmObj_allowZeroSize() @trusted
 {
-    assert(0, "WASM object format not yet implemented");
+    return true;
 }
 
-int WasmObj_data_start(Symbol* sdata, targ_size_t datasize, int seg)
+void WasmObj_exestr(const(char)* p) @trusted
 {
-    assert(0, "WASM object format not yet implemented");
 }
 
-int WasmObj_external(Symbol* s)
+void WasmObj_user(const(char)* p) @trusted
 {
-    assert(0, "WASM object format not yet implemented");
 }
 
-int WasmObj_common_block(Symbol* s, targ_size_t size, targ_size_t count)
+void WasmObj_compiler(const(char)* p) @trusted
 {
-    assert(0, "WASM object format not yet implemented");
 }
 
-int WasmObj_common_block(Symbol* s, int flag, targ_size_t size, targ_size_t count)
+void WasmObj_wkext(Symbol* s1, Symbol* s2) @trusted
 {
-    assert(0, "WASM object format not yet implemented");
 }
 
-void WasmObj_lidata(int seg, targ_size_t offset, targ_size_t count)
+void WasmObj_alias(const(char)* n1, const(char)* n2) @trusted
 {
-    assert(0, "WASM object format not yet implemented");
 }
 
-void WasmObj_write_zeros(seg_data* pseg, targ_size_t count)
+void WasmObj_staticctor(Symbol* s, int dtor, int seg) @trusted
 {
-    assert(0, "WASM object format not yet implemented");
 }
 
-void WasmObj_write_byte(seg_data* pseg, uint _byte)
+void WasmObj_staticdtor(Symbol* s) @trusted
 {
-    assert(0, "WASM object format not yet implemented");
 }
 
-void WasmObj_write_bytes(seg_data* pseg, const(void[]) a)
+void WasmObj_setModuleCtorDtor(Symbol* s, bool isCtor) @trusted
 {
-    assert(0, "WASM object format not yet implemented");
 }
 
-void WasmObj_byte(int seg, targ_size_t offset, uint _byte)
+void WasmObj_ehtables(Symbol* sfunc, uint size, Symbol* ehsym) @trusted
 {
-    assert(0, "WASM object format not yet implemented");
 }
 
-size_t WasmObj_bytes(int seg, targ_size_t offset, size_t nbytes, const(void)* p)
+void WasmObj_ehsections() @trusted
 {
-    assert(0, "WASM object format not yet implemented");
 }
 
-void WasmObj_reftodatseg(int seg, targ_size_t offset, targ_size_t val, uint targetdatum, int flags)
+void WasmObj_moduleinfo(Symbol* scc) @trusted
 {
-    assert(0, "WASM object format not yet implemented");
 }
 
-void WasmObj_reftocodeseg(int seg, targ_size_t offset, targ_size_t val)
+int WasmObj_comdat(Symbol* s) @trusted
 {
-    assert(0, "WASM object format not yet implemented");
+    if (!s || !s.Stype)
+        return 0;
+    // Register a defined function
+    WasmFuncType ft;
+    if (tybasic(s.Stype.Tty) != TYvoid)
+        ft = buildFuncType(s.Stype);
+    WasmFunc f;
+    f.typeIdx = wmod.internType(ft);
+    f.sym = s;
+    f.exported = (s.Sclass == SC.global);
+    wmod.funcs ~= f;
+    s.Sseg = cast(int)(wmod.funcs.length - 1);
+    return s.Sseg;
 }
 
-int WasmObj_reftoident(int seg, targ_size_t offset, Symbol* s, targ_size_t val, int flags)
+int WasmObj_comdatsize(Symbol* s, targ_size_t symsize) @trusted
 {
-    assert(0, "WASM object format not yet implemented");
+    return WasmObj_comdat(s);
 }
 
-void WasmObj_far16thunk(Symbol* s)
+void WasmObj_setcodeseg(int seg) @trusted
 {
-    assert(0, "WASM object format not yet implemented");
 }
 
-void WasmObj_fltused()
-{
-    assert(0, "WASM object format not yet implemented");
-}
-
-int WasmObj_data_readonly(char* p, int len, int* pseg)
-{
-    assert(0, "WASM object format not yet implemented");
-}
-
-int WasmObj_data_readonly(char* p, int len)
-{
-    assert(0, "WASM object format not yet implemented");
-}
-
-int WasmObj_string_literal_segment(uint sz)
-{
-    assert(0, "WASM object format not yet implemented");
-}
-
-Symbol* WasmObj_sym_cdata(tym_t ty, char* p, int len)
-{
-    assert(0, "WASM object format not yet implemented");
-}
-
-void WasmObj_func_start(Symbol* sfunc)
-{
-    assert(0, "WASM object format not yet implemented");
-}
-
-void WasmObj_func_term(Symbol* sfunc)
-{
-    assert(0, "WASM object format not yet implemented");
-}
-
-void WasmObj_write_pointerRef(Symbol* s, uint off)
-{
-    assert(0, "WASM object format not yet implemented");
-}
-
-int WasmObj_jmpTableSegment(Symbol* s)
-{
-    assert(0, "WASM object format not yet implemented");
-}
-
-Symbol* WasmObj_tlv_bootstrap()
-{
-    assert(0, "WASM object format not yet implemented");
-}
-
-void WasmObj_gotref(Symbol* s)
-{
-    // WASM has no GOT; no-op
-}
-
-Symbol* WasmObj_getGOTsym()
+seg_data* WasmObj_tlsseg() @trusted
 {
     return null;
 }
 
-void WasmObj_refGOTsym()
+seg_data* WasmObj_tlsseg_bss() @trusted
 {
-    // WASM has no GOT; no-op
+    return null;
+}
+
+seg_data* WasmObj_tlsseg_data() @trusted
+{
+    return null;
+}
+
+void WasmObj_export_symbol(Symbol* s, uint argsize) @trusted
+{
+    if (!s)
+        return;
+    // Mark the function as exported
+    foreach (ref WasmFunc f; wmod.funcs)
+    {
+        if (f.sym == s)
+        {
+            f.exported = true;
+            return;
+        }
+    }
+}
+
+void WasmObj_pubdef(int seg, Symbol* s, targ_size_t offset) @trusted
+{
+    WasmObj_export_symbol(s, 0);
+}
+
+void WasmObj_pubdefsize(int seg, Symbol* s, targ_size_t offset, targ_size_t symsize) @trusted
+{
+    WasmObj_export_symbol(s, 0);
+}
+
+int WasmObj_external_def(const(char)* name) @trusted
+{
+    return 0;
+}
+
+int WasmObj_data_start(Symbol* sdata, targ_size_t datasize, int seg) @trusted
+{
+    if (!datasize)
+        return 0;
+    wmod.needsMemory = true;
+    wmod.dataSegs.length++;
+    wmod.activeSeg = &wmod.dataSegs[$ - 1];
+    wmod.activeSeg.offset = 0;
+    return cast(int)(wmod.dataSegs.length);
+}
+
+int WasmObj_external(Symbol* s) @trusted
+{
+    if (!s || !s.Stype)
+        return 0;
+    // Register as an import (env.name)
+    WasmFuncType ft;
+    if (tybasic(s.Stype.Tty) != TYvoid)
+        ft = buildFuncType(s.Stype);
+    WasmFunc f;
+    f.typeIdx = wmod.internType(ft);
+    f.sym = s;
+    const(char)[] id = s.Sident.ptr[0 .. strlen(s.Sident.ptr)];
+    f.importModule = "env";
+    f.importName = id;
+    f.isImport = true;
+    // Imports must come before defined functions; insert at numImports position
+    wmod.funcs = wmod.funcs[0 .. wmod.numImports] ~ [f] ~ wmod.funcs[wmod.numImports .. $];
+    s.Sseg = cast(int) wmod.numImports;
+    wmod.numImports++;
+    return s.Sseg;
+}
+
+int WasmObj_common_block(Symbol* s, targ_size_t size, targ_size_t count) @trusted
+{
+    return 0;
+}
+
+int WasmObj_common_block(Symbol* s, int flag, targ_size_t size, targ_size_t count) @trusted
+{
+    return 0;
+}
+
+void WasmObj_lidata(int seg, targ_size_t offset, targ_size_t count) @trusted
+{
+    if (!wmod.activeSeg)
+        return;
+    foreach (_; 0 .. count)
+        wmod.activeSeg.data.writeByte(0);
+}
+
+void WasmObj_write_zeros(seg_data* pseg, targ_size_t count) @trusted
+{
+    if (!wmod.activeSeg)
+        return;
+    foreach (_; 0 .. count)
+        wmod.activeSeg.data.writeByte(0);
+}
+
+void WasmObj_write_byte(seg_data* pseg, uint _byte) @trusted
+{
+    if (wmod.activeSeg)
+        wmod.activeSeg.data.writeByte(cast(ubyte) _byte);
+}
+
+void WasmObj_write_bytes(seg_data* pseg, const(void[]) a) @trusted
+{
+    if (wmod.activeSeg)
+        wmod.activeSeg.data.write(a.ptr, a.length);
+}
+
+void WasmObj_byte(int seg, targ_size_t offset, uint _byte) @trusted
+{
+    if (wmod.activeSeg)
+        wmod.activeSeg.data.writeByte(cast(ubyte) _byte);
+}
+
+size_t WasmObj_bytes(int seg, targ_size_t offset, size_t nbytes, const(void)* p) @trusted
+{
+    if (wmod.activeSeg && p)
+        wmod.activeSeg.data.write(p, nbytes);
+    return nbytes;
+}
+
+void WasmObj_reftodatseg(int seg, targ_size_t offset, targ_size_t val, uint targetdatum, int flags) @trusted
+{
+}
+
+void WasmObj_reftocodeseg(int seg, targ_size_t offset, targ_size_t val) @trusted
+{
+}
+
+int WasmObj_reftoident(int seg, targ_size_t offset, Symbol* s, targ_size_t val, int flags) @trusted
+{
+    return 0;
+}
+
+void WasmObj_far16thunk(Symbol* s) @trusted
+{
+}
+
+void WasmObj_fltused() @trusted
+{
+}
+
+int WasmObj_data_readonly(char* p, int len, int* pseg) @trusted
+{
+    wmod.needsMemory = true;
+    wmod.dataSegs.length++;
+    wmod.activeSeg = &wmod.dataSegs[$ - 1];
+    wmod.activeSeg.data.write(p, len);
+    if (pseg)
+        *pseg = cast(int) wmod.dataSegs.length;
+    return 0;
+}
+
+int WasmObj_data_readonly(char* p, int len) @trusted
+{
+    int pseg;
+    return WasmObj_data_readonly(p, len, &pseg);
+}
+
+int WasmObj_string_literal_segment(uint sz) @trusted
+{
+    return 0;
+}
+
+Symbol* WasmObj_sym_cdata(tym_t ty, char* p, int len) @trusted
+{
+    return null;
+}
+
+void WasmObj_func_start(Symbol* sfunc) @trusted
+{
+    if (!sfunc || !sfunc.Stype)
+        return;
+    WasmFuncType ft = buildFuncType(sfunc.Stype);
+    WasmFunc f;
+    f.typeIdx = wmod.internType(ft);
+    f.sym = sfunc;
+    f.exported = (sfunc.Sclass == SC.global);
+    wmod.funcs ~= f;
+    sfunc.Sseg = cast(int)(wmod.funcs.length - 1);
+}
+
+void WasmObj_func_term(Symbol* sfunc) @trusted
+{
+}
+
+void WasmObj_write_pointerRef(Symbol* s, uint off) @trusted
+{
+}
+
+int WasmObj_jmpTableSegment(Symbol* s) @trusted
+{
+    return 0;
+}
+
+Symbol* WasmObj_tlv_bootstrap() @trusted
+{
+    return null;
+}
+
+void WasmObj_gotref(Symbol* s) @trusted
+{
+}
+
+Symbol* WasmObj_getGOTsym() @trusted
+{
+    return null;
+}
+
+void WasmObj_refGOTsym() @trusted
+{
 }
