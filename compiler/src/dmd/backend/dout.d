@@ -1024,6 +1024,19 @@ void writefunc2(Symbol* sfunc, ref GlobalOptimizer go, ref BlockOpt bo)
     assert(funcsym_p == sfunc);
     const int CSEGSAVE_DEFAULT = int.max;        // some unlikely number
     int csegsave = CSEGSAVE_DEFAULT;
+
+    // WASM uses a separate code generator; skip the x86-specific code path
+    if (config.objfmt == OBJ_WASM)
+    {
+        objmod.func_start(sfunc);
+        sfunc.Sfunc.Fstartblock = bo.startblock;
+        bo.startblock = null;
+        objmod.func_term(sfunc);
+        funcsym_p = null;
+        globsym.setLength(0);
+        return;
+    }
+
     if (eecontext.EEcompile != 1)
     {
         if (symbol_iscomdat2(sfunc))
