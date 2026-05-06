@@ -1001,24 +1001,42 @@ bool parseCommandLine(const ref Strings arguments, const size_t argc, out Param 
             target.isAArch64 = true;
             target.isX86    = false;
             target.isX86_64 = false;
+            target.isWasm   = false;
         }
         else if (arg == "-m32") // https://dlang.org/dmd.html#switch-m32
         {
             target.isAArch64 = false;
             target.isX86     = true;
             target.isX86_64  = false;
+            target.isWasm    = false;
         }
         else if (arg == "-m64") // https://dlang.org/dmd.html#switch-m64
         {
             target.isAArch64 = false;
             target.isX86     = false;
             target.isX86_64  = true;
+            target.isWasm    = false;
         }
         else if (arg == "-m32mscoff") // https://dlang.org/dmd.html#switch-m32mscoff
         {
             target.isAArch64 = false;
             target.isX86     = true;
             target.isX86_64  = false;
+            target.isWasm    = false;
+        }
+        else if (arg == "-mwasm32")
+        {
+            target.isWasm    = true;
+            target.isAArch64 = false;
+            target.isX86     = false;
+            target.isX86_64  = false;
+        }
+        else if (arg == "-mwasm64")
+        {
+            target.isWasm    = true;
+            target.isAArch64 = false;
+            target.isX86     = false;
+            target.isX86_64  = true;
         }
         else if (startsWith(p + 1, "mscrtlib="))
         {
@@ -1176,7 +1194,7 @@ bool parseCommandLine(const ref Strings arguments, const size_t argc, out Param 
             enum len = "-os=".length;
             // Parse:
             //      -os=identifier
-            immutable string msg = "Only `host`, `linux`, `windows`, `osx`,`openbsd`, `freebsd`, `solaris`, `dragonflybsd` allowed for `-os`";
+            immutable string msg = "Only `host`, `linux`, `windows`, `osx`,`openbsd`, `freebsd`, `solaris`, `dragonflybsd`, `wasm` allowed for `-os`";
             if (Identifier.isValidIdentifier(p + len))
             {
                 const ident = p + len;
@@ -1190,6 +1208,7 @@ bool parseCommandLine(const ref Strings arguments, const size_t argc, out Param 
                 case "freebsd":      target.os = Target.OS.FreeBSD;      break;
                 case "solaris":      target.os = Target.OS.Solaris;      break;
                 case "dragonflybsd": target.os = Target.OS.DragonFlyBSD; break;
+                case "wasm":         target.os = Target.OS.WASM;         break;
                 default:
                     errorInvalidSwitch(p, msg);
                     return false;

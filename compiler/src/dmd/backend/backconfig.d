@@ -293,6 +293,14 @@ void out_config_init(
         cfg.objfmt = OBJ_ELF;
         cfg.ehmethod = useExceptions ? EHmethod.EH_DWARF : EHmethod.EH_NONE;
     }
+    if (cfg.exe & EX_WASM)
+    {
+        cfg.target_cpu = TARGET_WASM;
+        cfg.objfmt = OBJ_WASM;
+        cfg.ehmethod = EHmethod.EH_NONE;  // WASM MVP doesn't support exceptions
+        cfg.fpxmmregs = false;
+        cfg.inline8087 = false;
+    }
 
     cfg.flags2 |= CFG2nodeflib;      // no default library
     cfg.flags3 |= CFG3eseqds;

@@ -226,6 +226,7 @@ enum
     TARGET_PentiumPro       = 7,
     TARGET_PentiumII        = 8,
     TARGET_AArch64          = 9,
+    TARGET_WASM             = 10,
 }
 
 // Symbolic debug info
@@ -274,6 +275,7 @@ enum
     OBJ_MSCOFF      = 2,
     OBJ_ELF         = 4,
     OBJ_MACH        = 8,
+    OBJ_WASM        = 16,
 }
 
 // Executable file format
@@ -301,6 +303,7 @@ enum
     EX_OPENBSD      = 0x400000,
     EX_OPENBSD64    = 0x800000,
     EX_DRAGONFLYBSD64 = 0x1000000,
+    EX_WASM         = 0x2000000,
 }
 
 // All of them
@@ -325,14 +328,15 @@ enum exefmt_t EX_all =
     EX_SOLARIS64 |
     EX_OPENBSD   |
     EX_OPENBSD64 |
-    EX_DRAGONFLYBSD64;
+    EX_DRAGONFLYBSD64 |
+    EX_WASM;
 
 // All segmented memory models
 enum exefmt_t EX_segmented = EX_DOSX | EX_ZPM | EX_RATIONAL | EX_PHARLAP |
                         EX_COM | EX_OS1 | EX_MZ;
 
 // All flat memory models (no segment registers)
-enum exefmt_t EX_flat = EX_OS2 | EX_WIN32 | EX_WIN64 | EX_posix;
+enum exefmt_t EX_flat = EX_OS2 | EX_WIN32 | EX_WIN64 | EX_posix | EX_WASM;
 
 // All DOS executable types
 enum exefmt_t EX_dos =  EX_DOSX | EX_ZPM | EX_RATIONAL | EX_PHARLAP |
@@ -347,7 +351,8 @@ enum exefmt_t EX_posix = EX_LINUX   | EX_LINUX64   |
                          EX_FREEBSD | EX_FREEBSD64 |
                          EX_SOLARIS | EX_SOLARIS64 |
                          EX_OPENBSD | EX_OPENBSD64 |
-                         EX_DRAGONFLYBSD64;
+                         EX_DRAGONFLYBSD64 |
+                         EX_WASM;
 
 // All 16 bit targets
 enum exefmt_t EX_16 = EX_ZPM | EX_RATIONAL | EX_COM | EX_OS1 | EX_MZ;
@@ -359,7 +364,8 @@ enum exefmt_t EX_32 = EX_DOSX | EX_OS2 | EX_PHARLAP |
                 EX_OSX     |
                 EX_FREEBSD |
                 EX_SOLARIS |
-                EX_OPENBSD;
+                EX_OPENBSD |
+                EX_WASM;
 
 // All 64 bit targets
 enum exefmt_t EX_64 =
