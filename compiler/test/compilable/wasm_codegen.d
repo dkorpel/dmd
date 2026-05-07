@@ -1,6 +1,9 @@
 // Tests that common D constructs compile successfully for the WASM target.
 // REQUIRED_ARGS: -mwasm32 -os=wasm -o-
 
+struct Vec2 { float x, y; }
+struct Point { int x, y; }
+
 extern (C) int add(int a, int b)
 {
     return a + b;
@@ -116,3 +119,31 @@ extern (C) int testSwap()
     *pb = tmp;
     return a * 10 + b; // 21
 }
+
+// Struct return via hidden pointer
+extern (C) Vec2 makeVec2(float x, float y)
+{
+    Vec2 v;
+    v.x = x;
+    v.y = y;
+    return v;
+}
+
+extern (C) Point makePoint(int x, int y)
+{
+    Point p;
+    p.x = x;
+    p.y = y;
+    return p;
+}
+
+// Struct field access via pointer
+extern (C) float getVec2X(Vec2* v) { return v.x; }
+extern (C) float getVec2Y(Vec2* v) { return v.y; }
+extern (C) void setVec2X(Vec2* v, float x) { v.x = x; }
+extern (C) int getPointX(Point* p) { return p.x; }
+extern (C) int getPointY(Point* p) { return p.y; }
+
+// Long arithmetic
+extern (C) long addLong(long a, long b) { return a + b; }
+extern (C) long mulLong(long a, long b) { return a * b; }

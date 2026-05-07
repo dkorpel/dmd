@@ -298,12 +298,34 @@ private ubyte wasmValType(tym_t ty) @trusted
     }
 }
 
-// Build a WasmFuncType from a backend function type
+// Returns true if the backend type is an aggregate (struct/array) that must be
+// returned via a hidden pointer parameter in the WASM calling convention.
+private bool isAggregateType(type* t) @trusted
+{
+    if (!t) return false;
+    switch (tybasic(t.Tty))
+    {
+    case TYstruct:
+    case TYarray:
+        return true;
+    default:
+        return false;
+    }
+}
+
+// Build a WasmFuncType from a backend function type.
+// Aggregates are passed/returned by pointer; aggregate return adds a hidden i32 first.
 private WasmFuncType buildFuncType(type* t) @trusted
 {
     WasmFuncType ft;
 
-    // Parameters
+    // Check for aggregate return: requires a hidden pointer as the first parameter.
+    type* ret = t.Tnext;
+    const bool hiddenPtr = isAggregateType(ret);
+    if (hiddenPtr)
+        ft.params ~= WASM_I32; // hidden return pointer (first param)
+
+    // Parameters (aggregates become i32 pointers via the WASM ABI)
     param_t* p = t.Tparamtypes;
     while (p)
     {
@@ -313,8 +335,9 @@ private WasmFuncType buildFuncType(type* t) @trusted
     }
 
     // Return type
-    type* ret = t.Tnext;
-    if (ret && tybasic(ret.Tty) != TYvoid)
+    if (hiddenPtr)
+        ft.results ~= WASM_I32; // returns hidden ptr
+    else if (ret && tybasic(ret.Tty) != TYvoid)
         ft.results ~= wasmValType(ret.Tty);
 
     return ft;
@@ -437,13 +460,19 @@ private void emitExportSection(OutBuffer* out_) @trusted
     s.reset();
     uint count = 0;
     foreach (ref const WasmFunc f; wmod.funcs)
-    {
-        if (f.exported)
-            ++count;
-    }
+        if (f.exported) ++count;
+    if (wmod.needsMemory)
+        ++count; // export "memory"
     if (!count)
         return;
     appendULEB128(s, count);
+    // Export memory if present
+    if (wmod.needsMemory)
+    {
+        appendName(s, "memory");
+        s.writeByte(WASM_EXPORT_MEM);
+        appendULEB128(s, 0); // memory index 0
+    }
     foreach (size_t i, ref const WasmFunc f; wmod.funcs)
     {
         if (!f.exported)

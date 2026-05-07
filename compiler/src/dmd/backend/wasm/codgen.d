@@ -2003,19 +2003,28 @@ void wasm_codgen(Symbol* sfunc) @trusted
     }
     cg.numParams = cast(uint) cg.locals.length;
 
-    // Then non-parameter locals
+    // Then non-parameter locals. Aggregates (structs/arrays) can't live in
+    // WASM locals — pre-register them in the shadow frame instead.
     foreach (s; globsym[])
     {
         if (s.Sclass == SC.auto_ || s.Sclass == SC.register || s.Sclass == SC.stack)
         {
-            WasmLocal l;
-            l.sym = s;
-            l.ty = wasmType(s.ty());
-            cg.locals ~= l;
+            const tym_t tb = tybasic(s.ty());
+            if (tb == TYstruct || tb == TYarray)
+            {
+                cg.registerShadow(s); // aggregate: lives in linear memory
+            }
+            else
+            {
+                WasmLocal l;
+                l.sym = s;
+                l.ty = wasmType(s.ty());
+                cg.locals ~= l;
+            }
         }
     }
 
-    // Determine return type
+    // Determine return type. Aggregate-returning functions return the hidden ptr (i32).
     type* retType = sfunc.Stype.Tnext;
     const bool hasReturn = retType && tybasic(retType.Tty) != TYvoid;
 
