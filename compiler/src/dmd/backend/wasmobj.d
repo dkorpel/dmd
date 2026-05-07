@@ -210,7 +210,7 @@ struct WasmModule
 
     uint memoryPageCount; // number of 64 KiB memory pages
     bool needsMemory; // true if any data segments or shadow stack exist
-    uint dataHeap; // next free byte offset in linear memory
+    uint dataHeap = 4; // next free byte offset in linear memory; starts at 4 to reserve address 0 as null
 
     WasmGlobal[] globals; // module-level mutable globals
     int stackPtrGlobalIdx = -1; // index of __stack_pointer global (-1 = not created)
@@ -818,7 +818,7 @@ int WasmObj_data_start(Symbol* sdata, targ_size_t datasize, int seg) @trusted
     if (wmod.dataSegs.length == 0)
     {
         wmod.dataSegs.length = 1;
-        wmod.dataSegs[0].offset = 0;
+        wmod.dataSegs[0].offset = 4; // reserve address 0 as null pointer
     }
     wmod.activeSeg = &wmod.dataSegs[0];
 
@@ -1021,11 +1021,11 @@ private uint allocRoData(const(void)* p, uint len, uint align_) @trusted
     if (wmod.dataSegs.length == 0)
     {
         wmod.dataSegs.length = 1;
-        wmod.dataSegs[0].offset = 0;
+        wmod.dataSegs[0].offset = 4; // reserve address 0 as null pointer
     }
     uint mask = align_ - 1;
     uint base = (wmod.dataHeap + mask) & ~mask;
-    // Pad with zeros up to the aligned base
+    // Pad with zeros up to the aligned base (relative to segment start = 4)
     foreach (_; wmod.dataHeap .. base)
         wmod.dataSegs[0].data.writeByte(0);
     if (p)
