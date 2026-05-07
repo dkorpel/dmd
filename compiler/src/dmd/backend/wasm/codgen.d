@@ -962,6 +962,18 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
                 cg.emitULEB(idx);
                 genElem(cg, e.E2);
                 emitBinop(cg, compoundToBinop(op), e.Ety);
+                // Mask for narrow types (ubyte, ushort, etc.) to preserve wrapping.
+                switch (tybasic(e.E1.Ety))
+                {
+                case TYbool: case TYchar: case TYschar: case TYuchar: case TYchar8:
+                    cg.emit(OP_I32_CONST); cg.emitSLEB(0xFF); cg.emit(OP_I32_AND);
+                    break;
+                case TYshort: case TYwchar_t: case TYushort: case TYchar16:
+                    cg.emit(OP_I32_CONST); cg.emitSLEB(0xFFFF); cg.emit(OP_I32_AND);
+                    break;
+                default:
+                    break;
+                }
                 cg.emit(OP_LOCAL_TEE);
                 cg.emitULEB(idx);
                 return true;
