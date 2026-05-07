@@ -341,6 +341,7 @@ nothrow:
         if (s.Stype)
         {
             import dmd.backend.type : type_size, type_alignsize;
+
             targ_size_t ts = type_size(s.Stype);
             if (ts != targ_size_t.max && ts > 0)
                 sz = cast(uint) ts;
@@ -1467,6 +1468,7 @@ private uint funcIndex(Symbol* sfunc) @trusted
 
     // External symbol not yet registered — register as import now.
     import dmd.backend.wasmobj : WasmObj_external;
+
     if (sfunc && sfunc.Stype)
     {
         int idx = WasmObj_external(sfunc);
@@ -2021,7 +2023,6 @@ void wasm_codgen(Symbol* sfunc) @trusted
     block* startblock = sfunc.Sfunc.Fstartblock;
     for (block* sb = startblock; sb; sb = sb.Bnext)
         scanShadow(sb.Belem, cg);
-
 
     // If any locals need addresses, set up the shadow stack frame.
     if (cg.shadowEntries.length > 0)
