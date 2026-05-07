@@ -44,22 +44,38 @@ TypeTuple toArgTypes_wasm(Type t)
     switch (tb.ty)
     {
         // integer primitives
-        case Tint8:  case Tuns8:
-        case Tint16: case Tuns16:
-        case Tint32: case Tuns32:
-        case Tint64: case Tuns64:
-        case Tint128: case Tuns128:
-        case Tbool: case Tchar: case Twchar: case Tdchar:
+    case Tint8:
+    case Tuns8:
+    case Tint16:
+    case Tuns16:
+    case Tint32:
+    case Tuns32:
+    case Tint64:
+    case Tuns64:
+    case Tint128:
+    case Tuns128:
+    case Tbool:
+    case Tchar:
+    case Twchar:
+    case Tdchar:
         // floating point
-        case Tfloat32: case Tfloat64: case Tfloat80:
-        case Timaginary32: case Timaginary64: case Timaginary80:
-        case Tcomplex32: case Tcomplex64: case Tcomplex80:
+    case Tfloat32:
+    case Tfloat64:
+    case Tfloat80:
+    case Timaginary32:
+    case Timaginary64:
+    case Timaginary80:
+    case Tcomplex32:
+    case Tcomplex64:
+    case Tcomplex80:
         // pointer-like
-        case Tpointer: case Tnull: case Tfunction:
-            return new TypeTuple(t);
+    case Tpointer:
+    case Tnull:
+    case Tfunction:
+        return new TypeTuple(t);
 
-        default:
-            break;
+    default:
+        break;
     }
 
     // Aggregates (structs, arrays, etc.): always pass by reference.

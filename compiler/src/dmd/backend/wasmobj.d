@@ -874,11 +874,15 @@ void WasmObj_fltused() @trusted
 }
 
 // Accessors for codgen.d to query wmod.funcs without importing the struct.
-uint wmod_numImports() @trusted { return wmod ? wmod.numImports : 0; }
+uint wmod_numImports() @trusted
+{
+    return wmod ? wmod.numImports : 0;
+}
 
 Symbol* wmod_funcs(size_t i) @trusted
 {
-    if (!wmod || i >= wmod.funcs.length) return null;
+    if (!wmod || i >= wmod.funcs.length)
+        return null;
     return wmod.funcs[i].sym;
 }
 
