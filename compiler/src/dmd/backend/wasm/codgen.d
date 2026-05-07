@@ -881,12 +881,14 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
             }
             else if (e.E1.Eoper == OPind)
             {
-                // Store to memory: address, value → store
+                // Store to memory. Save result in a temp to avoid re-evaluating
+                // E2 (which may have side effects like i++ in arr[k++] = L[i++]).
                 genElem(cg, e.E1.E1); // address
-                genElem(cg, e.E2); // value
-                emitStore(cg, e.E1.Ety);
-                // Expression result: re-load
-                genElem(cg, e.E2);
+                genElem(cg, e.E2);    // value
+                uint valTmp = cg.allocTemp(wasmType(e.Ety));
+                cg.emit(OP_LOCAL_TEE); cg.emitULEB(valTmp); // save, keep on stack
+                emitStore(cg, e.E1.Ety); // store [addr, val]
+                cg.emit(OP_LOCAL_GET); cg.emitULEB(valTmp); // result
                 return true;
             }
             // Fallthrough: unsupported, just evaluate RHS
@@ -965,11 +967,22 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
                 // Mask for narrow types (ubyte, ushort, etc.) to preserve wrapping.
                 switch (tybasic(e.E1.Ety))
                 {
-                case TYbool: case TYchar: case TYschar: case TYuchar: case TYchar8:
-                    cg.emit(OP_I32_CONST); cg.emitSLEB(0xFF); cg.emit(OP_I32_AND);
+                case TYbool:
+                case TYchar:
+                case TYschar:
+                case TYuchar:
+                case TYchar8:
+                    cg.emit(OP_I32_CONST);
+                    cg.emitSLEB(0xFF);
+                    cg.emit(OP_I32_AND);
                     break;
-                case TYshort: case TYwchar_t: case TYushort: case TYchar16:
-                    cg.emit(OP_I32_CONST); cg.emitSLEB(0xFFFF); cg.emit(OP_I32_AND);
+                case TYshort:
+                case TYwchar_t:
+                case TYushort:
+                case TYchar16:
+                    cg.emit(OP_I32_CONST);
+                    cg.emitSLEB(0xFFFF);
+                    cg.emit(OP_I32_AND);
                     break;
                 default:
                     break;
