@@ -52,6 +52,7 @@ enum : ubyte
     OP_END          = 0x0B,
     OP_BR           = 0x0C,
     OP_BR_IF        = 0x0D,
+    OP_BR_TABLE     = 0x0E,
     OP_RETURN       = 0x0F,
     // Call
     OP_CALL         = 0x10,
@@ -863,6 +864,7 @@ private struct BlkInfo
     int  loopEnd;        // for loop headers: index of the block that closes the loop
     int  nOpen;          // how many block/loop pairs open AT this block
     int  nClose;         // how many end's to emit AFTER this block
+    int[] jmptabDests;   // for BC.jmptab: unique sorted destination block indices
 }
 
 private block*[] collectBlocks(block* start) @trusted
@@ -955,6 +957,34 @@ private void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn) @
             stack = stack[0 .. $-1];
         }
 
+        // Open wrapper blocks for BC.jmptab (switch via br_table).
+        // Must happen before loop-header frames so depths are computed correctly.
+        if (b.bc == BC.jmptab || b.bc == BC.switch_)
+        {
+            // Collect unique destination block indices, sorted ascending.
+            // Bsucc[0] = default; Bsucc[1..n] = cases in Bswitch order.
+            int[] dests;
+            foreach (int si; 0 .. b.numSucc())
+            {
+                int idx = blockIdx(b.nthSucc(si));
+                bool found = false;
+                foreach (d; dests) if (d == idx) { found = true; break; }
+                if (!found) dests ~= idx;
+            }
+            import std.algorithm : sort;
+            sort(dests);
+
+            // Open one wrapper block per unique dest, outermost (highest idx) first.
+            // Frame closeAfter = destIdx - 1 so the block ends just before that block.
+            foreach_reverse (int destIdx; dests)
+            {
+                stack ~= Frame(false, destIdx - 1);
+                cg.emit(OP_BLOCK); cg.emit(WASM_VOID_BLOCK);
+            }
+            // stash dest list for use when emitting the br_table
+            info[bi].jmptabDests = dests;
+        }
+
         // Open a loop for loop headers: emit `block` (exit) + `loop` (continue)
         if (info[bi].isLoopHeader)
         {
@@ -988,7 +1018,60 @@ private void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn) @
             cg.emit(OP_UNREACHABLE);
             continue;
         }
+        else if (b.bc == BC.jmptab || b.bc == BC.switch_)
+        {
+            // Wrapper blocks already opened above.
+            // dests[i] has depth = (dests.length - 1 - i) from the current stack top.
+            int[] dests = info[bi].jmptabDests;
+            size_t nw = dests.length;
+
+            // Emit switch expression
+            if (b.Belem) genElem(cg, b.Belem);
+            else { cg.emit(OP_I32_CONST); cg.emitSLEB(0); }
+
+            // Compute vmin/vmax from case values
+            long vmin = long.max, vmax = long.min;
+            foreach (v; b.Bswitch) { if (v < vmin) vmin = v; if (v > vmax) vmax = v; }
+            if (b.Bswitch.length == 0) { cg.emit(OP_DROP); continue; }
+
+            // Adjust switch value to 0-based
+            if (vmin != 0)
+            {
+                cg.emit(OP_I32_CONST); cg.emitSLEB(cast(int) -vmin);
+                cg.emit(OP_I32_ADD);
+            }
+
+            // Helper: depth for a given block index
+            uint depthOf(int destIdx) @trusted
+            {
+                foreach (size_t di, int d; dests)
+                    if (d == destIdx) return cast(uint)(di);
+                return cast(uint)(nw - 1); // fallback: default
+            }
+
+            // Default block: Bsucc[0]
+            int defaultIdx = blockIdx(b.nthSucc(0));
+            uint defaultDepth = depthOf(defaultIdx);
+
+            // Table entries: for each integer value vmin..vmax, find its dest
+            size_t tableLen = cast(size_t)(vmax - vmin + 1);
+            cg.emit(OP_BR_TABLE);
+            cg.emitULEB(cast(uint) tableLen);
+            foreach (long v; vmin .. vmax + 1)
+            {
+                // Find which Bswitch entry matches this value
+                int destIdx = defaultIdx;
+                foreach (size_t ci, long cv; b.Bswitch)
+                    if (cv == v) { destIdx = blockIdx(b.nthSucc(cast(int)(ci + 1))); break; }
+                cg.emitULEB(depthOf(destIdx));
+            }
+            cg.emitULEB(defaultDepth); // default label
+            continue;
+        }
+        else if (b.bc == BC.ifthen) // switch converted to if-then chain — same as iftrue
+            goto case_iftrue;
         else if (b.bc == BC.iftrue)
+        case_iftrue:
         {
             block* taken    = succ(b, 0);
             block* nottaken = succ(b, 1);
