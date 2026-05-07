@@ -909,8 +909,11 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
     case OPshr:
     case OPashr:
         {
+            const ubyte rty = wasmType(e.Ety);
             genElem(cg, e.E1);
+            emitCoerce(cg, wasmType(e.E1.Ety), rty);
             genElem(cg, e.E2);
+            emitCoerce(cg, wasmType(e.E2.Ety), rty);
             emitBinop(cg, op, e.Ety);
             return true;
         }
@@ -922,8 +925,10 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
     case OPgt:
     case OPge:
         {
+            const ubyte cmpTy = wasmType(e.E1.Ety);
             genElem(cg, e.E1);
             genElem(cg, e.E2);
+            emitCoerce(cg, wasmType(e.E2.Ety), cmpTy);
             emitRelop(cg, op, e.E1.Ety);
             return true;
         }
@@ -1919,7 +1924,31 @@ private void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn) @
                 if (takenIdx == cast(int) bi + 1)
                 {
                     // True path is inline; false path at nottakenIdx.
-                    // block $skip ... cond; eqz; br_if 0 ... [true path] ... end $skip
+                    // If the true path jumps past the false path (if-else), we need an
+                    // outer block so the true path can 'br 1' to skip the false path.
+                    // Detect by peeking at the taken block's successor.
+                    int mergeIdx = -1;
+                    if (bi + 1 < N)
+                    {
+                        block* takenBlock = blocks[bi + 1];
+                        if (takenBlock.bc == BC.goto_ && takenBlock.numSucc() > 0)
+                        {
+                            block* mergeBlock = takenBlock.nthSucc(0);
+                            if (mergeBlock)
+                            {
+                                int midx = blockIdx(mergeBlock);
+                                if (midx > nottakenIdx)
+                                    mergeIdx = midx;
+                            }
+                        }
+                    }
+                    if (mergeIdx >= 0)
+                    {
+                        // if-else structure: open outer block covering both paths.
+                        stack ~= Frame(false, mergeIdx - 1);
+                        cg.emit(OP_BLOCK);
+                        cg.emit(WASM_VOID_BLOCK);
+                    }
                     stack ~= Frame(false, nottakenIdx - 1);
                     cg.emit(OP_BLOCK);
                     cg.emit(WASM_VOID_BLOCK);
