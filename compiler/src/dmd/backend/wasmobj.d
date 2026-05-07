@@ -28,12 +28,19 @@ import dmd.backend.type;
 import dmd.common.outbuffer;
 
 // Segment indices used by the backend (must match cdef.d enum segfl_t values)
-private enum : int { WASM_CODE = 1, WASM_DATA = 2, WASM_CDATA = 3, WASM_UDATA = 4 }
+private enum : int
+{
+    WASM_CODE = 1,
+    WASM_DATA = 2,
+    WASM_CDATA = 3,
+    WASM_UDATA = 4
+}
 
 // Allocate a seg_data entry in SegData at the given index
 private void pushSegData(int idx) nothrow @trusted
 {
     import dmd.backend.barray : Rarray;
+
     while (SegData.length <= idx)
     {
         seg_data** p = SegData.push();
@@ -52,9 +59,9 @@ nothrow:
 enum : ubyte
 {
     WASM_MAGIC_0 = 0x00,
-    WASM_MAGIC_1 = 0x61,   // 'a'
-    WASM_MAGIC_2 = 0x73,   // 's'
-    WASM_MAGIC_3 = 0x6D,   // 'm'
+    WASM_MAGIC_1 = 0x61, // 'a'
+    WASM_MAGIC_2 = 0x73, // 's'
+    WASM_MAGIC_3 = 0x6D, // 'm'
 
     WASM_VERSION_0 = 0x01,
     WASM_VERSION_1 = 0x00,
@@ -65,36 +72,36 @@ enum : ubyte
 // Section IDs
 enum WasmSection : ubyte
 {
-    custom   = 0,
-    type_    = 1,
-    import_  = 2,
-    function_= 3,
-    table    = 4,
-    memory   = 5,
-    global   = 6,
-    export_  = 7,
-    start    = 8,
-    element  = 9,
-    code     = 10,
-    data     = 11,
+    custom = 0,
+    type_ = 1,
+    import_ = 2,
+    function_ = 3,
+    table = 4,
+    memory = 5,
+    global = 6,
+    export_ = 7,
+    start = 8,
+    element = 9,
+    code = 10,
+    data = 11,
 }
 
 // Value types
 enum : ubyte
 {
-    WASM_I32  = 0x7F,
-    WASM_I64  = 0x7E,
-    WASM_F32  = 0x7D,
-    WASM_F64  = 0x7C,
-    WASM_VOID = 0x40,   // used in blocktype for void blocks
+    WASM_I32 = 0x7F,
+    WASM_I64 = 0x7E,
+    WASM_F32 = 0x7D,
+    WASM_F64 = 0x7C,
+    WASM_VOID = 0x40, // used in blocktype for void blocks
 }
 
 // Export kinds
 enum : ubyte
 {
-    WASM_EXPORT_FUNC   = 0x00,
-    WASM_EXPORT_TABLE  = 0x01,
-    WASM_EXPORT_MEM    = 0x02,
+    WASM_EXPORT_FUNC = 0x00,
+    WASM_EXPORT_TABLE = 0x01,
+    WASM_EXPORT_MEM = 0x02,
     WASM_EXPORT_GLOBAL = 0x03,
 }
 
@@ -102,7 +109,7 @@ enum : ubyte
 enum : ubyte
 {
     WASM_UNREACHABLE = 0x00,
-    WASM_END         = 0x0B,
+    WASM_END = 0x0B,
 }
 
 // ---------------------------------------------------------------------------
@@ -119,7 +126,8 @@ private void appendULEB128(OutBuffer* buf, uint val) @trusted
         if (val != 0)
             b |= 0x80;
         buf.writeByte(b);
-    } while (val != 0);
+    }
+    while (val != 0);
 }
 
 // Append a name string (length-prefixed)
@@ -136,26 +144,26 @@ private void appendName(OutBuffer* buf, const(char)[] name) @trusted
 // WASM function type: params and result
 struct WasmFuncType
 {
-    ubyte[] params;   // value types of parameters
-    ubyte[] results;  // value types of return values (0 or 1 for MVP)
+    ubyte[] params; // value types of parameters
+    ubyte[] results; // value types of return values (0 or 1 for MVP)
 }
 
 // Recorded function definition
 struct WasmFunc
 {
-    uint typeIdx;    // index into typeSection
-    Symbol* sym;     // the D symbol
+    uint typeIdx; // index into typeSection
+    Symbol* sym; // the D symbol
     bool exported;
     bool isImport;
-    const(char)[] importModule;  // for imports: module name
-    const(char)[] importName;    // for imports: field name
+    const(char)[] importModule; // for imports: module name
+    const(char)[] importName; // for imports: field name
 }
 
 // Local variable in a WASM function
 struct WasmLocal
 {
-    Symbol* sym;  // null for anonymous temporaries
-    ubyte ty;     // WASM value type
+    Symbol* sym; // null for anonymous temporaries
+    ubyte ty; // WASM value type
 }
 
 // Generated code body for a defined function
@@ -164,7 +172,7 @@ struct WasmFuncBody
     Symbol* sym;
     WasmLocal[] locals;
     uint numParams;
-    OutBuffer code;   // WASM bytecode (without local decls header)
+    OutBuffer code; // WASM bytecode (without local decls header)
 }
 
 // Module-global table of function bodies (indexed same as WasmFunc)
@@ -173,8 +181,8 @@ __gshared WasmFuncBody[] wasmFuncBodies;
 // Data segment (initialized global data)
 struct WasmDataSeg
 {
-    uint offset;       // linear memory offset
-    OutBuffer data;    // raw bytes
+    uint offset; // linear memory offset
+    OutBuffer data; // raw bytes
 }
 
 // ---------------------------------------------------------------------------
@@ -183,18 +191,18 @@ struct WasmDataSeg
 
 struct WasmModule
 {
-    OutBuffer* objbuf;         // the output buffer (owned by caller)
+    OutBuffer* objbuf; // the output buffer (owned by caller)
 
     // Collected entries
-    WasmFuncType[] funcTypes;  // de-duplicated type table
-    WasmFunc[] funcs;          // all functions (imports first, then defined)
-    uint numImports;           // number of import functions
-    WasmDataSeg[] dataSegs;    // data segments
-    WasmDataSeg* activeSeg;    // current data segment being filled
+    WasmFuncType[] funcTypes; // de-duplicated type table
+    WasmFunc[] funcs; // all functions (imports first, then defined)
+    uint numImports; // number of import functions
+    WasmDataSeg[] dataSegs; // data segments
+    WasmDataSeg* activeSeg; // current data segment being filled
 
-    uint memoryPageCount;      // number of 64 KiB memory pages
-    bool needsMemory;          // true if any data segments exist
-    uint dataHeap;             // next free byte offset in linear memory
+    uint memoryPageCount; // number of 64 KiB memory pages
+    bool needsMemory; // true if any data segments exist
+    uint dataHeap; // next free byte offset in linear memory
 
     // Scratch OutBuffer for section payloads
     OutBuffer scratch;
@@ -228,32 +236,54 @@ private ubyte wasmValType(tym_t ty) @trusted
 {
     switch (tybasic(ty))
     {
-        case TYbool:
-        case TYchar: case TYschar: case TYuchar:
-        case TYchar8: case TYchar16:
-        case TYshort: case TYwchar_t: case TYushort:
-        case TYenum:
-        case TYint: case TYuint:
-        case TYlong: case TYulong:
-        case TYdchar:
-        case TYnptr: case TYptr: case TYnullptr: case TYref: case TYnref:
-        case TYsptr: case TYcptr: case TYf16ptr: case TYfptr:
-        case TYhptr: case TYvptr: case TYfgPtr:
-            return WASM_I32;
+    case TYbool:
+    case TYchar:
+    case TYschar:
+    case TYuchar:
+    case TYchar8:
+    case TYchar16:
+    case TYshort:
+    case TYwchar_t:
+    case TYushort:
+    case TYenum:
+    case TYint:
+    case TYuint:
+    case TYlong:
+    case TYulong:
+    case TYdchar:
+    case TYnptr:
+    case TYptr:
+    case TYnullptr:
+    case TYref:
+    case TYnref:
+    case TYsptr:
+    case TYcptr:
+    case TYf16ptr:
+    case TYfptr:
+    case TYhptr:
+    case TYvptr:
+    case TYfgPtr:
+        return WASM_I32;
 
-        case TYllong: case TYullong:
-        case TYcent: case TYucent:
-            return WASM_I64;
+    case TYllong:
+    case TYullong:
+    case TYcent:
+    case TYucent:
+        return WASM_I64;
 
-        case TYfloat: case TYifloat:
-            return WASM_F32;
+    case TYfloat:
+    case TYifloat:
+        return WASM_F32;
 
-        case TYdouble: case TYdouble_alias: case TYidouble:
-        case TYreal: case TYireal:
-            return WASM_F64;
+    case TYdouble:
+    case TYdouble_alias:
+    case TYidouble:
+    case TYreal:
+    case TYireal:
+        return WASM_F64;
 
-        default:
-            return WASM_I32;   // aggregate / unknown: pass by pointer
+    default:
+        return WASM_I32; // aggregate / unknown: pass by pointer
     }
 }
 
@@ -297,7 +327,7 @@ private void emitTypeSection(OutBuffer* out_) @trusted
     appendULEB128(s, cast(uint) wmod.funcTypes.length);
     foreach (ref const WasmFuncType ft; wmod.funcTypes)
     {
-        s.writeByte(0x60);  // func type indicator
+        s.writeByte(0x60); // func type indicator
         appendULEB128(s, cast(uint) ft.params.length);
         foreach (ubyte v; ft.params)
             s.writeByte(v);
@@ -320,7 +350,7 @@ private void emitImportSection(OutBuffer* out_) @trusted
     {
         appendName(s, f.importModule);
         appendName(s, f.importName);
-        s.writeByte(WASM_EXPORT_FUNC);  // import kind: function
+        s.writeByte(WASM_EXPORT_FUNC); // import kind: function
         appendULEB128(s, f.typeIdx);
     }
     writeSection(out_, WasmSection.import_, s);
@@ -345,8 +375,8 @@ private void emitMemorySection(OutBuffer* out_) @trusted
         return;
     OutBuffer* s = &wmod.scratch;
     s.reset();
-    appendULEB128(s, 1);         // one memory
-    s.writeByte(0x00);           // flags: no maximum
+    appendULEB128(s, 1); // one memory
+    s.writeByte(0x00); // flags: no maximum
     appendULEB128(s, wmod.memoryPageCount ? wmod.memoryPageCount : 1);
     writeSection(out_, WasmSection.memory, s);
 }
@@ -390,7 +420,11 @@ private void emitCodeSection(OutBuffer* out_) @trusted
         // Find the matching WasmFuncBody (if any)
         WasmFuncBody* fb = null;
         foreach (ref WasmFuncBody b; wasmFuncBodies)
-            if (b.sym == f.sym) { fb = &b; break; }
+            if (b.sym == f.sym)
+            {
+                fb = &b;
+                break;
+            }
 
         OutBuffer body_;
 
@@ -401,7 +435,7 @@ private void emitCodeSection(OutBuffer* out_) @trusted
             appendULEB128(&body_, numLocals);
             foreach (ref const WasmLocal l; fb.locals[fb.numParams .. $])
             {
-                appendULEB128(&body_, 1);   // count of this type
+                appendULEB128(&body_, 1); // count of this type
                 body_.writeByte(l.ty);
             }
             // Append the generated bytecode
@@ -410,7 +444,7 @@ private void emitCodeSection(OutBuffer* out_) @trusted
         else
         {
             // No codegen result: emit unreachable stub
-            appendULEB128(&body_, 0);         // 0 locals
+            appendULEB128(&body_, 0); // 0 locals
             body_.writeByte(WASM_UNREACHABLE);
         }
         body_.writeByte(WASM_END);
@@ -430,9 +464,9 @@ private void emitDataSection(OutBuffer* out_) @trusted
     appendULEB128(s, cast(uint) wmod.dataSegs.length);
     foreach (ref WasmDataSeg ds; wmod.dataSegs)
     {
-        s.writeByte(0x00);           // active segment, memory 0
+        s.writeByte(0x00); // active segment, memory 0
         // offset initializer: i32.const <offset> end
-        s.writeByte(0x41);           // i32.const
+        s.writeByte(0x41); // i32.const
         appendULEB128(s, ds.offset);
         s.writeByte(WASM_END);
         appendULEB128(s, cast(uint) ds.data.length());
@@ -455,8 +489,8 @@ Obj WasmObj_init(OutBuffer* objbuf, const(char)* filename, const(char)* csegname
     // segment indices (CODE=1, DATA=2, CDATA=3, UDATA=4) so the backend's
     // segment-offset bookkeeping doesn't crash.
     SegData.reset();
-    SegData.push();  // index 0 reserved
-    pushSegData(WASM_UDATA);  // push indices 1-4
+    SegData.push(); // index 0 reserved
+    pushSegData(WASM_UDATA); // push indices 1-4
 
     return new Obj();
 }
@@ -650,7 +684,8 @@ int WasmObj_data_start(Symbol* sdata, targ_size_t datasize, int seg) @trusted
     if (sdata && sdata.Stype)
     {
         uint sz = tyalignsize(sdata.Stype.Tty);
-        if (sz > 0 && sz <= 8) align_ = sz;
+        if (sz > 0 && sz <= 8)
+            align_ = sz;
     }
     uint mask = align_ - 1;
     wmod.dataHeap = (wmod.dataHeap + mask) & ~mask;
@@ -763,15 +798,44 @@ void WasmObj_fltused() @trusted
 {
 }
 
-int WasmObj_data_readonly(char* p, int len, int* pseg) @trusted
+// Public entry point for codgen.d to allocate string data directly.
+uint allocRoData_wasm(const(void)* p, uint len, uint align_) @trusted
+{
+    return allocRoData(p, len, align_);
+}
+
+// Allocate `len` bytes of read-only data at the next aligned offset,
+// write the bytes, and return the linear memory address.
+private uint allocRoData(const(void)* p, uint len, uint align_) @trusted
 {
     wmod.needsMemory = true;
-    wmod.dataSegs.length++;
-    wmod.activeSeg = &wmod.dataSegs[$ - 1];
-    wmod.activeSeg.data.write(p, len);
+    if (wmod.dataSegs.length == 0)
+    {
+        wmod.dataSegs.length = 1;
+        wmod.dataSegs[0].offset = 0;
+    }
+    uint mask = align_ - 1;
+    uint base = (wmod.dataHeap + mask) & ~mask;
+    // Pad with zeros up to the aligned base
+    foreach (_; wmod.dataHeap .. base)
+        wmod.dataSegs[0].data.writeByte(0);
+    if (p)
+        wmod.dataSegs[0].data.write(p, len);
+    else
+        foreach (_; 0 .. len)
+            wmod.dataSegs[0].data.writeByte(0);
+    wmod.dataHeap = base + len;
+    wmod.activeSeg = &wmod.dataSegs[0];
+    return base;
+}
+
+int WasmObj_data_readonly(char* p, int len, int* pseg) @trusted
+{
+    uint align_ = len >= 8 ? 8 : len >= 4 ? 4 : len >= 2 ? 2 : 1;
+    uint off = allocRoData(p, len, align_);
     if (pseg)
-        *pseg = cast(int) wmod.dataSegs.length;
-    return 0;
+        *pseg = 1;
+    return cast(int) off;
 }
 
 int WasmObj_data_readonly(char* p, int len) @trusted
@@ -782,12 +846,21 @@ int WasmObj_data_readonly(char* p, int len) @trusted
 
 int WasmObj_string_literal_segment(uint sz) @trusted
 {
-    return 0;
+    // Return UNKNOWN so outdata() routes the string symbol through DATA.
+    return UNKNOWN;
 }
 
 Symbol* WasmObj_sym_cdata(tym_t ty, char* p, int len) @trusted
 {
-    return null;
+    import dmd.backend.global : symboldata;
+
+    uint align_ = cast(uint) tyalignsize(ty);
+    if (align_ < 1)
+        align_ = 1;
+    uint off = allocRoData(p, len, align_);
+    Symbol* s = symboldata(off, ty);
+    s.Sseg = 1;
+    return s;
 }
 
 void WasmObj_func_start(Symbol* sfunc) @trusted
@@ -811,6 +884,7 @@ void WasmObj_func_start(Symbol* sfunc) @trusted
 void WasmObj_func_term(Symbol* sfunc) @trusted
 {
     import dmd.backend.wasm.codgen : wasm_codgen;
+
     if (sfunc)
         wasm_codgen(sfunc);
 }
