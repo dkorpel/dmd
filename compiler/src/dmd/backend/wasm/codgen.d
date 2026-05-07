@@ -753,7 +753,8 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
             //   Voffset=4 → high 32 bits (ptr) → i64.shr_u 32; i32.wrap_i64
             if (cg.locals[idx].ty == WASM_I64 && e.Voffset == 4)
             {
-                cg.emit(OP_I64_CONST); cg.emitSLEB(32);
+                cg.emit(OP_I64_CONST);
+                cg.emitSLEB(32);
                 cg.emit(OP_I64_SHR_U);
             }
             // Coerce if expression type differs from the local's stored type.
@@ -869,17 +870,21 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
                     genElem(cg, e.E2.E2); // lo word (len of slice)
                     // stack: [hi, lo]. Save lo in temp.
                     uint tmpLo = cg.allocTemp(WASM_I32);
-                    cg.emit(OP_LOCAL_SET); cg.emitULEB(tmpLo);
+                    cg.emit(OP_LOCAL_SET);
+                    cg.emitULEB(tmpLo);
                     // Now stack: [hi]. Extend hi to i64 and shift.
                     cg.emit(OP_I64_EXTEND_I32_U);
-                    cg.emit(OP_I64_CONST); cg.emitSLEB(32);
+                    cg.emit(OP_I64_CONST);
+                    cg.emitSLEB(32);
                     cg.emit(OP_I64_SHL);
                     // Extend lo and OR in.
-                    cg.emit(OP_LOCAL_GET); cg.emitULEB(tmpLo);
+                    cg.emit(OP_LOCAL_GET);
+                    cg.emitULEB(tmpLo);
                     cg.emit(OP_I64_EXTEND_I32_U);
                     cg.emit(OP_I64_OR);
                     // stack: [packed_i64]
-                    cg.emit(OP_LOCAL_TEE); cg.emitULEB(idx);
+                    cg.emit(OP_LOCAL_TEE);
+                    cg.emitULEB(idx);
                     return true;
                 }
                 genElem(cg, e.E2);
@@ -889,11 +894,22 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
                 // Mask if storing into a narrow-type local (ubyte, bool, short, etc.).
                 switch (tybasic(e.E1.Ety))
                 {
-                case TYbool: case TYchar: case TYschar: case TYuchar: case TYchar8:
-                    cg.emit(OP_I32_CONST); cg.emitSLEB(0xFF); cg.emit(OP_I32_AND);
+                case TYbool:
+                case TYchar:
+                case TYschar:
+                case TYuchar:
+                case TYchar8:
+                    cg.emit(OP_I32_CONST);
+                    cg.emitSLEB(0xFF);
+                    cg.emit(OP_I32_AND);
                     break;
-                case TYshort: case TYwchar_t: case TYushort: case TYchar16:
-                    cg.emit(OP_I32_CONST); cg.emitSLEB(0xFFFF); cg.emit(OP_I32_AND);
+                case TYshort:
+                case TYwchar_t:
+                case TYushort:
+                case TYchar16:
+                    cg.emit(OP_I32_CONST);
+                    cg.emitSLEB(0xFFFF);
+                    cg.emit(OP_I32_AND);
                     break;
                 default:
                     break;
@@ -907,11 +923,13 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
                 // Store to memory. Save result in a temp to avoid re-evaluating
                 // E2 (which may have side effects like i++ in arr[k++] = L[i++]).
                 genElem(cg, e.E1.E1); // address
-                genElem(cg, e.E2);    // value
+                genElem(cg, e.E2); // value
                 uint valTmp = cg.allocTemp(wasmType(e.Ety));
-                cg.emit(OP_LOCAL_TEE); cg.emitULEB(valTmp); // save, keep on stack
+                cg.emit(OP_LOCAL_TEE);
+                cg.emitULEB(valTmp); // save, keep on stack
                 emitStore(cg, e.E1.Ety); // store [addr, val]
-                cg.emit(OP_LOCAL_GET); cg.emitULEB(valTmp); // result
+                cg.emit(OP_LOCAL_GET);
+                cg.emitULEB(valTmp); // result
                 return true;
             }
             // Fallthrough: unsupported, just evaluate RHS
@@ -1182,7 +1200,8 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
         {
             // Extract high 32 bits of a 64-bit value (ptr part of D slice on wasm32).
             genElem(cg, e.E1);
-            cg.emit(OP_I64_CONST); cg.emitSLEB(32);
+            cg.emit(OP_I64_CONST);
+            cg.emitSLEB(32);
             cg.emit(OP_I64_SHR_U);
             cg.emit(OP_I32_WRAP_I64);
             return true;
@@ -1749,13 +1768,17 @@ private void genOneArg(ref WasmCG cg, elem* e) @trusted
     if (isDynArray)
     {
         uint tmp = cg.allocTemp(WASM_I64);
-        cg.emit(OP_LOCAL_SET); cg.emitULEB(tmp);
-        cg.emit(OP_LOCAL_GET); cg.emitULEB(tmp);
-        cg.emit(OP_I32_WRAP_I64);                   // lo = len (low 32 bits)
-        cg.emit(OP_LOCAL_GET); cg.emitULEB(tmp);
-        cg.emit(OP_I64_CONST); cg.emitSLEB(32);
+        cg.emit(OP_LOCAL_SET);
+        cg.emitULEB(tmp);
+        cg.emit(OP_LOCAL_GET);
+        cg.emitULEB(tmp);
+        cg.emit(OP_I32_WRAP_I64); // lo = len (low 32 bits)
+        cg.emit(OP_LOCAL_GET);
+        cg.emitULEB(tmp);
+        cg.emit(OP_I64_CONST);
+        cg.emitSLEB(32);
         cg.emit(OP_I64_SHR_U);
-        cg.emit(OP_I32_WRAP_I64);                   // hi = ptr (high 32 bits)
+        cg.emit(OP_I32_WRAP_I64); // hi = ptr (high 32 bits)
     }
 }
 
@@ -2549,7 +2572,12 @@ void wasm_codgen(Symbol* sfunc) @trusted
     // into two i32 WASM params (len, ptr) by buildFuncType/toArgTypes_wasm.
     // We create two anonymous i32 params and reconstruct the i64 into a non-param
     // local that the function body (which uses TYullong for slices) can access.
-    struct SplitParam { Symbol* sym; uint loIdx, hiIdx, i64Idx; }
+    struct SplitParam
+    {
+        Symbol* sym;
+        uint loIdx, hiIdx, i64Idx;
+    }
+
     SplitParam[] splitParams;
 
     foreach (s; globsym[])
@@ -2564,18 +2592,22 @@ void wasm_codgen(Symbol* sfunc) @trusted
                 SplitParam sp;
                 sp.sym = s;
                 sp.loIdx = cast(uint) cg.locals.length; // len param (i32)
-                sp.hiIdx = sp.loIdx + 1;                // ptr param (i32)
+                sp.hiIdx = sp.loIdx + 1; // ptr param (i32)
                 sp.i64Idx = uint.max;
                 splitParams ~= sp;
                 WasmLocal lo, hi;
-                lo.sym = null; lo.ty = WASM_I32;
-                hi.sym = null; hi.ty = WASM_I32;
+                lo.sym = null;
+                lo.ty = WASM_I32;
+                hi.sym = null;
+                hi.ty = WASM_I32;
                 cg.locals ~= lo;
                 cg.locals ~= hi;
             }
             else
             {
-                WasmLocal l; l.sym = s; l.ty = wasmType(s.ty());
+                WasmLocal l;
+                l.sym = s;
+                l.ty = wasmType(s.ty());
                 cg.locals ~= l;
             }
         }
@@ -2586,20 +2618,26 @@ void wasm_codgen(Symbol* sfunc) @trusted
     foreach (ref sp; splitParams)
     {
         sp.i64Idx = cast(uint) cg.locals.length;
-        WasmLocal i64l; i64l.sym = sp.sym; i64l.ty = WASM_I64;
+        WasmLocal i64l;
+        i64l.sym = sp.sym;
+        i64l.ty = WASM_I64;
         cg.locals ~= i64l;
     }
     foreach (ref sp; splitParams)
     {
         // i64 = (ptr << 32) | len  (D slice layout: lo=len, hi=ptr)
-        cg.emit(OP_LOCAL_GET); cg.emitULEB(sp.hiIdx); // ptr
+        cg.emit(OP_LOCAL_GET);
+        cg.emitULEB(sp.hiIdx); // ptr
         cg.emit(OP_I64_EXTEND_I32_U);
-        cg.emit(OP_I64_CONST); cg.emitSLEB(32);
+        cg.emit(OP_I64_CONST);
+        cg.emitSLEB(32);
         cg.emit(OP_I64_SHL);
-        cg.emit(OP_LOCAL_GET); cg.emitULEB(sp.loIdx); // len
+        cg.emit(OP_LOCAL_GET);
+        cg.emitULEB(sp.loIdx); // len
         cg.emit(OP_I64_EXTEND_I32_U);
         cg.emit(OP_I64_OR);
-        cg.emit(OP_LOCAL_SET); cg.emitULEB(sp.i64Idx);
+        cg.emit(OP_LOCAL_SET);
+        cg.emitULEB(sp.i64Idx);
     }
 
     // Then non-parameter locals. Aggregates (structs/arrays) can't live in
