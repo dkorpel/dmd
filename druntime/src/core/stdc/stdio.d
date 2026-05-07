@@ -351,6 +351,42 @@ else version (CRuntime_UClibc)
         L_tmpnam     = 20
     }
 }
+else version (WASI)
+{
+    enum
+    {
+        ///
+        BUFSIZ       = 1024,
+        ///
+        EOF          = -1,
+        ///
+        FOPEN_MAX    = 1000,
+        ///
+        FILENAME_MAX = 4096,
+        ///
+        TMP_MAX      = 10000,
+        ///
+        L_tmpnam     = 20
+    }
+}
+else version (WebAssembly)
+{
+    enum
+    {
+        ///
+        BUFSIZ       = 1024,
+        ///
+        EOF          = -1,
+        ///
+        FOPEN_MAX    = 1000,
+        ///
+        FILENAME_MAX = 4096,
+        ///
+        TMP_MAX      = 10000,
+        ///
+        L_tmpnam     = 20
+    }
+}
 else
 {
     static assert( false, "Unsupported platform" );
@@ -433,6 +469,20 @@ else version (CRuntime_Glibc)
     alias FILE = shared(_IO_FILE);
 }
 else version (CRuntime_WASI)
+{
+    union fpos_t
+    {
+        char[16] __opaque = 0;
+        double __align;
+    }
+    struct _IO_FILE;
+
+    ///
+    alias _iobuf = _IO_FILE; // needed for phobos
+    ///
+    alias FILE = shared(_IO_FILE);
+}
+else version (WebAssembly)
 {
     union fpos_t
     {
@@ -1147,6 +1197,23 @@ else version (CRuntime_UClibc)
 else version (CRuntime_WASI)
 {
     // needs tail const
+    extern shared FILE* stdin;
+    ///
+    extern shared FILE* stdout;
+    ///
+    extern shared FILE* stderr;
+    enum
+    {
+        ///
+        _IOFBF = 0,
+        ///
+        _IOLBF = 1,
+        ///
+        _IONBF = 2,
+    }
+}
+else version (WebAssembly)
+{
     extern shared FILE* stdin;
     ///
     extern shared FILE* stdout;
@@ -1900,6 +1967,27 @@ else version (CRuntime_UClibc)
 else version (WASI)
 {
     // No unsafe pointer manipulation.
+    @trusted
+    {
+        ///
+        void rewind(FILE* stream);
+        ///
+        pure void clearerr(FILE* stream);
+        ///
+        pure int  feof(FILE* stream);
+        ///
+        pure int  ferror(FILE* stream);
+        ///
+        int  fileno(FILE *);
+    }
+
+    ///
+    int  snprintf(scope char* s, size_t n, scope const char* format, ...);
+    ///
+    int  vsnprintf(scope char* s, size_t n, scope const char* format, va_list arg);
+}
+else version (WebAssembly)
+{
     @trusted
     {
         ///
