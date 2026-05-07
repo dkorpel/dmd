@@ -671,6 +671,14 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
                     cg.emit(OP_I32_ADD);
                 }
             }
+            else if (rs && rs.Sfl == FL.func)
+            {
+                // Address of a function → WASM table index for call_indirect.
+                import dmd.backend.wasmobj : wmod_funcTableIndex;
+                uint tidx = wmod_funcTableIndex(rs);
+                cg.emit(OP_I32_CONST);
+                cg.emitSLEB(cast(int) tidx);
+            }
             else
             {
                 // Address of a global in linear memory.
@@ -1060,24 +1068,47 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
     case OPucall:
         {
             // Push arguments (right-to-left in elem tree => emit left-first for WASM)
-            // The E2 param chain: OPparam nodes or a single arg
             genArgs(cg, e.E2);
 
-            // E1 is the function symbol
-            if (e.E1.Eoper == OPvar)
+            // E1 is the function.
+            // Direct call: E1 is OPvar of a function symbol.
+            if (e.E1.Eoper == OPvar && e.E1.Vsym && e.E1.Vsym.Sclass != SC.auto_ &&
+                e.E1.Vsym.Sclass != SC.parameter && e.E1.Vsym.Sclass != SC.fastpar)
             {
-                Symbol* sfunc = e.E1.Vsym;
-                // Look up function index in wasmFuncBodies
-                uint fidx = funcIndex(sfunc);
+                uint fidx = funcIndex(e.E1.Vsym);
                 cg.emit(OP_CALL);
                 cg.emitULEB(fidx);
             }
             else
             {
-                // Indirect call — emit address, then call_indirect with type index 0
-                genElem(cg, e.E1);
+                // Indirect call through a function pointer (call_indirect).
+                // D IR: OPucall(OPind(OPvar(fptr)), args) — the OPind dereferences the
+                // pointer-to-function; in WASM we use the table index directly without
+                // loading from memory.
+                import dmd.backend.wasmobj : wmod_internFuncPtrType;
+                uint typeIdx = 0;
+                elem* fexpr = e.E1;
+                Symbol* fpSym = null;
+                if (fexpr.Eoper == OPind && fexpr.E1 && fexpr.E1.Eoper == OPvar)
+                {
+                    // OPind(OPvar(fptr)) — use fptr's value directly as table index.
+                    fpSym = fexpr.E1.Vsym;
+                    if (fpSym && fpSym.Stype)
+                        typeIdx = wmod_internFuncPtrType(fpSym.Stype);
+                    // Emit just the pointer value (the table index), skip the OPind load.
+                    const uint idx = cg.localFor(fpSym);
+                    cg.emit(OP_LOCAL_GET);
+                    cg.emitULEB(idx);
+                }
+                else
+                {
+                    // Generic: evaluate the function expression (table index value).
+                    if (fexpr.Eoper == OPvar && fexpr.Vsym && fexpr.Vsym.Stype)
+                        typeIdx = wmod_internFuncPtrType(fexpr.Vsym.Stype);
+                    genElem(cg, fexpr);
+                }
                 cg.emit(OP_CALL_INDIRECT);
-                cg.emitULEB(0); // type index (simplified)
+                cg.emitULEB(typeIdx);
                 cg.emitULEB(0); // table index 0
             }
             const retTy = tybasic(e.Ety);

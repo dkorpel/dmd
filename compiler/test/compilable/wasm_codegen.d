@@ -1,8 +1,15 @@
 // Tests that common D constructs compile successfully for the WASM target.
 // REQUIRED_ARGS: -mwasm32 -os=wasm -o-
 
-struct Vec2 { float x, y; }
-struct Point { int x, y; }
+struct Vec2
+{
+    float x, y;
+}
+
+struct Point
+{
+    int x, y;
+}
 
 extern (C) int add(int a, int b)
 {
@@ -138,15 +145,41 @@ extern (C) Point makePoint(int x, int y)
 }
 
 // Struct field access via pointer
-extern (C) float getVec2X(Vec2* v) { return v.x; }
-extern (C) float getVec2Y(Vec2* v) { return v.y; }
-extern (C) void setVec2X(Vec2* v, float x) { v.x = x; }
-extern (C) int getPointX(Point* p) { return p.x; }
-extern (C) int getPointY(Point* p) { return p.y; }
+extern (C) float getVec2X(Vec2* v)
+{
+    return v.x;
+}
+
+extern (C) float getVec2Y(Vec2* v)
+{
+    return v.y;
+}
+
+extern (C) void setVec2X(Vec2* v, float x)
+{
+    v.x = x;
+}
+
+extern (C) int getPointX(Point* p)
+{
+    return p.x;
+}
+
+extern (C) int getPointY(Point* p)
+{
+    return p.y;
+}
 
 // Long arithmetic
-extern (C) long addLong(long a, long b) { return a + b; }
-extern (C) long mulLong(long a, long b) { return a * b; }
+extern (C) long addLong(long a, long b)
+{
+    return a + b;
+}
+
+extern (C) long mulLong(long a, long b)
+{
+    return a * b;
+}
 
 // Array / pointer operations
 extern (C) int sumSlice(int* arr, int n)
@@ -178,7 +211,8 @@ extern (C) void reverseArray(int* arr, int n)
 
 extern (C) int fibonacci(int n)
 {
-    if (n <= 1) return n;
+    if (n <= 1)
+        return n;
     int a = 0, b = 1;
     for (int i = 2; i <= n; i++)
     {
@@ -191,9 +225,11 @@ extern (C) int fibonacci(int n)
 
 extern (C) int isPrime(int n)
 {
-    if (n < 2) return 0;
+    if (n < 2)
+        return 0;
     for (int i = 2; i * i <= n; i++)
-        if (n % i == 0) return 0;
+        if (n % i == 0)
+            return 0;
     return 1;
 }
 
@@ -218,9 +254,12 @@ extern (C) int binarySearch(int* arr, int n, int target)
     while (lo <= hi)
     {
         int mid = lo + (hi - lo) / 2;
-        if (arr[mid] == target) return mid;
-        if (arr[mid] < target) lo = mid + 1;
-        else hi = mid - 1;
+        if (arr[mid] == target)
+            return mid;
+        if (arr[mid] < target)
+            lo = mid + 1;
+        else
+            hi = mid - 1;
     }
     return -1;
 }
