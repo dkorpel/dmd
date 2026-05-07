@@ -174,6 +174,7 @@ struct WasmFuncBody
     WasmLocal[] locals;
     uint numParams;
     OutBuffer code; // WASM bytecode (without local decls header)
+    Symbol*[] savedGlobsym; // globsym snapshot at func_term time
 }
 
 // Module-global table of function bodies (indexed same as WasmFunc)
@@ -626,6 +627,35 @@ void WasmObj_term(const(char)[] objfilename) @trusted
     out_.writeByte(WASM_VERSION_1);
     out_.writeByte(WASM_VERSION_2);
     out_.writeByte(WASM_VERSION_3);
+
+    // Two-phase code generation:
+    // Phase 1: pre-scan all function IRs to register all external imports.
+    //   This ensures import indices are stable before any bytecode is emitted.
+    // Phase 2: generate bytecode for all functions.
+    {
+        import dmd.backend.wasm.codgen : wasm_codgen, preRegisterExternals;
+        // Phase 1: collect all external function references across all functions.
+        foreach (ref WasmFuncBody fb; wasmFuncBodies)
+        {
+            if (!fb.sym || !fb.sym.Sfunc) continue;
+            block* b = fb.sym.Sfunc.Fstartblock;
+            for (; b; b = b.Bnext)
+                preRegisterExternals(b.Belem);
+        }
+        // Phase 2: generate code now that import indices are stable.
+        // Restore each function's globsym before calling wasm_codgen.
+        import dmd.backend.var : globsym;
+        foreach (ref WasmFuncBody fb; wasmFuncBodies)
+        {
+            if (!fb.sym) continue;
+            // Restore the function's local symbol table.
+            globsym.setLength(cast(uint) fb.savedGlobsym.length);
+            foreach (size_t i, s; fb.savedGlobsym)
+                globsym[i] = s;
+            wasm_codgen(fb.sym);
+        }
+        globsym.setLength(0);
+    }
 
     // Finalize __stack_pointer initial value.
     // Data section occupies low addresses (0..dataHeap-1).
@@ -1137,10 +1167,20 @@ void WasmObj_func_start(Symbol* sfunc) @trusted
 
 void WasmObj_func_term(Symbol* sfunc) @trusted
 {
-    import dmd.backend.wasm.codgen : wasm_codgen;
-
-    if (sfunc)
-        wasm_codgen(sfunc);
+    // Save globsym (function locals/params) for use in deferred codegen.
+    // globsym is cleared by the caller after func_term returns.
+    import dmd.backend.var : globsym;
+    foreach (ref WasmFuncBody fb; wasmFuncBodies)
+    {
+        if (fb.sym == sfunc)
+        {
+            fb.savedGlobsym.length = globsym.length;
+            foreach (size_t i, s; globsym[])
+                fb.savedGlobsym[i] = s;
+            break;
+        }
+    }
+    // Code generation deferred to WasmObj_term (two-phase compilation).
 }
 
 void WasmObj_write_pointerRef(Symbol* s, uint off) @trusted
