@@ -309,6 +309,96 @@ nothrow:
     }
 }
 
+// Emit a typed load from the address already on the stack.
+private void emitLoad(ref WasmCG cg, tym_t ty) @trusted
+{
+    switch (tybasic(ty))
+    {
+    case TYllong:
+    case TYullong:
+        cg.emit(OP_I64_LOAD);
+        cg.emitMemArg(3, 0);
+        break;
+    case TYfloat:
+    case TYifloat:
+        cg.emit(OP_F32_LOAD);
+        cg.emitMemArg(2, 0);
+        break;
+    case TYdouble:
+    case TYdouble_alias:
+    case TYreal:
+    case TYireal:
+        cg.emit(OP_F64_LOAD);
+        cg.emitMemArg(3, 0);
+        break;
+    case TYchar:
+    case TYschar:
+        cg.emit(OP_I32_LOAD8_S);
+        cg.emitMemArg(0, 0);
+        break;
+    case TYuchar:
+    case TYbool:
+        cg.emit(OP_I32_LOAD8_U);
+        cg.emitMemArg(0, 0);
+        break;
+    case TYshort:
+        cg.emit(OP_I32_LOAD16_S);
+        cg.emitMemArg(1, 0);
+        break;
+    case TYwchar_t:
+    case TYushort:
+        cg.emit(OP_I32_LOAD16_U);
+        cg.emitMemArg(1, 0);
+        break;
+    default:
+        cg.emit(OP_I32_LOAD);
+        cg.emitMemArg(2, 0);
+        break;
+    }
+}
+
+// Emit a typed store (address then value already on stack).
+private void emitStore(ref WasmCG cg, tym_t ty) @trusted
+{
+    switch (tybasic(ty))
+    {
+    case TYllong:
+    case TYullong:
+        cg.emit(OP_I64_STORE);
+        cg.emitMemArg(3, 0);
+        break;
+    case TYfloat:
+    case TYifloat:
+        cg.emit(OP_F32_STORE);
+        cg.emitMemArg(2, 0);
+        break;
+    case TYdouble:
+    case TYdouble_alias:
+    case TYreal:
+    case TYireal:
+        cg.emit(OP_F64_STORE);
+        cg.emitMemArg(3, 0);
+        break;
+    case TYchar:
+    case TYschar:
+    case TYuchar:
+    case TYbool:
+        cg.emit(OP_I32_STORE8);
+        cg.emitMemArg(0, 0);
+        break;
+    case TYshort:
+    case TYwchar_t:
+    case TYushort:
+        cg.emit(OP_I32_STORE16);
+        cg.emitMemArg(1, 0);
+        break;
+    default:
+        cg.emit(OP_I32_STORE);
+        cg.emitMemArg(2, 0);
+        break;
+    }
+}
+
 // Expression code generation
 
 // Returns: true if the expression has a result on the stack after genElem
@@ -362,7 +452,24 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
 
     case OPvar:
         {
-            const uint idx = cg.localFor(e.Vsym);
+            Symbol* s = e.Vsym;
+            // Globals live in linear memory; locals/params live in WASM locals.
+            switch (s.Sfl)
+            {
+            case FL.data:
+            case FL.tlsdata:
+            case FL.udata:
+            case FL.extern_:
+            case FL.csdata:
+            case FL.datseg:
+                cg.emit(OP_I32_CONST);
+                cg.emitSLEB(cast(int)(s.Soffset + e.Voffset));
+                emitLoad(cg, e.Ety);
+                return true;
+            default:
+                break;
+            }
+            const uint idx = cg.localFor(s);
             cg.emit(OP_LOCAL_GET);
             cg.emitULEB(idx);
             return true;
@@ -370,59 +477,16 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
 
     case OPrelconst:
         {
-            // For WASM, &global_var is its linear memory address (stored as i32.const)
-            // The actual address is resolved at link time; emit 0 as placeholder.
+            // Address of a global variable in linear memory.
             cg.emit(OP_I32_CONST);
-            cg.emitSLEB(cast(int) e.Voffset);
+            cg.emitSLEB(cast(int)(e.Vsym.Soffset + e.Voffset));
             return true;
         }
 
     case OPind:
         {
             genElem(cg, e.E1); // address on stack
-            const ty = tybasic(e.Ety);
-            uint sz = tysize(ty);
-            switch (ty)
-            {
-            case TYllong:
-            case TYullong:
-                cg.emit(OP_I64_LOAD);
-                cg.emitMemArg(3, 0);
-                break;
-            case TYfloat:
-                cg.emit(OP_F32_LOAD);
-                cg.emitMemArg(2, 0);
-                break;
-            case TYdouble:
-            case TYdouble_alias:
-            case TYreal:
-                cg.emit(OP_F64_LOAD);
-                cg.emitMemArg(3, 0);
-                break;
-            case TYchar:
-            case TYschar:
-                cg.emit(OP_I32_LOAD8_S);
-                cg.emitMemArg(0, 0);
-                break;
-            case TYuchar:
-            case TYbool:
-                cg.emit(OP_I32_LOAD8_U);
-                cg.emitMemArg(0, 0);
-                break;
-            case TYshort:
-                cg.emit(OP_I32_LOAD16_S);
-                cg.emitMemArg(1, 0);
-                break;
-            case TYwchar_t:
-            case TYushort:
-                cg.emit(OP_I32_LOAD16_U);
-                cg.emitMemArg(1, 0);
-                break;
-            default:
-                cg.emit(OP_I32_LOAD);
-                cg.emitMemArg(2, 0);
-                break;
-            }
+            emitLoad(cg, e.Ety);
             return true;
         }
 
@@ -430,58 +494,45 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
         {
             if (e.E1.Eoper == OPvar)
             {
+                Symbol* lhs = e.E1.Vsym;
+                switch (lhs.Sfl)
+                {
+                case FL.data:
+                case FL.tlsdata:
+                case FL.udata:
+                case FL.extern_:
+                case FL.csdata:
+                case FL.datseg:
+                    // Store to global in linear memory
+                    cg.emit(OP_I32_CONST);
+                    cg.emitSLEB(cast(int)(lhs.Soffset + e.E1.Voffset));
+                    genElem(cg, e.E2);
+                    emitStore(cg, e.E1.Ety);
+                    // Re-load for expression result
+                    cg.emit(OP_I32_CONST);
+                    cg.emitSLEB(cast(int)(lhs.Soffset + e.E1.Voffset));
+                    emitLoad(cg, e.E1.Ety);
+                    return true;
+                default:
+                    break;
+                }
                 genElem(cg, e.E2);
-                const uint idx = cg.localFor(e.E1.Vsym);
+                const uint idx = cg.localFor(lhs);
                 cg.emit(OP_LOCAL_TEE);
-                cg.emitULEB(idx); // tee leaves copy on stack
+                cg.emitULEB(idx);
                 return true;
             }
             else if (e.E1.Eoper == OPind)
             {
-                // Store to memory: address, value => store
+                // Store to memory: address, value → store
                 genElem(cg, e.E1.E1); // address
                 genElem(cg, e.E2); // value
-                const ty = tybasic(e.E1.Ety);
-                switch (ty)
-                {
-                case TYllong:
-                case TYullong:
-                    cg.emit(OP_I64_STORE);
-                    cg.emitMemArg(3, 0);
-                    break;
-                case TYfloat:
-                    cg.emit(OP_F32_STORE);
-                    cg.emitMemArg(2, 0);
-                    break;
-                case TYdouble:
-                case TYdouble_alias:
-                case TYreal:
-                    cg.emit(OP_F64_STORE);
-                    cg.emitMemArg(3, 0);
-                    break;
-                case TYchar:
-                case TYschar:
-                case TYuchar:
-                case TYbool:
-                    cg.emit(OP_I32_STORE8);
-                    cg.emitMemArg(0, 0);
-                    break;
-                case TYshort:
-                case TYwchar_t:
-                case TYushort:
-                    cg.emit(OP_I32_STORE16);
-                    cg.emitMemArg(1, 0);
-                    break;
-                default:
-                    cg.emit(OP_I32_STORE);
-                    cg.emitMemArg(2, 0);
-                    break;
-                }
-                // Store has no result; re-load the value for expression result
+                emitStore(cg, e.E1.Ety);
+                // Expression result: re-load
                 genElem(cg, e.E2);
                 return true;
             }
-            // Fallthrough: unsupported assignment form
+            // Fallthrough: unsupported, just evaluate RHS
             genElem(cg, e.E2);
             return true;
         }
@@ -974,36 +1025,7 @@ private void emitBinop(ref WasmCG cg, int op, tym_t ty) @trusted
 }
 
 // Map compound-assignment op to its binary counterpart
-private int compoundToBinop(int op) @safe
-{
-    switch (op)
-    {
-    case OPaddass:
-        return OPadd;
-    case OPminass:
-        return OPmin;
-    case OPmulass:
-        return OPmul;
-    case OPdivass:
-        return OPdiv;
-    case OPmodass:
-        return OPmod;
-    case OPandass:
-        return OPand;
-    case OPorass:
-        return OPor;
-    case OPxorass:
-        return OPxor;
-    case OPshlass:
-        return OPshl;
-    case OPshrass:
-        return OPshr;
-    case OPashrass:
-        return OPashr;
-    default:
-        return OPadd;
-    }
-}
+alias compoundToBinop = opeqtoop;
 
 // Emit a relational/comparison opcode
 private void emitRelop(ref WasmCG cg, int op, tym_t operandTy) @trusted
