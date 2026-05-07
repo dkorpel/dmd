@@ -1212,11 +1212,29 @@ private void emitRelop(ref WasmCG cg, int op, tym_t operandTy) @trusted
 
 private uint funcIndex(Symbol* sfunc) @trusted
 {
-    import dmd.backend.wasmobj : wasmFuncBodies;
+    import dmd.backend.wasmobj : wasmFuncBodies, wmod_funcs, wmod_numImports;
 
+    // Imports come first in wmod.funcs; defined functions come after.
+    // Check imports (registered via WasmObj_external).
+    uint nimports = wmod_numImports();
+    foreach (size_t i; 0 .. nimports)
+    {
+        if (wmod_funcs(i) == sfunc)
+            return cast(uint) i;
+    }
+
+    // Defined functions follow imports.
     foreach (size_t i, ref const fb; wasmFuncBodies)
         if (fb.sym == sfunc)
-            return cast(uint) i;
+            return nimports + cast(uint) i;
+
+    // External symbol not yet registered — register as import now.
+    import dmd.backend.wasmobj : WasmObj_external;
+    if (sfunc && sfunc.Stype)
+    {
+        int idx = WasmObj_external(sfunc);
+        return cast(uint) idx;
+    }
     return 0;
 }
 

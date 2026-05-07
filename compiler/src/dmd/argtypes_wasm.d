@@ -31,11 +31,16 @@ TypeTuple toArgTypes_wasm(Type t)
     if (t == Type.terror)
         return new TypeTuple(t);
 
+    Type tb = t.toBasetype();
+
+    // void has no size and is not passed — return null
+    if (tb.ty == Tvoid)
+        return null;
+
     const sz = cast(size_t) t.size();
     if (sz == 0)
         return null;
 
-    Type tb = t.toBasetype();
     switch (tb.ty)
     {
         // integer primitives
@@ -57,10 +62,8 @@ TypeTuple toArgTypes_wasm(Type t)
             break;
     }
 
-    // Small aggregates (1-8 bytes): pass directly
-    if (sz <= 8)
-        return new TypeTuple(t);
-
-    // Large aggregates: pass by reference (empty signals indirect passing)
+    // Aggregates (structs, arrays, etc.): always pass by reference.
+    // Returning TypeTuple(t) for aggregates would recurse into visitStruct
+    // during backend type conversion; empty signals indirect passing.
     return TypeTuple.empty;
 }
