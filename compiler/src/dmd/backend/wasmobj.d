@@ -185,6 +185,14 @@ struct WasmDataSeg
     OutBuffer data; // raw bytes
 }
 
+// WASM mutable global (used for __stack_pointer)
+struct WasmGlobal
+{
+    ubyte valType; // e.g. WASM_I32
+    bool mutable_;
+    long initVal; // constant initializer (interpreted as i32 or i64)
+}
+
 // ---------------------------------------------------------------------------
 // Module state
 // ---------------------------------------------------------------------------
@@ -201,8 +209,11 @@ struct WasmModule
     WasmDataSeg* activeSeg; // current data segment being filled
 
     uint memoryPageCount; // number of 64 KiB memory pages
-    bool needsMemory; // true if any data segments exist
+    bool needsMemory; // true if any data segments or shadow stack exist
     uint dataHeap; // next free byte offset in linear memory
+
+    WasmGlobal[] globals; // module-level mutable globals
+    int stackPtrGlobalIdx = -1; // index of __stack_pointer global (-1 = not created)
 
     // Scratch OutBuffer for section payloads
     OutBuffer scratch;
@@ -381,6 +392,45 @@ private void emitMemorySection(OutBuffer* out_) @trusted
     writeSection(out_, WasmSection.memory, s);
 }
 
+private void emitGlobalSection(OutBuffer* out_) @trusted
+{
+    if (!wmod.globals.length)
+        return;
+    OutBuffer* s = &wmod.scratch;
+    s.reset();
+    appendULEB128(s, cast(uint) wmod.globals.length);
+    foreach (ref const WasmGlobal g; wmod.globals)
+    {
+        s.writeByte(g.valType);
+        s.writeByte(g.mutable_ ? 1 : 0);
+        // constant-expression initializer
+        if (g.valType == WASM_I32)
+        {
+            s.writeByte(0x41); // i32.const
+            // signed LEB128 for init value
+            long v = g.initVal;
+            bool more = true;
+            while (more)
+            {
+                ubyte b = v & 0x7F;
+                v >>= 7;
+                more = !((v == 0 && !(b & 0x40)) || (v == -1 && (b & 0x40)));
+                if (more)
+                    b |= 0x80;
+                s.writeByte(b);
+            }
+        }
+        else
+        {
+            // Fallback: emit i32.const 0 for unknown types
+            s.writeByte(0x41);
+            s.writeByte(0x00);
+        }
+        s.writeByte(0x0B); // end
+    }
+    writeSection(out_, WasmSection.global, s);
+}
+
 private void emitExportSection(OutBuffer* out_) @trusted
 {
     OutBuffer* s = &wmod.scratch;
@@ -517,10 +567,18 @@ void WasmObj_term(const(char)[] objfilename) @trusted
     out_.writeByte(WASM_VERSION_2);
     out_.writeByte(WASM_VERSION_3);
 
+    // Finalize __stack_pointer initial value.
+    // Data section occupies low addresses (0..dataHeap-1).
+    // Shadow stack grows downward from 65536 (top of first 64KiB page).
+    // Both fit in a single page as long as dataHeap < 65536.
+    if (wmod.stackPtrGlobalIdx >= 0)
+        wmod.globals[wmod.stackPtrGlobalIdx].initVal = 65536;
+
     emitTypeSection(out_);
     emitImportSection(out_);
     emitFunctionSection(out_);
     emitMemorySection(out_);
+    emitGlobalSection(out_);
     emitExportSection(out_);
     emitCodeSection(out_);
     emitDataSection(out_);
@@ -822,6 +880,22 @@ Symbol* wmod_funcs(size_t i) @trusted
 {
     if (!wmod || i >= wmod.funcs.length) return null;
     return wmod.funcs[i].sym;
+}
+
+// Return the index of the __stack_pointer mutable global, creating it if needed.
+// Called by codgen.d when a function needs a shadow stack frame.
+uint wmod_getOrCreateStackPtrGlobal() @trusted
+{
+    if (wmod.stackPtrGlobalIdx >= 0)
+        return cast(uint) wmod.stackPtrGlobalIdx;
+    WasmGlobal g;
+    g.valType = WASM_I32;
+    g.mutable_ = true;
+    g.initVal = 65536; // placeholder; updated in WasmObj_term from dataHeap
+    wmod.globals ~= g;
+    wmod.stackPtrGlobalIdx = cast(int)(wmod.globals.length - 1);
+    wmod.needsMemory = true; // shadow stack lives in linear memory
+    return cast(uint) wmod.stackPtrGlobalIdx;
 }
 
 // Public entry point for codgen.d to allocate string data directly.
