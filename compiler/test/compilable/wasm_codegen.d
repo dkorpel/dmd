@@ -1,0 +1,91 @@
+// Tests that common D constructs compile successfully for the WASM target.
+// REQUIRED_ARGS: -mwasm32 -os=wasm -o-
+
+extern (C) int add(int a, int b)
+{
+    return a + b;
+}
+
+extern (C) int factorial(int n)
+{
+    return n <= 1 ? 1 : n * factorial(n - 1);
+}
+
+extern (C) int gcd(int a, int b)
+{
+    while (b)
+    {
+        int t = b;
+        b = a % b;
+        a = t;
+    }
+    return a;
+}
+
+extern (C) int sign(int x)
+{
+    if (x > 0)
+        return 1;
+    else if (x < 0)
+        return -1;
+    return 0;
+}
+
+extern (C) int count(int n)
+{
+    int s = 0;
+    for (int i = 0; i < n; i++)
+        s += i;
+    return s;
+}
+
+extern (C) int sumDoWhile(int n)
+{
+    int s = 0, i = 1;
+    do
+    {
+        s += i;
+        i++;
+    }
+    while (i <= n);
+    return s;
+}
+
+extern (C) int dayType(int d)
+{
+    switch (d)
+    {
+    case 0:
+    case 6:
+        return 0;
+    case 1:
+    case 2:
+    case 3:
+    case 4:
+    case 5:
+        return 1;
+    default:
+        return -1;
+    }
+}
+
+extern (C) __gshared int counter = 0;
+extern (C) void increment()
+{
+    counter++;
+}
+
+extern (C) int getCounter()
+{
+    return counter;
+}
+
+extern (C) float fadd(float a, float b)
+{
+    return a + b;
+}
+
+extern (C) double dadd(double a, double b)
+{
+    return a + b;
+}
