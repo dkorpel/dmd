@@ -885,6 +885,26 @@ else
             FE_DOWNWARD     = 0x300, ///
         }
     }
+    else version (WebAssembly)
+    {
+        // WebAssembly uses IEEE 754 with no floating-point exception traps
+        enum
+        {
+            FE_INVALID      = 1,  ///
+            FE_DIVBYZERO    = 4,  ///
+            FE_OVERFLOW     = 8,  ///
+            FE_UNDERFLOW    = 16, ///
+            FE_INEXACT      = 32, ///
+            FE_ALL_EXCEPT   = 0x3F, ///
+        }
+        enum
+        {
+            FE_TONEAREST    = 0, ///
+            FE_DOWNWARD     = 1, ///
+            FE_UPWARD       = 2, ///
+            FE_TOWARDZERO   = 3, ///
+        }
+    }
     else
     {
         static assert(0, "Unimplemented architecture");
@@ -956,6 +976,11 @@ else version (CRuntime_WASI)
     enum FE_DFL_ENV = cast(fenv_t*)(-1);
 }
 else version (CRuntime_UClibc)
+{
+    ///
+    enum FE_DFL_ENV = cast(fenv_t*)(-1);
+}
+else version (WebAssembly)
 {
     ///
     enum FE_DFL_ENV = cast(fenv_t*)(-1);
