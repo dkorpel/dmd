@@ -305,10 +305,13 @@ extern (C) void memcpy_(void* dst, const(void)* src, int n)
         d[i] = s2[i];
 }
 
-// Struct copy (OPstreq)
+// Struct copy (OPstreq) and comparison
 struct S3 { int x, y, z; }
 extern (C) void copyS3(S3* dst, S3* src) { *dst = *src; }
 extern (C) void initS3(S3* s) { *s = S3(1, 2, 3); }
+// Field-by-field equality (avoids extern memcmp dependency)
+extern (C) int s3Equal(S3* a, S3* b) { return a.x == b.x && a.y == b.y && a.z == b.z; }
+// Note: *a == *b for structs generates env.memcmp import (requires host to provide it)
 
 // Large struct copy (may use OPmemcpy/OPstreq with byte loop)
 struct Big8 { int[8] data; }
