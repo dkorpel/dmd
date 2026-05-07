@@ -170,6 +170,7 @@ struct WasmLocal
 struct WasmFuncBody
 {
     Symbol* sym;
+    string name; // for synthesized functions with no Symbol
     WasmLocal[] locals;
     uint numParams;
     OutBuffer code; // WASM bytecode (without local decls header)
@@ -532,14 +533,8 @@ private void emitCodeSection(OutBuffer* out_) @trusted
 
     foreach (size_t fi, ref const WasmFunc f; wmod.funcs[wmod.numImports .. $])
     {
-        // Find the matching WasmFuncBody (if any)
-        WasmFuncBody* fb = null;
-        foreach (ref WasmFuncBody b; wasmFuncBodies)
-            if (b.sym == f.sym)
-            {
-                fb = &b;
-                break;
-            }
+        // WasmFuncBody[fi] corresponds positionally to funcs[numImports + fi].
+        WasmFuncBody* fb = fi < wasmFuncBodies.length ? &wasmFuncBodies[fi] : null;
 
         OutBuffer body_;
 
@@ -989,6 +984,28 @@ uint wmod_internFuncPtrType(type* ptrType) @trusted
         return 0;
     WasmFuncType wft = buildFuncType(ft);
     return wmod.internType(wft);
+}
+
+// Add a synthesized (no-Symbol) function to the module with the given type signature.
+// Returns the combined function index (numImports + body position).
+// After calling, the caller must write code into wasmFuncBodies[$-1].code.
+uint wmod_addDefinedFunc(string name, WasmLocal[] locals, uint numParams,
+    ubyte[] params, ubyte[] results) @trusted
+{
+    WasmFuncType ft;
+    ft.params = params.dup;
+    ft.results = results.dup;
+    WasmFunc f;
+    f.typeIdx = wmod.internType(ft);
+    f.sym = null;
+    f.exported = false;
+    wmod.funcs ~= f;
+    WasmFuncBody empty;
+    empty.name = name;
+    empty.locals = locals;
+    empty.numParams = numParams;
+    wasmFuncBodies ~= empty;
+    return wmod.numImports + cast(uint)(wasmFuncBodies.length - 1);
 }
 
 // Return the index of the __stack_pointer mutable global, creating it if needed.
