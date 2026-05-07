@@ -1886,6 +1886,37 @@ private uint synthBuiltin(const(char)* name) @trusted
             return idx2;
         }
     }
+    if (strcmp(name, "strlen") == 0 || strcmp(name, "_strlen") == 0)
+    {
+        // strlen(s: i32) → i32: count bytes until null terminator
+        WasmLocal p0; p0.ty = WASM_I32; cg.locals ~= p0; // s
+        cg.numParams = 1;
+        uint idxL = cg.allocTemp(WASM_I32);
+        cg.emit(OP_I32_CONST); cg.emitSLEB(0);
+        cg.emit(OP_LOCAL_SET); cg.emitULEB(idxL);
+        cg.emit(OP_BLOCK); cg.emit(WASM_VOID_BLOCK);
+        cg.emit(OP_LOOP); cg.emit(WASM_VOID_BLOCK);
+        // if s[idx] == 0: break
+        cg.emit(OP_LOCAL_GET); cg.emitULEB(0); // s
+        cg.emit(OP_LOCAL_GET); cg.emitULEB(idxL);
+        cg.emit(OP_I32_ADD);
+        cg.emit(OP_I32_LOAD8_U); cg.emitMemArg(0, 0);
+        cg.emit(OP_I32_EQZ); cg.emit(OP_BR_IF); cg.emitULEB(1);
+        // idx++
+        cg.emit(OP_LOCAL_GET); cg.emitULEB(idxL);
+        cg.emit(OP_I32_CONST); cg.emitSLEB(1); cg.emit(OP_I32_ADD);
+        cg.emit(OP_LOCAL_SET); cg.emitULEB(idxL);
+        cg.emit(OP_BR); cg.emitULEB(0);
+        cg.emit(OP_END); cg.emit(OP_END);
+        cg.emit(OP_LOCAL_GET); cg.emitULEB(idxL);
+        cg.emit(OP_RETURN);
+        {
+            uint idx2 = wmod_addDefinedFunc(fb.name, cg.locals, cg.numParams,
+                [WASM_I32], [WASM_I32]);
+            wasmFuncBodies[idx2 - wmod_numImports()].code.write(cg.code.peekSlice());
+            return idx2;
+        }
+    }
     return uint.max; // not a known built-in
 }
 
