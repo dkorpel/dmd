@@ -107,6 +107,8 @@ Examples:
     ./run.d all                                                  # runs all tests
     ./run.d clean                                                # remove all test results
     ./run.d -u -- unit/deinitialization.d -f Module              # runs the unit tests in the file "unit/deinitialization.d" with a UDA containing "Module"
+    ./run.d wasm_compilable                                      # try to compile all compilable tests as WASM (-mwasm32 -os=wasm)
+    ./run.d wasm_runnable                                        # try to compile all runnable tests as WASM and run with wasmtime
 
 Options:
 `, res.options);
@@ -416,6 +418,33 @@ Target[] predefinedTargets(string[] targets)
         return target;
     }
 
+    static Target createWasmCompilableTarget(string filename)
+    {
+        const testName = Target.normalizedTestName(filename);
+        const outFile = resultsDir.buildPath(testName.setExtension(".wasm"));
+        Target target = {
+            filename: filename,
+            args: [dmdPath, "-mwasm32", "-os=wasm", "-c",
+                   "-I" ~ filename.dirName, filename, "-of=" ~ outFile]
+        };
+        return target;
+    }
+
+    static Target createWasmRunnableTarget(string filename)
+    {
+        const testName = Target.normalizedTestName(filename);
+        const outFile = resultsDir.buildPath(testName.setExtension(".wasm"));
+        Target target = {
+            filename: filename,
+            args: [
+                "sh", "-c",
+                dmdPath ~ " -mwasm32 -os=wasm -I'" ~ filename.dirName ~ "' '" ~ filename ~ "' -of='" ~ outFile ~ "'" ~
+                " && wasmtime run '" ~ outFile ~ "'"
+            ]
+        };
+        return target;
+    }
+
     Appender!(Target[]) newTargets;
     foreach (t; targets)
     {
@@ -451,6 +480,12 @@ Target[] predefinedTargets(string[] targets)
             case "arm":
                 newTargets ~= Target("",
                     [hostDMD, "-i", "-I" ~ scriptDir, "-run", testPath(buildPath("dshell", "arm_cross.d"))]);
+            case "wasm_compilable":
+                newTargets.put(findFiles("compilable").map!createWasmCompilableTarget);
+                break;
+
+            case "wasm_runnable":
+                newTargets.put(findFiles("runnable").map!createWasmRunnableTarget);
                 break;
 
             case "all":
