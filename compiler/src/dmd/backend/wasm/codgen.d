@@ -469,6 +469,24 @@ private void emitStore(ref WasmCG cg, tym_t ty) @trusted
     }
 }
 
+// Emit a type coercion when a value's actual WASM type differs from what e.Ety expects.
+// This handles cases where the optimizer elides explicit cast operators.
+private void emitCoerce(ref WasmCG cg, ubyte from, ubyte to) @trusted
+{
+    if (from == to) return;
+    if (from == WASM_I64 && to == WASM_I32) { cg.emit(OP_I32_WRAP_I64); return; }
+    if (from == WASM_I32 && to == WASM_I64) { cg.emit(OP_I64_EXTEND_I32_S); return; }
+    if (from == WASM_F32 && to == WASM_F64) { cg.emit(OP_F64_PROMOTE_F32); return; }
+    if (from == WASM_F64 && to == WASM_F32) { cg.emit(OP_F32_DEMOTE_F64); return; }
+    if (from == WASM_I32 && to == WASM_F32) { cg.emit(OP_F32_CONVERT_I32_S); return; }
+    if (from == WASM_I32 && to == WASM_F64) { cg.emit(OP_F64_CONVERT_I32_S); return; }
+    if (from == WASM_I64 && to == WASM_F64) { cg.emit(OP_F64_CONVERT_I64_S); return; }
+    if (from == WASM_F32 && to == WASM_I32) { cg.emit(OP_I32_TRUNC_F32_S); return; }
+    if (from == WASM_F64 && to == WASM_I32) { cg.emit(OP_I32_TRUNC_F64_S); return; }
+    if (from == WASM_F64 && to == WASM_I64) { cg.emit(OP_I64_TRUNC_F64_S); return; }
+    // Other combos: no-op (best effort)
+}
+
 // Returns true if a symbol's storage class means it needs a WASM local (not global mem).
 private bool isLocalSym(Symbol* s) @trusted
 {
@@ -654,6 +672,8 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
             const uint idx = cg.localFor(s);
             cg.emit(OP_LOCAL_GET);
             cg.emitULEB(idx);
+            // Coerce if expression type differs from the local's stored type.
+            emitCoerce(cg, cg.locals[idx].ty, wasmType(e.Ety));
             return true;
         }
 
