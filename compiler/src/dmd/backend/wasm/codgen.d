@@ -60,6 +60,9 @@ enum : ubyte
     OP_LOCAL_GET = 0x20,
     OP_LOCAL_SET = 0x21,
     OP_LOCAL_TEE = 0x22,
+    // Globals
+    OP_GLOBAL_GET = 0x23,
+    OP_GLOBAL_SET = 0x24,
     // Memory
     OP_I32_LOAD = 0x28,
     OP_I64_LOAD = 0x29,
@@ -265,12 +268,25 @@ ubyte wasmType(tym_t ty) @trusted
     }
 }
 
+// Shadow frame entry: maps a symbol to its byte offset in the shadow frame.
+private struct ShadowEntry
+{
+    Symbol* sym;
+    uint offset;
+}
+
 /// Per-function code-generation state
 struct WasmCG
 {
     OutBuffer code; /// bytecode being emitted
     WasmLocal[] locals; /// local variable table (params first)
     uint numParams; /// number of parameters (= first numParams locals)
+
+    // Shadow stack frame (for locals whose address is taken)
+    bool hasShadowFrame;
+    uint shadowBaseLocal; /// WASM local index holding the shadow frame base address
+    uint shadowFrameSize; /// total size in bytes of shadow frame
+    ShadowEntry[] shadowEntries; /// per-symbol shadow frame offsets
 
 nothrow:
 
@@ -295,6 +311,49 @@ nothrow:
         nl.ty = wasmType(s.ty());
         locals ~= nl;
         return cast(uint)(locals.length - 1);
+    }
+
+    // Returns true if symbol s lives in the shadow frame.
+    bool inShadow(Symbol* s) const @trusted
+    {
+        foreach (ref const ShadowEntry e; shadowEntries)
+            if (e.sym == s)
+                return true;
+        return false;
+    }
+
+    // Returns the byte offset of s in the shadow frame (assumes inShadow).
+    uint shadowOffset(Symbol* s) const @trusted
+    {
+        foreach (ref const ShadowEntry e; shadowEntries)
+            if (e.sym == s)
+                return e.offset;
+        return 0;
+    }
+
+    // Register a symbol in the shadow frame (idempotent).
+    void registerShadow(Symbol* s) @trusted
+    {
+        if (inShadow(s))
+            return;
+        // Compute size and alignment for the type.
+        uint sz = 4, al = 4;
+        if (s.Stype)
+        {
+            import dmd.backend.type : type_size, type_alignsize;
+            targ_size_t ts = type_size(s.Stype);
+            if (ts != targ_size_t.max && ts > 0)
+                sz = cast(uint) ts;
+            uint ta = type_alignsize(s.Stype);
+            if (ta > 0 && ta <= 16)
+                al = ta;
+        }
+        uint off = (shadowFrameSize + al - 1) & ~(al - 1);
+        ShadowEntry se;
+        se.sym = s;
+        se.offset = off;
+        shadowEntries ~= se;
+        shadowFrameSize = off + sz;
     }
 
     void emit(ubyte b) @trusted
@@ -409,6 +468,105 @@ private void emitStore(ref WasmCG cg, tym_t ty) @trusted
     }
 }
 
+// Returns true if a symbol's storage class means it needs a WASM local (not global mem).
+private bool isLocalSym(Symbol* s) @trusted
+{
+    switch (s.Sfl)
+    {
+    case FL.data:
+    case FL.tlsdata:
+    case FL.udata:
+    case FL.extern_:
+    case FL.csdata:
+    case FL.datseg:
+    case FL.func:
+        return false;
+    default:
+        return true;
+    }
+}
+
+// Recursively scan an elem tree to find address-taken locals that need shadow frame.
+private void scanShadow(elem* e, ref WasmCG cg) @trusted
+{
+    if (!e)
+        return;
+    const op = e.Eoper;
+    if (OTleaf(op))
+    {
+        if (op == OPrelconst && e.Vsym && isLocalSym(e.Vsym))
+            cg.registerShadow(e.Vsym);
+        return;
+    }
+    if (OTunary(op))
+    {
+        if (op == OPaddr && e.E1 && e.E1.Eoper == OPvar && e.E1.Vsym && isLocalSym(e.E1.Vsym))
+            cg.registerShadow(e.E1.Vsym);
+        scanShadow(e.E1, cg);
+        return;
+    }
+    scanShadow(e.E1, cg);
+    scanShadow(e.E2, cg);
+}
+
+// Emit address of a shadow-frame symbol onto the value stack: local.get $base; i32.const offset; i32.add
+private void emitShadowAddr(ref WasmCG cg, Symbol* s) @trusted
+{
+    cg.emit(OP_LOCAL_GET);
+    cg.emitULEB(cg.shadowBaseLocal);
+    uint off = cg.shadowOffset(s);
+    if (off != 0)
+    {
+        cg.emit(OP_I32_CONST);
+        cg.emitSLEB(cast(int) off);
+        cg.emit(OP_I32_ADD);
+    }
+}
+
+// Emit shadow stack frame prologue (called once at function entry).
+// Creates the shadow base local, gets __stack_pointer, subtracts frame size, stores back.
+private void emitShadowPrologue(ref WasmCG cg) @trusted
+{
+    import dmd.backend.wasmobj : wmod_getOrCreateStackPtrGlobal;
+
+    uint spIdx = wmod_getOrCreateStackPtrGlobal();
+
+    // Round frame size up to 16
+    uint fsz = (cg.shadowFrameSize + 15) & ~15u;
+
+    // Allocate a new local to hold the shadow base address
+    cg.shadowBaseLocal = cg.allocTemp(WASM_I32);
+
+    // Emit: shadow_base = __stack_pointer - frame_size; __stack_pointer = shadow_base
+    cg.emit(OP_GLOBAL_GET);
+    cg.emitULEB(spIdx);
+    cg.emit(OP_I32_CONST);
+    cg.emitSLEB(cast(int) fsz);
+    cg.emit(OP_I32_SUB);
+    cg.emit(OP_LOCAL_TEE);
+    cg.emitULEB(cg.shadowBaseLocal);
+    cg.emit(OP_GLOBAL_SET);
+    cg.emitULEB(spIdx);
+}
+
+// Emit shadow stack frame epilogue (restore __stack_pointer).
+private void emitShadowEpilogue(ref WasmCG cg) @trusted
+{
+    import dmd.backend.wasmobj : wmod_getOrCreateStackPtrGlobal;
+
+    uint spIdx = wmod_getOrCreateStackPtrGlobal();
+    uint fsz = (cg.shadowFrameSize + 15) & ~15u;
+
+    // Emit: __stack_pointer = shadow_base + frame_size
+    cg.emit(OP_LOCAL_GET);
+    cg.emitULEB(cg.shadowBaseLocal);
+    cg.emit(OP_I32_CONST);
+    cg.emitSLEB(cast(int) fsz);
+    cg.emit(OP_I32_ADD);
+    cg.emit(OP_GLOBAL_SET);
+    cg.emitULEB(spIdx);
+}
+
 // Expression code generation
 
 // Returns: true if the expression has a result on the stack after genElem
@@ -479,6 +637,19 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
             default:
                 break;
             }
+            // Shadow-frame locals: load from linear memory.
+            if (cg.inShadow(s))
+            {
+                emitShadowAddr(cg, s);
+                if (e.Voffset != 0)
+                {
+                    cg.emit(OP_I32_CONST);
+                    cg.emitSLEB(cast(int) e.Voffset);
+                    cg.emit(OP_I32_ADD);
+                }
+                emitLoad(cg, e.Ety);
+                return true;
+            }
             const uint idx = cg.localFor(s);
             cg.emit(OP_LOCAL_GET);
             cg.emitULEB(idx);
@@ -487,10 +658,41 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
 
     case OPrelconst:
         {
-            // Address of a global variable in linear memory.
-            cg.emit(OP_I32_CONST);
-            cg.emitSLEB(cast(int)(e.Vsym.Soffset + e.Voffset));
+            Symbol* rs = e.Vsym;
+            if (rs && isLocalSym(rs) && cg.inShadow(rs))
+            {
+                // Address of a shadow-frame local.
+                emitShadowAddr(cg, rs);
+                if (e.Voffset != 0)
+                {
+                    cg.emit(OP_I32_CONST);
+                    cg.emitSLEB(cast(int) e.Voffset);
+                    cg.emit(OP_I32_ADD);
+                }
+            }
+            else
+            {
+                // Address of a global in linear memory.
+                cg.emit(OP_I32_CONST);
+                cg.emitSLEB(cast(int)(rs.Soffset + e.Voffset));
+            }
             return true;
+        }
+
+    case OPaddr:
+        {
+            // Address-of operator: OPaddr(OPvar(x)) for local x.
+            if (e.E1 && e.E1.Eoper == OPvar)
+            {
+                Symbol* as = e.E1.Vsym;
+                if (as && isLocalSym(as) && cg.inShadow(as))
+                {
+                    emitShadowAddr(cg, as);
+                    return true;
+                }
+            }
+            // Fallback: just evaluate E1 address (e.g., OPaddr of global)
+            return genElem(cg, e.E1);
         }
 
     case OPind:
@@ -525,6 +727,22 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
                     return true;
                 default:
                     break;
+                }
+                // Shadow-frame local: store to linear memory, reload for result.
+                if (cg.inShadow(lhs))
+                {
+                    emitShadowAddr(cg, lhs);
+                    if (e.E1.Voffset != 0)
+                    {
+                        cg.emit(OP_I32_CONST);
+                        cg.emitSLEB(cast(int) e.E1.Voffset);
+                        cg.emit(OP_I32_ADD);
+                    }
+                    genElem(cg, e.E2);
+                    emitStore(cg, e.E1.Ety);
+                    emitShadowAddr(cg, lhs);
+                    emitLoad(cg, e.E1.Ety);
+                    return true;
                 }
                 genElem(cg, e.E2);
                 const uint idx = cg.localFor(lhs);
@@ -590,6 +808,25 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
                     }
                 default:
                     break;
+                }
+                // Shadow-frame local compound assignment.
+                if (cg.inShadow(s))
+                {
+                    emitShadowAddr(cg, s);
+                    emitLoad(cg, e.E1.Ety);
+                    genElem(cg, e.E2);
+                    emitBinop(cg, compoundToBinop(op), e.Ety);
+                    emitShadowAddr(cg, s);
+                    // swap addr and value using temp
+                    uint valTmp2 = cg.allocTemp(wasmType(e.Ety));
+                    cg.emit(OP_LOCAL_SET);
+                    cg.emitULEB(valTmp2);
+                    cg.emit(OP_LOCAL_GET);
+                    cg.emitULEB(valTmp2);
+                    emitStore(cg, e.E1.Ety);
+                    emitShadowAddr(cg, s);
+                    emitLoad(cg, e.E1.Ety);
+                    return true;
                 }
                 const uint idx = cg.localFor(s);
                 cg.emit(OP_LOCAL_GET);
@@ -1411,6 +1648,23 @@ private void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn) @
             // Return value: leave on stack, then return
             if (b.Belem)
                 genElem(cg, b.Belem);
+            if (cg.hasShadowFrame)
+            {
+                if (b.Belem) // return value is on the stack
+                {
+                    // Save, epilogue, reload.
+                    uint retTmp = cg.allocTemp(wasmType(b.Belem.Ety));
+                    cg.emit(OP_LOCAL_SET);
+                    cg.emitULEB(retTmp);
+                    emitShadowEpilogue(cg);
+                    cg.emit(OP_LOCAL_GET);
+                    cg.emitULEB(retTmp);
+                }
+                else
+                {
+                    emitShadowEpilogue(cg);
+                }
+            }
             cg.emit(OP_RETURN);
             continue;
         }
@@ -1422,6 +1676,8 @@ private void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn) @
                 if (v)
                     cg.emit(OP_DROP);
             }
+            if (cg.hasShadowFrame)
+                emitShadowEpilogue(cg);
             cg.emit(OP_RETURN);
             continue;
         }
@@ -1761,10 +2017,26 @@ void wasm_codgen(Symbol* sfunc) @trusted
     type* retType = sfunc.Stype.Tnext;
     const bool hasReturn = retType && tybasic(retType.Tty) != TYvoid;
 
-    // Generate code from the block CFG
+    // Scan all IR blocks for address-taken locals → populate shadow frame.
     block* startblock = sfunc.Sfunc.Fstartblock;
+    for (block* sb = startblock; sb; sb = sb.Bnext)
+        scanShadow(sb.Belem, cg);
+
+
+    // If any locals need addresses, set up the shadow stack frame.
+    if (cg.shadowEntries.length > 0)
+    {
+        cg.hasShadowFrame = true;
+        emitShadowPrologue(cg);
+    }
+
+    // Generate code from the block CFG
     if (startblock)
         genBlocksProper(cg, startblock, hasReturn);
+
+    // Emit epilogue at function end (reached when all paths fall through without explicit return).
+    if (cg.hasShadowFrame)
+        emitShadowEpilogue(cg);
 
     // Store results back into the WasmFuncBody
     fb.locals = cg.locals;
