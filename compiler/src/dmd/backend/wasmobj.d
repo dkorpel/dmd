@@ -688,11 +688,7 @@ int WasmObj_data_start(Symbol* sdata, targ_size_t datasize, int seg) @trusted
             align_ = sz;
     }
     uint mask = align_ - 1;
-    wmod.dataHeap = (wmod.dataHeap + mask) & ~mask;
-
-    // Assign this symbol's linear memory address.
-    if (sdata)
-        sdata.Soffset = wmod.dataHeap;
+    uint base = (wmod.dataHeap + mask) & ~mask;
 
     if (wmod.dataSegs.length == 0)
     {
@@ -700,7 +696,16 @@ int WasmObj_data_start(Symbol* sdata, targ_size_t datasize, int seg) @trusted
         wmod.dataSegs[0].offset = 0;
     }
     wmod.activeSeg = &wmod.dataSegs[0];
-    wmod.dataHeap += cast(uint) datasize;
+
+    // Write alignment padding bytes so buffer position == symbol address.
+    foreach (_; wmod.dataHeap .. base)
+        wmod.activeSeg.data.writeByte(0);
+
+    // Assign this symbol's linear memory address.
+    if (sdata)
+        sdata.Soffset = base;
+
+    wmod.dataHeap = base + cast(uint) datasize;
     return 1;
 }
 
@@ -779,6 +784,13 @@ size_t WasmObj_bytes(int seg, targ_size_t offset, size_t nbytes, const(void)* p)
 
 void WasmObj_reftodatseg(int seg, targ_size_t offset, targ_size_t val, uint targetdatum, int flags) @trusted
 {
+    // Write `val` (an address in linear memory) as a 4-byte LE integer
+    // into the active data segment at the current position.
+    // In WASM single-segment layout, val IS the linear memory address.
+    if (!wmod.activeSeg)
+        return;
+    uint addr = cast(uint) val;
+    wmod.activeSeg.data.write(&addr, 4);
 }
 
 void WasmObj_reftocodeseg(int seg, targ_size_t offset, targ_size_t val) @trusted
@@ -787,7 +799,12 @@ void WasmObj_reftocodeseg(int seg, targ_size_t offset, targ_size_t val) @trusted
 
 int WasmObj_reftoident(int seg, targ_size_t offset, Symbol* s, targ_size_t val, int flags) @trusted
 {
-    return 0;
+    // Write the symbol's linear memory address + val as a 4-byte LE integer.
+    if (!wmod.activeSeg)
+        return 4;
+    uint addr = cast(uint)(s ? (s.Soffset + val) : val);
+    wmod.activeSeg.data.write(&addr, 4);
+    return 4;
 }
 
 void WasmObj_far16thunk(Symbol* s) @trusted
@@ -796,6 +813,15 @@ void WasmObj_far16thunk(Symbol* s) @trusted
 
 void WasmObj_fltused() @trusted
 {
+}
+
+// Accessors for codgen.d to query wmod.funcs without importing the struct.
+uint wmod_numImports() @trusted { return wmod ? wmod.numImports : 0; }
+
+Symbol* wmod_funcs(size_t i) @trusted
+{
+    if (!wmod || i >= wmod.funcs.length) return null;
+    return wmod.funcs[i].sym;
 }
 
 // Public entry point for codgen.d to allocate string data directly.
