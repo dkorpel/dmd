@@ -829,11 +829,39 @@ int WasmObj_data_start(Symbol* sdata, targ_size_t datasize, int seg) @trusted
     return 1;
 }
 
+// Return the WASM import module name for a given function name.
+// WASI functions come from "wasi_snapshot_preview1"; everything else from "env".
+private const(char)[] wasiImportModule(const(char)[] name) @trusted
+{
+    // WASI snapshot preview1 API — these are host-provided OS primitives.
+    static immutable string[] wasiNames = [
+        "args_get", "args_sizes_get",
+        "environ_get", "environ_sizes_get",
+        "clock_res_get", "clock_time_get",
+        "fd_advise", "fd_allocate", "fd_close", "fd_datasync",
+        "fd_fdstat_get", "fd_fdstat_set_flags", "fd_fdstat_set_rights",
+        "fd_filestat_get", "fd_filestat_set_size", "fd_filestat_set_times",
+        "fd_pread", "fd_prestat_dir_name", "fd_prestat_get",
+        "fd_pwrite", "fd_read", "fd_readdir", "fd_renumber",
+        "fd_seek", "fd_sync", "fd_tell", "fd_write",
+        "path_create_directory", "path_filestat_get", "path_filestat_set_times",
+        "path_link", "path_open", "path_readlink", "path_remove_directory",
+        "path_rename", "path_symlink", "path_unlink_file",
+        "poll_oneoff", "proc_exit", "proc_raise",
+        "random_get", "sched_yield",
+        "sock_accept", "sock_recv", "sock_send", "sock_shutdown",
+    ];
+    foreach (w; wasiNames)
+        if (name == w)
+            return "wasi_snapshot_preview1";
+    return "env";
+}
+
 int WasmObj_external(Symbol* s) @trusted
 {
     if (!s || !s.Stype)
         return 0;
-    // Register as an import (env.name)
+    // Register as an import. Use the correct module name for known ABIs.
     WasmFuncType ft;
     if (tybasic(s.Stype.Tty) != TYvoid)
         ft = buildFuncType(s.Stype);
@@ -841,7 +869,7 @@ int WasmObj_external(Symbol* s) @trusted
     f.typeIdx = wmod.internType(ft);
     f.sym = s;
     const(char)[] id = s.Sident.ptr[0 .. strlen(s.Sident.ptr)];
-    f.importModule = "env";
+    f.importModule = wasiImportModule(id);
     f.importName = id;
     f.isImport = true;
     // Imports must come before defined functions; insert at numImports position
@@ -963,8 +991,8 @@ uint wmod_funcTableIndex(Symbol* s) @trusted
     f.typeIdx = wmod.internType(ft);
     f.sym = s;
     f.isImport = true;
-    f.importModule = "env";
     f.importName = s ? s.Sident.ptr[0 .. strlen(s.Sident.ptr)] : "(unknown)";
+    f.importModule = wasiImportModule(f.importName);
     wmod.funcs = [f] ~ wmod.funcs; // prepend as import
     ++wmod.numImports;
     return 0; // table index 0 (this is wrong for imports, but best-effort)
