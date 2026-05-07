@@ -11,15 +11,9 @@ struct Point
     int x, y;
 }
 
-extern (C) int add(int a, int b)
-{
-    return a + b;
-}
+extern (C) int add(int a, int b) => a + b;
 
-extern (C) int factorial(int n)
-{
-    return n <= 1 ? 1 : n * factorial(n - 1);
-}
+extern (C) int factorial(int n) => n <= 1 ? 1 : n * factorial(n - 1);
 
 extern (C) int gcd(int a, int b)
 {
@@ -85,20 +79,11 @@ extern (C) void increment()
     counter++;
 }
 
-extern (C) int getCounter()
-{
-    return counter;
-}
+extern (C) int getCounter() => counter;
 
-extern (C) float fadd(float a, float b)
-{
-    return a + b;
-}
+extern (C) float fadd(float a, float b) => a + b;
 
-extern (C) double dadd(double a, double b)
-{
-    return a + b;
-}
+extern (C) double dadd(double a, double b) => a + b;
 
 // Shadow stack: address-of local variable
 extern (C) int testAddrOf()
@@ -145,41 +130,23 @@ extern (C) Point makePoint(int x, int y)
 }
 
 // Struct field access via pointer
-extern (C) float getVec2X(Vec2* v)
-{
-    return v.x;
-}
+extern (C) float getVec2X(Vec2* v) => v.x;
 
-extern (C) float getVec2Y(Vec2* v)
-{
-    return v.y;
-}
+extern (C) float getVec2Y(Vec2* v) => v.y;
 
 extern (C) void setVec2X(Vec2* v, float x)
 {
     v.x = x;
 }
 
-extern (C) int getPointX(Point* p)
-{
-    return p.x;
-}
+extern (C) int getPointX(Point* p) => p.x;
 
-extern (C) int getPointY(Point* p)
-{
-    return p.y;
-}
+extern (C) int getPointY(Point* p) => p.y;
 
 // Long arithmetic
-extern (C) long addLong(long a, long b)
-{
-    return a + b;
-}
+extern (C) long addLong(long a, long b) => a + b;
 
-extern (C) long mulLong(long a, long b)
-{
-    return a * b;
-}
+extern (C) long mulLong(long a, long b) => a * b;
 
 // Array / pointer operations
 extern (C) int sumSlice(int* arr, int n)
@@ -273,20 +240,11 @@ extern (C) int iDotProduct(int* a, int* b, int n)
 }
 
 // Function pointers
-extern (C) int applyFn(int function(int) f, int x)
-{
-    return f(x);
-}
+extern (C) int applyFn(int function(int) f, int x) => f(x);
 
-extern (C) int double_(int x)
-{
-    return x * 2;
-}
+extern (C) int double_(int x) => x * 2;
 
-extern (C) int square(int x)
-{
-    return x * x;
-}
+extern (C) int square(int x) => x * x;
 
 // Hash / string / memory operations
 extern (C) uint fnv1a(const(ubyte)* data, int len)
