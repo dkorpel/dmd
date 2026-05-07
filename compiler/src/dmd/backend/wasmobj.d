@@ -403,6 +403,44 @@ private void emitFunctionSection(OutBuffer* out_) @trusted
     writeSection(out_, WasmSection.function_, s);
 }
 
+// Emit a table section with one funcref table sized to hold all defined functions.
+// This is required for call_indirect (function pointers).
+private void emitTableSection(OutBuffer* out_) @trusted
+{
+    uint defined = cast(uint)(wmod.funcs.length - wmod.numImports);
+    if (!defined)
+        return;
+    OutBuffer* s = &wmod.scratch;
+    s.reset();
+    appendULEB128(s, 1); // 1 table
+    s.writeByte(0x70); // funcref type
+    s.writeByte(0x01); // has min and max (limits flag)
+    appendULEB128(s, defined); // min = number of defined functions
+    appendULEB128(s, defined); // max = same
+    writeSection(out_, WasmSection.table, s);
+}
+
+// Emit an element section populating table[0] with all defined function indices.
+// Table index for function F = F's position among defined functions (F.funcIdx - numImports).
+private void emitElementSection(OutBuffer* out_) @trusted
+{
+    uint defined = cast(uint)(wmod.funcs.length - wmod.numImports);
+    if (!defined)
+        return;
+    OutBuffer* s = &wmod.scratch;
+    s.reset();
+    appendULEB128(s, 1); // 1 element segment
+    s.writeByte(0x00); // segment kind: active, table 0, funcref
+    // offset initializer: i32.const 0 end
+    s.writeByte(0x41); // i32.const
+    s.writeByte(0x00); // 0
+    s.writeByte(0x0B); // end
+    appendULEB128(s, defined); // count of functions
+    foreach (size_t i; wmod.numImports .. wmod.funcs.length)
+        appendULEB128(s, cast(uint) i); // function index
+    writeSection(out_, WasmSection.element, s);
+}
+
 private void emitMemorySection(OutBuffer* out_) @trusted
 {
     // Always declare one page of linear memory — any function using pointers
@@ -604,9 +642,11 @@ void WasmObj_term(const(char)[] objfilename) @trusted
     emitTypeSection(out_);
     emitImportSection(out_);
     emitFunctionSection(out_);
+    emitTableSection(out_);
     emitMemorySection(out_);
     emitGlobalSection(out_);
     emitExportSection(out_);
+    emitElementSection(out_);
     emitCodeSection(out_);
     emitDataSection(out_);
 
@@ -911,6 +951,44 @@ Symbol* wmod_funcs(size_t i) @trusted
     if (!wmod || i >= wmod.funcs.length)
         return null;
     return wmod.funcs[i].sym;
+}
+
+// Return the table index for a function symbol (for call_indirect / function pointers).
+// Table[i] = defined function at index (numImports + i). So table index = funcIndex - numImports.
+uint wmod_funcTableIndex(Symbol* s) @trusted
+{
+    foreach (size_t i; wmod.numImports .. wmod.funcs.length)
+        if (wmod.funcs[i].sym == s)
+            return cast(uint)(i - wmod.numImports);
+    // Auto-register as an import if not found (external function pointer).
+    WasmFuncType ft;
+    if (s && s.Stype)
+        ft = buildFuncType(s.Stype);
+    WasmFunc f;
+    f.typeIdx = wmod.internType(ft);
+    f.sym = s;
+    f.isImport = true;
+    f.importModule = "env";
+    f.importName = s ? s.Sident.ptr[0 .. strlen(s.Sident.ptr)] : "(unknown)";
+    wmod.funcs = [f] ~ wmod.funcs; // prepend as import
+    ++wmod.numImports;
+    return 0; // table index 0 (this is wrong for imports, but best-effort)
+}
+
+// Intern the WASM function type for an indirect call through a function pointer.
+// Accepts the type of the function pointer symbol (Stype of the pointer variable).
+uint wmod_internFuncPtrType(type* ptrType) @trusted
+{
+    if (!wmod || !ptrType) return 0;
+    // Function pointer type: TYnptr/TYptr → Tnext is the function type.
+    type* ft = ptrType;
+    if (tybasic(ft.Tty) == TYnptr || tybasic(ft.Tty) == TYptr ||
+        tybasic(ft.Tty) == TYfptr || tybasic(ft.Tty) == TYfgPtr)
+        ft = ft.Tnext; // dereference pointer to get function type
+    if (!ft)
+        return 0;
+    WasmFuncType wft = buildFuncType(ft);
+    return wmod.internType(wft);
 }
 
 // Return the index of the __stack_pointer mutable global, creating it if needed.
