@@ -274,6 +274,16 @@ struct WasmCG
 
 nothrow:
 
+    // Allocate an anonymous temp local of the given WASM type
+    uint allocTemp(ubyte ty) @trusted
+    {
+        WasmLocal l;
+        l.sym = null;
+        l.ty = ty;
+        locals ~= l;
+        return cast(uint)(locals.length - 1);
+    }
+
     // Allocate or look up a local for a symbol; return its index
     uint localFor(Symbol* s) @trusted
     {
@@ -551,10 +561,37 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
     case OPashrass:
         {
             // Desugar: lhs op= rhs  =>  lhs = lhs op rhs
-            // Only handle simple local var lhs for now
             if (e.E1.Eoper == OPvar)
             {
-                const uint idx = cg.localFor(e.E1.Vsym);
+                Symbol* s = e.E1.Vsym;
+                switch (s.Sfl)
+                {
+                case FL.data:
+                case FL.tlsdata:
+                case FL.udata:
+                case FL.extern_:
+                case FL.csdata:
+                case FL.datseg:
+                    {
+                        // Global: load, op, store, load-result
+                        int addr = cast(int)(s.Soffset + e.E1.Voffset);
+                        cg.emit(OP_I32_CONST);
+                        cg.emitSLEB(addr);
+                        cg.emit(OP_I32_CONST);
+                        cg.emitSLEB(addr);
+                        emitLoad(cg, e.E1.Ety);
+                        genElem(cg, e.E2);
+                        emitBinop(cg, compoundToBinop(op), e.Ety);
+                        emitStore(cg, e.E1.Ety);
+                        cg.emit(OP_I32_CONST);
+                        cg.emitSLEB(addr);
+                        emitLoad(cg, e.E1.Ety);
+                        return true;
+                    }
+                default:
+                    break;
+                }
+                const uint idx = cg.localFor(s);
                 cg.emit(OP_LOCAL_GET);
                 cg.emitULEB(idx);
                 genElem(cg, e.E2);
@@ -563,11 +600,37 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
                 cg.emitULEB(idx);
                 return true;
             }
+            if (e.E1.Eoper == OPind)
+            {
+                // *ptr op= rhs : load ptr, dup, load, op, store, load-result
+                // Need ptr evaluated once; use a temp local for it
+                genElem(cg, e.E1.E1); // ptr addr on stack
+                // Duplicate addr via a temp local
+                uint tmp = cg.allocTemp(WASM_I32);
+                cg.emit(OP_LOCAL_TEE);
+                cg.emitULEB(tmp);
+                emitLoad(cg, e.E1.Ety);
+                genElem(cg, e.E2);
+                emitBinop(cg, compoundToBinop(op), e.Ety);
+                // Now: result on stack. Store then reload.
+                // We need addr again: local.get tmp; swap; store; local.get tmp; load
+                uint valTmp = cg.allocTemp(wasmType(e.Ety));
+                cg.emit(OP_LOCAL_SET);
+                cg.emitULEB(valTmp);
+                cg.emit(OP_LOCAL_GET);
+                cg.emitULEB(tmp);
+                cg.emit(OP_LOCAL_GET);
+                cg.emitULEB(valTmp);
+                emitStore(cg, e.E1.Ety);
+                cg.emit(OP_LOCAL_GET);
+                cg.emitULEB(tmp);
+                emitLoad(cg, e.E1.Ety);
+                return true;
+            }
             genElem(cg, e.E2);
             return true;
         }
 
-        // ---- Binary arithmetic / bitwise / shifts ----------------------------
     case OPadd:
     case OPmin:
     case OPmul:
@@ -586,7 +649,6 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
             return true;
         }
 
-        // ---- Comparisons -----------------------------------------------------
     case OPeqeq:
     case OPne:
     case OPlt:
@@ -600,7 +662,6 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
             return true;
         }
 
-        // ---- Unary -----------------------------------------------------------
     case OPneg:
         {
             const ty = tybasic(e.Ety);
@@ -662,7 +723,6 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
             return true;
         }
 
-        // ---- Type conversions ------------------------------------------------
     case OPu16_32:
     case OPs16_32:
     case OPu8_16:
