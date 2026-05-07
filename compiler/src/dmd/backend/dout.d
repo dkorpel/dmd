@@ -555,6 +555,10 @@ Symbol* out_string_literal(const(char)* str, uint len, uint sz)
             s.Sseg = objmod.string_literal_segment(sz);
             break;
 
+        case OBJ_WASM:
+            s.Sseg = objmod.string_literal_segment(sz);
+            break;
+
         case OBJ_MSCOFF:
         case OBJ_OMF:   // goes into COMDATs, handled elsewhere
         default:
@@ -1228,7 +1232,8 @@ Symbol* out_readonly_sym(tym_t ty, void[] data)
 
     bool cdata = config.objfmt == OBJ_ELF ||
                  config.objfmt == OBJ_OMF ||
-                 config.objfmt == OBJ_MSCOFF;
+                 config.objfmt == OBJ_MSCOFF ||
+                 config.objfmt == OBJ_WASM;
     if (cdata)
     {
         /* MACHOBJ can't go here, because the const data segment goes into
