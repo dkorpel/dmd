@@ -14,6 +14,7 @@ module dmd.argtypes_wasm;
 import dmd.astenums;
 import dmd.mtype;
 import dmd.typesem;
+import dmd.target : target;
 
 /****************************************************
  * Break down a D type into basic types for WebAssembly ABI.
@@ -78,7 +79,18 @@ TypeTuple toArgTypes_wasm(Type t)
         break;
     }
 
-    // Aggregates (structs, arrays, etc.): always pass by reference.
+    // D dynamic arrays (slices T[]): decompose into (length, ptr) as two separate params.
+    // This matches the x86 convention (toArgTypes_x86 does the same) and is binary
+    // compatible with LDC2's WebAssembly output. On WASM32:
+    //   T[]  → (size_t length, T* ptr) = (i32, i32)
+    if (tb.ty == Tarray)
+        return new TypeTuple(Type.tsize_t, Type.tvoidptr);
+
+    // Delegates: decompose into (funcptr, contextptr).
+    if (tb.ty == Tdelegate)
+        return new TypeTuple(Type.tvoidptr, Type.tvoidptr);
+
+    // Other aggregates (structs, static arrays, etc.): always pass by reference.
     // Returning TypeTuple(t) for aggregates would recurse into visitStruct
     // during backend type conversion; empty signals indirect passing.
     return TypeTuple.empty;

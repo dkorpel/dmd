@@ -328,12 +328,22 @@ private WasmFuncType buildFuncType(type* t) @trusted
     if (hiddenPtr)
         ft.params ~= WASM_I32; // hidden return pointer (first param)
 
-    // Parameters (aggregates become i32 pointers via the WASM ABI)
+    // Parameters. D dynamic arrays (TYdarray = TYullong on WASM32) are decomposed
+    // by toArgTypes_wasm into (size_t length, void* ptr) = (i32, i32), matching
+    // LDC2's WebAssembly ABI. TYdarray is identified by Tnext != null (element type).
     param_t* p = t.Tparamtypes;
     while (p)
     {
         if (p.Ptype && tybasic(p.Ptype.Tty) != TYvoid)
-            ft.params ~= wasmValType(p.Ptype.Tty);
+        {
+            const tym_t pty = tybasic(p.Ptype.Tty);
+            // TYdarray (D slice) == TYullong on WASM32; Tnext holds the element type.
+            // Split into two i32 WASM params: (size_t len, T* ptr).
+            if (pty == TYullong && p.Ptype.Tnext)
+                { ft.params ~= WASM_I32; ft.params ~= WASM_I32; }
+            else
+                ft.params ~= wasmValType(pty);
+        }
         p = p.Pnext;
     }
 
