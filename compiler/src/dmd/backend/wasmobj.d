@@ -340,7 +340,10 @@ private WasmFuncType buildFuncType(type* t) @trusted
             // TYdarray (D slice) == TYullong on WASM32; Tnext holds the element type.
             // Split into two i32 WASM params: (size_t len, T* ptr).
             if (pty == TYullong && p.Ptype.Tnext)
-                { ft.params ~= WASM_I32; ft.params ~= WASM_I32; }
+            {
+                ft.params ~= WASM_I32;
+                ft.params ~= WASM_I32;
+            }
             else
                 ft.params ~= wasmValType(pty);
         }

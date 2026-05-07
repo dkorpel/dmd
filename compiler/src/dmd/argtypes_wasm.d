@@ -79,14 +79,11 @@ TypeTuple toArgTypes_wasm(Type t)
         break;
     }
 
-    // D dynamic arrays (slices T[]): decompose into (length, ptr) as two separate params.
-    // This matches the x86 convention (toArgTypes_x86 does the same) and is binary
-    // compatible with LDC2's WebAssembly output. On WASM32:
-    //   T[]  → (size_t length, T* ptr) = (i32, i32)
+    // (length, ptr)
     if (tb.ty == Tarray)
         return new TypeTuple(Type.tsize_t, Type.tvoidptr);
 
-    // Delegates: decompose into (funcptr, contextptr).
+    // (funcptr, contextptr)
     if (tb.ty == Tdelegate)
         return new TypeTuple(Type.tvoidptr, Type.tvoidptr);
 
