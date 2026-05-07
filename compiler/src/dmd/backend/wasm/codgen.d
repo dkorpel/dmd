@@ -1116,14 +1116,26 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
                 Symbol* fpSym = null;
                 if (fexpr.Eoper == OPind && fexpr.E1 && fexpr.E1.Eoper == OPvar)
                 {
-                    // OPind(OPvar(fptr)) — use fptr's value directly as table index.
+                    // OPind(OPvar(fptr)) — fptr holds a table index.
+                    // For WASM locals: load the local value directly.
+                    // For globals (FL.data etc.): load the table index from linear memory.
                     fpSym = fexpr.E1.Vsym;
                     if (fpSym && fpSym.Stype)
                         typeIdx = wmod_internFuncPtrType(fpSym.Stype);
-                    // Emit just the pointer value (the table index), skip the OPind load.
-                    const uint idx = cg.localFor(fpSym);
-                    cg.emit(OP_LOCAL_GET);
-                    cg.emitULEB(idx);
+                    if (fpSym && isLocalSym(fpSym) && !cg.inShadow(fpSym))
+                    {
+                        // Local variable: its value IS the table index.
+                        const uint idx = cg.localFor(fpSym);
+                        cg.emit(OP_LOCAL_GET);
+                        cg.emitULEB(idx);
+                    }
+                    else
+                    {
+                        // Global variable: load table index from linear memory.
+                        genElem(cg, fexpr.E1); // push address or value
+                        // If it loaded a value (for FL.data OPvar emits load), we're done.
+                        // If it only pushed an address (shadow/relconst), emit a load too.
+                    }
                 }
                 else
                 {
