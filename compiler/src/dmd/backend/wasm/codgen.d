@@ -506,6 +506,33 @@ private bool isLocalSym(Symbol* s) @trusted
 }
 
 // Recursively scan an elem tree to find address-taken locals that need shadow frame.
+// Walk the IR tree and pre-register any external function calls as imports.
+// Must run before code generation so that import indices are stable.
+void preRegisterExternals(elem* e) @trusted
+{
+    if (!e) return;
+    const op = e.Eoper;
+    if (OTleaf(op))
+        return;
+    if (op == OPcall || op == OPucall)
+    {
+        // E1 is the function; E2 is args. Register external calls.
+        if (e.E1 && e.E1.Eoper == OPvar)
+        {
+            Symbol* s = e.E1.Vsym;
+            if (s && s.Sclass != SC.auto_ && s.Sclass != SC.parameter &&
+                s.Sclass != SC.fastpar)
+                funcIndex(s); // side-effect: registers as import if not defined
+        }
+        if (e.E1) preRegisterExternals(e.E1);
+        if (e.E2) preRegisterExternals(e.E2);
+        return;
+    }
+    if (OTunary(op)) { preRegisterExternals(e.E1); return; }
+    preRegisterExternals(e.E1);
+    preRegisterExternals(e.E2);
+}
+
 private void scanShadow(elem* e, ref WasmCG cg) @trusted
 {
     if (!e)
@@ -1030,6 +1057,22 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
             cg.emit(OP_I32_WRAP_I64);
             return true;
         }
+    case OP16_8:
+        {
+            // Truncate 16→8 bit (e.g. cast(char)(expr)). Mask low 8 bits.
+            genElem(cg, e.E1);
+            cg.emit(OP_I32_CONST); cg.emitSLEB(0xFF);
+            cg.emit(OP_I32_AND);
+            return true;
+        }
+    case OP32_16:
+        {
+            // Truncate 32→16 bit (e.g. cast(short)(expr)). Mask low 16 bits.
+            genElem(cg, e.E1);
+            cg.emit(OP_I32_CONST); cg.emitSLEB(0xFFFF);
+            cg.emit(OP_I32_AND);
+            return true;
+        }
 
     case OPd_f:
         {
@@ -1470,7 +1513,6 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
         }
 
     default:
-        // Unsupported: emit unreachable to keep stack balanced
         cg.emit(OP_UNREACHABLE);
         return tybasic(e.Ety) != TYvoid;
     }
