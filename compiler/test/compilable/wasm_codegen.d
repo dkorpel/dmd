@@ -271,3 +271,36 @@ extern (C) int iDotProduct(int* a, int* b, int n)
         sum += a[i] * b[i];
     return sum;
 }
+
+// Function pointers
+extern (C) int applyFn(int function(int) f, int x) { return f(x); }
+extern (C) int double_(int x) { return x * 2; }
+extern (C) int square(int x) { return x * x; }
+
+// Hash / string / memory operations
+extern (C) uint fnv1a(const(ubyte)* data, int len)
+{
+    uint h = 2166136261u;
+    for (int i = 0; i < len; i++)
+    {
+        h ^= data[i];
+        h *= 16777619u;
+    }
+    return h;
+}
+
+extern (C) int strlen_(const(char)* s)
+{
+    int n = 0;
+    while (s[n])
+        n++;
+    return n;
+}
+
+extern (C) void memcpy_(void* dst, const(void)* src, int n)
+{
+    ubyte* d = cast(ubyte*) dst;
+    const(ubyte)* s2 = cast(const(ubyte)*) src;
+    for (int i = 0; i < n; i++)
+        d[i] = s2[i];
+}
