@@ -405,8 +405,8 @@ private void emitFunctionSection(OutBuffer* out_) @trusted
 
 private void emitMemorySection(OutBuffer* out_) @trusted
 {
-    if (!wmod.needsMemory)
-        return;
+    // Always declare one page of linear memory — any function using pointers
+    // or array indexing needs it, and it's harmless when unused.
     OutBuffer* s = &wmod.scratch;
     s.reset();
     appendULEB128(s, 1); // one memory
@@ -461,13 +461,11 @@ private void emitExportSection(OutBuffer* out_) @trusted
     uint count = 0;
     foreach (ref const WasmFunc f; wmod.funcs)
         if (f.exported) ++count;
-    if (wmod.needsMemory)
-        ++count; // export "memory"
+    ++count; // always export "memory"
     if (!count)
         return;
     appendULEB128(s, count);
-    // Export memory if present
-    if (wmod.needsMemory)
+    // Always export memory (index 0)
     {
         appendName(s, "memory");
         s.writeByte(WASM_EXPORT_MEM);

@@ -147,3 +147,52 @@ extern (C) int getPointY(Point* p) { return p.y; }
 // Long arithmetic
 extern (C) long addLong(long a, long b) { return a + b; }
 extern (C) long mulLong(long a, long b) { return a * b; }
+
+// Array / pointer operations
+extern (C) int sumSlice(int* arr, int n)
+{
+    int s = 0;
+    for (int i = 0; i < n; i++)
+        s += arr[i];
+    return s;
+}
+
+extern (C) void fillArray(int* arr, int n, int val)
+{
+    for (int i = 0; i < n; i++)
+        arr[i] = val;
+}
+
+extern (C) void reverseArray(int* arr, int n)
+{
+    int lo = 0, hi = n - 1;
+    while (lo < hi)
+    {
+        int tmp = arr[lo];
+        arr[lo] = arr[hi];
+        arr[hi] = tmp;
+        lo++;
+        hi--;
+    }
+}
+
+extern (C) int fibonacci(int n)
+{
+    if (n <= 1) return n;
+    int a = 0, b = 1;
+    for (int i = 2; i <= n; i++)
+    {
+        int c = a + b;
+        a = b;
+        b = c;
+    }
+    return b;
+}
+
+extern (C) int isPrime(int n)
+{
+    if (n < 2) return 0;
+    for (int i = 2; i * i <= n; i++)
+        if (n % i == 0) return 0;
+    return 1;
+}
