@@ -12,3 +12,8 @@ version (Windows) static assert(0, "Windows should not be defined for WASM targe
 version (OSX)     static assert(0, "OSX should not be defined for WASM target");
 version (X86_64)  static assert(0, "X86_64 should not be defined for WASM target");
 version (AArch64) static assert(0, "AArch64 should not be defined for WASM target");
+
+// WASM has no druntime, so runtime features are disabled (betterC semantics).
+version (D_ModuleInfo) static assert(0, "D_ModuleInfo should not be defined for WASM");
+version (D_Exceptions) static assert(0, "D_Exceptions should not be defined for WASM");
+version (D_TypeInfo)   static assert(0, "D_TypeInfo should not be defined for WASM");

@@ -194,6 +194,7 @@ struct WasmModule
 
     uint memoryPageCount;      // number of 64 KiB memory pages
     bool needsMemory;          // true if any data segments exist
+    uint dataHeap;             // next free byte offset in linear memory
 
     // Scratch OutBuffer for section payloads
     OutBuffer scratch;
@@ -642,10 +643,30 @@ int WasmObj_data_start(Symbol* sdata, targ_size_t datasize, int seg) @trusted
     if (!datasize)
         return 0;
     wmod.needsMemory = true;
-    wmod.dataSegs.length++;
-    wmod.activeSeg = &wmod.dataSegs[$ - 1];
-    wmod.activeSeg.offset = 0;
-    return cast(int)(wmod.dataSegs.length);
+
+    // All data goes into a single data segment at offset wmod.dataHeap.
+    // Align to natural alignment of the data type (max 8 bytes).
+    uint align_ = 4;
+    if (sdata && sdata.Stype)
+    {
+        uint sz = tyalignsize(sdata.Stype.Tty);
+        if (sz > 0 && sz <= 8) align_ = sz;
+    }
+    uint mask = align_ - 1;
+    wmod.dataHeap = (wmod.dataHeap + mask) & ~mask;
+
+    // Assign this symbol's linear memory address.
+    if (sdata)
+        sdata.Soffset = wmod.dataHeap;
+
+    if (wmod.dataSegs.length == 0)
+    {
+        wmod.dataSegs.length = 1;
+        wmod.dataSegs[0].offset = 0;
+    }
+    wmod.activeSeg = &wmod.dataSegs[0];
+    wmod.dataHeap += cast(uint) datasize;
+    return 1;
 }
 
 int WasmObj_external(Symbol* s) @trusted
