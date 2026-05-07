@@ -23,6 +23,9 @@ else version (TVOS)
 else version (WatchOS)
     version = Darwin;
 
+version (WASI)          version = WASI_Compat;
+version (CRuntime_WASI) version = WASI_Compat;
+
 version (ARM)     version = ARM_Any;
 version (AArch64) version = ARM_Any;
 version (HPPA)    version = HPPA_Any;
@@ -151,6 +154,14 @@ else version (Haiku)
     {
         ref int _errnop();
         alias errno = _errnop;
+    }
+}
+else version (WASI_Compat)
+{
+    extern (C)
+    {
+        ref int __errno_location();
+        alias errno = __errno_location;
     }
 }
 else
@@ -2320,7 +2331,7 @@ else version (Haiku)
     enum B_NO_TRANSLATOR                 = (B_TRANSLATION_ERROR_BASE + 1);
     enum B_ILLEGAL_DATA                  = (B_TRANSLATION_ERROR_BASE + 2);
 }
-else version (WASI)
+else version (WASI_Compat)
 {
     enum EPERM            = 1;
     enum ENOENT           = 2;

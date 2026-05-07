@@ -559,6 +559,11 @@ else version (CRuntime_UClibc)
         static assert(false, "Architecture not supported.");
     }
 }
+else version (WebAssembly)
+{
+    struct fenv_t { uint __control; }
+    alias fexcept_t = uint;
+}
 else
 {
     static assert( false, "Unsupported platform" );

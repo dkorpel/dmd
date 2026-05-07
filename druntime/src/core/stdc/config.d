@@ -213,6 +213,20 @@ else version (WASI)
         alias cpp_ulonglong = ulong;
     }
 }
+else version (WebAssembly)
+{
+    enum __c_long  : int;
+    enum __c_ulong : uint;
+
+    alias c_long = int;
+    alias c_ulong = uint;
+
+    alias cpp_long = __c_long;
+    alias cpp_ulong = __c_ulong;
+
+    alias cpp_longlong = long;
+    alias cpp_ulonglong = ulong;
+}
 
 version (GNU)
     alias c_long_double = real;
@@ -277,6 +291,8 @@ else version (DigitalMars)
         else version (Darwin)
             alias c_long_double = real;
     }
+    else version (WASM32)
+        alias c_long_double = real;
 }
 
 static assert(is(c_long_double), "c_long_double needs to be declared for this platform/architecture.");
