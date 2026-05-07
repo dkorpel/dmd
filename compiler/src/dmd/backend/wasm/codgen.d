@@ -1227,14 +1227,16 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
 }
 
 // Emit argument list (OPparam chain or single elem)
+// In DMD IR, OPparam(E1, E2) is right-to-left: E2 is the leftmost argument.
+// WASM args are left-to-right on the stack, so emit E2 before E1.
 private void genArgs(ref WasmCG cg, elem* e) @trusted
 {
     if (!e)
         return;
     if (e.Eoper == OPparam)
     {
-        genArgs(cg, e.E1);
-        genArgs(cg, e.E2);
+        genArgs(cg, e.E2); // leftmost arg first
+        genArgs(cg, e.E1); // rightmost arg second
     }
     else
     {
