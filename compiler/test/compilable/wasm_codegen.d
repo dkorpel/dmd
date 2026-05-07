@@ -273,9 +273,20 @@ extern (C) int iDotProduct(int* a, int* b, int n)
 }
 
 // Function pointers
-extern (C) int applyFn(int function(int) f, int x) { return f(x); }
-extern (C) int double_(int x) { return x * 2; }
-extern (C) int square(int x) { return x * x; }
+extern (C) int applyFn(int function(int) f, int x)
+{
+    return f(x);
+}
+
+extern (C) int double_(int x)
+{
+    return x * 2;
+}
+
+extern (C) int square(int x)
+{
+    return x * x;
+}
 
 // Hash / string / memory operations
 extern (C) uint fnv1a(const(ubyte)* data, int len)
@@ -306,16 +317,37 @@ extern (C) void memcpy_(void* dst, const(void)* src, int n)
 }
 
 // Struct copy (OPstreq) and comparison
-struct S3 { int x, y, z; }
-extern (C) void copyS3(S3* dst, S3* src) { *dst = *src; }
-extern (C) void initS3(S3* s) { *s = S3(1, 2, 3); }
+struct S3
+{
+    int x, y, z;
+}
+
+extern (C) void copyS3(S3* dst, S3* src)
+{
+    *dst = *src;
+}
+
+extern (C) void initS3(S3* s)
+{
+    *s = S3(1, 2, 3);
+}
 // Field-by-field equality (avoids extern memcmp dependency)
-extern (C) int s3Equal(S3* a, S3* b) { return a.x == b.x && a.y == b.y && a.z == b.z; }
+extern (C) int s3Equal(S3* a, S3* b)
+{
+    return a.x == b.x && a.y == b.y && a.z == b.z;
+}
 // Note: *a == *b for structs generates env.memcmp import (requires host to provide it)
 
 // Large struct copy (may use OPmemcpy/OPstreq with byte loop)
-struct Big8 { int[8] data; }
-extern (C) void copyBig(Big8* dst, Big8* src) { *dst = *src; }
+struct Big8
+{
+    int[8] data;
+}
+
+extern (C) void copyBig(Big8* dst, Big8* src)
+{
+    *dst = *src;
+}
 
 // Local struct copy
 extern (C) int localStructCopy()
@@ -331,4 +363,23 @@ extern (C) int arrayCopy()
     int[5] a = [10, 20, 30, 40, 50];
     int[5] b = a;
     return b[0] + b[4]; // 60
+}
+
+// WASI I/O declarations (imported from wasi_snapshot_preview1)
+struct WasiIov
+{
+    const(char)* buf;
+    size_t len;
+}
+
+extern (C) int fd_write(uint fd, const(WasiIov)* iovs, size_t iovs_len, size_t* nwritten);
+extern (C) void proc_exit(int code);
+
+extern (C) void wasiWrite(const(char)* msg, size_t len)
+{
+    WasiIov iov;
+    iov.buf = msg;
+    iov.len = len;
+    size_t n;
+    fd_write(1, &iov, 1, &n);
 }

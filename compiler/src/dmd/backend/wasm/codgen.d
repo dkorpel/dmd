@@ -473,17 +473,58 @@ private void emitStore(ref WasmCG cg, tym_t ty) @trusted
 // This handles cases where the optimizer elides explicit cast operators.
 private void emitCoerce(ref WasmCG cg, ubyte from, ubyte to) @trusted
 {
-    if (from == to) return;
-    if (from == WASM_I64 && to == WASM_I32) { cg.emit(OP_I32_WRAP_I64); return; }
-    if (from == WASM_I32 && to == WASM_I64) { cg.emit(OP_I64_EXTEND_I32_S); return; }
-    if (from == WASM_F32 && to == WASM_F64) { cg.emit(OP_F64_PROMOTE_F32); return; }
-    if (from == WASM_F64 && to == WASM_F32) { cg.emit(OP_F32_DEMOTE_F64); return; }
-    if (from == WASM_I32 && to == WASM_F32) { cg.emit(OP_F32_CONVERT_I32_S); return; }
-    if (from == WASM_I32 && to == WASM_F64) { cg.emit(OP_F64_CONVERT_I32_S); return; }
-    if (from == WASM_I64 && to == WASM_F64) { cg.emit(OP_F64_CONVERT_I64_S); return; }
-    if (from == WASM_F32 && to == WASM_I32) { cg.emit(OP_I32_TRUNC_F32_S); return; }
-    if (from == WASM_F64 && to == WASM_I32) { cg.emit(OP_I32_TRUNC_F64_S); return; }
-    if (from == WASM_F64 && to == WASM_I64) { cg.emit(OP_I64_TRUNC_F64_S); return; }
+    if (from == to)
+        return;
+    if (from == WASM_I64 && to == WASM_I32)
+    {
+        cg.emit(OP_I32_WRAP_I64);
+        return;
+    }
+    if (from == WASM_I32 && to == WASM_I64)
+    {
+        cg.emit(OP_I64_EXTEND_I32_S);
+        return;
+    }
+    if (from == WASM_F32 && to == WASM_F64)
+    {
+        cg.emit(OP_F64_PROMOTE_F32);
+        return;
+    }
+    if (from == WASM_F64 && to == WASM_F32)
+    {
+        cg.emit(OP_F32_DEMOTE_F64);
+        return;
+    }
+    if (from == WASM_I32 && to == WASM_F32)
+    {
+        cg.emit(OP_F32_CONVERT_I32_S);
+        return;
+    }
+    if (from == WASM_I32 && to == WASM_F64)
+    {
+        cg.emit(OP_F64_CONVERT_I32_S);
+        return;
+    }
+    if (from == WASM_I64 && to == WASM_F64)
+    {
+        cg.emit(OP_F64_CONVERT_I64_S);
+        return;
+    }
+    if (from == WASM_F32 && to == WASM_I32)
+    {
+        cg.emit(OP_I32_TRUNC_F32_S);
+        return;
+    }
+    if (from == WASM_F64 && to == WASM_I32)
+    {
+        cg.emit(OP_I32_TRUNC_F64_S);
+        return;
+    }
+    if (from == WASM_F64 && to == WASM_I64)
+    {
+        cg.emit(OP_I64_TRUNC_F64_S);
+        return;
+    }
     // Other combos: no-op (best effort)
 }
 
@@ -510,7 +551,8 @@ private bool isLocalSym(Symbol* s) @trusted
 // Must run before code generation so that import indices are stable.
 void preRegisterExternals(elem* e) @trusted
 {
-    if (!e) return;
+    if (!e)
+        return;
     const op = e.Eoper;
     if (OTleaf(op))
         return;
@@ -524,11 +566,17 @@ void preRegisterExternals(elem* e) @trusted
                 s.Sclass != SC.fastpar)
                 funcIndex(s); // side-effect: registers as import if not defined
         }
-        if (e.E1) preRegisterExternals(e.E1);
-        if (e.E2) preRegisterExternals(e.E2);
+        if (e.E1)
+            preRegisterExternals(e.E1);
+        if (e.E2)
+            preRegisterExternals(e.E2);
         return;
     }
-    if (OTunary(op)) { preRegisterExternals(e.E1); return; }
+    if (OTunary(op))
+    {
+        preRegisterExternals(e.E1);
+        return;
+    }
     preRegisterExternals(e.E1);
     preRegisterExternals(e.E2);
 }
@@ -722,6 +770,7 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
             {
                 // Address of a function → WASM table index for call_indirect.
                 import dmd.backend.wasmobj : wmod_funcTableIndex;
+
                 uint tidx = wmod_funcTableIndex(rs);
                 cg.emit(OP_I32_CONST);
                 cg.emitSLEB(cast(int) tidx);
@@ -1061,7 +1110,8 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
         {
             // Truncate 16→8 bit (e.g. cast(char)(expr)). Mask low 8 bits.
             genElem(cg, e.E1);
-            cg.emit(OP_I32_CONST); cg.emitSLEB(0xFF);
+            cg.emit(OP_I32_CONST);
+            cg.emitSLEB(0xFF);
             cg.emit(OP_I32_AND);
             return true;
         }
@@ -1069,7 +1119,8 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
         {
             // Truncate 32→16 bit (e.g. cast(short)(expr)). Mask low 16 bits.
             genElem(cg, e.E1);
-            cg.emit(OP_I32_CONST); cg.emitSLEB(0xFFFF);
+            cg.emit(OP_I32_CONST);
+            cg.emitSLEB(0xFFFF);
             cg.emit(OP_I32_AND);
             return true;
         }
@@ -1154,6 +1205,7 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
                 // pointer-to-function; in WASM we use the table index directly without
                 // loading from memory.
                 import dmd.backend.wasmobj : wmod_internFuncPtrType;
+
                 uint typeIdx = 0;
                 elem* fexpr = e.E1;
                 Symbol* fpSym = null;
@@ -1335,6 +1387,7 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
             // Struct assignment: copy type_size(e.ET) bytes from E2 to E1.
             // Result: the destination address (i32) for chained assignment.
             import dmd.backend.type : type_size;
+
             uint sz = e.ET ? cast(uint) type_size(e.ET) : 0;
             if (sz == 0)
                 return false;
@@ -1484,31 +1537,52 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
             }
             else
             {
-                cg.emit(OP_I32_CONST); cg.emitSLEB(0);
-                cg.emit(OP_LOCAL_SET); cg.emitULEB(valTmp);
-                cg.emit(OP_I32_CONST); cg.emitSLEB(0);
-                cg.emit(OP_LOCAL_SET); cg.emitULEB(cntTmp);
+                cg.emit(OP_I32_CONST);
+                cg.emitSLEB(0);
+                cg.emit(OP_LOCAL_SET);
+                cg.emitULEB(valTmp);
+                cg.emit(OP_I32_CONST);
+                cg.emitSLEB(0);
+                cg.emit(OP_LOCAL_SET);
+                cg.emitULEB(cntTmp);
             }
-            cg.emit(OP_I32_CONST); cg.emitSLEB(0);
-            cg.emit(OP_LOCAL_SET); cg.emitULEB(idxTmp);
-            cg.emit(OP_BLOCK); cg.emit(WASM_VOID_BLOCK);
-            cg.emit(OP_LOOP); cg.emit(WASM_VOID_BLOCK);
-            cg.emit(OP_LOCAL_GET); cg.emitULEB(idxTmp);
-            cg.emit(OP_LOCAL_GET); cg.emitULEB(cntTmp);
+            cg.emit(OP_I32_CONST);
+            cg.emitSLEB(0);
+            cg.emit(OP_LOCAL_SET);
+            cg.emitULEB(idxTmp);
+            cg.emit(OP_BLOCK);
+            cg.emit(WASM_VOID_BLOCK);
+            cg.emit(OP_LOOP);
+            cg.emit(WASM_VOID_BLOCK);
+            cg.emit(OP_LOCAL_GET);
+            cg.emitULEB(idxTmp);
+            cg.emit(OP_LOCAL_GET);
+            cg.emitULEB(cntTmp);
             cg.emit(OP_I32_GE_U);
-            cg.emit(OP_BR_IF); cg.emitULEB(1);
-            cg.emit(OP_LOCAL_GET); cg.emitULEB(dstTmp);
-            cg.emit(OP_LOCAL_GET); cg.emitULEB(idxTmp);
+            cg.emit(OP_BR_IF);
+            cg.emitULEB(1);
+            cg.emit(OP_LOCAL_GET);
+            cg.emitULEB(dstTmp);
+            cg.emit(OP_LOCAL_GET);
+            cg.emitULEB(idxTmp);
             cg.emit(OP_I32_ADD);
-            cg.emit(OP_LOCAL_GET); cg.emitULEB(valTmp);
-            cg.emit(OP_I32_STORE8); cg.emitMemArg(0, 0);
-            cg.emit(OP_LOCAL_GET); cg.emitULEB(idxTmp);
-            cg.emit(OP_I32_CONST); cg.emitSLEB(1);
+            cg.emit(OP_LOCAL_GET);
+            cg.emitULEB(valTmp);
+            cg.emit(OP_I32_STORE8);
+            cg.emitMemArg(0, 0);
+            cg.emit(OP_LOCAL_GET);
+            cg.emitULEB(idxTmp);
+            cg.emit(OP_I32_CONST);
+            cg.emitSLEB(1);
             cg.emit(OP_I32_ADD);
-            cg.emit(OP_LOCAL_SET); cg.emitULEB(idxTmp);
-            cg.emit(OP_BR); cg.emitULEB(0);
-            cg.emit(OP_END); cg.emit(OP_END);
-            cg.emit(OP_LOCAL_GET); cg.emitULEB(dstTmp);
+            cg.emit(OP_LOCAL_SET);
+            cg.emitULEB(idxTmp);
+            cg.emit(OP_BR);
+            cg.emitULEB(0);
+            cg.emit(OP_END);
+            cg.emit(OP_END);
+            cg.emit(OP_LOCAL_GET);
+            cg.emitULEB(dstTmp);
             return true;
         }
 
@@ -1521,7 +1595,12 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
 // Get the address of an lvalue expression (OPind → its pointer; OPvar in shadow → shadow addr; else genElem).
 private void genElemAddr(ref WasmCG cg, elem* e) @trusted
 {
-    if (!e) { cg.emit(OP_I32_CONST); cg.emitSLEB(0); return; }
+    if (!e)
+    {
+        cg.emit(OP_I32_CONST);
+        cg.emitSLEB(0);
+        return;
+    }
     if (e.Eoper == OPind)
     {
         genElem(cg, e.E1); // evaluate the pointer
@@ -1533,12 +1612,20 @@ private void genElemAddr(ref WasmCG cg, elem* e) @trusted
         if (s)
         {
             // Shadow-frame variable: emit its address.
-            if (cg.inShadow(s)) { emitShadowAddr(cg, s); return; }
+            if (cg.inShadow(s))
+            {
+                emitShadowAddr(cg, s);
+                return;
+            }
             // Global: its Soffset is the linear memory address.
             switch (s.Sfl)
             {
-            case FL.data: case FL.tlsdata: case FL.udata:
-            case FL.extern_: case FL.csdata: case FL.datseg:
+            case FL.data:
+            case FL.tlsdata:
+            case FL.udata:
+            case FL.extern_:
+            case FL.csdata:
+            case FL.datseg:
                 cg.emit(OP_I32_CONST);
                 cg.emitSLEB(cast(int)(s.Soffset + e.Voffset));
                 return;

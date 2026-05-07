@@ -304,7 +304,8 @@ private ubyte wasmValType(tym_t ty) @trusted
 // returned via a hidden pointer parameter in the WASM calling convention.
 private bool isAggregateType(type* t) @trusted
 {
-    if (!t) return false;
+    if (!t)
+        return false;
     switch (tybasic(t.Tty))
     {
     case TYstruct:
@@ -500,7 +501,8 @@ private void emitExportSection(OutBuffer* out_) @trusted
     s.reset();
     uint count = 0;
     foreach (ref const WasmFunc f; wmod.funcs)
-        if (f.exported) ++count;
+        if (f.exported)
+            ++count;
     ++count; // always export "memory"
     if (!count)
         return;
@@ -634,10 +636,12 @@ void WasmObj_term(const(char)[] objfilename) @trusted
     // Phase 2: generate bytecode for all functions.
     {
         import dmd.backend.wasm.codgen : wasm_codgen, preRegisterExternals;
+
         // Phase 1: collect all external function references across all functions.
         foreach (ref WasmFuncBody fb; wasmFuncBodies)
         {
-            if (!fb.sym || !fb.sym.Sfunc) continue;
+            if (!fb.sym || !fb.sym.Sfunc)
+                continue;
             block* b = fb.sym.Sfunc.Fstartblock;
             for (; b; b = b.Bnext)
                 preRegisterExternals(b.Belem);
@@ -645,9 +649,11 @@ void WasmObj_term(const(char)[] objfilename) @trusted
         // Phase 2: generate code now that import indices are stable.
         // Restore each function's globsym before calling wasm_codgen.
         import dmd.backend.var : globsym;
+
         foreach (ref WasmFuncBody fb; wasmFuncBodies)
         {
-            if (!fb.sym) continue;
+            if (!fb.sym)
+                continue;
             // Restore the function's local symbol table.
             globsym.setLength(cast(uint) fb.savedGlobsym.length);
             foreach (size_t i, s; fb.savedGlobsym)
@@ -1032,7 +1038,8 @@ uint wmod_funcTableIndex(Symbol* s) @trusted
 // Accepts the type of the function pointer symbol (Stype of the pointer variable).
 uint wmod_internFuncPtrType(type* ptrType) @trusted
 {
-    if (!wmod || !ptrType) return 0;
+    if (!wmod || !ptrType)
+        return 0;
     // Function pointer type: TYnptr/TYptr → Tnext is the function type.
     type* ft = ptrType;
     if (tybasic(ft.Tty) == TYnptr || tybasic(ft.Tty) == TYptr ||
@@ -1170,6 +1177,7 @@ void WasmObj_func_term(Symbol* sfunc) @trusted
     // Save globsym (function locals/params) for use in deferred codegen.
     // globsym is cleared by the caller after func_term returns.
     import dmd.backend.var : globsym;
+
     foreach (ref WasmFuncBody fb; wasmFuncBodies)
     {
         if (fb.sym == sfunc)
