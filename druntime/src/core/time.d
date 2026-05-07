@@ -348,6 +348,13 @@ else version (Hurd) enum ClockType
     // threadCPUTime = 7,
 
 }
+else version (WebAssembly) enum ClockType
+{
+    normal = 0,
+    coarse = 2,
+    precise = 3,
+    second = 6,
+}
 else
 {
     // It needs to be decided (and implemented in an appropriate version branch
