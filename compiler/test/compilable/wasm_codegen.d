@@ -89,3 +89,30 @@ extern (C) double dadd(double a, double b)
 {
     return a + b;
 }
+
+// Shadow stack: address-of local variable
+extern (C) int testAddrOf()
+{
+    int x = 42;
+    int* p = &x;
+    return *p;
+}
+
+extern (C) int testAddrOfModify()
+{
+    int x = 10;
+    int* p = &x;
+    *p = 99;
+    return x;
+}
+
+extern (C) int testSwap()
+{
+    int a = 1, b = 2;
+    int* pa = &a;
+    int* pb = &b;
+    int tmp = *pa;
+    *pa = *pb;
+    *pb = tmp;
+    return a * 10 + b; // 21
+}
