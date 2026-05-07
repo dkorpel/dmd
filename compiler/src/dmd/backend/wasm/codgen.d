@@ -850,6 +850,30 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
                     return true;
                 }
                 genElem(cg, e.E2);
+                // Mask if storing into a narrow-type local (ubyte, bool, short, etc.).
+                // x86 uses narrow stores to truncate; WASM i32 locals hold the full value.
+                switch (tybasic(e.E1.Ety))
+                {
+                case TYbool:
+                case TYchar:
+                case TYschar:
+                case TYuchar:
+                case TYchar8:
+                    cg.emit(OP_I32_CONST);
+                    cg.emitSLEB(0xFF);
+                    cg.emit(OP_I32_AND);
+                    break;
+                case TYshort:
+                case TYwchar_t:
+                case TYushort:
+                case TYchar16:
+                    cg.emit(OP_I32_CONST);
+                    cg.emitSLEB(0xFFFF);
+                    cg.emit(OP_I32_AND);
+                    break;
+                default:
+                    break;
+                }
                 const uint idx = cg.localFor(lhs);
                 cg.emit(OP_LOCAL_TEE);
                 cg.emitULEB(idx);
