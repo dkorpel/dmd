@@ -190,6 +190,144 @@ version (Windows)
 
 enum STATUS_FAILED = -1;
 
+/***********************************
+ * Invoke wasm-ld to link WebAssembly object files.
+ *
+ * wasm-ld is a real linker (not a compiler driver), so flags are passed
+ * directly without any `-Xlinker` wrapping, and host system libraries
+ * such as -lpthread are omitted.
+ *
+ * Params:
+ *   verbose = print the command before executing
+ *   eSink   = sink for error messages
+ * Returns: 0 on success, non-zero on failure
+ */
+private int runWasmLINK(bool verbose, ErrorSink eSink)
+{
+    Strings argv;
+    const(char)* wasmld = getenv("WASM_LD");
+    argv.push(wasmld ? wasmld : "wasm-ld");
+
+    argv.append(&global.params.objfiles);
+
+    argv.push("-o");
+    if (global.params.exefile)
+    {
+        argv.push(global.params.exefile.xarraydup.ptr);
+    }
+    else
+    {
+        const(char)[] n = FileName.name(global.params.objfiles[0].toDString);
+        const(char)[] ex = FileName.forceExt(n, target.obj_ext);
+        global.params.exefile = ex;
+        argv.push(ex.xarraydup.ptr);
+    }
+    if (!ensurePathToNameExists(Loc.initial, global.params.exefile))
+        return STATUS_FAILED;
+
+    // Link switches: pass directly to wasm-ld, skipping CC-driver-only flags
+    foreach (pi, p; global.params.linkswitches)
+        if (p && p[0] && !global.params.linkswitchIsForCC[pi])
+            argv.push(p);
+
+    // Static archive files passed directly
+    foreach (p; global.params.libfiles)
+        if (FileName.equalsExt(p, "a"))
+            argv.push(p);
+
+    // Named libraries: prepend -l
+    foreach (p; global.params.libfiles)
+        if (!FileName.equalsExt(p, "a"))
+        {
+            const plen = strlen(p);
+            char* s = cast(char*)mem.xmalloc(plen + 3);
+            s[0] = '-';
+            s[1] = 'l';
+            memcpy(s + 2, p, plen + 1);
+            argv.push(s);
+        }
+
+    foreach (p; global.params.dllfiles)
+        argv.push(p);
+
+    OutBuffer cmdbuf;
+    foreach (i; 0 .. argv.length)
+    {
+        cmdbuf.writestring(argv[i]);
+        cmdbuf.writeByte(' ');
+    }
+    const(char)* linkerCommand = cmdbuf.peekChars();
+    if (verbose)
+        eSink.message(Loc.initial, "%s", linkerCommand);
+    argv.push(null);
+
+    version (Posix)
+    {
+        int[2] fds;
+        if (pipe(fds.ptr) == -1)
+        {
+            perror("unable to create pipe to linker");
+            return -1;
+        }
+        pid_t childpid = vfork();
+        if (childpid == 0)
+        {
+            dup2(fds[1], STDERR_FILENO);
+            close(fds[0]);
+            execvp(argv[0], argv.tdata());
+            perror(argv[0]);
+            _exit(-1);
+        }
+        else if (childpid == -1)
+        {
+            perror("unable to fork");
+            return STATUS_FAILED;
+        }
+        close(fds[1]);
+        OutBuffer outputBuf;
+        const pipeSuccess = pipeProcessOutput(fds[0], outputBuf);
+        int status;
+        waitpid(childpid, &status, 0);
+        if (WIFEXITED(status))
+        {
+            status = WEXITSTATUS(status);
+            if (status)
+            {
+                if (!pipeSuccess)
+                {
+                    perror("error with the linker pipe");
+                    return -1;
+                }
+                eSink.error(Loc.initial, "linker exited with status %d", status);
+                eSink.errorSupplemental(Loc.initial, "%s", linkerCommand);
+            }
+        }
+        else if (WIFSIGNALED(status))
+        {
+            eSink.error(Loc.initial, "linker killed by signal %d", WTERMSIG(status));
+            status = 1;
+        }
+        return status;
+    }
+    else version (Windows)
+    {
+        const int status = spawnvp(_P_WAIT, argv[0], argv.tdata());
+        if (status == -1)
+            eSink.error(Loc.initial, "can't run '%s', check PATH", argv[0]);
+        else if (status)
+        {
+            eSink.error(Loc.initial, "linker exited with status %d", status);
+            eSink.errorSupplemental(Loc.initial, "%s", linkerCommand);
+        }
+        return status;
+    }
+    else
+    {
+        eSink.error(Loc.initial, "WASM linking not supported on this platform");
+        return -1;
+    }
+}
+
 /*****************************
  * Run the linker.
  * Params:
@@ -199,6 +337,9 @@ enum STATUS_FAILED = -1;
  */
 public int runLINK(bool verbose, ErrorSink eSink)
 {
+    if (target.isWasm)
+        return runWasmLINK(verbose, eSink);
+
     const phobosLibname = finalDefaultlibname();
 
     void setExeFile()
