@@ -1,11 +1,6 @@
 WebAssembly target support added to DMD
 
 DMD now recognizes WebAssembly as a compilation target via the `-mwasm32` and `-os=wasm` flags.
-This sets the correct version identifiers (`WebAssembly`, `WASM32`, `CRuntime_WASI`) and
-configures the type system for the WASM ABI, enabling cross-compilation of D code to WebAssembly.
-
-The full code generator backend is not yet implemented; this infrastructure lays the groundwork
-for a future native WASM object file emitter.
 
 $(CONSOLE
 $ dmd -mwasm32 -os=wasm -o- hello.d
@@ -16,6 +11,7 @@ $(UL
     $(LI `WebAssembly`)
     $(LI `WASM32`)
     $(LI `CRuntime_WASI`)
+    $(LI `WASI`)
     $(LI `CppRuntime_LLVM`)
     $(LI `LittleEndian`)
 )
