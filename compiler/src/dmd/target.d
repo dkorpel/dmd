@@ -224,6 +224,7 @@ void addPredefinedGlobalIdentifiers(const ref Target tgt)
             case OS.WASM:
             {
                 predef("WebAssembly");
+                predef("WASI");
                 break;
             }
             default: assert(0);
