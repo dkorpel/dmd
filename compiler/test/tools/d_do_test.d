@@ -135,6 +135,7 @@ struct EnvData
     string cxxcompiler;          /// `CXX`: host C++ compiler
     string model;                /// `MODEL`: target model (`32` or `64`)
     string required_args;        /// `REQUIRED_ARGS`: flags added to the tests `REQUIRED_ARGS` parameter
+    string execBinaryWrapper;    /// `EXEC_BINARY_WRAPPER`: prepended to run command (e.g. `wasmtime run`)
     string cxxCompatFlags;       /// Additional flags passed to $(compiler) when `EXTRA_CPP_SOURCES` is present
     string[] picFlag;            /// Compiler flag for PIC (if requested from environment)
     bool dobjc;                  /// `D_OBJC`: run Objective-C tests
@@ -175,8 +176,9 @@ immutable(EnvData) processEnvironment()
     envData.ccompiler      = environment.get("CC");
     envData.cxxcompiler    = environment.get("CXX");
     envData.model          = envGetRequired("MODEL");
-    envData.required_args  = environment.get("REQUIRED_ARGS");
-    envData.dobjc          = environment.get("D_OBJC") == "1";
+    envData.required_args      = environment.get("REQUIRED_ARGS");
+    envData.execBinaryWrapper  = environment.get("EXEC_BINARY_WRAPPER");
+    envData.dobjc              = environment.get("D_OBJC") == "1";
     envData.coverage_build = environment.get("DMD_TEST_COVERAGE") == "1";
     envData.autoUpdate     = environment.get("AUTO_UPDATE", "") == "1";
     envData.printRuntime   = environment.get("PRINT_RUNTIME", "") == "1";
@@ -1896,7 +1898,9 @@ int tryMain(string[] args)
 
                 if (testArgs.gdbScript is null)
                 {
-                    command = test_app_dmd;
+                    command = envData.execBinaryWrapper.length
+                              ? envData.execBinaryWrapper ~ " " ~ test_app_dmd
+                              : test_app_dmd;
                     if (testArgs.executeArgs) command ~= " " ~ testArgs.executeArgs;
 
                     string output = execute(fThisRun, command, testArgs.runReturn)
