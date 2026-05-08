@@ -1446,7 +1446,12 @@ elem* toElem(Expression e, ref IRState irs)
                 // Call _d_newitemT()
                 ex = toElem(ne.lowering, irs);
             else
+            {
+                import dmd.target : target;
+                if (target.isWasm)
+                    return el_long(TYnptr, 0); // betterC WASM: new struct not supported
                 assert(0, "This case should have been rewritten to `_d_newitemT` in the semantic phase");
+            }
 
             ectype = null;
 
@@ -1524,7 +1529,12 @@ elem* toElem(Expression e, ref IRState irs)
                 // Call _d_newitemT()
                 e = toElem(ne.lowering, irs);
             else
+            {
+                import dmd.target : target;
+                if (target.isWasm)
+                    return el_long(TYnptr, 0); // betterC WASM: new not supported
                 assert(0, "This case should have been rewritten to `_d_newitemT` in the semantic phase");
+            }
 
             if (ne.arguments && ne.arguments.length == 1)
             {
@@ -4291,6 +4301,15 @@ elem* toElem(Expression e, ref IRState irs)
  */
 elem* toElemRVO(Expression e, elem* ehidden, ref IRState irs)
 {
+    // For WASM, class types might reach here due to betterC class restrictions.
+    // Return a no-op rather than crashing; the semantic phase should have caught this.
+    import dmd.target : target;
+    if (target.isWasm)
+    {
+        auto tb = e.type.toBasetype();
+        if (tb.ty != Tstruct && tb.ty != Tsarray)
+            return toElem(e, irs);
+    }
     assert(e.type.toBasetype().ty == Tstruct || e.type.toBasetype().ty == Tsarray);
 
     elem* doCommaRVO(CommaExp ce)

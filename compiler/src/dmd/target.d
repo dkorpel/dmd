@@ -704,6 +704,11 @@ extern (C++) struct Target
                 tvalist = Type.tchar.pointerTo();
             }
         }
+        else if (isWasm)
+        {
+            // WASM has no hardware va_list; use a simple pointer convention.
+            tvalist = Type.tchar.pointerTo();
+        }
         else
         {
             assert(0);
@@ -1457,7 +1462,8 @@ extern (C++) struct Target
         uint sz = isXmmSupported() ? 16 :
                   isX86_64         ?  8 :
                   isAArch64        ?  8 :
-                  isX86            ?  4 : 0;
+                  isX86            ?  4 :
+                  isWasm           ?  8 : 0; // WASM: 8-byte alignment (wasm32 pointer-natural)
         assert(sz);
         return sz;
     }

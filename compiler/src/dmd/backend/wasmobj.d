@@ -788,7 +788,13 @@ int WasmObj_comdat(Symbol* s) @trusted
 
 int WasmObj_comdatsize(Symbol* s, targ_size_t symsize) @trusted
 {
-    return WasmObj_comdat(s);
+    // For data comdats (class/struct initializers), use the data segment.
+    // Function comdats use WasmObj_comdat.
+    if (s && s.Stype && tyfunc(tybasic(s.Stype.Tty)))
+        return WasmObj_comdat(s);
+    // Data comdat: allocate in linear memory data segment.
+    WasmObj_data_start(s, cast(targ_size_t) symsize, WASM_DATA);
+    return s.Sseg;
 }
 
 void WasmObj_setcodeseg(int seg) @trusted
