@@ -418,28 +418,36 @@ Target[] predefinedTargets(string[] targets)
         return target;
     }
 
+    // Create a wasm compilable target that delegates to d_do_test with wasm flags.
+    // Uses `env` to override REQUIRED_ARGS and ARGS per-subprocess without
+    // affecting the global environment used by other parallel targets.
     static Target createWasmCompilableTarget(string filename)
     {
-        const testName = Target.normalizedTestName(filename);
-        const outFile = resultsDir.buildPath(testName.setExtension(".wasm"));
         Target target = {
             filename: filename,
-            args: [dmdPath, "-mwasm32", "-os=wasm", "-c",
-                   "-I" ~ filename.dirName, filename, "-of=" ~ outFile]
+            args: [
+                "env",
+                "REQUIRED_ARGS=-mwasm32 -os=wasm",
+                "ARGS=",
+                resultsDir.buildPath(testRunner.name.exeName),
+                Target.normalizedTestName(filename)
+            ]
         };
         return target;
     }
 
     static Target createWasmRunnableTarget(string filename)
     {
-        const testName = Target.normalizedTestName(filename);
-        const outFile = resultsDir.buildPath(testName.setExtension(".wasm"));
         Target target = {
             filename: filename,
             args: [
-                "sh", "-c",
-                dmdPath ~ " -mwasm32 -os=wasm -I'" ~ filename.dirName ~ "' '" ~ filename ~ "' -of='" ~ outFile ~ "'" ~
-                " && wasmtime run '" ~ outFile ~ "'"
+                "env",
+                "REQUIRED_ARGS=-mwasm32 -os=wasm",
+                "ARGS=",
+                "EXE=.wasm",
+                "EXEC_BINARY_WRAPPER=wasmtime run",
+                resultsDir.buildPath(testRunner.name.exeName),
+                Target.normalizedTestName(filename)
             ]
         };
         return target;
