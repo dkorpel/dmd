@@ -1176,16 +1176,6 @@ void reconcileCommands(ref Param params, ref Target target, ErrorSink eSink)
         params.useModuleInfo = false;
         params.useTypeInfo = false;
         params.useExceptions = false;
-        params.useGC = false;
-        // Disable all runtime checks - these require druntime string literals
-        // and exception support that WASM does not have.
-        params.useArrayBounds   = CHECKENABLE.off;
-        params.useAssert        = CHECKENABLE.off;
-        params.useIn            = CHECKENABLE.off;
-        params.useOut           = CHECKENABLE.off;
-        params.useInvariants    = CHECKENABLE.off;
-        params.useSwitchError   = CHECKENABLE.off;
-        params.useNullCheck     = CHECKENABLE.off;
     }
 }
 
