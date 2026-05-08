@@ -1031,6 +1031,7 @@ bool parseCommandLine(const ref Strings arguments, const size_t argc, out Param 
         else if (arg == "-mwasm32")
         {
             target.isWasm    = true;
+            target.os        = Target.OS.WASM;
             target.isAArch64 = false;
             target.isX86     = false;
             target.isX86_64  = false;
@@ -1038,6 +1039,7 @@ bool parseCommandLine(const ref Strings arguments, const size_t argc, out Param 
         else if (arg == "-mwasm64")
         {
             target.isWasm    = true;
+            target.os        = Target.OS.WASM;
             target.isAArch64 = false;
             target.isX86     = false;
             target.isX86_64  = true;
@@ -1213,7 +1215,12 @@ bool parseCommandLine(const ref Strings arguments, const size_t argc, out Param 
                 case "solaris":      target.os = Target.OS.Solaris;      break;
                 case "dragonflybsd": target.os = Target.OS.DragonFlyBSD; break;
                 case "hurd":         target.os = Target.OS.Hurd;         break;
-                case "wasm":         target.os = Target.OS.WASM;         break;
+                case "wasm":         target.os = Target.OS.WASM;
+                    target.isWasm = true;
+                    target.isX86 = false;
+                    target.isX86_64 = false;
+                    target.isAArch64 = false;
+                    break;
                 default:
                     errorInvalidSwitch(p, msg);
                     return false;
