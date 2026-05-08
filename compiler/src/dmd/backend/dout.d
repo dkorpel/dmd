@@ -291,6 +291,15 @@ void outdata(Symbol* s)
         }
         case mTYthread:
         {
+            if (config.objfmt == OBJ_WASM)
+            {
+                // WASM: TLS not supported; treat as regular data
+                if (s.Sseg == 0 || s.Sseg == UNKNOWN)
+                    s.Sseg = DATA;
+                seg = objmod.data_start(s, datasize, DATA);
+                s.Sfl = FL.data;
+                break;
+            }
             if (config.objfmt == OBJ_MACH && config.target_cpu == TARGET_AArch64)
             {
                 // Special handling
