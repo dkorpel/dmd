@@ -1020,10 +1020,24 @@ public int runProgram(const char[] exefile, const char*[] runargs, bool verbose,
 {
     //printf("runProgram()\n");
 
+    // For WebAssembly targets, run through wasmtime
+    const(char)* wasmtime;
+    if (target.isWasm)
+    {
+        wasmtime = getenv("WASMTIME");
+        if (!wasmtime)
+            wasmtime = "wasmtime";
+    }
+
     // print command line to user
     if (verbose)
     {
         OutBuffer buf;
+        if (wasmtime)
+        {
+            buf.writestring(wasmtime);
+            buf.writestring(" run ");
+        }
         buf.writestring(exefile);
         foreach (arg; runargs)
         {
@@ -1035,6 +1049,11 @@ public int runProgram(const char[] exefile, const char*[] runargs, bool verbose,
 
     // Build argv[]
     Strings argv;
+    if (wasmtime)
+    {
+        argv.push(wasmtime);
+        argv.push("run");
+    }
     argv.push(exefile.xarraydup.ptr);
     foreach (arg; runargs)
     {
