@@ -216,6 +216,12 @@ void toObjFile(Dsymbol ds, bool multiobj)
             if (!cd.members)
                 return;
 
+            // WASM: class vtable/typeinfo requires segments not available in WASM modules.
+            // Classes are unsupported in betterC/WASM; skip metadata generation.
+            import dmd.target : target;
+            if (target.isWasm)
+                return;
+
             if (multiobj && !cd.hasStaticCtorOrDtor())
             {
                 obj_append(cd);
@@ -380,6 +386,16 @@ void toObjFile(Dsymbol ds, bool multiobj)
             if (sd.type.ty == Terror)
             {
                 .error(sd.loc, "%s `%s` had semantic errors when compiling", sd.kind, sd.toPrettyChars);
+                return;
+            }
+
+            // WASM: skip static initializer and TypeInfo generation; these require
+            // ELF/COFF-style segments not available in WASM modules. Only visit members.
+            import dmd.target : target;
+            if (target.isWasm)
+            {
+                if (sd.members)
+                    sd.members.foreachDsymbol( (s) { s.accept(this); } );
                 return;
             }
 

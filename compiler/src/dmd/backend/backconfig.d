@@ -477,6 +477,13 @@ if (exe & EX_windos)
     _tysize[TYireal] = 10;
     _tysize[TYcreal] = 20;
 }
+if (exe & EX_WASM)
+{
+    // WASM: `real` maps to double (64-bit); no 80-bit x87 support.
+    _tysize[TYreal] = 8;
+    _tysize[TYireal] = 8;
+    _tysize[TYcreal] = 16;
+}
 
     _tysize[TYsptr] = LONGSIZE;
     _tysize[TYcptr] = LONGSIZE;
@@ -507,6 +514,12 @@ if (exe & EX_windos)
     _tyalignsize[TYreal] = 2;
     _tyalignsize[TYireal] = 2;
     _tyalignsize[TYcreal] = 2;
+}
+if (exe & EX_WASM)
+{
+    _tyalignsize[TYreal] = 8;
+    _tyalignsize[TYireal] = 8;
+    _tyalignsize[TYcreal] = 8;
 }
 
     _tyalignsize[TYsptr] = LONGSIZE;
