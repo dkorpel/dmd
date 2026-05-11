@@ -793,8 +793,9 @@ int WasmObj_comdatsize(Symbol* s, targ_size_t symsize) @trusted
     if (s && s.Stype && tyfunc(tybasic(s.Stype.Tty)))
         return WasmObj_comdat(s);
     // Data comdat: allocate in linear memory data segment.
+    s.Sseg = WASM_DATA;
     WasmObj_data_start(s, cast(targ_size_t) symsize, WASM_DATA);
-    return s.Sseg;
+    return WASM_DATA;
 }
 
 void WasmObj_setcodeseg(int seg) @trusted
@@ -946,18 +947,13 @@ int WasmObj_common_block(Symbol* s, int flag, targ_size_t size, targ_size_t coun
 
 void WasmObj_lidata(int seg, targ_size_t offset, targ_size_t count) @trusted
 {
-    if (!wmod.activeSeg)
-        return;
-    foreach (_; 0 .. count)
-        wmod.activeSeg.data.writeByte(0);
+    // WASM linear memory is zero-initialized; BSS needs no bytes in the data section.
+    // dataHeap was already advanced by WasmObj_data_start.
 }
 
 void WasmObj_write_zeros(seg_data* pseg, targ_size_t count) @trusted
 {
-    if (!wmod.activeSeg)
-        return;
-    foreach (_; 0 .. count)
-        wmod.activeSeg.data.writeByte(0);
+    // WASM linear memory is zero-initialized; no need to emit zero bytes.
 }
 
 void WasmObj_write_byte(seg_data* pseg, uint _byte) @trusted
