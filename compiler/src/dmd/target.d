@@ -144,8 +144,10 @@ void addDefaultVersionIdentifiers(const ref Param params, const ref Target tgt)
     }
     else if (tgt.isWasm)
     {
-        // WASM has no druntime; suppress runtime feature versions even without -betterC.
-        // throw generates halt, so exceptions are syntactically allowed but not runtime-backed.
+        // TypeInfo structs are statically allocated (no GC) and fit in linear memory.
+        // D_ModuleInfo and D_Exceptions are suppressed: no module system or EH runtime.
+        if (params.useTypeInfo)
+            VersionCondition.addPredefinedGlobalIdent("D_TypeInfo");
     }
     else
     {

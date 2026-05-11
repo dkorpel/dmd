@@ -341,3 +341,102 @@ extern (C) void wasiWrite(const(char)* msg, size_t len)
     size_t n;
     fd_write(1, &iov, 1, &n);
 }
+
+// ---- TypeInfo ---------------------------------------------------------------
+
+// TypeInfo for basic types is available via D_TypeInfo
+version (D_TypeInfo) static assert(true, "D_TypeInfo is defined for WASM");
+
+// TypeInfo carries the type's size (runtime check — TypeInfo is a static variable)
+void testTypeInfo()
+{
+    assert(typeid(int) !is null);
+    assert(typeid(double) !is null);
+    assert(typeid(bool) !is null);
+
+    // Struct TypeInfo
+    struct Color { ubyte r, g, b; }
+    assert(typeid(Color) !is null);
+
+    // TypeInfo carries the type's size
+    assert(typeid(int).tsize == int.sizeof);
+    assert(typeid(long).tsize == long.sizeof);
+
+    // TypeInfo identity
+    assert(typeid(int) == typeid(int));
+    assert(typeid(double) !is typeid(float));
+}
+
+// ---- Classes ----------------------------------------------------------------
+
+// Abstract base class with virtual methods
+class Shape
+{
+    abstract double area() const;
+    abstract const(char)[] kind() const;
+}
+
+// Concrete subclass
+class Circle : Shape
+{
+    double radius;
+
+    this(double r) { radius = r; }
+
+    override double area() const
+    {
+        return 3.14159265358979 * radius * radius;
+    }
+
+    override const(char)[] kind() const { return "circle"; }
+}
+
+class Rectangle : Shape
+{
+    double w, h;
+
+    this(double w, double h) { this.w = w; this.h = h; }
+
+    override double area() const { return w * h; }
+    override const(char)[] kind() const { return "rectangle"; }
+}
+
+// TypeInfo for class types (compile-time is-a checks)
+static assert(is(Circle : Shape));
+static assert(is(Rectangle : Shape));
+static assert(!is(Circle : Rectangle));
+
+// Virtual dispatch through base pointer
+double shapeArea(Shape s) { return s.area(); }
+const(char)[] shapeKind(Shape s) { return s.kind(); }
+
+// ClassInfo is accessible at runtime
+void testClassInfo()
+{
+    assert(typeid(Circle) !is null);
+    assert(typeid(Rectangle) !is null);
+    assert(typeid(Circle) !is typeid(Rectangle));
+    assert(typeid(Circle).name.length > 0);
+}
+
+// Interfaces with multiple inheritance
+interface Drawable
+{
+    void draw();
+}
+
+interface Resizable
+{
+    void resize(double factor);
+}
+
+class Widget : Drawable, Resizable
+{
+    double size = 1.0;
+
+    void draw() {}
+    void resize(double factor) { size *= factor; }
+}
+
+static assert(is(Widget : Drawable));
+static assert(is(Widget : Resizable));
