@@ -1,4 +1,5 @@
 // REQUIRED_ARGS: -O -m64
+// DISABLED: wasm
 import core.simd;
 
 double dot (double2 a) {

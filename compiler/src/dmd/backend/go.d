@@ -372,7 +372,7 @@ void optfunc(ref GlobalOptimizer go, ref BlockOpt bo)
         /* Only scan once to prevent recursive functions from endlessly being inlined
          * https://issues.dlang.org/show_bug.cgi?id=23857
          */
-        if (iter == 1)
+        if (iter == 1 && config.objfmt != OBJ_WASM)
             scanForInlines(funcsym_p);
 
         if (go.mfoptim & MFdc)

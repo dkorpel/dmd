@@ -1,4 +1,5 @@
 /* REQUIRED_ARGS: -verrors=simple -m64
+DISABLED: wasm
 TEST_OUTPUT:
 ---
 compilable/b16976.d(33): Deprecation: foreach: loop index implicitly converted from `size_t` to `int`

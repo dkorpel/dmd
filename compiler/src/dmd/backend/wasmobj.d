@@ -1060,7 +1060,7 @@ uint wmod_internFuncPtrType(type* ptrType) @trusted
     if (tybasic(ft.Tty) == TYnptr || tybasic(ft.Tty) == TYptr ||
         tybasic(ft.Tty) == TYfptr || tybasic(ft.Tty) == TYfgPtr)
         ft = ft.Tnext; // dereference pointer to get function type
-    if (!ft)
+    if (!ft || !tyfunc(tybasic(ft.Tty)))
         return 0;
     WasmFuncType wft = buildFuncType(ft);
     return wmod.internType(wft);
