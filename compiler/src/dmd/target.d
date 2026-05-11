@@ -140,6 +140,11 @@ void addDefaultVersionIdentifiers(const ref Param params, const ref Target tgt)
     {
         VersionCondition.addPredefinedGlobalIdent("D_BetterC");
     }
+    else if (tgt.isWasm)
+    {
+        // WASM has no druntime; suppress runtime feature versions even without -betterC.
+        // throw generates halt, so exceptions are syntactically allowed but not runtime-backed.
+    }
     else
     {
         if (params.useModuleInfo)

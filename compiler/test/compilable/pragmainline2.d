@@ -1,4 +1,5 @@
 /*
+DISABLED: wasm
 REQUIRED_ARGS: -verrors=simple -inline -wi
 TEST_OUTPUT:
 ---

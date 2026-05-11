@@ -429,6 +429,8 @@ Target[] predefinedTargets(string[] targets)
                 "env",
                 "REQUIRED_ARGS=-mwasm32 -os=wasm",
                 "ARGS=",
+                "OS=wasm",
+                "MODEL=32",
                 resultsDir.buildPath(testRunner.name.exeName),
                 Target.normalizedTestName(filename)
             ]
@@ -444,6 +446,8 @@ Target[] predefinedTargets(string[] targets)
                 "env",
                 "REQUIRED_ARGS=-mwasm32 -os=wasm",
                 "ARGS=",
+                "OS=wasm",
+                "MODEL=32",
                 "EXE=.wasm",
                 "EXEC_BINARY_WRAPPER=wasmtime run",
                 resultsDir.buildPath(testRunner.name.exeName),

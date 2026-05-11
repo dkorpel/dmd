@@ -1167,14 +1167,6 @@ void reconcileCommands(ref Param params, ref Target target, ErrorSink eSink)
         params.useExceptions = false;
         params.useGC = false;
     }
-
-    // WASM has no druntime, so implicitly apply betterC semantics.
-    if (target.isWasm)
-    {
-        params.useModuleInfo = false;
-        params.useTypeInfo = false;
-        params.useExceptions = false;
-    }
 }
 
 /***********************************************

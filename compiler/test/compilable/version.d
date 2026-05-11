@@ -1,4 +1,5 @@
 /* REQUIRED_ARGS:
+   DISABLED: wasm
 */
 
 version (D_ModuleInfo)

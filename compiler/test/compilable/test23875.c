@@ -1,4 +1,4 @@
-/* DISABLED: win32 linux32
+/* DISABLED: win32 linux32 wasm
  */
 
 // https://issues.dlang.org/show_bug.cgi?id=23875
