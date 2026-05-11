@@ -217,6 +217,11 @@ struct WasmModule
     WasmGlobal[] globals; // module-level mutable globals
     int stackPtrGlobalIdx = -1; // index of __stack_pointer global (-1 = not created)
 
+    // Deferred function-pointer relocations in data segments.
+    // Written as 0 during data emission; patched in WasmObj_term once table indices are known.
+    struct FuncReloc { uint dataByteOffset; Symbol* sym; }
+    FuncReloc[] funcRelocations;
+
     // Scratch OutBuffer for section payloads
     OutBuffer scratch;
 
@@ -676,6 +681,30 @@ void WasmObj_term(const(char)[] objfilename) @trusted
         globsym.setLength(0);
     }
 
+    // Patch deferred function-pointer relocations in the data segment.
+    // Now that all functions are registered, we can look up their WASM table indices.
+    if (wmod.dataSegs.length > 0)
+    {
+        ubyte[] dataBuf = cast(ubyte[]) wmod.dataSegs[0].data.peekSlice();
+        foreach (ref WasmModule.FuncReloc rel; wmod.funcRelocations)
+        {
+            if (rel.dataByteOffset + 4 > dataBuf.length)
+                continue;
+            uint tableIdx = 0;
+            // Find the function in the defined function list and compute its table index.
+            foreach (size_t fi; wmod.numImports .. wmod.funcs.length)
+            {
+                if (wmod.funcs[fi].sym == rel.sym)
+                {
+                    tableIdx = cast(uint)(fi - wmod.numImports);
+                    break;
+                }
+            }
+            dataBuf[rel.dataByteOffset .. rel.dataByteOffset + 4] =
+                (cast(ubyte*)&tableIdx)[0 .. 4];
+        }
+    }
+
     // Finalize __stack_pointer initial value.
     // Data section occupies low addresses (0..dataHeap-1).
     // Shadow stack grows downward from 65536 (top of first 64KiB page).
@@ -998,9 +1027,18 @@ void WasmObj_reftocodeseg(int seg, targ_size_t offset, targ_size_t val) @trusted
 
 int WasmObj_reftoident(int seg, targ_size_t offset, Symbol* s, targ_size_t val, int flags) @trusted
 {
-    // Write the symbol's linear memory address + val as a 4-byte LE integer.
     if (!wmod.activeSeg)
         return 4;
+    // Function symbols: write 0 as placeholder; real table index patched in WasmObj_term.
+    if (s && s.Stype && tyfunc(tybasic(s.Stype.Tty)))
+    {
+        uint dataOff = cast(uint) wmod.activeSeg.data.length;
+        uint zero = 0;
+        wmod.activeSeg.data.write(&zero, 4);
+        wmod.funcRelocations ~= WasmModule.FuncReloc(dataOff, s);
+        return 4;
+    }
+    // Data symbols: write linear memory address.
     uint addr = cast(uint)(s ? (s.Soffset + val) : val);
     wmod.activeSeg.data.write(&addr, 4);
     return 4;
