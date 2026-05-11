@@ -1,4 +1,4 @@
-
+// DISABLED: wasm
 version (D_InlineAsm_X86)
     version = TestInlineAsm;
 else version (D_InlineAsm_X86_64)
