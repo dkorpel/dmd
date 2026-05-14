@@ -112,6 +112,51 @@ enum : ubyte
     WASM_END = 0x0B,
 }
 
+// WASM relocation types (WebAssembly tool conventions / linking metadata)
+enum : ubyte
+{
+    R_WASM_FUNCTION_INDEX_LEB = 0,  // function index in call (5-byte padded ULEB)
+    R_WASM_TABLE_INDEX_SLEB   = 1,
+    R_WASM_TABLE_INDEX_I32    = 2,
+    R_WASM_MEMORY_ADDR_LEB    = 3,
+    R_WASM_MEMORY_ADDR_SLEB   = 4,
+    R_WASM_MEMORY_ADDR_I32    = 5,
+    R_WASM_TYPE_INDEX_LEB     = 6,
+    R_WASM_GLOBAL_INDEX_LEB   = 7,
+}
+
+// "linking" custom section subsection IDs (version 2)
+enum : ubyte
+{
+    WASM_LINKING_SEGMENT_INFO = 5,
+    WASM_LINKING_INIT_FUNCS   = 6,
+    WASM_LINKING_COMDAT_INFO  = 7,
+    WASM_LINKING_SYMBOL_TABLE = 8,
+}
+
+// Symbol table entry kinds
+enum : ubyte
+{
+    WASM_SYMTAB_FUNCTION = 0,
+    WASM_SYMTAB_DATA     = 1,
+    WASM_SYMTAB_GLOBAL   = 2,
+    WASM_SYMTAB_SECTION  = 3,
+    WASM_SYMTAB_TAG      = 4,
+    WASM_SYMTAB_TABLE    = 5,
+}
+
+// Symbol table flags
+enum : uint
+{
+    WASM_SYM_BINDING_WEAK      = 0x01,
+    WASM_SYM_BINDING_LOCAL     = 0x02,
+    WASM_SYM_VISIBILITY_HIDDEN = 0x04,
+    WASM_SYM_UNDEFINED         = 0x10,
+    WASM_SYM_EXPORTED          = 0x40,
+    WASM_SYM_EXPLICIT_NAME     = 0x80,
+    WASM_SYM_NO_STRIP          = 0x100,
+}
+
 // ---------------------------------------------------------------------------
 // LEB128 encoding helpers
 // ---------------------------------------------------------------------------
@@ -137,6 +182,35 @@ private void appendName(OutBuffer* buf, const(char)[] name) @trusted
     buf.write(name.ptr[0 .. name.length]);
 }
 
+// Return number of bytes needed for ULEB128 encoding of v
+private uint ulebSize(uint v) @trusted
+{
+    uint n = 0;
+    do { n++; v >>= 7; } while (v);
+    return n;
+}
+
+// Emit a 5-byte padded ULEB128 (fixed-width, allowing linker relocation patching)
+private void appendULEB128_5(OutBuffer* buf, uint v) @trusted
+{
+    buf.writeByte(cast(ubyte)((v & 0x7F) | 0x80));
+    buf.writeByte(cast(ubyte)(((v >> 7) & 0x7F) | 0x80));
+    buf.writeByte(cast(ubyte)(((v >> 14) & 0x7F) | 0x80));
+    buf.writeByte(cast(ubyte)(((v >> 21) & 0x7F) | 0x80));
+    buf.writeByte(cast(ubyte)((v >> 28) & 0x0F)); // MSB=0 to terminate
+}
+
+// Write a custom section: section id 0, size, name, then payload bytes
+private void writeCustomSection(OutBuffer* out_, const(char)[] name, OutBuffer* payload) @trusted
+{
+    OutBuffer header;
+    appendName(&header, name);
+    out_.writeByte(0); // custom section id
+    appendULEB128(out_, cast(uint)(header.length() + payload.length()));
+    out_.write(header.peekSlice());
+    out_.write(payload.peekSlice());
+}
+
 // ---------------------------------------------------------------------------
 // Data structures
 // ---------------------------------------------------------------------------
@@ -157,6 +231,7 @@ struct WasmFunc
     bool isImport;
     const(char)[] importModule; // for imports: module name
     const(char)[] importName; // for imports: field name
+    string name; // for synthesized functions with no Symbol and no importName
 }
 
 // Local variable in a WASM function
@@ -175,6 +250,19 @@ struct WasmFuncBody
     uint numParams;
     OutBuffer code; // WASM bytecode (without local decls header)
     Symbol*[] savedGlobsym; // globsym snapshot at func_term time
+
+    // Code relocations recorded during code generation.
+    // offset is relative to the start of `code` (i.e. before the END byte).
+    // Set by emitCodeSection: byte offset from code section payload start
+    // where this function's code bytes begin (used for reloc.CODE offsets).
+    struct CodeReloc
+    {
+        uint offset;   // byte offset within code buffer (before the 5-byte ULEB)
+        ubyte type;    // R_WASM_FUNCTION_INDEX_LEB etc.
+        uint symIdx;   // symbol table index (= function index for function symbols)
+    }
+    CodeReloc[] codeRelocs;
+    uint codePayloadStart; // set by emitCodeSection
 }
 
 // Module-global table of function bodies (indexed same as WasmFunc)
@@ -216,6 +304,9 @@ struct WasmModule
 
     WasmGlobal[] globals; // module-level mutable globals
     int stackPtrGlobalIdx = -1; // index of __stack_pointer global (-1 = not created)
+    bool importFuncTable; // true: import __indirect_function_table from "env"
+    uint[] elemFuncRelocOffsets; // payload offsets of function indices in the element section
+    bool relocatable; // true: emit linking/reloc sections (for -c / wasm-ld use)
 
     // Deferred relocations in data segments. Written as 0 at emit time;
     // patched in WasmObj_term once all symbol addresses are known.
@@ -228,6 +319,51 @@ struct WasmModule
     OutBuffer scratch;
 
 nothrow:
+
+    // Rearrange funcTypes so import function types come first (in import order).
+    // wasm-ld does the same when creating the final module, so by pre-empting
+    // this reordering our type indices remain stable after single-file linking,
+    // and call_indirect instructions stay correct without relocation patching.
+    void reorderImportTypesFirst() nothrow
+    {
+        if (!numImports || funcTypes.length == 0)
+            return;
+
+        // Build mapping: old type index → new type index
+        uint[] oldToNew;
+        oldToNew.length = funcTypes.length;
+        oldToNew[] = uint.max;
+
+        WasmFuncType[] newTypes;
+
+        // Step 1: add import function types first, in import-function order.
+        foreach (ref const WasmFunc f; funcs[0 .. numImports])
+        {
+            uint oi = f.typeIdx;
+            if (oi < funcTypes.length && oldToNew[oi] == uint.max)
+            {
+                oldToNew[oi] = cast(uint) newTypes.length;
+                newTypes ~= WasmFuncType(funcTypes[oi].params.dup, funcTypes[oi].results.dup);
+            }
+        }
+
+        // Step 2: append remaining types in their original relative order.
+        foreach (size_t i, ref const WasmFuncType ft; funcTypes)
+        {
+            if (oldToNew[i] == uint.max)
+            {
+                oldToNew[i] = cast(uint) newTypes.length;
+                newTypes ~= WasmFuncType(ft.params.dup, ft.results.dup);
+            }
+        }
+
+        // Update typeIdx for all registered functions.
+        foreach (ref WasmFunc f; funcs)
+            if (f.typeIdx < oldToNew.length)
+                f.typeIdx = oldToNew[f.typeIdx];
+
+        funcTypes = newTypes;
+    }
 
     // Return or create a type index for the given func type
     uint internType(const WasmFuncType ft)
@@ -243,10 +379,15 @@ nothrow:
 }
 
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 // Global module instance (one per compilation unit)
 // ---------------------------------------------------------------------------
 
 private WasmModule* wmod;
+
+// Set by the DMD frontend: true when -c is given (produce relocatable object
+// for wasm-ld), false when producing a self-contained final module directly.
+__gshared bool wasm_relocatable = true; // default: relocatable (for -c)
 
 // ---------------------------------------------------------------------------
 // WASM value type for a backend type
@@ -398,17 +539,28 @@ private void emitTypeSection(OutBuffer* out_) @trusted
 
 private void emitImportSection(OutBuffer* out_) @trusted
 {
-    if (!wmod.numImports)
+    uint count = wmod.numImports + (wmod.importFuncTable ? 1 : 0);
+    if (!count)
         return;
     OutBuffer* s = &wmod.scratch;
     s.reset();
-    appendULEB128(s, wmod.numImports);
+    appendULEB128(s, count);
     foreach (ref const WasmFunc f; wmod.funcs[0 .. wmod.numImports])
     {
         appendName(s, f.importModule);
         appendName(s, f.importName);
         s.writeByte(WASM_EXPORT_FUNC); // import kind: function
         appendULEB128(s, f.typeIdx);
+    }
+    if (wmod.importFuncTable)
+    {
+        // (import "env" "__indirect_function_table" (table 0 funcref))
+        appendName(s, "env");
+        appendName(s, "__indirect_function_table");
+        s.writeByte(0x01); // import kind: table
+        s.writeByte(0x70); // funcref element type
+        s.writeByte(0x00); // limits: no max
+        appendULEB128(s, 0); // min size = 0 (linker sets actual size)
     }
     writeSection(out_, WasmSection.import_, s);
 }
@@ -427,12 +579,14 @@ private void emitFunctionSection(OutBuffer* out_) @trusted
 }
 
 // Emit a table section with one funcref table sized to hold all defined functions.
-// This is required for call_indirect (function pointers).
-private void emitTableSection(OutBuffer* out_) @trusted
+// Skipped when the table is imported as __indirect_function_table.
+private bool emitTableSection(OutBuffer* out_) @trusted
 {
+    if (wmod.importFuncTable)
+        return false; // table is imported, not defined here
     uint defined = cast(uint)(wmod.funcs.length - wmod.numImports);
     if (!defined)
-        return;
+        return false;
     OutBuffer* s = &wmod.scratch;
     s.reset();
     appendULEB128(s, 1); // 1 table
@@ -441,10 +595,13 @@ private void emitTableSection(OutBuffer* out_) @trusted
     appendULEB128(s, defined); // min = number of defined functions
     appendULEB128(s, defined); // max = same
     writeSection(out_, WasmSection.table, s);
+    return true;
 }
 
 // Emit an element section populating table[0] with all defined function indices.
-// Table index for function F = F's position among defined functions (F.funcIdx - numImports).
+// Uses 5-byte padded ULEB128 for each function index to support R_WASM_FUNCTION_INDEX_LEB
+// relocations (stored in the "reloc.ELEM" section so wasm-ld can patch them).
+// After writing, elemFuncRelocOffsets contains the reloc payload offsets of each entry.
 private void emitElementSection(OutBuffer* out_) @trusted
 {
     uint defined = cast(uint)(wmod.funcs.length - wmod.numImports);
@@ -453,14 +610,25 @@ private void emitElementSection(OutBuffer* out_) @trusted
     OutBuffer* s = &wmod.scratch;
     s.reset();
     appendULEB128(s, 1); // 1 element segment
-    s.writeByte(0x00); // segment kind: active, table 0, funcref
-    // offset initializer: i32.const 0 end
+    // Segment payload:
+    s.writeByte(0x00); // kind: active, table 0, funcref, offset init-expr, funcidx vec
     s.writeByte(0x41); // i32.const
-    s.writeByte(0x00); // 0
+    s.writeByte(0x00); // offset = 0
     s.writeByte(0x0B); // end
-    appendULEB128(s, defined); // count of functions
+    appendULEB128(s, defined); // count of function indices
+    // Byte offset from start of element section PAYLOAD (after section id + size bytes).
+    // Payload starts with: [count=1 ULEB] + [kind=0] + [0x41]+[0x00]+[0x0B] + [defined ULEB]
+    // = 1 + 1 + 3 + 1 = 6 bytes before the first function index.
+    uint entryOffset = 1 + 1 + 3 + ulebSize(defined);
+    wmod.elemFuncRelocOffsets.length = 0;
+    wmod.elemFuncRelocOffsets.reserve(defined);
     foreach (size_t i; wmod.numImports .. wmod.funcs.length)
-        appendULEB128(s, cast(uint) i); // function index
+    {
+        uint fidx = cast(uint) i;
+        wmod.elemFuncRelocOffsets ~= entryOffset; // offset of this 5-byte entry
+        appendULEB128_5(s, fidx); // 5-byte padded ULEB for linker relocation patching
+        entryOffset += 5;
+    }
     writeSection(out_, WasmSection.element, s);
 }
 
@@ -554,36 +722,50 @@ private void emitCodeSection(OutBuffer* out_) @trusted
     s.reset();
     appendULEB128(s, defined);
 
+    // Track running byte offset from start of code section payload
+    // to compute absolute relocation offsets for reloc.CODE.
+    uint payloadOffset = ulebSize(defined);
+
     foreach (size_t fi, ref const WasmFunc f; wmod.funcs[wmod.numImports .. $])
     {
-        // WasmFuncBody[fi] corresponds positionally to funcs[numImports + fi].
         WasmFuncBody* fb = fi < wasmFuncBodies.length ? &wasmFuncBodies[fi] : null;
 
-        OutBuffer body_;
-
+        // Build local declarations into a temp buffer to know their size.
+        OutBuffer locBuf;
+        uint numLocalGroups = 0;
         if (fb && fb.code.length())
         {
-            // Emit local variable declarations (non-parameter locals only)
-            uint numLocals = cast(uint)(fb.locals.length - fb.numParams);
-            appendULEB128(&body_, numLocals);
+            numLocalGroups = cast(uint)(fb.locals.length - fb.numParams);
+            appendULEB128(&locBuf, numLocalGroups);
             foreach (ref const WasmLocal l; fb.locals[fb.numParams .. $])
             {
-                appendULEB128(&body_, 1); // count of this type
-                body_.writeByte(l.ty);
+                appendULEB128(&locBuf, 1); // count of this type
+                locBuf.writeByte(l.ty);
             }
-            // Append the generated bytecode
-            body_.write(fb.code.peekSlice());
         }
         else
         {
-            // No codegen result: emit unreachable stub
-            appendULEB128(&body_, 0); // 0 locals
-            body_.writeByte(WASM_UNREACHABLE);
+            appendULEB128(&locBuf, 0); // 0 local groups
         }
-        body_.writeByte(WASM_END);
 
-        appendULEB128(s, cast(uint) body_.length());
-        s.write(body_.peekSlice());
+        uint codeLen = fb && fb.code.length() ? cast(uint) fb.code.length() : 1; // 1 = unreachable
+        uint bodySize = cast(uint)(locBuf.length() + codeLen + 1); // +1 for END byte
+        uint bodySizeBytes = ulebSize(bodySize);
+
+        // Record where this function's code bytes start in the code section payload.
+        // = offset of body_size field + body_size field bytes + local declarations
+        if (fb)
+            fb.codePayloadStart = payloadOffset + bodySizeBytes + cast(uint) locBuf.length();
+
+        appendULEB128(s, bodySize);
+        s.write(locBuf.peekSlice());
+        if (fb && fb.code.length())
+            s.write(fb.code.peekSlice());
+        else
+            s.writeByte(WASM_UNREACHABLE);
+        s.writeByte(WASM_END);
+
+        payloadOffset += bodySizeBytes + bodySize;
     }
     writeSection(out_, WasmSection.code, s);
 }
@@ -608,6 +790,263 @@ private void emitDataSection(OutBuffer* out_) @trusted
     writeSection(out_, WasmSection.data, s);
 }
 
+// Emit the "linking" custom section required by wasm-ld.
+// Contains WASM_LINKING_SYMBOL_TABLE with one entry per function (import or defined).
+private void emitLinkingSection(OutBuffer* out_) @trusted
+{
+    OutBuffer body_;
+    appendULEB128(&body_, 2); // linking metadata version 2
+
+    // WASM_LINKING_SYMBOL_TABLE subsection
+    OutBuffer symtab;
+    // Count usable symbols (skip anonymous synthesized functions).
+    // Also count one SYMTAB_TABLE entry for the defined function table (if any).
+    uint symCount = 0;
+    foreach (ref const WasmFunc f; wmod.funcs)
+    {
+        const(char)[] name;
+        if (f.sym)
+            name = f.sym.Sident.ptr[0 .. strlen(f.sym.Sident.ptr)];
+        else
+            name = f.importName.length ? f.importName : f.name[];
+        if (name.length)
+            symCount++;
+    }
+    // One TABLE symbol for the function table (defined or imported).
+    const bool hasTable = !wmod.importFuncTable &&
+        (wmod.funcs.length > wmod.numImports);
+    const bool hasImportedTable = wmod.importFuncTable;
+    if (hasTable || hasImportedTable)
+        symCount++;
+    appendULEB128(&symtab, symCount);
+
+    foreach (size_t i, ref const WasmFunc f; wmod.funcs)
+    {
+        const(char)[] name;
+        if (f.sym)
+            name = f.sym.Sident.ptr[0 .. strlen(f.sym.Sident.ptr)];
+        else
+            name = f.importName.length ? f.importName : f.name[];
+        if (!name.length)
+            continue; // skip anonymous synthesized functions
+
+        symtab.writeByte(WASM_SYMTAB_FUNCTION);
+
+        // For UNDEFINED (import) symbols the name comes from the import
+        // section; do NOT include a name field in the symbol table entry.
+        // For defined symbols, provide an explicit name. Use global binding
+        // (no WASM_SYM_BINDING_LOCAL) so wasm-ld accepts these symbols as
+        // targets for R_WASM_TYPE_INDEX_LEB relocations.
+        uint flags;
+        if (f.isImport)
+        {
+            flags = WASM_SYM_UNDEFINED;
+        }
+        else
+        {
+            flags = WASM_SYM_EXPLICIT_NAME;
+            if (f.exported)
+                flags |= WASM_SYM_EXPORTED;
+            // Defined non-exported functions: global binding by default
+            // (omit WASM_SYM_BINDING_LOCAL so wasm-ld can use them for type relocs)
+        }
+
+        appendULEB128(&symtab, flags);
+        appendULEB128(&symtab, cast(uint) i); // function index
+        if (flags & WASM_SYM_EXPLICIT_NAME)
+            appendName(&symtab, name); // only for defined symbols
+    }
+
+    // Add a SYMTAB_TABLE entry for the function table so wasm-ld accepts it.
+    if (hasTable)
+    {
+        // Defined table: table index 0, binding local.
+        symtab.writeByte(WASM_SYMTAB_TABLE);
+        appendULEB128(&symtab, WASM_SYM_BINDING_LOCAL | WASM_SYM_EXPLICIT_NAME);
+        appendULEB128(&symtab, 0); // table index 0
+        appendName(&symtab, "__indirect_function_table");
+    }
+    else if (hasImportedTable)
+    {
+        // Imported table: table index 0, undefined.
+        symtab.writeByte(WASM_SYMTAB_TABLE);
+        appendULEB128(&symtab, WASM_SYM_UNDEFINED);
+        appendULEB128(&symtab, 0); // table index 0
+    }
+
+    body_.writeByte(WASM_LINKING_SYMBOL_TABLE);
+    appendULEB128(&body_, cast(uint) symtab.length());
+    body_.write(symtab.peekSlice());
+
+    writeCustomSection(out_, "linking", &body_);
+}
+
+// Emit "reloc.DATA" custom section with R_WASM_TABLE_INDEX_I32 entries for
+// function-table-index (function pointer) writes in the data section.
+// wasm-ld patches these with the correct table indices after linking.
+// dataSectionIdx: the 0-based section index of the data section in the module.
+private void emitRelocDataSection(OutBuffer* out_, uint dataSectionIdx) @trusted
+{
+    if (!wmod.funcRelocations.length || !wmod.dataSegs.length)
+        return;
+
+    // Build funcToSymIdx mapping
+    uint[] funcToSymIdx;
+    funcToSymIdx.length = wmod.funcs.length;
+    uint si = 0;
+    foreach (size_t i, ref const WasmFunc f; wmod.funcs)
+    {
+        const(char)[] name;
+        if (f.sym)
+            name = f.sym.Sident.ptr[0 .. strlen(f.sym.Sident.ptr)];
+        else
+            name = f.importName.length ? f.importName : f.name[];
+        funcToSymIdx[i] = name.length ? si++ : uint.max;
+    }
+
+    // Compute the data section payload prefix size:
+    // [count=1 ULEB] + [seg_kind=0] + [i32.const=0x41] + [offset=4 ULEB] + [end=0x0B]
+    //   + [seg_size ULEB]
+    uint segSize = cast(uint) wmod.dataSegs[0].data.length();
+    uint dataSectionPrefix = 1 + 1 + 1 + ulebSize(4) + 1 + ulebSize(segSize);
+
+    // Two-pass: first count valid relocs, then write them.
+    uint relCount = 0;
+    foreach (ref WasmModule.FuncReloc rel; wmod.funcRelocations)
+    {
+        uint funcIdx = uint.max;
+        foreach (size_t fi; wmod.numImports .. wmod.funcs.length)
+            if (wmod.funcs[fi].sym == rel.sym) { funcIdx = cast(uint) fi; break; }
+        if (funcIdx != uint.max && funcIdx < funcToSymIdx.length &&
+            funcToSymIdx[funcIdx] != uint.max)
+            relCount++;
+    }
+    if (!relCount)
+        return;
+
+    OutBuffer payload;
+    appendULEB128(&payload, dataSectionIdx);
+    appendULEB128(&payload, relCount);
+
+    foreach (ref WasmModule.FuncReloc rel; wmod.funcRelocations)
+    {
+        uint funcIdx = uint.max;
+        foreach (size_t fi; wmod.numImports .. wmod.funcs.length)
+            if (wmod.funcs[fi].sym == rel.sym) { funcIdx = cast(uint) fi; break; }
+        if (funcIdx == uint.max) continue;
+        uint sym = funcToSymIdx[funcIdx];
+        if (sym == uint.max) continue;
+
+        payload.writeByte(R_WASM_TABLE_INDEX_I32);
+        appendULEB128(&payload, dataSectionPrefix + rel.dataByteOffset);
+        appendULEB128(&payload, sym);
+    }
+
+    writeCustomSection(out_, "reloc.DATA", &payload);
+}
+
+// Emit "reloc.ELEM" custom section with R_WASM_FUNCTION_INDEX_LEB entries for
+// each function index in the element section so wasm-ld can patch them when
+// the element is merged with other objects (function indices may change).
+private void emitRelocElemSection(OutBuffer* out_, uint elemSectionIdx) @trusted
+{
+    if (!wmod.elemFuncRelocOffsets.length)
+        return;
+
+    // Build funcToSymIdx mapping (same logic as emitRelocCodeSection)
+    uint[] funcToSymIdx;
+    funcToSymIdx.length = wmod.funcs.length;
+    uint si = 0;
+    foreach (size_t i, ref const WasmFunc f; wmod.funcs)
+    {
+        const(char)[] name;
+        if (f.sym)
+            name = f.sym.Sident.ptr[0 .. strlen(f.sym.Sident.ptr)];
+        else
+            name = f.importName.length ? f.importName : f.name[];
+        funcToSymIdx[i] = name.length ? si++ : uint.max;
+    }
+
+    // Two-pass: count valid relocs first, then write.
+    uint relCount = 0;
+    foreach (size_t k, uint payloadOff; wmod.elemFuncRelocOffsets)
+    {
+        uint funcIdx = cast(uint)(wmod.numImports + k);
+        if (funcIdx < funcToSymIdx.length && funcToSymIdx[funcIdx] != uint.max)
+            relCount++;
+    }
+    if (!relCount)
+        return;
+
+    OutBuffer payload;
+    appendULEB128(&payload, elemSectionIdx);
+    appendULEB128(&payload, relCount);
+
+    foreach (size_t k, uint payloadOff; wmod.elemFuncRelocOffsets)
+    {
+        uint funcIdx = cast(uint)(wmod.numImports + k);
+        uint sym = funcIdx < funcToSymIdx.length ? funcToSymIdx[funcIdx] : uint.max;
+        if (sym == uint.max)
+            continue;
+        payload.writeByte(R_WASM_FUNCTION_INDEX_LEB);
+        appendULEB128(&payload, payloadOff);
+        appendULEB128(&payload, sym);
+    }
+
+    writeCustomSection(out_, "reloc.ELEM", &payload);
+}
+
+// Emit "reloc.CODE" custom section with R_WASM_FUNCTION_INDEX_LEB entries
+// for all direct function calls recorded during code generation.
+// codeSectionIdx: the 0-based section index of the code section in the module.
+private void emitRelocCodeSection(OutBuffer* out_, uint codeSectionIdx) @trusted
+{
+    // Collect all relocations with their absolute code-section-payload offsets.
+    // Build a mapping from function index to symbol table index.
+    // Since we skip anonymous functions in the symbol table, we need a map.
+    uint[] funcToSymIdx;
+    funcToSymIdx.length = wmod.funcs.length;
+    uint si = 0;
+    foreach (size_t i, ref const WasmFunc f; wmod.funcs)
+    {
+        const(char)[] name;
+        if (f.sym)
+            name = f.sym.Sident.ptr[0 .. strlen(f.sym.Sident.ptr)];
+        else
+            name = f.importName.length ? f.importName : f.name[];
+        funcToSymIdx[i] = name.length ? si++ : uint.max;
+    }
+
+    // Count total relocations across all function bodies.
+    uint totalRelocs = 0;
+    foreach (size_t fi, ref const WasmFuncBody fb; wasmFuncBodies)
+        foreach (ref const WasmFuncBody.CodeReloc r; fb.codeRelocs)
+            if (funcToSymIdx[r.symIdx] != uint.max)
+                totalRelocs++;
+
+    if (!totalRelocs)
+        return;
+
+    OutBuffer payload;
+    appendULEB128(&payload, codeSectionIdx);
+    appendULEB128(&payload, totalRelocs);
+
+    foreach (size_t fi, ref const WasmFuncBody fb; wasmFuncBodies)
+    {
+        foreach (ref const WasmFuncBody.CodeReloc r; fb.codeRelocs)
+        {
+            uint sym = funcToSymIdx[r.symIdx];
+            if (sym == uint.max)
+                continue;
+            payload.writeByte(r.type);
+            appendULEB128(&payload, fb.codePayloadStart + r.offset);
+            appendULEB128(&payload, sym);
+        }
+    }
+
+    writeCustomSection(out_, "reloc.CODE", &payload);
+}
+
 // ---------------------------------------------------------------------------
 // Obj interface implementation
 // ---------------------------------------------------------------------------
@@ -617,6 +1056,8 @@ Obj WasmObj_init(OutBuffer* objbuf, const(char)* filename, const(char)* csegname
     wmod = new WasmModule();
     wmod.objbuf = objbuf;
     wasmFuncBodies = null;
+    // The relocatable flag is set externally (by the DMD frontend) when -c is given.
+    wmod.relocatable = wasm_relocatable;
 
     // Initialize the SegData array with placeholder entries for the standard
     // segment indices (CODE=1, DATA=2, CDATA=3, UDATA=4) so the backend's
@@ -666,6 +1107,11 @@ void WasmObj_term(const(char)[] objfilename) @trusted
             for (; b; b = b.Bnext)
                 preRegisterExternals(b.Belem);
         }
+        // Reorder type table so import types come first — this must happen
+        // between phase 1 and phase 2 so that code generation uses the
+        // correct post-reorder type indices in call_indirect instructions.
+        wmod.reorderImportTypesFirst();
+
         // Phase 2: generate code now that import indices are stable.
         // Restore each function's globsym before calling wasm_codgen.
         import dmd.backend.var : globsym;
@@ -684,30 +1130,29 @@ void WasmObj_term(const(char)[] objfilename) @trusted
     }
 
     // Patch deferred relocations in the data segment.
-    // Now that all symbols are allocated, we have their correct Soffset/table indices.
     if (wmod.dataSegs.length > 0)
     {
         ubyte[] dataBuf = cast(ubyte[]) wmod.dataSegs[0].data.peekSlice();
 
-        // Patch function-pointer relocations (write WASM table index).
-        foreach (ref WasmModule.FuncReloc rel; wmod.funcRelocations)
+        if (!wmod.relocatable)
         {
-            if (rel.dataByteOffset + 4 > dataBuf.length)
-                continue;
-            uint tableIdx = 0;
-            foreach (size_t fi; wmod.numImports .. wmod.funcs.length)
+            // Final module: resolve function-pointer table indices directly.
+            foreach (ref WasmModule.FuncReloc rel; wmod.funcRelocations)
             {
-                if (wmod.funcs[fi].sym == rel.sym)
-                {
-                    tableIdx = cast(uint)(fi - wmod.numImports);
-                    break;
-                }
+                if (rel.dataByteOffset + 4 > dataBuf.length)
+                    continue;
+                uint tableIdx = 0;
+                foreach (size_t fi; wmod.numImports .. wmod.funcs.length)
+                    if (wmod.funcs[fi].sym == rel.sym)
+                    { tableIdx = cast(uint)(fi - wmod.numImports); break; }
+                dataBuf[rel.dataByteOffset .. rel.dataByteOffset + 4] =
+                    (cast(ubyte*)&tableIdx)[0 .. 4];
             }
-            dataBuf[rel.dataByteOffset .. rel.dataByteOffset + 4] =
-                (cast(ubyte*)&tableIdx)[0 .. 4];
         }
+        // In relocatable mode, funcRelocations are left as 0 placeholders;
+        // wasm-ld patches them via R_WASM_TABLE_INDEX_I32 in reloc.DATA.
 
-        // Patch data-symbol relocations (write linear memory address).
+        // Always patch data-to-data address references (stable across linking).
         foreach (ref WasmModule.DataReloc rel; wmod.dataRelocations)
         {
             if (rel.dataByteOffset + 4 > dataBuf.length)
@@ -725,16 +1170,61 @@ void WasmObj_term(const(char)[] objfilename) @trusted
     if (wmod.stackPtrGlobalIdx >= 0)
         wmod.globals[wmod.stackPtrGlobalIdx].initVal = 65536;
 
+    // Use defined table (not imported) — matches pre-link behavior.
+    // The relocatable object has the table defined; wasm-ld owns it.
+    wmod.importFuncTable = false;
+
+    // Emit all sections in canonical order and track section indices
+    // so reloc.CODE can reference the code section by its module index.
+    uint sectionIdx = 0; // counts non-custom sections actually emitted
     emitTypeSection(out_);
+    if (wmod.funcTypes.length) sectionIdx++;
+
+    uint count = wmod.numImports + (wmod.importFuncTable ? 1 : 0);
     emitImportSection(out_);
+    if (count) sectionIdx++;
+
+    uint defined = cast(uint)(wmod.funcs.length - wmod.numImports);
     emitFunctionSection(out_);
-    emitTableSection(out_);
+    if (defined) sectionIdx++;
+
+    if (emitTableSection(out_)) sectionIdx++;
     emitMemorySection(out_);
+    sectionIdx++; // memory section always emitted
+
     emitGlobalSection(out_);
+    if (wmod.globals.length) sectionIdx++;
+
     emitExportSection(out_);
+    {
+        // Export section: count exported + memory
+        uint expCount = 1; // "memory"
+        foreach (ref const WasmFunc f; wmod.funcs)
+            if (f.exported) expCount++;
+        if (expCount) sectionIdx++;
+    }
+
+    uint elemSectionIdx = sectionIdx;
     emitElementSection(out_);
+    if (defined) sectionIdx++;
+
+    uint codeSectionIdx = sectionIdx;
     emitCodeSection(out_);
+    if (defined) sectionIdx++;
+
+    uint dataSectionIdx = sectionIdx;
     emitDataSection(out_);
+    if (wmod.dataSegs.length) sectionIdx++;
+
+    // Relocatable objects include "linking" + "reloc.*" custom sections
+    // so wasm-ld can patch symbol references when linking.
+    if (wmod.relocatable)
+    {
+        emitLinkingSection(out_);
+        emitRelocDataSection(out_, dataSectionIdx);
+        emitRelocElemSection(out_, elemSectionIdx);
+        emitRelocCodeSection(out_, codeSectionIdx);
+    }
 
     wmod = null;
 }
@@ -944,11 +1434,11 @@ int WasmObj_data_start(Symbol* sdata, targ_size_t datasize, int seg) @trusted
     return 1;
 }
 
+// Returns: the WASM import module name for a given function name
 // Return the WASM import module name for a given function name.
 // WASI functions come from "wasi_snapshot_preview1"; everything else from "env".
 private const(char)[] wasiImportModule(const(char)[] name) @trusted
 {
-    // WASI snapshot preview1 API — these are host-provided OS primitives.
     static immutable string[] wasiNames = [
         "args_get", "args_sizes_get",
         "environ_get", "environ_sizes_get",
@@ -1194,6 +1684,28 @@ uint wmod_internType(ubyte[] params, ubyte[] results) @trusted
     return wmod.internType(ft);
 }
 
+// Find the function index of a named function whose WASM type matches typeIdx.
+// Used to produce R_WASM_TYPE_INDEX_LEB relocations for call_indirect instructions
+// so wasm-ld can patch the type index when merging type tables.
+uint wmod_findFuncForType(uint typeIdx) @trusted
+{
+    if (!wmod) return uint.max;
+    foreach (size_t i, ref const WasmFunc f; wmod.funcs)
+    {
+        if (f.typeIdx != typeIdx)
+            continue;
+        // Only return functions that have a symbol table entry (named).
+        const(char)[] name;
+        if (f.sym)
+            name = f.sym.Sident.ptr[0 .. strlen(f.sym.Sident.ptr)];
+        else
+            name = f.importName.length ? f.importName : f.name[];
+        if (name.length)
+            return cast(uint) i;
+    }
+    return uint.max;
+}
+
 // Add a synthesized (no-Symbol) function to the module with the given type signature.
 // Returns the combined function index (numImports + body position).
 // After calling, the caller must write code into wasmFuncBodies[$-1].code.
@@ -1207,6 +1719,7 @@ uint wmod_addDefinedFunc(string name, WasmLocal[] locals, uint numParams,
     f.typeIdx = wmod.internType(ft);
     f.sym = null;
     f.exported = false;
+    f.name = name; // store for symbol table
     wmod.funcs ~= f;
     WasmFuncBody empty;
     empty.name = name;
