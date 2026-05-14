@@ -217,10 +217,12 @@ struct WasmModule
     WasmGlobal[] globals; // module-level mutable globals
     int stackPtrGlobalIdx = -1; // index of __stack_pointer global (-1 = not created)
 
-    // Deferred function-pointer relocations in data segments.
-    // Written as 0 during data emission; patched in WasmObj_term once table indices are known.
+    // Deferred relocations in data segments. Written as 0 at emit time;
+    // patched in WasmObj_term once all symbol addresses are known.
     struct FuncReloc { uint dataByteOffset; Symbol* sym; }
+    struct DataReloc { uint dataByteOffset; Symbol* sym; uint addend; }
     FuncReloc[] funcRelocations;
+    DataReloc[] dataRelocations;
 
     // Scratch OutBuffer for section payloads
     OutBuffer scratch;
@@ -681,17 +683,18 @@ void WasmObj_term(const(char)[] objfilename) @trusted
         globsym.setLength(0);
     }
 
-    // Patch deferred function-pointer relocations in the data segment.
-    // Now that all functions are registered, we can look up their WASM table indices.
+    // Patch deferred relocations in the data segment.
+    // Now that all symbols are allocated, we have their correct Soffset/table indices.
     if (wmod.dataSegs.length > 0)
     {
         ubyte[] dataBuf = cast(ubyte[]) wmod.dataSegs[0].data.peekSlice();
+
+        // Patch function-pointer relocations (write WASM table index).
         foreach (ref WasmModule.FuncReloc rel; wmod.funcRelocations)
         {
             if (rel.dataByteOffset + 4 > dataBuf.length)
                 continue;
             uint tableIdx = 0;
-            // Find the function in the defined function list and compute its table index.
             foreach (size_t fi; wmod.numImports .. wmod.funcs.length)
             {
                 if (wmod.funcs[fi].sym == rel.sym)
@@ -702,6 +705,16 @@ void WasmObj_term(const(char)[] objfilename) @trusted
             }
             dataBuf[rel.dataByteOffset .. rel.dataByteOffset + 4] =
                 (cast(ubyte*)&tableIdx)[0 .. 4];
+        }
+
+        // Patch data-symbol relocations (write linear memory address).
+        foreach (ref WasmModule.DataReloc rel; wmod.dataRelocations)
+        {
+            if (rel.dataByteOffset + 4 > dataBuf.length)
+                continue;
+            uint addr = cast(uint)(rel.sym.Soffset + rel.addend);
+            dataBuf[rel.dataByteOffset .. rel.dataByteOffset + 4] =
+                (cast(ubyte*)&addr)[0 .. 4];
         }
     }
 
@@ -805,7 +818,11 @@ int WasmObj_comdat(Symbol* s) @trusted
     // Register a defined function
     WasmFuncType ft;
     if (tybasic(s.Stype.Tty) != TYvoid)
+    {
         ft = buildFuncType(s.Stype);
+        if (s.Sfunc && s.Sfunc.Fflags3 & Fmember)
+            ft.params = WASM_I32 ~ ft.params;
+    }
     WasmFunc f;
     f.typeIdx = wmod.internType(ft);
     f.sym = s;
@@ -900,6 +917,19 @@ int WasmObj_data_start(Symbol* sdata, targ_size_t datasize, int seg) @trusted
         wmod.dataSegs.length = 1;
         wmod.dataSegs[0].offset = 4; // reserve address 0 as null pointer
     }
+
+    if (seg == WASM_UDATA)
+    {
+        // BSS: just reserve address space. WASM linear memory is zero-initialized,
+        // so no bytes need to be emitted. Deactivate the data buffer so subsequent
+        // lidata/write calls (which don't exist for BSS) are ignored.
+        wmod.activeSeg = null;
+        if (sdata)
+            sdata.Soffset = base;
+        wmod.dataHeap = base + cast(uint) datasize;
+        return seg;
+    }
+
     wmod.activeSeg = &wmod.dataSegs[0];
 
     // Write alignment padding bytes so buffer position == symbol address.
@@ -942,10 +972,42 @@ private const(char)[] wasiImportModule(const(char)[] name) @trusted
     return "env";
 }
 
+// Update an import's WASM function type. Called from codgen when the actual
+// argument types are known at the call site (runtime symbols use a generic
+// placeholder type that lacks parameter info).
+void wmod_fixImportType(uint fidx, const(ubyte)[] params, const(ubyte)[] results) @trusted
+{
+    if (fidx >= wmod.funcs.length || !wmod.funcs[fidx].isImport)
+        return;
+    const existing = wmod.funcTypes[wmod.funcs[fidx].typeIdx];
+    // Only fix if the existing type has no parameters (generic placeholder).
+    if (existing.params.length != 0)
+        return;
+    WasmFuncType newFT;
+    newFT.params = params.dup;
+    newFT.results = results.dup;
+    wmod.funcs[fidx].typeIdx = wmod.internType(newFT);
+}
+
 int WasmObj_external(Symbol* s) @trusted
 {
     if (!s || !s.Stype)
         return 0;
+    // If a non-import function with the same name is already defined in the module
+    // (e.g. user provides `extern(C) int memcmp(...)`), use that instead of importing.
+    const(char)[] id = s.Sident.ptr[0 .. strlen(s.Sident.ptr)];
+    foreach (size_t i, ref const WasmFunc f; wmod.funcs)
+    {
+        if (!f.isImport && f.sym && f.sym.Sident.ptr != s.Sident.ptr)
+        {
+            const(char)[] fname = f.sym.Sident.ptr[0 .. strlen(f.sym.Sident.ptr)];
+            if (fname == id)
+            {
+                s.Sseg = cast(int) i;
+                return s.Sseg;
+            }
+        }
+    }
     // Register as an import. Use the correct module name for known ABIs.
     WasmFuncType ft;
     if (tybasic(s.Stype.Tty) != TYvoid)
@@ -953,7 +1015,6 @@ int WasmObj_external(Symbol* s) @trusted
     WasmFunc f;
     f.typeIdx = wmod.internType(ft);
     f.sym = s;
-    const(char)[] id = s.Sident.ptr[0 .. strlen(s.Sident.ptr)];
     f.importModule = wasiImportModule(id);
     f.importName = id;
     f.isImport = true;
@@ -976,13 +1037,20 @@ int WasmObj_common_block(Symbol* s, int flag, targ_size_t size, targ_size_t coun
 
 void WasmObj_lidata(int seg, targ_size_t offset, targ_size_t count) @trusted
 {
-    // WASM linear memory is zero-initialized; BSS needs no bytes in the data section.
-    // dataHeap was already advanced by WasmObj_data_start.
+    // BSS segment: WASM linear memory is zero-initialized by the runtime; address
+    // space was already reserved in data_start, so nothing to emit.
+    if (seg == WASM_UDATA || !wmod.activeSeg)
+        return;
+    foreach (_; 0 .. count)
+        wmod.activeSeg.data.writeByte(0);
 }
 
 void WasmObj_write_zeros(seg_data* pseg, targ_size_t count) @trusted
 {
-    // WASM linear memory is zero-initialized; no need to emit zero bytes.
+    if (pseg.SDseg == WASM_UDATA || !wmod.activeSeg)
+        return;
+    foreach (_; 0 .. count)
+        wmod.activeSeg.data.writeByte(0);
 }
 
 void WasmObj_write_byte(seg_data* pseg, uint _byte) @trusted
@@ -1038,8 +1106,19 @@ int WasmObj_reftoident(int seg, targ_size_t offset, Symbol* s, targ_size_t val, 
         wmod.funcRelocations ~= WasmModule.FuncReloc(dataOff, s);
         return 4;
     }
-    // Data symbols: write linear memory address.
-    uint addr = cast(uint)(s ? (s.Soffset + val) : val);
+    // Data symbols: write linear memory address, or defer if not yet allocated.
+    uint addr;
+    if (s && s.Soffset == 0)
+    {
+        // Soffset is 0: symbol may not be allocated yet. Record deferred relocation;
+        // WasmObj_term will patch with the final address (or leave as 0 if truly external).
+        uint dataOff = cast(uint) wmod.activeSeg.data.length;
+        uint zero = 0;
+        wmod.activeSeg.data.write(&zero, 4);
+        wmod.dataRelocations ~= WasmModule.DataReloc(dataOff, s, cast(uint) val);
+        return 4;
+    }
+    addr = cast(uint)(s ? (s.Soffset + val) : val);
     wmod.activeSeg.data.write(&addr, 4);
     return 4;
 }
@@ -1102,6 +1181,17 @@ uint wmod_internFuncPtrType(type* ptrType) @trusted
         return 0;
     WasmFuncType wft = buildFuncType(ft);
     return wmod.internType(wft);
+}
+
+// Intern a WASM function type given explicit param and result byte arrays.
+// Used by codgen.d to compute typeIdx for virtual call_indirect.
+uint wmod_internType(ubyte[] params, ubyte[] results) @trusted
+{
+    if (!wmod) return 0;
+    WasmFuncType ft;
+    ft.params = params;
+    ft.results = results;
+    return wmod.internType(ft);
 }
 
 // Add a synthesized (no-Symbol) function to the module with the given type signature.
@@ -1212,6 +1302,10 @@ void WasmObj_func_start(Symbol* sfunc) @trusted
     if (!sfunc || !sfunc.Stype)
         return;
     WasmFuncType ft = buildFuncType(sfunc.Stype);
+    // D member functions (Fmember) receive 'this' as an implicit first parameter,
+    // which is not in Tparamtypes. Prepend an i32 for the 'this' pointer.
+    if (sfunc.Sfunc && sfunc.Sfunc.Fflags3 & Fmember)
+        ft.params = WASM_I32 ~ ft.params;
     WasmFunc f;
     f.typeIdx = wmod.internType(ft);
     f.sym = sfunc;

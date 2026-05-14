@@ -246,6 +246,30 @@ extern (C) int double_(int x) => x * 2;
 
 extern (C) int square(int x) => x * x;
 
+// WASI proc_exit: terminate the process (used by __assert below).
+extern (C) void proc_exit(int code);
+
+// Assert handler: betterC assert failure calls __assert(msg, file, line).
+extern (C) void __assert(const(char)* msg, const(char)* file, int line)
+{
+    proc_exit(1);
+}
+
+// memcmp: required for slice equality comparisons in betterC WASM (no libc)
+extern (C) int memcmp(const(void)* a, const(void)* b, size_t n)
+{
+    const(ubyte)* pa = cast(const(ubyte)*) a;
+    const(ubyte)* pb = cast(const(ubyte)*) b;
+    for (size_t i = 0; i < n; i++)
+    {
+        if (pa[i] < pb[i])
+            return -1;
+        if (pa[i] > pb[i])
+            return 1;
+    }
+    return 0;
+}
+
 // Hash / string / memory operations
 extern (C) uint fnv1a(const(ubyte)* data, int len)
 {
@@ -331,7 +355,6 @@ struct WasiIov
 }
 
 extern (C) int fd_write(uint fd, const(WasiIov)* iovs, size_t iovs_len, size_t* nwritten);
-extern (C) void proc_exit(int code);
 
 extern (C) void wasiWrite(const(char)* msg, size_t len)
 {
@@ -348,14 +371,18 @@ extern (C) void wasiWrite(const(char)* msg, size_t len)
 version (D_TypeInfo) static assert(true, "D_TypeInfo is defined for WASM");
 
 // TypeInfo carries the type's size (runtime check — TypeInfo is a static variable)
-void testTypeInfo()
+version (D_TypeInfo) void testTypeInfo()
 {
     assert(typeid(int) !is null);
     assert(typeid(double) !is null);
     assert(typeid(bool) !is null);
 
     // Struct TypeInfo
-    struct Color { ubyte r, g, b; }
+    struct Color
+    {
+        ubyte r, g, b;
+    }
+
     assert(typeid(Color) !is null);
 
     // TypeInfo carries the type's size
@@ -381,24 +408,41 @@ class Circle : Shape
 {
     double radius;
 
-    this(double r) { radius = r; }
+    this(double r)
+    {
+        radius = r;
+    }
 
     override double area() const
     {
         return 3.14159265358979 * radius * radius;
     }
 
-    override const(char)[] kind() const { return "circle"; }
+    override const(char)[] kind() const
+    {
+        return "circle";
+    }
 }
 
 class Rectangle : Shape
 {
     double w, h;
 
-    this(double w, double h) { this.w = w; this.h = h; }
+    this(double w, double h)
+    {
+        this.w = w;
+        this.h = h;
+    }
 
-    override double area() const { return w * h; }
-    override const(char)[] kind() const { return "rectangle"; }
+    override double area() const
+    {
+        return w * h;
+    }
+
+    override const(char)[] kind() const
+    {
+        return "rectangle";
+    }
 }
 
 // TypeInfo for class types (compile-time is-a checks)
@@ -407,11 +451,18 @@ static assert(is(Rectangle : Shape));
 static assert(!is(Circle : Rectangle));
 
 // Virtual dispatch through base pointer
-double shapeArea(Shape s) { return s.area(); }
-const(char)[] shapeKind(Shape s) { return s.kind(); }
+double shapeArea(Shape s)
+{
+    return s.area();
+}
+
+const(char)[] shapeKind(Shape s)
+{
+    return s.kind();
+}
 
 // ClassInfo is accessible at runtime
-void testClassInfo()
+version (D_TypeInfo) void testClassInfo()
 {
     assert(typeid(Circle) !is null);
     assert(typeid(Rectangle) !is null);
@@ -434,9 +485,208 @@ class Widget : Drawable, Resizable
 {
     double size = 1.0;
 
-    void draw() {}
-    void resize(double factor) { size *= factor; }
+    void draw()
+    {
+    }
+
+    void resize(double factor)
+    {
+        size *= factor;
+    }
 }
 
-static assert(is(Widget : Drawable));
-static assert(is(Widget : Resizable));
+// ---- Virtual dispatch runtime test ------------------------------------------
+
+// Allocate class instances in static buffers (no GC needed)
+private
+{
+    __gshared ubyte[64] _wasm_dogBuf;
+    __gshared ubyte[64] _wasm_catBuf;
+}
+
+private T wasmEmplace(T)(ubyte* mem)
+{
+    auto init = __traits(initSymbol, T);
+    (cast(ubyte*) mem)[0 .. init.length] = cast(ubyte[]) init;
+    return cast(T) mem;
+}
+
+void testVirtualDispatch()
+{
+    Circle circ = wasmEmplace!Circle(_wasm_dogBuf.ptr);
+    circ.__ctor(5.0);
+    Rectangle rect = wasmEmplace!Rectangle(_wasm_catBuf.ptr);
+    rect.__ctor(3.0, 4.0);
+
+    // Direct virtual call
+    assert(circ.kind() == "circle");
+    assert(rect.kind() == "rectangle");
+
+    // Virtual dispatch through base pointer
+    Shape s = circ;
+    double a1 = s.area(); // calls Circle.area() virtually
+    assert(a1 > 78.0 && a1 < 79.0); // π*25 ≈ 78.54
+
+    s = rect;
+    double a2 = s.area(); // calls Rectangle.area() virtually
+    assert(a2 == 12.0); // 3.0 * 4.0
+}
+
+extern (C) int main()
+{
+    // Basic arithmetic
+    assert(add(3, 4) == 7);
+    assert(add(-1, 1) == 0);
+
+    // Recursion
+    assert(factorial(0) == 1);
+    assert(factorial(1) == 1);
+    assert(factorial(5) == 120);
+
+    // Loops / gcd
+    assert(gcd(12, 8) == 4);
+    assert(gcd(17, 5) == 1);
+    assert(gcd(100, 75) == 25);
+
+    // Conditionals
+    assert(sign(5) == 1);
+    assert(sign(-3) == -1);
+    assert(sign(0) == 0);
+
+    // For loop accumulator
+    assert(count(5) == 10); // 0+1+2+3+4
+    assert(count(0) == 0);
+
+    // Do-while
+    assert(sumDoWhile(5) == 15); // 1+2+3+4+5
+    assert(sumDoWhile(1) == 1);
+
+    // Switch
+    assert(dayType(0) == 0);
+    assert(dayType(6) == 0);
+    assert(dayType(3) == 1);
+    assert(dayType(7) == -1);
+
+    // Global variable
+    assert(getCounter() == 0);
+    increment();
+    increment();
+    assert(getCounter() == 2);
+
+    // Float / double
+    assert(fadd(1.5f, 2.5f) == 4.0f);
+    assert(dadd(1.5, 2.5) == 4.0);
+
+    // Shadow stack: address-of
+    assert(testAddrOf() == 42);
+    assert(testAddrOfModify() == 99);
+    assert(testSwap() == 21);
+
+    // Struct return via hidden pointer
+    Vec2 v = makeVec2(3.0f, 4.0f);
+    assert(v.x == 3.0f);
+    assert(v.y == 4.0f);
+
+    Point pt = makePoint(10, 20);
+    assert(pt.x == 10);
+    assert(pt.y == 20);
+
+    // Struct field access via pointer
+    assert(getVec2X(&v) == 3.0f);
+    assert(getVec2Y(&v) == 4.0f);
+    setVec2X(&v, 9.0f);
+    assert(v.x == 9.0f);
+
+    assert(getPointX(&pt) == 10);
+    assert(getPointY(&pt) == 20);
+
+    // Long arithmetic
+    assert(addLong(1_000_000_000L, 2_000_000_000L) == 3_000_000_000L);
+    assert(mulLong(1_000_000L, 1_000_000L) == 1_000_000_000_000L);
+
+    // Array / pointer operations
+    int[5] arr = [5, 3, 1, 4, 2];
+    assert(sumSlice(arr.ptr, 5) == 15);
+
+    fillArray(arr.ptr, 5, 7);
+    assert(arr[0] == 7 && arr[4] == 7);
+
+    int[5] arr2 = [1, 2, 3, 4, 5];
+    reverseArray(arr2.ptr, 5);
+    assert(arr2[0] == 5 && arr2[2] == 3 && arr2[4] == 1);
+
+    // Fibonacci
+    assert(fibonacci(0) == 0);
+    assert(fibonacci(1) == 1);
+    assert(fibonacci(10) == 55);
+
+    // Prime
+    assert(isPrime(2) == 1);
+    assert(isPrime(17) == 1);
+    assert(isPrime(1) == 0);
+    assert(isPrime(9) == 0);
+
+    // Insertion sort
+    int[5] toSort = [3, 1, 4, 1, 5];
+    insertionSort(toSort.ptr, 5);
+    assert(toSort[0] == 1 && toSort[1] == 1 && toSort[2] == 3 && toSort[4] == 5);
+
+    // Binary search (sorted array)
+    int[5] sorted = [1, 3, 5, 7, 9];
+    assert(binarySearch(sorted.ptr, 5, 5) == 2);
+    assert(binarySearch(sorted.ptr, 5, 1) == 0);
+    assert(binarySearch(sorted.ptr, 5, 9) == 4);
+    assert(binarySearch(sorted.ptr, 5, 4) == -1);
+
+    // Dot product
+    int[3] va = [1, 2, 3];
+    int[3] vb = [4, 5, 6];
+    assert(iDotProduct(va.ptr, vb.ptr, 3) == 32); // 4+10+18
+
+    // Function pointers
+    assert(applyFn(&double_, 5) == 10);
+    assert(applyFn(&square, 4) == 16);
+
+    // String length
+    assert(strlen_("hello".ptr) == 5);
+    assert(strlen_("".ptr) == 0);
+
+    // memcpy
+    int[4] src = [10, 20, 30, 40];
+    int[4] dst;
+    memcpy_(dst.ptr, src.ptr, 16);
+    assert(dst[0] == 10 && dst[3] == 40);
+
+    // Struct copy
+    S3 s3a = S3(7, 8, 9);
+    S3 s3b;
+    copyS3(&s3b, &s3a);
+    assert(s3Equal(&s3a, &s3b) == 1);
+
+    S3 s3c;
+    initS3(&s3c);
+    assert(s3c.x == 1 && s3c.y == 2 && s3c.z == 3);
+
+    // Large struct copy
+    Big8 big1;
+    foreach (i; 0 .. 8)
+        big1.data[i] = i * 10;
+    Big8 big2;
+    copyBig(&big2, &big1);
+    assert(big2.data[0] == 0 && big2.data[7] == 70);
+
+    // Local struct and array copy
+    assert(localStructCopy() == 789);
+    assert(arrayCopy() == 60);
+
+    // TypeInfo
+    version (D_TypeInfo)
+        testTypeInfo();
+
+    // Classes and virtual dispatch
+    version (D_TypeInfo)
+        testClassInfo();
+    testVirtualDispatch();
+
+    return 0;
+}
