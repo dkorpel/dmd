@@ -30,7 +30,8 @@ import dmd.backend.oper;
 import dmd.backend.ty;
 import dmd.backend.type;
 import dmd.backend.var : globsym;
-import dmd.backend.wasmobj : WasmFuncBody, wasmFuncBodies, WasmLocal;
+import dmd.backend.wasmobj : WasmFuncBody, wasmFuncBodies, WasmLocal,
+    R_WASM_FUNCTION_INDEX_LEB, R_WASM_TYPE_INDEX_LEB;
 
 import dmd.common.outbuffer;
 
@@ -281,6 +282,7 @@ struct WasmCG
     OutBuffer code; /// bytecode being emitted
     WasmLocal[] locals; /// local variable table (params first)
     uint numParams; /// number of parameters (= first numParams locals)
+    WasmFuncBody.CodeReloc[] codeRelocs; /// relocations for direct function calls
 
     // Shadow stack frame (for locals whose address is taken)
     bool hasShadowFrame;
@@ -370,6 +372,30 @@ nothrow:
     void emitSLEB(long v) @trusted
     {
         sleb(&code, v);
+    }
+
+    // Emit OP_CALL with a 5-byte padded ULEB128 function index and record a
+    // R_WASM_FUNCTION_INDEX_LEB relocation so wasm-ld can patch the index.
+    void emitCall(uint fidx) @trusted
+    {
+        emit(OP_CALL);
+        codeRelocs ~= WasmFuncBody.CodeReloc(cast(uint) code.length,
+            R_WASM_FUNCTION_INDEX_LEB, fidx);
+        code.writeByte(cast(ubyte)((fidx & 0x7F) | 0x80));
+        code.writeByte(cast(ubyte)(((fidx >> 7) & 0x7F) | 0x80));
+        code.writeByte(cast(ubyte)(((fidx >> 14) & 0x7F) | 0x80));
+        code.writeByte(cast(ubyte)(((fidx >> 21) & 0x7F) | 0x80));
+        code.writeByte(cast(ubyte)((fidx >> 28) & 0x0F));
+    }
+
+    // Emit the type index operand of call_indirect.
+    // NOTE: R_WASM_TYPE_INDEX_LEB would let wasm-ld patch this, but wasm-ld 22
+    // crashes when using that relocation type for local function symbols.
+    // Instead we rely on reorderImportTypesFirst() which places import types
+    // first so the type indices match what wasm-ld produces for single-file links.
+    void emitCallIndirectType(uint typeIdx) @trusted
+    {
+        emitULEB(typeIdx); // compact ULEB, type indices are stable post-reorder
     }
 
     void emitMemArg(uint align_, uint offset) @trusted
@@ -1302,8 +1328,7 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
                         aresults ~= wasmType(retTy2);
                     wmod_fixImportType(fidx, aparams, aresults);
                 }
-                cg.emit(OP_CALL);
-                cg.emitULEB(fidx);
+                cg.emitCall(fidx);
                 // Noreturn (SFLexit) functions leave the stack empty. Emit unreachable
                 // so WASM's type checker accepts any type expectations after the call.
                 if (e.E1.Vsym.Sflags & SFLexit)
@@ -1385,7 +1410,7 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
                     genElem(cg, fn);
                 }
                 cg.emit(OP_CALL_INDIRECT);
-                cg.emitULEB(typeIdx);
+                cg.emitCallIndirectType(typeIdx);
                 cg.emitULEB(0); // table index 0
             }
             const retTy = tybasic(e.Ety);
@@ -2753,6 +2778,7 @@ void wasm_codgen(Symbol* sfunc) @trusted
     // Store results back into the WasmFuncBody
     fb.locals = cg.locals;
     fb.numParams = cg.numParams;
+    fb.codeRelocs = cg.codeRelocs;
     fb.code.reset();
     fb.code.write(cg.code.peekSlice());
 }
