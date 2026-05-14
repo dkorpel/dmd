@@ -69,8 +69,9 @@ TypeTuple toArgTypes_wasm(Type t)
     case Tcomplex32:
     case Tcomplex64:
     case Tcomplex80:
-        // pointer-like
+        // pointer-like (class references are pointer-sized values, not aggregates)
     case Tpointer:
+    case Tclass:
     case Tnull:
     case Tfunction:
         return new TypeTuple(t);
