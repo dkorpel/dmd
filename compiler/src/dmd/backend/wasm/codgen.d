@@ -859,34 +859,7 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
                     emitLoad(cg, e.E1.Ety);
                     return true;
                 }
-                // For i64 locals (long, D slices): if RHS is OPpair{hi,lo},
-                // combine two i32s into a packed i64 = (hi<<32)|lo.
                 const uint idx = cg.localFor(lhs);
-                if (cg.locals[idx].ty == WASM_I64 &&
-                    (e.E2.Eoper == OPpair || e.E2.Eoper == OPrpair))
-                {
-                    // OPpair(E1=hi, E2=lo): E1 pushed first (becomes bottom), E2 on top.
-                    genElem(cg, e.E2.E1); // hi word (ptr of slice)
-                    genElem(cg, e.E2.E2); // lo word (len of slice)
-                    // stack: [hi, lo]. Save lo in temp.
-                    uint tmpLo = cg.allocTemp(WASM_I32);
-                    cg.emit(OP_LOCAL_SET);
-                    cg.emitULEB(tmpLo);
-                    // Now stack: [hi]. Extend hi to i64 and shift.
-                    cg.emit(OP_I64_EXTEND_I32_U);
-                    cg.emit(OP_I64_CONST);
-                    cg.emitSLEB(32);
-                    cg.emit(OP_I64_SHL);
-                    // Extend lo and OR in.
-                    cg.emit(OP_LOCAL_GET);
-                    cg.emitULEB(tmpLo);
-                    cg.emit(OP_I64_EXTEND_I32_U);
-                    cg.emit(OP_I64_OR);
-                    // stack: [packed_i64]
-                    cg.emit(OP_LOCAL_TEE);
-                    cg.emitULEB(idx);
-                    return true;
-                }
                 genElem(cg, e.E2);
                 // Coerce i32→i64 if needed (e.g. assigning integer to ulong local).
                 if (cg.locals[idx].ty == WASM_I64 && wasmType(e.E2.Ety) == WASM_I32)
@@ -1295,8 +1268,46 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
                 e.E1.Vsym.Sclass != SC.parameter && e.E1.Vsym.Sclass != SC.fastpar)
             {
                 uint fidx = funcIndex(e.E1.Vsym);
+                // Runtime symbols (memcmp, __assert, etc.) are registered with a
+                // generic empty type because rtlsym.d uses type_fake(TYnfunc). Fix
+                // the import type from the actual call-site argument/return types.
+                {
+                    import dmd.backend.wasmobj : wmod_fixImportType;
+
+                    ubyte[] aparams;
+                    void collectArgTys(elem* p) nothrow @trusted
+                    {
+                        if (!p)
+                            return;
+                        if (p.Eoper == OPparam)
+                        {
+                            collectArgTys(p.E2);
+                            collectArgTys(p.E1);
+                            return;
+                        }
+                        const tym_t pty = tybasic(p.Ety);
+                        if (pty == TYullong && p.Ety != TYullong) // D slice: two i32s
+                        {
+                            aparams ~= WASM_I32;
+                            aparams ~= WASM_I32;
+                        }
+                        else
+                            aparams ~= wasmType(pty);
+                    }
+
+                    collectArgTys(e.E2);
+                    const tym_t retTy2 = tybasic(e.Ety);
+                    ubyte[] aresults;
+                    if (retTy2 != TYvoid && retTy2 != TYnoreturn)
+                        aresults ~= wasmType(retTy2);
+                    wmod_fixImportType(fidx, aparams, aresults);
+                }
                 cg.emit(OP_CALL);
                 cg.emitULEB(fidx);
+                // Noreturn (SFLexit) functions leave the stack empty. Emit unreachable
+                // so WASM's type checker accepts any type expectations after the call.
+                if (e.E1.Vsym.Sflags & SFLexit)
+                    cg.emit(OP_UNREACHABLE);
             }
             else
             {
@@ -1334,10 +1345,44 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
                 }
                 else
                 {
-                    // Generic: evaluate the function expression (table index value).
-                    if (fexpr.Eoper == OPvar && fexpr.Vsym && fexpr.Vsym.Stype)
-                        typeIdx = wmod_internFuncPtrType(fexpr.Vsym.Stype);
-                    genElem(cg, fexpr);
+                    // For virtual dispatch and function pointer calls, the outermost
+                    // OPind is semantic ("call through pointer"), not a memory load.
+                    // Strip it so we evaluate the inner expression to get the table index.
+                    elem* fn = (fexpr.Eoper == OPind) ? fexpr.E1 : fexpr;
+                    if (fn.Eoper == OPvar && fn.Vsym && fn.Vsym.Stype)
+                    {
+                        typeIdx = wmod_internFuncPtrType(fn.Vsym.Stype);
+                    }
+                    else
+                    {
+                        // Virtual dispatch: derive the call type from the call expression.
+                        // Params come from e.E2 (already pushed above); return from e.Ety.
+                        // Build a WASM type that matches what was registered for the method.
+                        import dmd.backend.wasmobj : wmod_internType;
+
+                        ubyte[] params;
+                        void collectArgTypes(elem* p) nothrow @trusted
+                        {
+                            if (!p)
+                                return;
+                            if (p.Eoper == OPparam)
+                            {
+                                collectArgTypes(p.E2);
+                                collectArgTypes(p.E1);
+                                return;
+                            }
+                            const tym_t pty = tybasic(p.Ety);
+                            params ~= wasmType(pty);
+                        }
+
+                        collectArgTypes(e.E2);
+                        ubyte[] results;
+                        const tym_t retTy = tybasic(e.Ety);
+                        if (retTy != TYvoid && retTy != TYnoreturn)
+                            results ~= wasmType(retTy);
+                        typeIdx = wmod_internType(params, results);
+                    }
+                    genElem(cg, fn);
                 }
                 cg.emit(OP_CALL_INDIRECT);
                 cg.emitULEB(typeIdx);
@@ -1477,10 +1522,30 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
 
     case OPpair:
     case OPrpair:
-        // Multiple return
-        genElem(cg, e.E1);
-        genElem(cg, e.E2);
-        return true;
+        {
+            // For i64 results (D slices, long long): pack two i32 halves into one i64.
+            // OPpair:  E1=lo (len), E2=hi (ptr) → i64 = (E2<<32) | E1
+            // OPrpair: E1=hi (ptr), E2=lo (len) → i64 = (E1<<32) | E2
+            const tym_t resultTy = tybasic(e.Ety);
+            if (resultTy == TYullong || resultTy == TYllong)
+            {
+                elem* loE = (e.Eoper == OPrpair) ? e.E2 : e.E1;
+                elem* hiE = (e.Eoper == OPrpair) ? e.E1 : e.E2;
+                genElem(cg, hiE);
+                cg.emit(OP_I64_EXTEND_I32_U);
+                cg.emit(OP_I64_CONST);
+                cg.emitSLEB(32);
+                cg.emit(OP_I64_SHL);
+                genElem(cg, loE);
+                cg.emit(OP_I64_EXTEND_I32_U);
+                cg.emit(OP_I64_OR);
+                return true;
+            }
+            // Other (multi-value): push both separately.
+            genElem(cg, e.E1);
+            genElem(cg, e.E2);
+            return true;
+        }
 
     case OPstreq:
         {
@@ -2625,7 +2690,7 @@ void wasm_codgen(Symbol* sfunc) @trusted
     }
     foreach (ref sp; splitParams)
     {
-        // i64 = (ptr << 32) | len  (D slice layout: lo=len, hi=ptr)
+        // i64 = (ptr << 32) | len  (D slice layout: lo32=len, hi32=ptr)
         cg.emit(OP_LOCAL_GET);
         cg.emitULEB(sp.hiIdx); // ptr
         cg.emit(OP_I64_EXTEND_I32_U);
