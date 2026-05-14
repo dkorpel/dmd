@@ -101,6 +101,16 @@ void backend_init(const ref Param params, const ref DMDparams driverParams, cons
         cast(ErrorCallbackBackend) &errorBackend,
     );
 
+    // Configure WASM output mode: produce a relocatable object (for -c / wasm-ld)
+    // or a self-contained final module (for direct execution with wasmtime.
+    if (target.isWasm)
+    {
+        import dmd.backend.wasmobj : wasm_relocatable;
+        // link=true → we're producing a final executable → emit a final WASM module.
+        // link=false → -c was given → emit a relocatable object for wasm-ld.
+        wasm_relocatable = !driverParams.link;
+    }
+
     out_config_debug(
         driverParams.debugb,
         driverParams.debugc,

@@ -204,6 +204,43 @@ enum STATUS_FAILED = -1;
  */
 private int runWasmLINK(bool verbose, ErrorSink eSink)
 {
+    // For single-file compilation without -c, the compiler produces a
+    // self-contained final WASM module. Just rename it to the output path.
+    if (global.params.objfiles.length == 1)
+    {
+        const(char)* src = global.params.objfiles[0];
+        const(char)[] outfile;
+        if (global.params.exefile)
+            outfile = global.params.exefile;
+        else
+        {
+            const(char)[] n = FileName.name(src[0 .. strlen(src)]);
+            outfile = FileName.forceExt(n, target.obj_ext);
+            global.params.exefile = outfile;
+        }
+        if (!ensurePathToNameExists(Loc.initial, outfile))
+            return STATUS_FAILED;
+        import core.stdc.string : strcmp;
+        if (strcmp(src, outfile.ptr) != 0)
+        {
+            version (Posix)
+            {
+                import core.sys.posix.stdio : rename;
+                if (rename(src, outfile.ptr) == 0)
+                    return 0;
+                // rename failed (cross-device); fall through to wasm-ld
+            }
+            version (Windows)
+            {
+                import core.sys.windows.winbase : MoveFileExA, MOVEFILE_REPLACE_EXISTING;
+                if (MoveFileExA(src, outfile.ptr, MOVEFILE_REPLACE_EXISTING))
+                    return 0;
+            }
+        }
+        else
+            return 0;
+    }
+
     Strings argv;
     const(char)* wasmld = getenv("WASM_LD");
     argv.push(wasmld ? wasmld : "wasm-ld");
@@ -224,6 +261,13 @@ private int runWasmLINK(bool verbose, ErrorSink eSink)
     }
     if (!ensurePathToNameExists(Loc.initial, global.params.exefile))
         return STATUS_FAILED;
+
+    // wasm-ld defaults: allow the file to not have a _start entry point,
+    // export main if defined, and import memory from the host environment.
+    argv.push("--no-entry");
+    argv.push("--export-if-defined=main");
+    argv.push("--allow-undefined"); // allow unresolved WASI/env imports
+    argv.push("--no-gc-sections"); // keep table, data, elements from being GC'd
 
     // Link switches: pass directly to wasm-ld, skipping CC-driver-only flags
     foreach (pi, p; global.params.linkswitches)
@@ -1084,11 +1128,10 @@ public int runProgram(const char[] exefile, const char*[] runargs, bool verbose,
         if (childpid == 0)
         {
             const(char)[] fn = argv[0].toDString();
-            // Make it "./fn" if needed
-            if (!FileName.absolute(fn))
-                fn = FileName.combine(".", fn);
             fn.toCStringThen!((fnp) {
-                    execv(fnp.ptr, argv.tdata());
+                    // Use execvp so PATH is searched for the executable.
+                    import core.sys.posix.unistd : execvp;
+                    execvp(fnp.ptr, argv.tdata());
                     // If execv returns, it failed to execute
                     perror(fnp.ptr);
                 });
