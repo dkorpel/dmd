@@ -519,55 +519,19 @@ struct ElfObjModule
     int scan; // 1 means scan for symbols
 }
 
-enum ELF_OBJECT_NAME_SIZE = 16;
-enum ELF_FILE_TIME_SIZE = 12;
-enum ELF_USER_ID_SIZE = 6;
-enum ELF_GROUP_ID_SIZE = 6;
-enum ELF_FILE_MODE_SIZE = 8;
-enum ELF_FILE_SIZE_SIZE = 10;
-enum ELF_TRAILER_SIZE = 2;
-
-struct ElfLibHeader
-{
-    char[ELF_OBJECT_NAME_SIZE] object_name;
-    char[ELF_FILE_TIME_SIZE] file_time;
-    char[ELF_USER_ID_SIZE] user_id;
-    char[ELF_GROUP_ID_SIZE] group_id;
-    char[ELF_FILE_MODE_SIZE] file_mode; // in octal
-    char[ELF_FILE_SIZE_SIZE] file_size;
-    char[ELF_TRAILER_SIZE] trailer;
-}
+// ar header format is now defined in dmd.lib (package.d) and shared with wasm.d.
+alias ELF_OBJECT_NAME_SIZE = AR_OBJECT_NAME_SIZE;
+alias ELF_FILE_TIME_SIZE   = AR_FILE_TIME_SIZE;
+alias ELF_USER_ID_SIZE     = AR_USER_ID_SIZE;
+alias ELF_GROUP_ID_SIZE    = AR_GROUP_ID_SIZE;
+alias ELF_FILE_MODE_SIZE   = AR_FILE_MODE_SIZE;
+alias ELF_FILE_SIZE_SIZE   = AR_FILE_SIZE_SIZE;
+alias ELF_TRAILER_SIZE     = AR_TRAILER_SIZE;
+alias ElfLibHeader         = ArHeader;
 
 void ElfOmToHeader(ElfLibHeader* h, ElfObjModule* om)
 {
-    char* buffer = cast(char*)h;
-    // user_id and group_id are padded on 6 characters in Header struct.
-    // Squashing to 0 if more than 999999.
-    if (om.user_id > 999_999)
-        om.user_id = 0;
-    if (om.group_id > 999_999)
-        om.group_id = 0;
-    size_t len;
-    if (om.name_offset == -1)
-    {
-        // "name/           1423563789  5000  5000  100640  3068      `\n"
-        //  |^^^^^^^^^^^^^^^|^^^^^^^^^^^|^^^^^|^^^^^|^^^^^^^|^^^^^^^^^|^^
-        //        name       file_time   u_id gr_id  fmode    fsize   trailer
-        len = snprintf(buffer, ElfLibHeader.sizeof, "%-16s%-12llu%-6u%-6u%-8o%-10u`", om.name.ptr, cast(long)om.file_time, om.user_id, om.group_id, om.file_mode, om.length);
-        // adding '/' after the name field
-        const(size_t) name_length = om.name.length;
-        assert(name_length < ELF_OBJECT_NAME_SIZE);
-        buffer[name_length] = '/';
-    }
-    else
-    {
-        // "/162007         1423563789  5000  5000  100640  3068      `\n"
-        //  |^^^^^^^^^^^^^^^|^^^^^^^^^^^|^^^^^|^^^^^|^^^^^^^|^^^^^^^^^|^^
-        //     name_offset   file_time   u_id gr_id  fmode    fsize   trailer
-        len = snprintf(buffer, ElfLibHeader.sizeof, "/%-15d%-12llu%-6u%-6u%-8o%-10u`", om.name_offset, cast(long)om.file_time, om.user_id, om.group_id, om.file_mode, om.length);
-    }
-    assert(len + 1 != 0); // some old snprintf's return -1 on error
-    assert(ElfLibHeader.sizeof > 0 && len == ElfLibHeader.sizeof - 1);
-    // replace trailing \0 with \n
-    buffer[len] = '\n';
+    import dmd.root.string : toCStringThen;
+    om.name.toCStringThen!(s => arFillHeader(*h, s.ptr, om.name_offset,
+        om.file_time, om.user_id, om.group_id, om.file_mode, om.length));
 }
