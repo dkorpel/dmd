@@ -389,13 +389,32 @@ nothrow:
     }
 
     // Emit the type index operand of call_indirect.
-    // NOTE: R_WASM_TYPE_INDEX_LEB would let wasm-ld patch this, but wasm-ld 22
-    // crashes when using that relocation type for local function symbols.
-    // Instead we rely on reorderImportTypesFirst() which places import types
-    // first so the type indices match what wasm-ld produces for single-file links.
+    // In relocatable mode, emit R_WASM_TYPE_INDEX_LEB so wasm-ld can patch the
+    // type index when merging type tables from multiple objects.  The relocation
+    // references a named function whose type matches, preferring imports to avoid
+    // a wasm-ld 22 crash on locally-defined symbol targets.  If no suitable
+    // function is found yet (rare), fall back to compact ULEB without relocation
+    // (type indices are stable for single-file linking via reorderImportTypesFirst).
     void emitCallIndirectType(uint typeIdx) @trusted
     {
-        emitULEB(typeIdx); // compact ULEB, type indices are stable post-reorder
+        import dmd.backend.wasmobj : wmod_findFuncForType, wasm_relocatable;
+        if (wasm_relocatable)
+        {
+            uint fidx = wmod_findFuncForType(typeIdx);
+            if (fidx != uint.max)
+            {
+                codeRelocs ~= WasmFuncBody.CodeReloc(cast(uint) code.length,
+                    R_WASM_TYPE_INDEX_LEB, fidx);
+                // 5-byte padded ULEB128 so wasm-ld has room to write the patched index.
+                code.writeByte(cast(ubyte)((typeIdx & 0x7F) | 0x80));
+                code.writeByte(cast(ubyte)(((typeIdx >> 7) & 0x7F) | 0x80));
+                code.writeByte(cast(ubyte)(((typeIdx >> 14) & 0x7F) | 0x80));
+                code.writeByte(cast(ubyte)(((typeIdx >> 21) & 0x7F) | 0x80));
+                code.writeByte(cast(ubyte)((typeIdx >> 28) & 0x0F));
+                return;
+            }
+        }
+        emitULEB(typeIdx); // single-file / no matching symbol: compact ULEB
     }
 
     void emitMemArg(uint align_, uint offset) @trusted
