@@ -1600,7 +1600,7 @@ auto sourceFiles()
             dmsc.d iasm/dmdx86.d iasm/dmdaarch64.d glue/package.d glue/e2ir.d glue/objc.d
             glue/s2ir.d glue/tocsym.d glue/toctype.d glue/tocvdebug.d glue/todt.d glue/toir.d glue/toobj.d
         "),
-        driver: fileArray(env["D"], "dinifile.d dmdparams.d lib/package.d lib/elf.d lib/mach.d lib/mscoff.d
+        driver: fileArray(env["D"], "dinifile.d dmdparams.d lib/package.d lib/elf.d lib/mach.d lib/mscoff.d lib/wasm.d
             link.d mars.d main.d sarif.d lib/scanelf.d lib/scanmach.d lib/scanmscoff.d timetrace.d vsoptions.d
         "),
         frontend: fileArray(env["D"], "

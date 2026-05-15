@@ -197,9 +197,9 @@ enum STATUS_FAILED = -1;
  */
 private int runWasmLINK(bool verbose, ref Param params, ErrorSink eSink)
 {
-    // For single-file compilation without -c, the compiler produces a
-    // self-contained final WASM module. Just rename it to the output path.
-    if (params.objfiles.length == 1)
+    // For single-file compilation without -c (and no extra library archives),
+    // the compiler produces a self-contained final WASM module. Just rename it.
+    if (params.objfiles.length == 1 && !params.libfiles.length)
     {
         const(char)* src = params.objfiles[0];
         const(char)[] outfile;

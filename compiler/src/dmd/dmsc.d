@@ -106,9 +106,11 @@ void backend_init(const ref Param params, const ref DMDparams driverParams, cons
     if (target.isWasm)
     {
         import dmd.backend.wasmobj : wasm_relocatable;
-        // link=true → we're producing a final executable → emit a final WASM module.
+        // link=true → producing a final executable → emit a final WASM module.
         // link=false → -c was given → emit a relocatable object for wasm-ld.
-        wasm_relocatable = !driverParams.link;
+        // Exception: if library files are also being linked, the per-module objects
+        // must be relocatable so wasm-ld can link them with the archives.
+        wasm_relocatable = !driverParams.link || params.libfiles.length > 0;
     }
 
     out_config_debug(
