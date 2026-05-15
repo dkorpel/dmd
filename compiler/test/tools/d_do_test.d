@@ -143,6 +143,10 @@ struct EnvData
     bool autoUpdate;             /// `AUTO_UPDATE`: update `(TEST|RUN)_OUTPUT` on missmatch
     bool printRuntime;           /// `PRINT_RUNTIME`: Print time spent on a single test
     bool tryDisabled;            /// `TRY_DISABLED`:Silently try disabled tests (ignore failure and report success)
+
+    /// Returns the `-mXX` model flag for this target, or `""` for WASM
+    /// (which uses `-mwasm32 -os=wasm` from REQUIRED_ARGS instead).
+    string modelFlag() const { return os == "wasm" ? "" : "-m" ~ model; }
 }
 
 /++
@@ -1788,7 +1792,7 @@ int tryMain(string[] args)
                 string objfile = output_dir ~ envData.sep ~ test_name ~ "_" ~ to!string(permuteIndex) ~ envData.obj;
                 toCleanup ~= objfile;
 
-                command = format("%s -conf= -m%s -I%s %s %s -od%s -of%s %s %s%s %s", envData.dmd, envData.model, input_dir,
+                command = format("%s -conf= %s -I%s %s %s -od%s -of%s %s %s%s %s", envData.dmd, envData.modelFlag, input_dir,
                         testArgs.requiredArgs, permutedArgs, output_dir,
                         (testArgs.mode == TestMode.RUN || testArgs.link ? test_app_dmd : objfile),
                         argSet,
@@ -1812,7 +1816,7 @@ int tryMain(string[] args)
                     string newo = output_dir ~ envData.sep ~ filename.baseName().setExtension(envData.obj);
                     toCleanup ~= newo;
 
-                    command = format("%s -conf= -m%s -I%s %s %s -od%s -c %s %s", envData.dmd, envData.model, input_dir,
+                    command = format("%s -conf= %s -I%s %s %s -od%s -c %s %s", envData.dmd, envData.modelFlag, input_dir,
                         testArgs.requiredArgs, permutedArgs, output_dir, argSet, filename);
                     compile_output ~= execute(fThisRun, command, testArgs.mode == TestMode.FAIL_COMPILE);
                 }
@@ -1820,7 +1824,7 @@ int tryMain(string[] args)
                 if (testArgs.mode == TestMode.RUN || testArgs.link)
                 {
                     // link .o's into an executable
-                    command = format("%s -conf= -m%s%s%s %s %s -od%s -of%s %s", envData.dmd, envData.model,
+                    command = format("%s -conf= %s%s%s %s %s -od%s -of%s %s", envData.dmd, envData.modelFlag,
                         autoCompileImports ? " -i" : "",
                         autoCompileImports ? "extraSourceIncludePaths" : "",
                         envData.required_args, testArgs.requiredArgsForLink, output_dir, test_app_dmd, join(toCleanup, " "));
@@ -2352,7 +2356,7 @@ static this()
     // compile the test
     //
     {
-        const compile = [envData.dmd, "-conf=", "-m"~envData.model] ~
+        const compile = [envData.dmd, "-conf="] ~ (envData.modelFlag.length ? [envData.modelFlag] : []) ~
             envData.picFlag ~ [
             "-od" ~ testOutDir,
             "-of" ~ testScriptExe,

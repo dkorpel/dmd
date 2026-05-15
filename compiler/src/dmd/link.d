@@ -296,42 +296,57 @@ private int runWasmLINK(bool verbose, ref Param params, ErrorSink eSink)
         argv.push("--no-gc-sections");
     }
 
-    // Link switches: pass directly to wasm-ld, skipping CC-driver-only flags
+    // Link switches: pass directly to wasm-ld, filtering out switches that
+    // are host-native only (e.g. -rpath, which wasm-ld rejects or ignores).
     foreach (pi, p; params.linkswitches)
-        if (p && p[0] && !params.linkswitchIsForCC[pi])
-            argv.push(p);
+    {
+        if (!p || !p[0] || params.linkswitchIsForCC[pi])
+            continue;
+        const sw = p[0 .. strlen(p)];
+        // Skip rpath / shared-library flags — meaningless / harmful for WASM.
+        if (startsWith(sw, "-rpath") || startsWith(sw, "--rpath") ||
+            startsWith(sw, "-Wl,-rpath") || startsWith(sw, "-soname") ||
+            startsWith(sw, "-dynamic"))
+            continue;
+        argv.push(p);
+    }
 
-    // User-specified .a archives (from -L flags / pragma(lib))
+    // User-specified .a archives (from pragma(lib) or -L flags)
     foreach (p; params.libfiles)
         if (FileName.equalsExt(p, "a"))
             argv.push(p);
 
-    // User-specified named libraries (-l<name>)
+    // User-specified named libraries: only pass .a archives for WASM
+    // (shared libraries don't exist in WASM; skip .so / .dylib / .dll).
     foreach (p; params.libfiles)
-        if (!FileName.equalsExt(p, "a"))
-        {
-            const plen = strlen(p);
-            char* s = cast(char*)mem.xmalloc(plen + 3);
-            s[0] = '-'; s[1] = 'l';
-            memcpy(s + 2, p, plen + 1);
-            argv.push(s);
-        }
+    {
+        if (FileName.equalsExt(p, "a"))
+            continue;  // already handled above
+        // Drop platform shared libraries silently.
+        if (FileName.equalsExt(p, "so") || FileName.equalsExt(p, "dylib") ||
+            FileName.equalsExt(p, "dll"))
+            continue;
+        const plen = strlen(p);
+        char* s = cast(char*)mem.xmalloc(plen + 3);
+        s[0] = '-'; s[1] = 'l';
+        memcpy(s + 2, p, plen + 1);
+        argv.push(s);
+    }
 
     // Auto-link druntime and libc when not betterC.
-    // WasmObj_includelib is a no-op, so we add libraries directly here.
+    // Always use libdruntime-wasm.a regardless of -defaultlib=: DFLAGS from
+    // the host dmd.conf may set -defaultlib=libphobos2.so (native default)
+    // which is irrelevant for WASM and would cause wasm-ld to fail.
     if (hasDruntime)
     {
         const druntimeDir = findWasmDruntimeDir();
+        enum wasmDruntimeLib = "libdruntime-wasm.a";
 
-        // Link the D WASM runtime (libdruntime-wasm.a).
-        // finalDefaultlibname() returns "libdruntime-wasm.a" for WASM targets.
-        if (const deflib = finalDefaultlibname())
-        {
-            const(char)[] libPath = druntimeDir.length
-                ? FileName.combine(druntimeDir, deflib)
-                : deflib;
+        const(char)[] libPath = druntimeDir.length
+            ? FileName.combine(druntimeDir, wasmDruntimeLib)
+            : wasmDruntimeLib;
+        if (FileName.exists(libPath) == 1)
             argv.push(libPath.xarraydup.ptr);
-        }
 
         // libc.a — WASI C runtime (printf, memcpy, etc.)
         if (druntimeDir.length)
