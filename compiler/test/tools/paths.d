@@ -9,26 +9,35 @@ version (Posix)
 else version (Windows)
     enum exeExtension = ".exe";
 
+// Host OS name (compile-time constant).
 version (Windows)
-    enum os = "windows";
+    enum hostOs = "windows";
 else version (OSX)
-    enum os = "osx";
+    enum hostOs = "osx";
 else version (linux)
-    enum os = "linux";
+    enum hostOs = "linux";
 else version (FreeBSD)
-    enum os = "freebsd";
+    enum hostOs = "freebsd";
 else version (OpenBSD)
-    enum os = "openbsd";
+    enum hostOs = "openbsd";
 else version (NetBSD)
-    enum os = "netbsd";
+    enum hostOs = "netbsd";
 else version (DragonFlyBSD)
-    enum os = "dragonflybsd";
+    enum hostOs = "dragonflybsd";
 else version (Solaris)
-    enum os = "solaris";
+    enum hostOs = "solaris";
 else version (SunOS)
-    enum os = "solaris";
+    enum hostOs = "solaris";
 else
     static assert(0, "Unrecognized or unsupported OS.");
+
+/// Target OS: reads the `OS` environment variable so cross-target invocations
+/// such as `OS=wasm ./run.d runnable` work without recompiling the runner.
+string os()
+{
+    static string cached;
+    return cached ? cached : (cached = environment.get("OS", hostOs));
+}
 
 enum projectRootDir = __FILE_FULL_PATH__.dirName.buildNormalizedPath("..", "..", "..");
 enum generatedDir = projectRootDir.buildPath("generated");
@@ -45,21 +54,27 @@ string build()
 
 string buildOutputPath()
 {
-    return generatedDir.buildPath(os, build, dmdModel);
+    // The DMD binary is always built for the host OS, not the cross-compile target.
+    const hostOsForBinary = os == "wasm" ? hostOs : os;
+    return generatedDir.buildPath(hostOsForBinary, build, dmdModel);
 }
 
 // auto-tester might run the test suite with a different $(MODEL) than DMD
 // has been compiled with. Hence we manually check which binary exists.
 string dmdModel()
 {
-    const prefix = generatedDir.buildPath(os, build);
+    // DMD binary is always built for the host OS, not a cross-compile target.
+    const hostOsForBinary = os == "wasm" ? hostOs : os;
+    const prefix = generatedDir.buildPath(hostOsForBinary, build);
     return environment.get("DMD_MODEL",
         prefix.buildPath("64", dmdFilename).exists ? "64" : "32");
 }
 
 string model()
 {
-    return environment.get("MODEL", dmdModel);
+    // WASM is always 32-bit; don't probe for a 64-bit DMD binary.
+    const defaultModel = os == "wasm" ? "32" : dmdModel;
+    return environment.get("MODEL", defaultModel);
 }
 
 string dmdPath()
