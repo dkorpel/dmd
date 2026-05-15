@@ -1616,24 +1616,31 @@ uint wmod_internType(ubyte[] params, ubyte[] results) @trusted
 // Find the function index of a named function whose WASM type matches typeIdx.
 // Used to produce R_WASM_TYPE_INDEX_LEB relocations for call_indirect instructions
 // so wasm-ld can patch the type index when merging type tables.
+// Prefers import functions: wasm-ld 22 can crash on R_WASM_TYPE_INDEX_LEB
+// relocations targeting locally-defined symbols; imports are always safe.
 uint wmod_findFuncForType(uint typeIdx) @trusted
 {
     if (!wmod)
         return uint.max;
+    uint localFallback = uint.max;
     foreach (size_t i, ref const WasmFunc f; wmod.funcs)
     {
         if (f.typeIdx != typeIdx)
             continue;
-        // Only return functions that have a symbol table entry (named).
+        // Only consider functions that have a symbol table entry (named).
         const(char)[] name;
         if (f.sym)
             name = f.sym.Sident.ptr[0 .. strlen(f.sym.Sident.ptr)];
         else
             name = f.importName.length ? f.importName : f.name[];
-        if (name.length)
-            return cast(uint) i;
+        if (!name.length)
+            continue;
+        if (f.isImport)
+            return cast(uint) i; // prefer import symbols (safe for wasm-ld 22)
+        if (localFallback == uint.max)
+            localFallback = cast(uint) i;
     }
-    return uint.max;
+    return localFallback;
 }
 
 // Add a synthesized (no-Symbol) function to the module with the given type signature.
