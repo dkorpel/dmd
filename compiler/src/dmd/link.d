@@ -195,11 +195,28 @@ enum STATUS_FAILED = -1;
  *   eSink   = sink for error messages
  * Returns: 0 on success, non-zero on failure
  */
+// Locate the WASM druntime directory.
+// Uses the same path formula as dmd.conf: exe_dir/../../../../druntime.
+// Returns an empty slice if the directory cannot be found.
+private const(char)[] findWasmDruntimeDir() nothrow
+{
+    import dmd.root.filename : FileName;
+    const(char)* argv0ptr = global.params.argv0.ptr;
+    if (!argv0ptr) return null;
+    const argv0 = argv0ptr[0 .. strlen(argv0ptr)];
+    if (!argv0.length) return null;
+    const exeDir = FileName.path(argv0).idup;  // e.g. generated/linux/release/64
+    // Navigate up four levels then into druntime/ — mirrors dmd.conf import path
+    const dir = FileName.combine(exeDir, "../../../../druntime");
+    return dir;
+}
+
 private int runWasmLINK(bool verbose, ref Param params, ErrorSink eSink)
 {
-    // For single-file compilation without -c (and no extra library archives),
-    // the compiler produces a self-contained final WASM module. Just rename it.
-    if (params.objfiles.length == 1 && !params.libfiles.length)
+    const bool hasDruntime = !params.betterC;
+
+    // Fast path: betterC single-file with no extra libraries — just rename.
+    if (!hasDruntime && params.objfiles.length == 1 && !params.libfiles.length)
     {
         const(char)* src = params.objfiles[0];
         const(char)[] outfile;
@@ -255,34 +272,68 @@ private int runWasmLINK(bool verbose, ref Param params, ErrorSink eSink)
     if (!ensurePathToNameExists(Loc.initial, params.exefile))
         return STATUS_FAILED;
 
-    // wasm-ld defaults: allow the file to not have a _start entry point,
-    // export main if defined, and import memory from the host environment.
-    argv.push("--no-entry");
-    argv.push("--export-if-defined=main");
-    argv.push("--allow-undefined"); // allow unresolved WASI/env imports
-    argv.push("--no-gc-sections"); // keep table, data, elements from being GC'd
+    if (hasDruntime)
+    {
+        // Full D runtime: _start (WASI entry) is provided by libdruntime-wasm.a.
+        // wasmtime calls _start; proc_exit called from _start propagates exit codes.
+        argv.push("--export=_start");
+        argv.push("--allow-undefined"); // allow unresolved WASI imports
+        argv.push("--no-gc-sections");
+    }
+    else
+    {
+        // betterC: no runtime, use --no-entry for maximum flexibility.
+        argv.push("--no-entry");
+        argv.push("--export-if-defined=main");
+        argv.push("--allow-undefined");
+        argv.push("--no-gc-sections");
+    }
 
     // Link switches: pass directly to wasm-ld, skipping CC-driver-only flags
     foreach (pi, p; params.linkswitches)
         if (p && p[0] && !params.linkswitchIsForCC[pi])
             argv.push(p);
 
-    // Static archive files passed directly
+    // User-specified .a archives (from -L flags / pragma(lib))
     foreach (p; params.libfiles)
         if (FileName.equalsExt(p, "a"))
             argv.push(p);
 
-    // Named libraries: prepend -l
+    // User-specified named libraries (-l<name>)
     foreach (p; params.libfiles)
         if (!FileName.equalsExt(p, "a"))
         {
             const plen = strlen(p);
             char* s = cast(char*)mem.xmalloc(plen + 3);
-            s[0] = '-';
-            s[1] = 'l';
+            s[0] = '-'; s[1] = 'l';
             memcpy(s + 2, p, plen + 1);
             argv.push(s);
         }
+
+    // Auto-link druntime and libc when not betterC.
+    // WasmObj_includelib is a no-op, so we add libraries directly here.
+    if (hasDruntime)
+    {
+        const druntimeDir = findWasmDruntimeDir();
+
+        // Link the D WASM runtime (libdruntime-wasm.a).
+        // finalDefaultlibname() returns "libdruntime-wasm.a" for WASM targets.
+        if (const deflib = finalDefaultlibname())
+        {
+            const(char)[] libPath = druntimeDir.length
+                ? FileName.combine(druntimeDir, deflib)
+                : deflib;
+            argv.push(libPath.xarraydup.ptr);
+        }
+
+        // libc.a — WASI C runtime (printf, memcpy, etc.)
+        if (druntimeDir.length)
+        {
+            const libcPath = FileName.combine(druntimeDir, "libc.a");
+            if (FileName.exists(libcPath) == 1)
+                argv.push(libcPath.xarraydup.ptr);
+        }
+    }
 
     foreach (p; params.dllfiles)
         argv.push(p);
