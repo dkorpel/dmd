@@ -107,8 +107,9 @@ Examples:
     ./run.d all                                                  # runs all tests
     ./run.d clean                                                # remove all test results
     ./run.d -u -- unit/deinitialization.d -f Module              # runs the unit tests in the file "unit/deinitialization.d" with a UDA containing "Module"
-    ./run.d wasm_compilable                                      # try to compile all compilable tests as WASM (-mwasm32 -os=wasm)
-    ./run.d wasm_runnable                                        # try to compile all runnable tests as WASM and run with wasmtime
+    OS=wasm ./run.d runnable/hello.d                             # run a single test as WASM
+    OS=wasm ./run.d compilable                                   # compile all compilable tests as WASM
+    OS=wasm ./run.d runnable                                     # compile+run all runnable tests as WASM
 
 Options:
 `, res.options);
@@ -301,11 +302,12 @@ void ensureToolsExists(const string[string] env, const TestTool[] tools ...)
         if (tool.linksWithTests)
         {
             // This will compile the dshell library thus needs the actual
-            // DMD compiler under test
+            // DMD compiler under test.  Use the DMD's native model, not
+            // the target test model (which may be "wasm" with no -mXX flag).
             buildCommand = [
                 env["DMD"],
                 "-conf=",
-                "-m"~env["MODEL"],
+                "-m"~dmdModel,
                 "-of" ~ targetBin,
                 "-c",
                 sourceFile
@@ -314,9 +316,11 @@ void ensureToolsExists(const string[string] env, const TestTool[] tools ...)
         }
         else
         {
+            // Host tools (d_do_test, etc.) are always built for the host
+            // platform, not the test target (which might be WASM).
             buildCommand = [
                 hostDMD,
-                "-m"~env["MODEL"],
+                "-m"~dmdModel,
                 "-of"~targetBin,
                 sourceFile
             ] ~ getPicFlags(env) ~ tool.extraArgs;
@@ -415,45 +419,6 @@ Target[] predefinedTargets(string[] targets)
             ]
         };
 
-        return target;
-    }
-
-    // Create a wasm compilable target that delegates to d_do_test with wasm flags.
-    // Uses `env` to override REQUIRED_ARGS and ARGS per-subprocess without
-    // affecting the global environment used by other parallel targets.
-    static Target createWasmCompilableTarget(string filename)
-    {
-        Target target = {
-            filename: filename,
-            args: [
-                "env",
-                "REQUIRED_ARGS=-mwasm32 -os=wasm",
-                "ARGS=",
-                "OS=wasm",
-                "MODEL=32",
-                resultsDir.buildPath(testRunner.name.exeName),
-                Target.normalizedTestName(filename)
-            ]
-        };
-        return target;
-    }
-
-    static Target createWasmRunnableTarget(string filename)
-    {
-        Target target = {
-            filename: filename,
-            args: [
-                "env",
-                "REQUIRED_ARGS=-mwasm32 -os=wasm",
-                "ARGS=",
-                "OS=wasm",
-                "MODEL=32",
-                "EXE=.wasm",
-                "EXEC_BINARY_WRAPPER=wasmtime run",
-                resultsDir.buildPath(testRunner.name.exeName),
-                Target.normalizedTestName(filename)
-            ]
-        };
         return target;
     }
 
@@ -601,6 +566,25 @@ string[string] getEnvironment()
     env.setDefault("DMD_TEST_COVERAGE", "0");
 
     const generatedSuffix = "generated/%s/%s/%s".format(os, build, model);
+
+    // WebAssembly target: override flags and runner regardless of host platform.
+    if (os == "wasm")
+    {
+        env["OBJ"]  = ".o";
+        env["DSEP"] = "/";
+        env["SEP"]  = "/";
+        env["EXE"]  = ".wasm";
+        env["PIC_FLAG"] = "";
+        env.setDefault("ARGS", "");
+        // REQUIRED_ARGS: inject WASM target flags; honour extra user args.
+        const extra = environment.get("REQUIRED_ARGS", "");
+        env["REQUIRED_ARGS"] = "-mwasm32 -os=wasm" ~ (extra.length ? " " ~ extra : "");
+        env.setDefault("EXEC_BINARY_WRAPPER", "wasmtime run");
+        // Provide druntime import path (used when -conf= is passed, which strips dmd.conf).
+        auto druntimePath = environment.get("DRUNTIME_PATH", testPath(`../../druntime`));
+        env["DFLAGS"] = "-I%s/import".format(druntimePath);
+        return env;
+    }
 
     version(Windows)
     {

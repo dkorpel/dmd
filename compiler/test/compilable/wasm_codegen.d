@@ -1,5 +1,7 @@
 // Tests that common D constructs compile successfully for the WASM target.
-// REQUIRED_ARGS: -mwasm32 -os=wasm -o-
+// Run via: OS=wasm ./run.d compilable/wasm_codegen.d
+// DISABLED: linux osx freebsd windows dragonflybsd openbsd netbsd solaris
+// REQUIRED_ARGS: -o-
 
 struct Vec2
 {
