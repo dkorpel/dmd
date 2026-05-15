@@ -143,3 +143,4 @@ void test6()
     }
     L1:;
 }
+// DISABLED: wasm

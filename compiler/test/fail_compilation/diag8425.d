@@ -13,3 +13,4 @@ alias a = __vector(void); // not static array
 alias b = __vector(void[1]); // wrong size
 alias c = __vector(void[99]); // wrong size
 alias d = __vector(void*[4]); // wrong base type
+// DISABLED: wasm

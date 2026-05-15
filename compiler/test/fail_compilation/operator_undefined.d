@@ -19,3 +19,4 @@ void main()
 {
     auto x = -2.toJson;
 }
+// DISABLED: wasm
