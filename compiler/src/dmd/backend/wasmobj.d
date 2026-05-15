@@ -424,10 +424,10 @@ private WasmFuncType buildFuncType(type* t) @trusted
         p = p.Pnext;
     }
 
-    // Return type
+    // Return type (void and noreturn both produce no WASM result)
     if (hiddenPtr)
         ft.results ~= WASM_I32; // returns hidden ptr
-    else if (ret && tybasic(ret.Tty) != TYvoid)
+    else if (ret && tybasic(ret.Tty) != TYvoid && tybasic(ret.Tty) != TYnoreturn)
         ft.results ~= wasmValType(ret.Tty);
 
     return ft;
