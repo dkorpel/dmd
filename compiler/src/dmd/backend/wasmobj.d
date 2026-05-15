@@ -57,6 +57,21 @@ nothrow:
 // LEB128 encoding helpers
 // ---------------------------------------------------------------------------
 
+// Append signed LEB128 (for relocation addends)
+private void appendSLEB128(OutBuffer* buf, int val) @trusted
+{
+    bool more;
+    do
+    {
+        ubyte b = val & 0x7F;
+        val >>= 7;                 // arithmetic right shift
+        more = !((val == 0 && !(b & 0x40)) || (val == -1 && (b & 0x40)));
+        if (more) b |= 0x80;
+        buf.writeByte(b);
+    }
+    while (more);
+}
+
 // Append unsigned LEB128
 private void appendULEB128(OutBuffer* buf, uint val) @trusted
 {
@@ -159,11 +174,23 @@ struct WasmFuncBody
     struct CodeReloc
     {
         uint offset; // byte offset within code buffer (before the 5-byte ULEB)
-        ubyte type; // R_WASM_FUNCTION_INDEX_LEB etc.
-        uint symIdx; // symbol table index (= function index for function symbols)
+        ubyte type; // R_WASM_FUNCTION_INDEX_LEB, R_WASM_TYPE_INDEX_LEB, etc.
+        uint symIdx; // symbol table index
+        uint addend; // for R_WASM_MEMORY_ADDR_LEB: offset within the segment
     }
 
-    CodeReloc[] codeRelocs;
+    // Data-address code relocations: R_WASM_MEMORY_ADDR_LEB entries.
+    // sym is the D Symbol whose data segment is referenced; addend is the
+    // byte offset from sym.Soffset (usually e.Voffset).
+    struct DataAddrReloc
+    {
+        uint offset; // byte offset within code buffer
+        Symbol* sym; // the data symbol
+        uint addend; // extra offset beyond sym.Soffset
+    }
+
+    CodeReloc[]    codeRelocs;
+    DataAddrReloc[] dataAddrRelocs;
     uint codePayloadStart; // set by emitCodeSection
 }
 
@@ -726,7 +753,7 @@ private void emitLinkingSection(OutBuffer* out_) @trusted
     // WASM_LINKING_SYMBOL_TABLE subsection
     OutBuffer symtab;
     // Count usable symbols (skip anonymous synthesized functions).
-    // Also count one SYMTAB_TABLE entry for the defined function table (if any).
+    // Also count data symbols and one TABLE entry for the function table.
     uint symCount = 0;
     foreach (ref const WasmFunc f; wmod.funcs)
     {
@@ -738,6 +765,10 @@ private void emitLinkingSection(OutBuffer* out_) @trusted
         if (name.length)
             symCount++;
     }
+    // Data symbols referenced by code relocations.
+    Symbol*[] datasymsForLinking = collectRelocDataSyms();
+    symCount += cast(uint) datasymsForLinking.length;
+
     // One TABLE symbol for the function table (defined or imported).
     const bool hasTable = !wmod.importFuncTable &&
         (wmod.funcs.length > wmod.numImports);
@@ -781,6 +812,27 @@ private void emitLinkingSection(OutBuffer* out_) @trusted
         appendULEB128(&symtab, cast(uint) i); // function index
         if (flags & WASM_SYM_EXPLICIT_NAME)
             appendName(&symtab, name); // only for defined symbols
+    }
+
+    // Add WASM_SYMTAB_DATA entries for all globally-referenced data symbols.
+    // These are needed so R_WASM_MEMORY_ADDR_LEB relocations in reloc.CODE can
+    // reference them by symbol index for wasm-ld to patch after data relocation.
+    foreach (Symbol* sym; datasymsForLinking)
+    {
+        const(char)[] name = sym.Sident.ptr[0 .. strlen(sym.Sident.ptr)];
+        symtab.writeByte(WASM_SYMTAB_DATA);
+        // Use local binding so same-named temporaries in different objects don't conflict.
+        appendULEB128(&symtab, WASM_SYM_BINDING_LOCAL | WASM_SYM_EXPLICIT_NAME);
+        appendName(&symtab, name);
+        // Data symbol payload: segment index (0), offset in segment, size.
+        // sym.Soffset is the linear memory address (including the null-pointer slot
+        // at 0..ds.offset-1).  The segment-relative offset subtracts the segment's
+        // own start address so wasm-ld computes: final_addr = segment_base + seg_off.
+        const uint dsBase = wmod.dataSegs.length ? wmod.dataSegs[0].offset : 4;
+        const uint segOff = sym.Soffset > dsBase ? cast(uint)(sym.Soffset - dsBase) : 0;
+        appendULEB128(&symtab, 0);              // segment index (single data seg)
+        appendULEB128(&symtab, segOff);         // offset within segment
+        appendULEB128(&symtab, 0);              // size (0 = unknown/whole object)
     }
 
     // Add a SYMTAB_TABLE entry for the function table so wasm-ld accepts it.
@@ -932,14 +984,11 @@ private void emitRelocElemSection(OutBuffer* out_, uint elemSectionIdx) @trusted
     writeCustomSection(out_, "reloc.ELEM", &payload);
 }
 
-// Emit "reloc.CODE" custom section with R_WASM_FUNCTION_INDEX_LEB entries
-// for all direct function calls recorded during code generation.
+// Emit "reloc.CODE" custom section with function and data-address relocs.
 // codeSectionIdx: the 0-based section index of the code section in the module.
 private void emitRelocCodeSection(OutBuffer* out_, uint codeSectionIdx) @trusted
 {
-    // Collect all relocations with their absolute code-section-payload offsets.
-    // Build a mapping from function index to symbol table index.
-    // Since we skip anonymous functions in the symbol table, we need a map.
+    // Build mapping: function index → symbol table index (for function relocs).
     uint[] funcToSymIdx;
     funcToSymIdx.length = wmod.funcs.length;
     uint si = 0;
@@ -953,34 +1002,125 @@ private void emitRelocCodeSection(OutBuffer* out_, uint codeSectionIdx) @trusted
         funcToSymIdx[i] = name.length ? si++ : uint.max;
     }
 
-    // Count total relocations across all function bodies.
+    // Build ordered list of referenced data symbols and their symbol-table indices.
+    // Data symbols follow function symbols in the linking symbol table.
+    // We collect unique data symbols in the order first encountered.
+    Symbol*[] datasyms;
+    void collectDataSyms(const WasmFuncBody.DataAddrReloc[] relocs)
+    {
+        foreach (ref const r; relocs)
+        {
+            if (!r.sym) continue;
+            bool found = false;
+            foreach (ds; datasyms) if (ds == r.sym) { found = true; break; }
+            if (!found) datasyms ~= cast(Symbol*) r.sym;
+        }
+    }
+    foreach (ref const WasmFuncBody fb; wasmFuncBodies)
+        collectDataSyms(fb.dataAddrRelocs);
+
+    // The data symbol table indices start right after the function symbol table.
+    uint dataSymBase = cast(uint)(si); // si = number of named function symbols
+    // (TABLE symbol is emitted after data syms in the linking section, so it
+    //  doesn't affect data sym indices here.)
+
+    uint dataSymIdx(const(Symbol)* sym)
+    {
+        foreach (size_t k, ds; datasyms)
+            if (ds == sym) return dataSymBase + cast(uint) k;
+        return uint.max;
+    }
+
+    // Count total relocations.
     uint totalRelocs = 0;
-    foreach (size_t fi, ref const WasmFuncBody fb; wasmFuncBodies)
+    foreach (ref const WasmFuncBody fb; wasmFuncBodies)
+    {
         foreach (ref const WasmFuncBody.CodeReloc r; fb.codeRelocs)
             if (funcToSymIdx[r.symIdx] != uint.max)
                 totalRelocs++;
-
+        foreach (ref const WasmFuncBody.DataAddrReloc r; fb.dataAddrRelocs)
+            if (r.sym && dataSymIdx(r.sym) != uint.max)
+                totalRelocs++;
+    }
     if (!totalRelocs)
         return;
 
-    OutBuffer payload;
-    appendULEB128(&payload, codeSectionIdx);
-    appendULEB128(&payload, totalRelocs);
+    // wasm-ld requires relocations in ascending offset order.
+    // Merge all relocations into a flat list and sort by absolute offset.
+    struct AnyReloc
+    {
+        uint absOffset; // fb.codePayloadStart + r.offset
+        ubyte type;
+        uint sym;
+        uint addend;     // only for MEMORY_ADDR_LEB
+    }
+    AnyReloc[] allRelocs;
+    allRelocs.reserve(totalRelocs);
 
-    foreach (size_t fi, ref const WasmFuncBody fb; wasmFuncBodies)
+    foreach (ref const WasmFuncBody fb; wasmFuncBodies)
     {
         foreach (ref const WasmFuncBody.CodeReloc r; fb.codeRelocs)
         {
             uint sym = funcToSymIdx[r.symIdx];
-            if (sym == uint.max)
-                continue;
-            payload.writeByte(r.type);
-            appendULEB128(&payload, fb.codePayloadStart + r.offset);
-            appendULEB128(&payload, sym);
+            if (sym == uint.max) continue;
+            allRelocs ~= AnyReloc(fb.codePayloadStart + r.offset, r.type, sym, 0);
+        }
+        foreach (ref const WasmFuncBody.DataAddrReloc r; fb.dataAddrRelocs)
+        {
+            if (!r.sym) continue;
+            uint sym = dataSymIdx(r.sym);
+            if (sym == uint.max) continue;
+            // addend = offset relative to the symbol's base (usually 0 or Voffset)
+            allRelocs ~= AnyReloc(fb.codePayloadStart + r.offset,
+                R_WASM_MEMORY_ADDR_LEB, sym, r.addend);
         }
     }
 
+    // Sort by absOffset (insertion sort — typically nearly-sorted already).
+    for (size_t i = 1; i < allRelocs.length; i++)
+    {
+        AnyReloc key = allRelocs[i];
+        size_t j = i;
+        while (j > 0 && allRelocs[j - 1].absOffset > key.absOffset)
+        {
+            allRelocs[j] = allRelocs[j - 1];
+            j--;
+        }
+        allRelocs[j] = key;
+    }
+
+    OutBuffer payload;
+    appendULEB128(&payload, codeSectionIdx);
+    appendULEB128(&payload, cast(uint) allRelocs.length);
+
+    foreach (ref const AnyReloc r; allRelocs)
+    {
+        payload.writeByte(r.type);
+        appendULEB128(&payload, r.absOffset);
+        appendULEB128(&payload, r.sym);
+        if (r.type == R_WASM_MEMORY_ADDR_LEB)
+            appendSLEB128(&payload, cast(int) r.addend); // addend is SLEB per spec
+    }
+
     writeCustomSection(out_, "reloc.CODE", &payload);
+}
+
+// Collect all data symbols referenced in code relocations.
+// Must match the ordering used in emitRelocCodeSection.
+private Symbol*[] collectRelocDataSyms() @trusted
+{
+    Symbol*[] datasyms;
+    foreach (ref const WasmFuncBody fb; wasmFuncBodies)
+    {
+        foreach (ref const WasmFuncBody.DataAddrReloc r; fb.dataAddrRelocs)
+        {
+            if (!r.sym) continue;
+            bool found = false;
+            foreach (ds; datasyms) if (ds == r.sym) { found = true; break; }
+            if (!found) datasyms ~= cast(Symbol*) r.sym;
+        }
+    }
+    return datasyms;
 }
 
 // ---------------------------------------------------------------------------
@@ -1641,6 +1781,21 @@ uint wmod_findFuncForType(uint typeIdx) @trusted
             localFallback = cast(uint) i;
     }
     return localFallback;
+}
+
+// Record a R_WASM_MEMORY_ADDR_LEB relocation for a data symbol address emitted
+// in the current function's code.  codeOffset is the byte offset within the
+// current WasmFuncBody.code buffer where the 5-byte padded ULEB128 begins.
+// sym is the D Symbol for the data object; addend is the extra byte offset
+// beyond sym.Soffset (typically e.Voffset in the IR).
+void wmod_recordDataAddrReloc(uint codeOffset, Symbol* sym, uint addend) @trusted
+{
+    if (!wasmFuncBodies.length) return;
+    WasmFuncBody.DataAddrReloc r;
+    r.offset = codeOffset;
+    r.sym    = sym;
+    r.addend = addend;
+    wasmFuncBodies[$ - 1].dataAddrRelocs ~= r;
 }
 
 // Add a synthesized (no-Symbol) function to the module with the given type signature.
