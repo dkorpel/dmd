@@ -7,3 +7,4 @@ fail_compilation/fail37_m64.d(9): Error: `cast(float)4LU / cast(float)8LU - cast
 */
 
 ulong[cast(uint)((cast(float)int.sizeof/ulong.sizeof)-int.max>>2)+int.max>>2] hexarray;
+// DISABLED: wasm

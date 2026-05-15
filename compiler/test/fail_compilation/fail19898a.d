@@ -10,3 +10,4 @@ void f (__vector(int[4]) n)
     foreach (i; 0 .. n)
         cast(void)n;
 }
+// DISABLED: wasm

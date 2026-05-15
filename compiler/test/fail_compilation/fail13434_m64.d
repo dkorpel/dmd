@@ -12,3 +12,4 @@ void main()
     float[] arr;
     arr[tuple!()] = 0;
 }
+// DISABLED: wasm

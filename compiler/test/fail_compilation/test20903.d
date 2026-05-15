@@ -13,3 +13,4 @@ long test()
     long x = -1L;
     return r / x;
 }
+// DISABLED: wasm

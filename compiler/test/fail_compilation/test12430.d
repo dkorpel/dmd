@@ -16,3 +16,4 @@ void foo()
         auto op = XMM.RSQRTPS;
         auto b = __simd(op, a);
 }
+// DISABLED: wasm

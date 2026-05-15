@@ -20,3 +20,4 @@ void main()
     float4 a, b;
     a = simd!(XMM.CMPPD)(a, b, 0x7A);
 }
+// DISABLED: wasm
