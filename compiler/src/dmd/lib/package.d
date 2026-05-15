@@ -22,6 +22,7 @@ import dmd.target : Target;
 import dmd.lib.elf;
 import dmd.lib.mach;
 import dmd.lib.mscoff;
+import dmd.lib.wasm;
 
 private enum LOG = false;
 
@@ -38,9 +39,7 @@ class Library
             case Target.ObjectFormat.elf:   lib = LibElf_factory();     break;
             case Target.ObjectFormat.macho: lib = LibMach_factory();    break;
             case Target.ObjectFormat.coff:  lib = LibMSCoff_factory();  break;
-            case Target.ObjectFormat.wasm:
-                eSink.error(Loc.initial, "cannot create library: WASM library format not supported");
-                return null;
+            case Target.ObjectFormat.wasm: lib = LibWasm_factory(); break;
         }
         lib.lib_ext = lib_ext;
         lib.eSink = eSink;
