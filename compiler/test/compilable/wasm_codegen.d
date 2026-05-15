@@ -246,7 +246,7 @@ extern (C) int double_(int x) => x * 2;
 
 extern (C) int square(int x) => x * x;
 
-// WASI proc_exit: terminate the process (used by __assert below).
+pragma(wasm_import_module, "wasi_snapshot_preview1"):
 extern (C) void proc_exit(int code);
 
 // Assert handler: betterC assert failure calls __assert(msg, file, line).
@@ -347,13 +347,14 @@ extern (C) int arrayCopy()
     return b[0] + b[4]; // 60
 }
 
-// WASI I/O declarations (imported from wasi_snapshot_preview1)
+// WASI I/O declarations
 struct WasiIov
 {
     const(char)* buf;
     size_t len;
 }
 
+pragma(wasm_import_module, "wasi_snapshot_preview1")
 extern (C) int fd_write(uint fd, const(WasiIov)* iovs, size_t iovs_len, size_t* nwritten);
 
 extern (C) void wasiWrite(const(char)* msg, size_t len)
