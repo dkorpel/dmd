@@ -1,9 +1,10 @@
 /**
- * A library in the ar archive format, used for WebAssembly.
+ * A library in the GNU/SVR4 ar archive format for WebAssembly.
  *
- * wasm-ld reads WASM object files from standard ar archives and builds its
- * own symbol index by scanning each member's "linking" custom section.
- * No separate symbol dictionary entry is required in the archive itself.
+ * The ar format is shared with the ELF library (same header structure and
+ * symbol-table layout); see dmd.lib.ArHeader and arFillHeader() in package.d.
+ * wasm-ld reads WASM object members from the archive and uses the symbol table
+ * for lazy linking, exactly as LDC and llvm-ar produce it.
  *
  * Copyright:   Copyright (C) 1999-2026 by The D Language Foundation, All Rights Reserved
  * License:     $(LINK2 https://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
@@ -12,19 +13,22 @@
 
 module dmd.lib.wasm;
 
-import core.stdc.stdio : snprintf;
-import core.stdc.string : memcmp, memset, memcpy;
+import core.stdc.stdlib : strtoul;
+import core.stdc.string : memcmp, strlen;
 import core.stdc.time : time, time_t;
 
 import dmd.errors : fatal;
 import dmd.lib;
+import dmd.lib.scanwasm;
 import dmd.location;
-import dmd.utils : readFile;
-
 import dmd.root.array;
-import dmd.common.outbuffer;
 import dmd.root.filename;
+import dmd.root.port;
 import dmd.root.rmem;
+import dmd.root.string;
+import dmd.root.stringtable;
+import dmd.common.outbuffer;
+import dmd.utils : readFile;
 
 // Entry point (only public symbol in this module).
 package(dmd.lib) extern (C++) Library LibWasm_factory()
@@ -35,45 +39,39 @@ package(dmd.lib) extern (C++) Library LibWasm_factory()
 private:
 nothrow:
 
-enum AR_OBJECT_NAME_SIZE = 16;
-enum AR_FILE_TIME_SIZE   = 12;
-enum AR_USER_ID_SIZE     =  6;
-enum AR_GROUP_ID_SIZE    =  6;
-enum AR_FILE_MODE_SIZE   =  8;
-enum AR_FILE_SIZE_SIZE   = 10;
-enum AR_TRAILER_SIZE     =  2;
-
-// Standard ar member header (60 bytes total, GNU/SVR4 format).
-struct ArHeader
+struct WasmObjSymbol
 {
-    char[AR_OBJECT_NAME_SIZE] object_name;
-    char[AR_FILE_TIME_SIZE]   file_time;
-    char[AR_USER_ID_SIZE]     user_id;
-    char[AR_GROUP_ID_SIZE]    group_id;
-    char[AR_FILE_MODE_SIZE]   file_mode;
-    char[AR_FILE_SIZE_SIZE]   file_size;
-    char[AR_TRAILER_SIZE]     trailer;
+    const(char)[] name;
+    WasmObjModule* om;
 }
-
-static assert(ArHeader.sizeof == 60);
 
 struct WasmObjModule
 {
-    const(char)[] name;  // basename used in ar header
+    const(char)[] name;  // basename used in ar header (null-terminated)
     const(ubyte)[] data; // raw bytes of the WASM object
     long file_time;
     uint user_id;
     uint group_id;
     uint file_mode;
-    uint name_offset;    // offset into // name table, or uint.max if short name fits
-    uint offset;         // byte offset of this member in the archive
+    int  name_offset; // offset into // name table, or -1 if inline
+    uint offset;      // byte offset of this member in the archive
+    uint length;      // same as data.length but kept as uint for arFillHeader
+    bool scan;        // true = scan for symbols
 }
 
 alias WasmObjModules = Array!(WasmObjModule*);
+alias WasmObjSymbols = Array!(WasmObjSymbol*);
 
 final class LibWasm : Library
 {
     WasmObjModules objmodules;
+    WasmObjSymbols objsymbols;
+    StringTable!(WasmObjSymbol*) tab;
+
+    extern (D) this()
+    {
+        tab._init(14_000);
+    }
 
     /***************************************
      * Add object module or library to the library.
@@ -90,14 +88,14 @@ final class LibWasm : Library
             buffer = cast(ubyte[])b.extractSlice();
         }
 
-        // If it's already an ar archive, extract its WASM members.
+        // Already an ar archive → extract WASM members from it.
         if (buffer.length >= 8 && memcmp(buffer.ptr, "!<arch>\n".ptr, 8) == 0)
         {
-            extractArchive(buffer);
+            extractArchive(buffer, module_name);
             return;
         }
 
-        // Validate WASM magic number (\0asm).
+        // Validate WASM magic (\0asm).
         if (buffer.length < 4 || buffer[0] != 0 || buffer[1] != 0x61 ||
             buffer[2] != 0x73 || buffer[3] != 0x6d)
         {
@@ -107,8 +105,11 @@ final class LibWasm : Library
         }
 
         auto om = new WasmObjModule();
-        om.name = FileName.name(module_name); // store basename
+        om.name = toCString(FileName.name(module_name));
         om.data = buffer;
+        om.length = cast(uint)buffer.length;
+        om.scan = true;
+
         time_t t;
         time(&t);
         om.file_time = cast(long)t;
@@ -118,92 +119,145 @@ final class LibWasm : Library
         objmodules.push(om);
     }
 
+    void addSymbol(WasmObjModule* om, const(char)[] name, int pickAny = 0) nothrow
+    {
+        auto s = tab.insert(name.ptr, name.length, null);
+        if (!s)
+        {
+            if (!pickAny)
+            {
+                s = tab.lookup(name.ptr, name.length);
+                assert(s);
+                WasmObjSymbol* os2 = s.value;
+                eSink.error(Loc.initial, "multiple definition of %s: %s and %s: %s",
+                    om.name.ptr, name.ptr, os2.om.name.ptr, os2.name.ptr);
+            }
+        }
+        else
+        {
+            auto os = new WasmObjSymbol();
+            os.name = xarraydup(name);
+            os.om = om;
+            s.value = os;
+            objsymbols.push(os);
+        }
+    }
+
     /***************************************
-     * Write library as a GNU/SVR4 ar archive.
-     * No symbol index is written; wasm-ld builds its own from each
-     * member's "linking" custom section.
+     * Write library as a GNU/SVR4 ar archive with a symbol table.
+     * Compatible with wasm-ld and llvm-ar.
      */
     protected override void writeLibToBuffer(ref OutBuffer libbuf)
     {
-        // Assign name_offset for members whose names are too long for the inline field.
-        // Inline fits: "name/" in 16 bytes → name can be at most 14 chars (15 - 1 for '/').
+        // 1. Scan object modules for symbols.
+        foreach (om; objmodules)
+        {
+            if (om.scan)
+                scanObjModule(om);
+        }
+
+        // 2. Assign long name offsets (// table) for names ≥ 15 chars.
         uint noffset = 0;
         foreach (om; objmodules)
         {
-            // name field = 16 bytes: name + '/' + spaces. Name ≤ 14 chars fits inline.
-            if (om.name.length < AR_OBJECT_NAME_SIZE)
-            {
-                om.name_offset = uint.max; // fits inline
-            }
+            // name field = 16 bytes: "name/" fits if name is ≤ 14 chars.
+            if (strlen(om.name.ptr) < AR_OBJECT_NAME_SIZE)
+                om.name_offset = -1;
             else
             {
-                om.name_offset = noffset;
-                noffset += cast(uint)(om.name.length + 2); // "name/\n"
+                om.name_offset = cast(int)noffset;
+                noffset += cast(uint)(strlen(om.name.ptr) + 2); // "name/\n"
             }
         }
 
-        // Compute member offsets.
+        // 3. Compute member offsets (symbol table first, then // table, then data).
+        //    Symbol table payload: 4-byte count + 4 bytes per symbol + symbol names + NULs.
+        uint symtabPayload = 4;
+        foreach (os; objsymbols)
+            symtabPayload += 4 + cast(uint)(os.name.length + 1);
+
         uint moffset = 8; // "!<arch>\n"
+        moffset += ArHeader.sizeof + symtabPayload;
+        moffset += moffset & 1; // align to even
+
         if (noffset)
         {
-            uint padded = (noffset + 1) & ~1u;
-            moffset += ArHeader.sizeof + padded; // // header + name table
+            moffset += ArHeader.sizeof + ((noffset + 1) & ~1u);
         }
+
         foreach (om; objmodules)
         {
-            if (moffset & 1)
-                moffset++; // pad to even
+            moffset += moffset & 1;
             om.offset = moffset;
-            moffset += ArHeader.sizeof + cast(uint)om.data.length;
+            moffset += ArHeader.sizeof + om.length;
         }
 
         libbuf.reserve(moffset);
+
+        // 4. Write magic.
         libbuf.write("!<arch>\n");
 
-        // Write the long filename table (//) if needed.
+        // 5. Write symbol table "/" member.
+        {
+            ArHeader h;
+            arFillHeader(h, "/", -1, 0, 0, 0, 0, symtabPayload);
+            // arFillHeader would turn "/" into "//", so fix the name field manually.
+            // The "/" symbol-table member is a special case: name field = "/               "
+            h.object_name[0] = '/';
+            foreach (ref c; h.object_name[1 .. $])
+                c = ' ';
+            libbuf.write((&h)[0 .. 1]);
+
+            // Payload: [count BE-u32] [offsets BE-u32...] [names NUL-terminated...]
+            char[4] tmp;
+            Port.writelongBE(cast(uint)objsymbols.length, tmp.ptr);
+            libbuf.write(tmp[0 .. 4]);
+            foreach (os; objsymbols)
+            {
+                Port.writelongBE(os.om.offset, tmp.ptr);
+                libbuf.write(tmp[0 .. 4]);
+            }
+            foreach (os; objsymbols)
+            {
+                libbuf.write(os.name);
+                libbuf.writeByte(0);
+            }
+        }
+        if (libbuf.length & 1)
+            libbuf.writeByte('\n');
+
+        // 6. Write long filename table "//" if needed.
         if (noffset)
         {
             ArHeader h;
-            // The // member name field is exactly "//" (no extra / suffix, padded with spaces).
-            fillArHeader(h, "//", noffset, 0, 0, 0, 0);
+            // "//" member: name field = "//              " (no extra '/' suffix).
+            arFillHeader(h, "/", -1, 0, 0, 0, 0, noffset);
+            h.object_name[0] = '/';
+            h.object_name[1] = '/';
+            foreach (ref c; h.object_name[2 .. $])
+                c = ' ';
             libbuf.write((&h)[0 .. 1]);
             foreach (om; objmodules)
             {
-                if (om.name_offset != uint.max)
+                if (om.name_offset >= 0)
                 {
-                    libbuf.write(om.name);
+                    libbuf.writestring(om.name.ptr);
                     libbuf.write("/\n");
                 }
             }
             if (noffset & 1)
-                libbuf.writeByte('\n'); // pad to even
+                libbuf.writeByte('\n');
         }
 
-        // Write object members.
+        // 7. Write object members.
         foreach (om; objmodules)
         {
             if (libbuf.length & 1)
-                libbuf.writeByte('\n'); // pad to even before header
+                libbuf.writeByte('\n');
 
             ArHeader h;
-            if (om.name_offset == uint.max)
-            {
-                // Short name: write "name/" padded to 16 chars.
-                char[AR_OBJECT_NAME_SIZE] namefield = ' ';
-                memcpy(namefield.ptr, om.name.ptr, om.name.length);
-                namefield[om.name.length] = '/';
-                fillArHeader(h, namefield[], om.data.length,
-                    om.file_time, om.user_id, om.group_id, om.file_mode);
-            }
-            else
-            {
-                // Long name: "/offset" reference into // table.
-                char[AR_OBJECT_NAME_SIZE + 1] namefield = ' ';
-                int n = snprintf(namefield.ptr, namefield.sizeof, "/%u", om.name_offset);
-                namefield[n] = ' '; // overwrite null terminator with space
-                fillArHeader(h, namefield[0 .. AR_OBJECT_NAME_SIZE], om.data.length,
-                    om.file_time, om.user_id, om.group_id, om.file_mode);
-            }
+            arFillHeader(h, om.name.ptr, om.name_offset,
+                om.file_time, om.user_id, om.group_id, om.file_mode, om.length);
             libbuf.write((&h)[0 .. 1]);
             libbuf.write(om.data);
         }
@@ -211,8 +265,17 @@ final class LibWasm : Library
 
 private:
 
+    void scanObjModule(WasmObjModule* om) nothrow
+    {
+        extern (D) void addSym(const(char)[] name, int pickAny) nothrow
+        {
+            this.addSymbol(om, name, pickAny);
+        }
+        scanWasmObjModule(&addSym, om.data, om.name.ptr, filename, eSink);
+    }
+
     // Extract WASM object members from an existing ar archive.
-    void extractArchive(const(ubyte)[] buf)
+    void extractArchive(const(ubyte)[] buf, const(char)[] archiveName)
     {
         uint offset = 8; // skip "!<arch>\n"
         const(char)[] nametab; // extended filename table (//)
@@ -222,8 +285,6 @@ private:
             auto h = cast(const(ArHeader)*)(buf.ptr + offset);
             offset += ArHeader.sizeof;
 
-            // Parse size field (decimal, space-padded).
-            import core.stdc.stdlib : strtoul;
             char* endptr;
             uint size = cast(uint)strtoul(cast(char*)h.file_size.ptr, &endptr, 10);
             if (offset + size > buf.length)
@@ -236,84 +297,35 @@ private:
                 // Extended filename table.
                 nametab = cast(const(char)[])(buf.ptr + offset)[0 .. size];
             }
-            else if (memberName[0] != '/' || memberName[1] == ' ')
+            else if (memberName[0] != '/')
             {
-                // Regular object member — resolve name and add it.
-                const(char)[] name;
-                if (memberName[0] == '/')
-                {
-                    // Short / followed by space: shouldn't happen but skip.
-                }
-                else
-                {
-                    // Short name: strip trailing '/' and spaces.
-                    name = memberName;
-                    size_t end = name.length;
-                    while (end > 0 && (name[end-1] == ' ' || name[end-1] == '/'))
-                        end--;
-                    name = name[0 .. end];
-                }
-                if (name.length)
-                    addObject(name, cast(const(ubyte)[])(buf.ptr + offset)[0 .. size]);
+                // Short-name regular member.
+                const(char)[] name = memberName;
+                size_t end = name.length;
+                while (end > 0 && (name[end-1] == ' ' || name[end-1] == '/'))
+                    end--;
+                if (end)
+                    addObject(name[0 .. end], cast(const(ubyte)[])(buf.ptr + offset)[0 .. size]);
             }
-            else if (memberName[0] == '/' && memberName[1] != '/')
+            else if (memberName[0] == '/' && memberName[1] != '/' && memberName[1] != ' ')
             {
-                // Long name reference: "/offset" into nametab.
-                import core.stdc.stdlib : strtoul;
+                // Long-name reference into // table.
                 uint noff = cast(uint)strtoul(cast(char*)memberName.ptr + 1, null, 10);
-                const(char)[] name;
                 if (noff < nametab.length)
                 {
                     const(char)[] rest = nametab[noff .. $];
                     size_t end = 0;
                     while (end < rest.length && rest[end] != '/' && rest[end] != '\n')
                         end++;
-                    name = rest[0 .. end];
+                    if (end)
+                        addObject(rest[0 .. end], cast(const(ubyte)[])(buf.ptr + offset)[0 .. size]);
                 }
-                if (name.length)
-                    addObject(name, cast(const(ubyte)[])(buf.ptr + offset)[0 .. size]);
             }
+            // else: "/" symbol table or other special member — skip.
 
             offset += size;
             if (offset & 1)
-                offset++; // align to even
+                offset++;
         }
     }
-}
-
-// Fill an ar member header with the given fields.
-// `nameField` must be exactly AR_OBJECT_NAME_SIZE (16) chars, already space-padded.
-// Special names like "//" and "/" are passed as-is (no automatic '/' suffix added).
-private void fillArHeader(ref ArHeader h, const(char)[] nameField,
-    ulong dataSize, long fileTime, uint uid, uint gid, uint mode) nothrow
-{
-    memset(&h, ' ', ArHeader.sizeof);
-
-    // Name field: copy up to 16 chars.
-    size_t nlen = nameField.length < AR_OBJECT_NAME_SIZE ? nameField.length : AR_OBJECT_NAME_SIZE;
-    memcpy(h.object_name.ptr, nameField.ptr, nlen);
-
-    // Numeric fields: format then copy without null terminator.
-    char[13] tmp = void;
-    int n;
-
-    n = snprintf(tmp.ptr, tmp.sizeof, "%-12lld", cast(long)fileTime);
-    memcpy(h.file_time.ptr, tmp.ptr, AR_FILE_TIME_SIZE);
-
-    n = snprintf(tmp.ptr, tmp.sizeof, "%-6u", uid);
-    memcpy(h.user_id.ptr, tmp.ptr, AR_USER_ID_SIZE);
-
-    n = snprintf(tmp.ptr, tmp.sizeof, "%-6u", gid);
-    memcpy(h.group_id.ptr, tmp.ptr, AR_GROUP_ID_SIZE);
-
-    n = snprintf(tmp.ptr, tmp.sizeof, "%-8o", mode);
-    memcpy(h.file_mode.ptr, tmp.ptr, AR_FILE_MODE_SIZE);
-
-    n = snprintf(tmp.ptr, tmp.sizeof, "%-10llu", cast(ulong)dataSize);
-    memcpy(h.file_size.ptr, tmp.ptr, AR_FILE_SIZE_SIZE);
-
-    h.trailer[0] = '`';
-    h.trailer[1] = '\n';
-
-    cast(void)n;
 }
