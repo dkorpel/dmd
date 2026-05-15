@@ -469,6 +469,12 @@ Symbol* toSymbol(Dsymbol s)
 
             s.prettyIdent = fd.toPrettyChars(true);
 
+            if (fd.wasmImportModule.length)
+            {
+                import dmd.backend.wasmobj : WasmObj_registerImportModule;
+                WasmObj_registerImportModule(id[0 .. strlen(id)], fd.wasmImportModule);
+            }
+
             /* Make C static functions SCstatic
              */
             s.Sclass = (fd.storage_class & STC.static_ && fd.isCsymbol())

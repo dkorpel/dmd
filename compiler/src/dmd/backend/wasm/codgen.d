@@ -30,8 +30,8 @@ import dmd.backend.oper;
 import dmd.backend.ty;
 import dmd.backend.type;
 import dmd.backend.var : globsym;
-import dmd.backend.wasmobj : WasmFuncBody, wasmFuncBodies, WasmLocal,
-    R_WASM_FUNCTION_INDEX_LEB, R_WASM_TYPE_INDEX_LEB;
+import dmd.backend.wasm : R_WASM_FUNCTION_INDEX_LEB, R_WASM_TYPE_INDEX_LEB;
+import dmd.backend.wasmobj : WasmFuncBody, wasmFuncBodies, WasmLocal;
 
 import dmd.common.outbuffer;
 

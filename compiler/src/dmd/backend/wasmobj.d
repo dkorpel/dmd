@@ -25,6 +25,7 @@ import dmd.backend.obj;
 import dmd.backend.ty;
 import dmd.backend.type;
 
+import dmd.backend.wasm;
 import dmd.common.outbuffer;
 
 // Segment indices used by the backend (must match cdef.d enum segfl_t values)
@@ -51,111 +52,6 @@ private void pushSegData(int idx) nothrow @trusted
 }
 
 nothrow:
-
-// ---------------------------------------------------------------------------
-// WASM binary encoding constants
-// ---------------------------------------------------------------------------
-
-enum : ubyte
-{
-    WASM_MAGIC_0 = 0x00,
-    WASM_MAGIC_1 = 0x61, // 'a'
-    WASM_MAGIC_2 = 0x73, // 's'
-    WASM_MAGIC_3 = 0x6D, // 'm'
-
-    WASM_VERSION_0 = 0x01,
-    WASM_VERSION_1 = 0x00,
-    WASM_VERSION_2 = 0x00,
-    WASM_VERSION_3 = 0x00,
-}
-
-// Section IDs
-enum WasmSection : ubyte
-{
-    custom = 0,
-    type_ = 1,
-    import_ = 2,
-    function_ = 3,
-    table = 4,
-    memory = 5,
-    global = 6,
-    export_ = 7,
-    start = 8,
-    element = 9,
-    code = 10,
-    data = 11,
-}
-
-// Value types
-enum : ubyte
-{
-    WASM_I32 = 0x7F,
-    WASM_I64 = 0x7E,
-    WASM_F32 = 0x7D,
-    WASM_F64 = 0x7C,
-    WASM_VOID = 0x40, // used in blocktype for void blocks
-}
-
-// Export kinds
-enum : ubyte
-{
-    WASM_EXPORT_FUNC = 0x00,
-    WASM_EXPORT_TABLE = 0x01,
-    WASM_EXPORT_MEM = 0x02,
-    WASM_EXPORT_GLOBAL = 0x03,
-}
-
-// Instructions
-enum : ubyte
-{
-    WASM_UNREACHABLE = 0x00,
-    WASM_END = 0x0B,
-}
-
-// WASM relocation types (WebAssembly tool conventions / linking metadata)
-enum : ubyte
-{
-    R_WASM_FUNCTION_INDEX_LEB = 0,  // function index in call (5-byte padded ULEB)
-    R_WASM_TABLE_INDEX_SLEB   = 1,
-    R_WASM_TABLE_INDEX_I32    = 2,
-    R_WASM_MEMORY_ADDR_LEB    = 3,
-    R_WASM_MEMORY_ADDR_SLEB   = 4,
-    R_WASM_MEMORY_ADDR_I32    = 5,
-    R_WASM_TYPE_INDEX_LEB     = 6,
-    R_WASM_GLOBAL_INDEX_LEB   = 7,
-}
-
-// "linking" custom section subsection IDs (version 2)
-enum : ubyte
-{
-    WASM_LINKING_SEGMENT_INFO = 5,
-    WASM_LINKING_INIT_FUNCS   = 6,
-    WASM_LINKING_COMDAT_INFO  = 7,
-    WASM_LINKING_SYMBOL_TABLE = 8,
-}
-
-// Symbol table entry kinds
-enum : ubyte
-{
-    WASM_SYMTAB_FUNCTION = 0,
-    WASM_SYMTAB_DATA     = 1,
-    WASM_SYMTAB_GLOBAL   = 2,
-    WASM_SYMTAB_SECTION  = 3,
-    WASM_SYMTAB_TAG      = 4,
-    WASM_SYMTAB_TABLE    = 5,
-}
-
-// Symbol table flags
-enum : uint
-{
-    WASM_SYM_BINDING_WEAK      = 0x01,
-    WASM_SYM_BINDING_LOCAL     = 0x02,
-    WASM_SYM_VISIBILITY_HIDDEN = 0x04,
-    WASM_SYM_UNDEFINED         = 0x10,
-    WASM_SYM_EXPORTED          = 0x40,
-    WASM_SYM_EXPLICIT_NAME     = 0x80,
-    WASM_SYM_NO_STRIP          = 0x100,
-}
 
 // ---------------------------------------------------------------------------
 // LEB128 encoding helpers
@@ -186,7 +82,12 @@ private void appendName(OutBuffer* buf, const(char)[] name) @trusted
 private uint ulebSize(uint v) @trusted
 {
     uint n = 0;
-    do { n++; v >>= 7; } while (v);
+    do
+    {
+        n++;
+        v >>= 7;
+    }
+    while (v);
     return n;
 }
 
@@ -257,10 +158,11 @@ struct WasmFuncBody
     // where this function's code bytes begin (used for reloc.CODE offsets).
     struct CodeReloc
     {
-        uint offset;   // byte offset within code buffer (before the 5-byte ULEB)
-        ubyte type;    // R_WASM_FUNCTION_INDEX_LEB etc.
-        uint symIdx;   // symbol table index (= function index for function symbols)
+        uint offset; // byte offset within code buffer (before the 5-byte ULEB)
+        ubyte type; // R_WASM_FUNCTION_INDEX_LEB etc.
+        uint symIdx; // symbol table index (= function index for function symbols)
     }
+
     CodeReloc[] codeRelocs;
     uint codePayloadStart; // set by emitCodeSection
 }
@@ -310,8 +212,19 @@ struct WasmModule
 
     // Deferred relocations in data segments. Written as 0 at emit time;
     // patched in WasmObj_term once all symbol addresses are known.
-    struct FuncReloc { uint dataByteOffset; Symbol* sym; }
-    struct DataReloc { uint dataByteOffset; Symbol* sym; uint addend; }
+    struct FuncReloc
+    {
+        uint dataByteOffset;
+        Symbol* sym;
+    }
+
+    struct DataReloc
+    {
+        uint dataByteOffset;
+        Symbol* sym;
+        uint addend;
+    }
+
     FuncReloc[] funcRelocations;
     DataReloc[] dataRelocations;
 
@@ -388,6 +301,19 @@ private WasmModule* wmod;
 // Set by the DMD frontend: true when -c is given (produce relocatable object
 // for wasm-ld), false when producing a self-contained final module directly.
 __gshared bool wasm_relocatable = true; // default: relocatable (for -c)
+
+// Maps mangled function name → WebAssembly import module name.
+// Populated from pragma(wasm_import_module) via WasmObj_registerImportModule().
+private __gshared const(char)[][string] g_importModuleTable;
+
+/**
+ * Register a WebAssembly import module name for the given mangled function name.
+ * Called from the frontend glue when pragma(wasm_import_module) is in effect.
+ */
+void WasmObj_registerImportModule(const(char)[] mangledName, const(char)[] moduleName) @trusted nothrow
+{
+    g_importModuleTable[cast(string) mangledName] = moduleName;
+}
 
 // ---------------------------------------------------------------------------
 // WASM value type for a backend type
@@ -916,7 +842,11 @@ private void emitRelocDataSection(OutBuffer* out_, uint dataSectionIdx) @trusted
     {
         uint funcIdx = uint.max;
         foreach (size_t fi; wmod.numImports .. wmod.funcs.length)
-            if (wmod.funcs[fi].sym == rel.sym) { funcIdx = cast(uint) fi; break; }
+            if (wmod.funcs[fi].sym == rel.sym)
+            {
+                funcIdx = cast(uint) fi;
+                break;
+            }
         if (funcIdx != uint.max && funcIdx < funcToSymIdx.length &&
             funcToSymIdx[funcIdx] != uint.max)
             relCount++;
@@ -932,10 +862,16 @@ private void emitRelocDataSection(OutBuffer* out_, uint dataSectionIdx) @trusted
     {
         uint funcIdx = uint.max;
         foreach (size_t fi; wmod.numImports .. wmod.funcs.length)
-            if (wmod.funcs[fi].sym == rel.sym) { funcIdx = cast(uint) fi; break; }
-        if (funcIdx == uint.max) continue;
+            if (wmod.funcs[fi].sym == rel.sym)
+            {
+                funcIdx = cast(uint) fi;
+                break;
+            }
+        if (funcIdx == uint.max)
+            continue;
         uint sym = funcToSymIdx[funcIdx];
-        if (sym == uint.max) continue;
+        if (sym == uint.max)
+            continue;
 
         payload.writeByte(R_WASM_TABLE_INDEX_I32);
         appendULEB128(&payload, dataSectionPrefix + rel.dataByteOffset);
@@ -1144,7 +1080,10 @@ void WasmObj_term(const(char)[] objfilename) @trusted
                 uint tableIdx = 0;
                 foreach (size_t fi; wmod.numImports .. wmod.funcs.length)
                     if (wmod.funcs[fi].sym == rel.sym)
-                    { tableIdx = cast(uint)(fi - wmod.numImports); break; }
+                    {
+                        tableIdx = cast(uint)(fi - wmod.numImports);
+                        break;
+                    }
                 dataBuf[rel.dataByteOffset .. rel.dataByteOffset + 4] =
                     (cast(ubyte*)&tableIdx)[0 .. 4];
             }
@@ -1178,43 +1117,53 @@ void WasmObj_term(const(char)[] objfilename) @trusted
     // so reloc.CODE can reference the code section by its module index.
     uint sectionIdx = 0; // counts non-custom sections actually emitted
     emitTypeSection(out_);
-    if (wmod.funcTypes.length) sectionIdx++;
+    if (wmod.funcTypes.length)
+        sectionIdx++;
 
     uint count = wmod.numImports + (wmod.importFuncTable ? 1 : 0);
     emitImportSection(out_);
-    if (count) sectionIdx++;
+    if (count)
+        sectionIdx++;
 
     uint defined = cast(uint)(wmod.funcs.length - wmod.numImports);
     emitFunctionSection(out_);
-    if (defined) sectionIdx++;
+    if (defined)
+        sectionIdx++;
 
-    if (emitTableSection(out_)) sectionIdx++;
+    if (emitTableSection(out_))
+        sectionIdx++;
     emitMemorySection(out_);
     sectionIdx++; // memory section always emitted
 
     emitGlobalSection(out_);
-    if (wmod.globals.length) sectionIdx++;
+    if (wmod.globals.length)
+        sectionIdx++;
 
     emitExportSection(out_);
     {
         // Export section: count exported + memory
         uint expCount = 1; // "memory"
         foreach (ref const WasmFunc f; wmod.funcs)
-            if (f.exported) expCount++;
-        if (expCount) sectionIdx++;
+            if (f.exported)
+                expCount++;
+        if (expCount)
+            sectionIdx++;
     }
 
     uint elemSectionIdx = sectionIdx;
     emitElementSection(out_);
-    if (defined) sectionIdx++;
+    if (defined)
+        sectionIdx++;
 
     uint codeSectionIdx = sectionIdx;
     emitCodeSection(out_);
-    if (defined) sectionIdx++;
+    if (defined)
+        sectionIdx++;
 
     uint dataSectionIdx = sectionIdx;
     emitDataSection(out_);
-    if (wmod.dataSegs.length) sectionIdx++;
+    if (wmod.dataSegs.length)
+        sectionIdx++;
 
     // Relocatable objects include "linking" + "reloc.*" custom sections
     // so wasm-ld can patch symbol references when linking.
@@ -1434,33 +1383,6 @@ int WasmObj_data_start(Symbol* sdata, targ_size_t datasize, int seg) @trusted
     return 1;
 }
 
-// Returns: the WASM import module name for a given function name
-// Return the WASM import module name for a given function name.
-// WASI functions come from "wasi_snapshot_preview1"; everything else from "env".
-private const(char)[] wasiImportModule(const(char)[] name) @trusted
-{
-    static immutable string[] wasiNames = [
-        "args_get", "args_sizes_get",
-        "environ_get", "environ_sizes_get",
-        "clock_res_get", "clock_time_get",
-        "fd_advise", "fd_allocate", "fd_close", "fd_datasync",
-        "fd_fdstat_get", "fd_fdstat_set_flags", "fd_fdstat_set_rights",
-        "fd_filestat_get", "fd_filestat_set_size", "fd_filestat_set_times",
-        "fd_pread", "fd_prestat_dir_name", "fd_prestat_get",
-        "fd_pwrite", "fd_read", "fd_readdir", "fd_renumber",
-        "fd_seek", "fd_sync", "fd_tell", "fd_write",
-        "path_create_directory", "path_filestat_get", "path_filestat_set_times",
-        "path_link", "path_open", "path_readlink", "path_remove_directory",
-        "path_rename", "path_symlink", "path_unlink_file",
-        "poll_oneoff", "proc_exit", "proc_raise",
-        "random_get", "sched_yield",
-        "sock_accept", "sock_recv", "sock_send", "sock_shutdown",
-    ];
-    foreach (w; wasiNames)
-        if (name == w)
-            return "wasi_snapshot_preview1";
-    return "env";
-}
 
 // Update an import's WASM function type. Called from codgen when the actual
 // argument types are known at the call site (runtime symbols use a generic
@@ -1498,14 +1420,17 @@ int WasmObj_external(Symbol* s) @trusted
             }
         }
     }
-    // Register as an import. Use the correct module name for known ABIs.
+    // Register as an import. Module name comes from pragma(wasm_import_module), else "env".
     WasmFuncType ft;
     if (tybasic(s.Stype.Tty) != TYvoid)
         ft = buildFuncType(s.Stype);
     WasmFunc f;
     f.typeIdx = wmod.internType(ft);
     f.sym = s;
-    f.importModule = wasiImportModule(id);
+    if (auto p = cast(string) id in g_importModuleTable)
+        f.importModule = *p;
+    else
+        f.importModule = "env";
     f.importName = id;
     f.isImport = true;
     // Imports must come before defined functions; insert at numImports position
@@ -1650,7 +1575,10 @@ uint wmod_funcTableIndex(Symbol* s) @trusted
     f.sym = s;
     f.isImport = true;
     f.importName = s ? s.Sident.ptr[0 .. strlen(s.Sident.ptr)] : "(unknown)";
-    f.importModule = wasiImportModule(f.importName);
+    if (auto p = cast(string) f.importName in g_importModuleTable)
+        f.importModule = *p;
+    else
+        f.importModule = "env";
     wmod.funcs = [f] ~ wmod.funcs; // prepend as import
     ++wmod.numImports;
     return 0; // table index 0 (this is wrong for imports, but best-effort)
@@ -1677,7 +1605,8 @@ uint wmod_internFuncPtrType(type* ptrType) @trusted
 // Used by codgen.d to compute typeIdx for virtual call_indirect.
 uint wmod_internType(ubyte[] params, ubyte[] results) @trusted
 {
-    if (!wmod) return 0;
+    if (!wmod)
+        return 0;
     WasmFuncType ft;
     ft.params = params;
     ft.results = results;
@@ -1689,7 +1618,8 @@ uint wmod_internType(ubyte[] params, ubyte[] results) @trusted
 // so wasm-ld can patch the type index when merging type tables.
 uint wmod_findFuncForType(uint typeIdx) @trusted
 {
-    if (!wmod) return uint.max;
+    if (!wmod)
+        return uint.max;
     foreach (size_t i, ref const WasmFunc f; wmod.funcs)
     {
         if (f.typeIdx != typeIdx)
