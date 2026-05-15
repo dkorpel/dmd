@@ -282,7 +282,8 @@ struct WasmCG
     OutBuffer code; /// bytecode being emitted
     WasmLocal[] locals; /// local variable table (params first)
     uint numParams; /// number of parameters (= first numParams locals)
-    WasmFuncBody.CodeReloc[] codeRelocs; /// relocations for direct function calls
+    WasmFuncBody.CodeReloc[]    codeRelocs;     /// relocations for direct function calls
+    WasmFuncBody.DataAddrReloc[] dataAddrRelocs; /// R_WASM_MEMORY_ADDR_LEB relocations
 
     // Shadow stack frame (for locals whose address is taken)
     bool hasShadowFrame;
@@ -372,6 +373,42 @@ nothrow:
     void emitSLEB(long v) @trusted
     {
         sleb(&code, v);
+    }
+
+    // Emit OP_I32_CONST with a data-segment address.
+    // In relocatable mode, emits a 5-byte padded ULEB128 and records a
+    // R_WASM_MEMORY_ADDR_LEB relocation so wasm-ld patches the address after
+    // moving the data section to its final location.
+    // In non-relocatable (final) mode, emits a compact SLEB128 — the data
+    // section is already at its final address in that case.
+    void emitDataAddr(Symbol* sym, uint addend) @trusted
+    {
+        import dmd.backend.wasmobj : wasm_relocatable;
+        emit(OP_I32_CONST);
+        const uint addr = cast(uint)(sym.Soffset + addend);
+        // Only relocate symbols in the INITIALIZED data section (FL.data, FL.csdata,
+        // FL.datseg).  BSS (FL.udata) variables have offsets relative to the BSS
+        // region which is handled differently by wasm-ld; they don't map to a
+        // valid offset in the single initialized data segment.
+        // Only relocate symbols in the INITIALIZED data section.
+        // BSS (FL.udata) and TLS (FL.tlsdata) have offsets beyond the active
+        // data segment and don't map to valid WASM_SYMTAB_DATA entries in it.
+        const bool canRelocate = wasm_relocatable && sym.Sident.ptr != null &&
+            sym.Sfl != FL.udata && sym.Sfl != FL.tlsdata;
+        if (canRelocate)
+        {
+            // 5-byte padded ULEB128 for wasm-ld relocation patching.
+            dataAddrRelocs ~= WasmFuncBody.DataAddrReloc(cast(uint) code.length, sym, addend);
+            code.writeByte(cast(ubyte)((addr & 0x7F) | 0x80));
+            code.writeByte(cast(ubyte)(((addr >> 7) & 0x7F) | 0x80));
+            code.writeByte(cast(ubyte)(((addr >> 14) & 0x7F) | 0x80));
+            code.writeByte(cast(ubyte)(((addr >> 21) & 0x7F) | 0x80));
+            code.writeByte(cast(ubyte)((addr >> 28) & 0x0F));
+        }
+        else
+        {
+            emitSLEB(cast(int) addr);
+        }
     }
 
     // Emit OP_CALL with a 5-byte padded ULEB128 function index and record a
@@ -769,8 +806,7 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
             case FL.extern_:
             case FL.csdata:
             case FL.datseg:
-                cg.emit(OP_I32_CONST);
-                cg.emitSLEB(cast(int)(s.Soffset + e.Voffset));
+                cg.emitDataAddr(s, cast(uint) e.Voffset);
                 emitLoad(cg, e.Ety);
                 return true;
             default:
@@ -833,8 +869,7 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
             else
             {
                 // Address of a global in linear memory.
-                cg.emit(OP_I32_CONST);
-                cg.emitSLEB(cast(int)(rs.Soffset + e.Voffset));
+                cg.emitDataAddr(rs, cast(uint) e.Voffset);
             }
             return true;
         }
@@ -876,13 +911,11 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
                 case FL.csdata:
                 case FL.datseg:
                     // Store to global in linear memory
-                    cg.emit(OP_I32_CONST);
-                    cg.emitSLEB(cast(int)(lhs.Soffset + e.E1.Voffset));
+                    cg.emitDataAddr(lhs, cast(uint) e.E1.Voffset);
                     genElem(cg, e.E2);
                     emitStore(cg, e.E1.Ety);
                     // Re-load for expression result
-                    cg.emit(OP_I32_CONST);
-                    cg.emitSLEB(cast(int)(lhs.Soffset + e.E1.Voffset));
+                    cg.emitDataAddr(lhs, cast(uint) e.E1.Voffset);
                     emitLoad(cg, e.E1.Ety);
                     return true;
                 default:
@@ -982,17 +1015,14 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
                 case FL.datseg:
                     {
                         // Global: load, op, store, load-result
-                        int addr = cast(int)(s.Soffset + e.E1.Voffset);
-                        cg.emit(OP_I32_CONST);
-                        cg.emitSLEB(addr);
-                        cg.emit(OP_I32_CONST);
-                        cg.emitSLEB(addr);
+                        const uint addend = cast(uint) e.E1.Voffset;
+                        cg.emitDataAddr(s, addend);
+                        cg.emitDataAddr(s, addend);
                         emitLoad(cg, e.E1.Ety);
                         genElem(cg, e.E2);
                         emitBinop(cg, compoundToBinop(op), e.Ety);
                         emitStore(cg, e.E1.Ety);
-                        cg.emit(OP_I32_CONST);
-                        cg.emitSLEB(addr);
+                        cg.emitDataAddr(s, addend);
                         emitLoad(cg, e.E1.Ety);
                         return true;
                     }
@@ -1835,8 +1865,7 @@ private void genElemAddr(ref WasmCG cg, elem* e) @trusted
             case FL.extern_:
             case FL.csdata:
             case FL.datseg:
-                cg.emit(OP_I32_CONST);
-                cg.emitSLEB(cast(int)(s.Soffset + e.Voffset));
+                cg.emitDataAddr(s, cast(uint) e.Voffset);
                 return;
             default:
                 break;
@@ -2797,7 +2826,8 @@ void wasm_codgen(Symbol* sfunc) @trusted
     // Store results back into the WasmFuncBody
     fb.locals = cg.locals;
     fb.numParams = cg.numParams;
-    fb.codeRelocs = cg.codeRelocs;
+    fb.codeRelocs    = cg.codeRelocs;
+    fb.dataAddrRelocs = cg.dataAddrRelocs;
     fb.code.reset();
     fb.code.write(cg.code.peekSlice());
 }
