@@ -195,21 +195,21 @@ enum STATUS_FAILED = -1;
  *   eSink   = sink for error messages
  * Returns: 0 on success, non-zero on failure
  */
-private int runWasmLINK(bool verbose, ErrorSink eSink)
+private int runWasmLINK(bool verbose, ref Param params, ErrorSink eSink)
 {
     // For single-file compilation without -c, the compiler produces a
     // self-contained final WASM module. Just rename it to the output path.
-    if (global.params.objfiles.length == 1)
+    if (params.objfiles.length == 1)
     {
-        const(char)* src = global.params.objfiles[0];
+        const(char)* src = params.objfiles[0];
         const(char)[] outfile;
-        if (global.params.exefile)
-            outfile = global.params.exefile;
+        if (params.exefile)
+            outfile = params.exefile;
         else
         {
             const(char)[] n = FileName.name(src[0 .. strlen(src)]);
             outfile = FileName.forceExt(n, target.obj_ext);
-            global.params.exefile = outfile;
+            params.exefile = outfile;
         }
         if (!ensurePathToNameExists(Loc.initial, outfile))
             return STATUS_FAILED;
@@ -238,21 +238,21 @@ private int runWasmLINK(bool verbose, ErrorSink eSink)
     const(char)* wasmld = getenv("WASM_LD");
     argv.push(wasmld ? wasmld : "wasm-ld");
 
-    argv.append(&global.params.objfiles);
+    argv.append(&params.objfiles);
 
     argv.push("-o");
-    if (global.params.exefile)
+    if (params.exefile)
     {
-        argv.push(global.params.exefile.xarraydup.ptr);
+        argv.push(params.exefile.xarraydup.ptr);
     }
     else
     {
-        const(char)[] n = FileName.name(global.params.objfiles[0].toDString);
+        const(char)[] n = FileName.name(params.objfiles[0].toDString);
         const(char)[] ex = FileName.forceExt(n, target.obj_ext);
-        global.params.exefile = ex;
+        params.exefile = ex;
         argv.push(ex.xarraydup.ptr);
     }
-    if (!ensurePathToNameExists(Loc.initial, global.params.exefile))
+    if (!ensurePathToNameExists(Loc.initial, params.exefile))
         return STATUS_FAILED;
 
     // wasm-ld defaults: allow the file to not have a _start entry point,
@@ -263,17 +263,17 @@ private int runWasmLINK(bool verbose, ErrorSink eSink)
     argv.push("--no-gc-sections"); // keep table, data, elements from being GC'd
 
     // Link switches: pass directly to wasm-ld, skipping CC-driver-only flags
-    foreach (pi, p; global.params.linkswitches)
-        if (p && p[0] && !global.params.linkswitchIsForCC[pi])
+    foreach (pi, p; params.linkswitches)
+        if (p && p[0] && !params.linkswitchIsForCC[pi])
             argv.push(p);
 
     // Static archive files passed directly
-    foreach (p; global.params.libfiles)
+    foreach (p; params.libfiles)
         if (FileName.equalsExt(p, "a"))
             argv.push(p);
 
     // Named libraries: prepend -l
-    foreach (p; global.params.libfiles)
+    foreach (p; params.libfiles)
         if (!FileName.equalsExt(p, "a"))
         {
             const plen = strlen(p);
@@ -284,7 +284,7 @@ private int runWasmLINK(bool verbose, ErrorSink eSink)
             argv.push(s);
         }
 
-    foreach (p; global.params.dllfiles)
+    foreach (p; params.dllfiles)
         argv.push(p);
 
     OutBuffer cmdbuf;
@@ -375,7 +375,7 @@ private int runWasmLINK(bool verbose, ErrorSink eSink)
 public int runLINK(bool verbose, ErrorSink eSink)
 {
     if (target.isWasm)
-        return runWasmLINK(verbose, eSink);
+        return runWasmLINK(verbose, global.params, eSink);
 
     const phobosLibname = finalDefaultlibname();
 

@@ -67,6 +67,8 @@ extern (C++) abstract class Declaration : Dsymbol
     STC storage_class = STC.none;
     // overridden symbol with pragma(mangle, "...")
     const(char)[] mangleOverride;
+    // WebAssembly import module name set by pragma(wasm_import_module, "name")
+    const(char)[] wasmImportModule;
     Visibility visibility;
     short inuse;          // used to detect cycles
 
