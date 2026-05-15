@@ -160,22 +160,6 @@ void pragmaDeclSemantic(PragmaDeclaration pd, Scope* sc)
             sc2.pop();
         return;
     }
-    else if (pd.ident == Id.wasm_import_module)
-    {
-        if (!pd.args || pd.args.length != 1)
-            .error(pd.loc, "%s `%s` requires a single string argument", pd.kind, pd.toPrettyChars);
-        else
-        {
-            auto se = semanticString(sc, (*pd.args)[0], "wasm_import_module argument");
-            if (se)
-            {
-                (*pd.args)[0] = se;
-                const modName = se.peekString();
-                pragmaWasmImportModuleSemantic(pd.loc, modName, pd.decl);
-            }
-        }
-        return declarations();
-    }
     else if (pd.ident == Id.crt_constructor || pd.ident == Id.crt_destructor)
     {
         if (pd.args && pd.args.length != 0)
@@ -725,31 +709,3 @@ private bool pragmaMangleSemantic(Loc loc, Scope* sc, Expressions* args, Dsymbol
     return true;
 }
 
-/***************************************
- * Apply `pragma(wasm_import_module, "name")` to declarations.
- * Sets the WebAssembly import module name on each function declaration.
- *
- * Params:
- *   loc    = location for error messages
- *   modName = the WebAssembly module name string
- *   decls  = declarations to apply it to
- */
-private void pragmaWasmImportModuleSemantic(Loc loc, const(char)[] modName, Dsymbols* decls)
-{
-    import dmd.declaration : Declaration;
-    if (decls is null)
-        return;
-    foreach (s; (*decls)[])
-    {
-        if (auto ad = s.isAttribDeclaration())
-        {
-            auto inner = ad.include(null);
-            if (inner)
-                pragmaWasmImportModuleSemantic(loc, modName, inner);
-        }
-        else if (auto d = s.isDeclaration())
-        {
-            d.wasmImportModule = modName;
-        }
-    }
-}

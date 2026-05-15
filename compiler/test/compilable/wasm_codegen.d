@@ -246,8 +246,8 @@ extern (C) int double_(int x) => x * 2;
 
 extern (C) int square(int x) => x * x;
 
-pragma(wasm_import_module, "wasi_snapshot_preview1"):
-extern (C) void proc_exit(int code);
+import core.attribute : wasmImportModule;
+@wasmImportModule("wasi_snapshot_preview1") extern (C) void proc_exit(int code);
 
 // Assert handler: betterC assert failure calls __assert(msg, file, line).
 extern (C) void __assert(const(char)* msg, const(char)* file, int line)
@@ -354,8 +354,7 @@ struct WasiIov
     size_t len;
 }
 
-pragma(wasm_import_module, "wasi_snapshot_preview1")
-extern (C) int fd_write(uint fd, const(WasiIov)* iovs, size_t iovs_len, size_t* nwritten);
+@wasmImportModule("wasi_snapshot_preview1") extern (C) int fd_write(uint fd, const(WasiIov)* iovs, size_t iovs_len, size_t* nwritten);
 
 extern (C) void wasiWrite(const(char)* msg, size_t len)
 {
