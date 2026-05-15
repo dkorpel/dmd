@@ -469,11 +469,8 @@ Symbol* toSymbol(Dsymbol s)
 
             s.prettyIdent = fd.toPrettyChars(true);
 
-            if (fd.wasmImportModule.length)
-            {
-                import dmd.backend.wasmobj : WasmObj_registerImportModule;
-                WasmObj_registerImportModule(id[0 .. strlen(id)], fd.wasmImportModule);
-            }
+            if (target.isWasm)
+                registerWasmImportModule(fd, id[0 .. strlen(id)]);
 
             /* Make C static functions SCstatic
              */
@@ -943,4 +940,28 @@ Classsym* fake_classsym(Identifier id)
     assert(t.Tmangle == 0);
     t.Tmangle = Mangle.d;
     return t.Ttag;
+}
+
+/**
+ * If `fd` has a `@wasmImportModule("name")` UDA from `core.attribute`,
+ * register the module name in the WASM backend's import-module table.
+ * Called only when targeting WebAssembly.
+ */
+private void registerWasmImportModule(FuncDeclaration fd, const(char)[] mangledName)
+{
+    import dmd.attrib : foreachUdaNoSemantic, isCoreUda;
+    import dmd.backend.wasmobj : WasmObj_registerImportModule;
+
+    foreachUdaNoSemantic(fd, (Expression e) {
+        auto lit = e.isStructLiteralExp();
+        if (!lit || !lit.sd)
+            return 0;
+        if (!isCoreUda(lit.sd, Id.udaWasmImportModule))
+            return 0;
+        assert(lit.elements.length == 1);
+        auto se = (*lit.elements)[0].isStringExp();
+        assert(se);
+        WasmObj_registerImportModule(mangledName, se.peekString());
+        return 1;
+    });
 }
