@@ -309,7 +309,6 @@ immutable Msgtable[] msgtable =
     { "startaddress" },
     { "crt_constructor" },
     { "crt_destructor" },
-    { "wasm_import_module" },
 
     // For special functions
     { "tohash", "toHash" },
@@ -495,6 +494,7 @@ immutable Msgtable[] msgtable =
     { "udaMustUse", "mustuse" },
     { "udaStandalone", "standalone" },
     { "udaSection", "section" },
+    { "udaWasmImportModule", "wasmImportModule" },
 
     // Editions
     { "__edition_latest_do_not_use", },

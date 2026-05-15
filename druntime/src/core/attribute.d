@@ -110,6 +110,35 @@ else
 }
 
 /**
+ * When applied to an `extern(C)` function declaration targeting WebAssembly,
+ * specifies the WebAssembly import module name for that function.
+ *
+ * In the WebAssembly binary format, every import has a two-level namespace:
+ * a module name and a function name. Without this attribute the module name
+ * defaults to `"env"`. Use this attribute to import from a specific host
+ * module such as WASI.
+ *
+ * Examples:
+ * ---
+ * import core.attribute : wasmImportModule;
+ *
+ * @wasmImportModule("wasi_snapshot_preview1")
+ * extern (C) void proc_exit(int) nothrow @nogc;
+ * ---
+ */
+version (DigitalMars)
+{
+    struct wasmImportModule
+    {
+        string name;
+    }
+}
+else
+{
+    // LDC uses @llvmAttr("wasm-import-module", ...) for the same purpose.
+}
+
+/**
  * Use this attribute to attach an Objective-C selector to a method.
  *
  * This is a special compiler recognized attribute, it has several
