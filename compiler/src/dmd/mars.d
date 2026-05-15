@@ -399,7 +399,7 @@ void setDefaultLibraries(const ref Target target, ref const(char)[] defaultlibna
         }
         else if (target.os == Target.OS.WASM)
         {
-            defaultlibname = null;
+            defaultlibname = "libdruntime-wasm.a";
         }
         else
         {
