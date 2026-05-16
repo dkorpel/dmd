@@ -116,22 +116,80 @@ private void appendULEB128_5(OutBuffer* buf, uint v) @trusted
     buf.writeByte(cast(ubyte)((v >> 28) & 0x0F)); // MSB=0 to terminate
 }
 
+// Name of a WasmFunc as it appears in the wasm symbol table.
+private const(char)[] funcName(ref const WasmFunc f) @trusted
+{
+    if (f.sym)
+        return f.sym.Sident.ptr[0 .. strlen(f.sym.Sident.ptr)];
+    return f.importName.length ? f.importName : f.name[];
+}
+
+// Index of the func that "owns" the symbol-table entry for the given name:
+// the first defined func with that name, else the first import with that name.
+// Used to merge duplicate symbol-table entries that would otherwise conflict
+// for wasm-ld (e.g. import+defined twin, or several modules each defining the
+// same extern(C) symbol — drop subsequent copies from the symbol table).
+private uint canonicalFuncForName(size_t i) @trusted
+{
+    const(char)[] name = funcName(wmod.funcs[i]);
+    if (!name.length)
+        return cast(uint) i;
+    uint firstDefined = uint.max;
+    uint firstImport = uint.max;
+    foreach (size_t j, ref const WasmFunc g; wmod.funcs)
+    {
+        if (funcName(g) != name) continue;
+        if (g.isImport)
+        {
+            if (firstImport == uint.max) firstImport = cast(uint) j;
+        }
+        else
+        {
+            if (firstDefined == uint.max) firstDefined = cast(uint) j;
+        }
+    }
+    if (firstDefined != uint.max) return firstDefined;
+    return firstImport;
+}
+
+// True if func i should be omitted from the symbol table because another
+// func owns the canonical entry for its name.
+private bool isShadowedFunc(size_t i) @trusted
+{
+    return canonicalFuncForName(i) != i;
+}
+
 // Write a custom section: section id 0, size, name, then payload bytes
 // Build mapping: function index → linking-section symbol index.
 // Functions without a name get uint.max (excluded from the symbol table).
+// Shadowed imports (same name as a defined func) alias to the defined sym idx
+// so we never emit two symbol-table entries with the same name.
 private uint[] buildFuncToSymIdx() @trusted
 {
     uint[] funcToSymIdx;
     funcToSymIdx.length = wmod.funcs.length;
+    enum uint SHADOWED = uint.max - 1;
     uint si = 0;
     foreach (size_t i, ref const WasmFunc f; wmod.funcs)
     {
-        const(char)[] name;
-        if (f.sym)
-            name = f.sym.Sident.ptr[0 .. strlen(f.sym.Sident.ptr)];
-        else
-            name = f.importName.length ? f.importName : f.name[];
-        funcToSymIdx[i] = name.length ? si++ : uint.max;
+        const(char)[] name = funcName(f);
+        if (!name.length)
+        {
+            funcToSymIdx[i] = uint.max;
+            continue;
+        }
+        if (isShadowedFunc(i))
+        {
+            funcToSymIdx[i] = SHADOWED;
+            continue;
+        }
+        funcToSymIdx[i] = si++;
+    }
+    // Resolve shadowed funcs to the canonical func's sym index.
+    foreach (size_t i; 0 .. wmod.funcs.length)
+    {
+        if (funcToSymIdx[i] != SHADOWED) continue;
+        funcToSymIdx[i] = funcToSymIdx[canonicalFuncForName(i)];
     }
     return funcToSymIdx;
 }
@@ -778,18 +836,15 @@ private void emitLinkingSection(OutBuffer* out_) @trusted
 
     // WASM_LINKING_SYMBOL_TABLE subsection
     OutBuffer symtab;
-    // Count usable symbols (skip anonymous synthesized functions).
-    // Also count data symbols and one TABLE entry for the function table.
+    // Count usable symbols (skip anonymous synthesized functions and
+    // imports that are shadowed by a same-named defined function).
     uint symCount = 0;
-    foreach (ref const WasmFunc f; wmod.funcs)
+    foreach (size_t i, ref const WasmFunc f; wmod.funcs)
     {
-        const(char)[] name;
-        if (f.sym)
-            name = f.sym.Sident.ptr[0 .. strlen(f.sym.Sident.ptr)];
-        else
-            name = f.importName.length ? f.importName : f.name[];
-        if (name.length)
-            symCount++;
+        const(char)[] name = funcName(f);
+        if (!name.length) continue;
+        if (isShadowedFunc(i)) continue;
+        symCount++;
     }
     // Data symbols referenced by code relocations.
     Symbol*[] datasymsForLinking = collectRelocDataSyms();
@@ -805,13 +860,11 @@ private void emitLinkingSection(OutBuffer* out_) @trusted
 
     foreach (size_t i, ref const WasmFunc f; wmod.funcs)
     {
-        const(char)[] name;
-        if (f.sym)
-            name = f.sym.Sident.ptr[0 .. strlen(f.sym.Sident.ptr)];
-        else
-            name = f.importName.length ? f.importName : f.name[];
+        const(char)[] name = funcName(f);
         if (!name.length)
             continue; // skip anonymous synthesized functions
+        if (isShadowedFunc(i))
+            continue; // canonical twin owns the symbol-table entry
 
         symtab.writeByte(WASM_SYMTAB_FUNCTION);
 
@@ -1395,6 +1448,9 @@ int WasmObj_comdat(Symbol* s) @trusted
 {
     if (!s || !s.Stype)
         return 0;
+    // Dedup: if already registered, return existing func index
+    if (s.Sseg >= 0 && s.Sseg < wmod.funcs.length && wmod.funcs[s.Sseg].sym == s)
+        return s.Sseg;
     // Register a defined function
     WasmFuncType ft;
     if (tybasic(s.Stype.Tty) != TYvoid)
