@@ -1346,10 +1346,10 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
                 // Runtime symbols (memcmp, __assert, etc.) are registered with a
                 // generic empty type because rtlsym.d uses type_fake(TYnfunc). Fix
                 // the import type from the actual call-site argument/return types.
-                ubyte[] aparams;
                 {
                     import dmd.backend.wasmobj : wmod_fixImportType;
 
+                    ubyte[] aparams;
                     void collectArgTys(elem* p) nothrow @trusted
                     {
                         if (!p)
@@ -1360,13 +1360,14 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
                             collectArgTys(p.E1);
                             return;
                         }
-                        if (isSliceElem(p)) // D slice: split into two i32 params
+                        const tym_t pty = tybasic(p.Ety);
+                        if (pty == TYullong && p.Ety != TYullong) // D slice: two i32s
                         {
                             aparams ~= WASM_I32;
                             aparams ~= WASM_I32;
                         }
                         else
-                            aparams ~= wasmType(tybasic(p.Ety));
+                            aparams ~= wasmType(pty);
                     }
 
                     collectArgTys(e.E2);
@@ -1381,44 +1382,6 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
                 // so WASM's type checker accepts any type expectations after the call.
                 if (e.E1.Vsym.Sflags & SFLexit)
                     cg.emit(OP_UNREACHABLE);
-                else if (e.E1.Vsym.Stype && variadic(e.E1.Vsym.Stype))
-                {
-                    // Variadic C functions (printf, etc.) are imported with only their
-                    // fixed parameters.  The variadic arguments are pushed deeper on the
-                    // WASM stack and remain after the call.  Clean them up so the block
-                    // stack is balanced: save the return value (if any), drop the extras,
-                    // then restore the return value.
-                    uint fixedParams = 0;
-                    for (param_t* p = e.E1.Vsym.Stype.Tparamtypes; p; p = p.Pnext)
-                    {
-                        if (p.Ptype && tybasic(p.Ptype.Tty) != TYvoid)
-                        {
-                            const tym_t pty = tybasic(p.Ptype.Tty);
-                            // D slice (TYullong + Tnext on WASM32) counts as two i32 WASM params.
-                            fixedParams += (pty == TYullong && p.Ptype.Tnext) ? 2 : 1;
-                        }
-                    }
-                    const int extra = cast(int)aparams.length - cast(int)fixedParams;
-                    if (extra > 0)
-                    {
-                        const tym_t retTy3 = tybasic(e.Ety);
-                        const bool hasRet = (retTy3 != TYvoid && retTy3 != TYnoreturn);
-                        uint retTmp = 0;
-                        if (hasRet)
-                        {
-                            retTmp = cg.allocTemp(wasmType(retTy3));
-                            cg.emit(OP_LOCAL_SET);
-                            cg.emitULEB(retTmp);
-                        }
-                        foreach (_; 0 .. extra)
-                            cg.emit(OP_DROP);
-                        if (hasRet)
-                        {
-                            cg.emit(OP_LOCAL_GET);
-                            cg.emitULEB(retTmp);
-                        }
-                    }
-                }
             }
             else
             {
@@ -1924,46 +1887,22 @@ private void genElemAddr(ref WasmCG cg, elem* e) @trusted
 // Emit argument list (OPparam chain or single elem)
 // In DMD IR, OPparam(E1, E2) is right-to-left: E2 is the leftmost argument.
 // WASM args are left-to-right on the stack, so emit E2 before E1.
-// Return true if a TYullong elem is a D dynamic array (slice).
-// On WASM32, TYdarray == TYullong (util_set32 keeps var.d default of TYullong).
-// D slices are packed as i64 (len32 | ptr32<<32) and must be split into two
-// i32 WASM params when passed as function arguments.
-private bool isSliceElem(const(elem)* e) @trusted
-{
-    const tym_t ty = tybasic(e.Ety);
-    if (ty != TYullong && ty != TYllong)
-        return false;
-    // Explicit element type with Tnext indicates a slice.
-    if (e.ET && e.ET.Tnext)
-        return true;
-    // OPvar: check symbol's declared type for Tnext.
-    if (e.Eoper == OPvar && e.Vsym && e.Vsym.Stype && e.Vsym.Stype.Tnext)
-        return true;
-    // OPpair/OPrpair always construct a (len, ptr) D slice.
-    if (e.Eoper == OPpair || e.Eoper == OPrpair)
-        return true;
-    // OPind: dereferencing a pointer-to-slice.
-    // addr.Vsym.Stype = ptr type; .Tnext = slice type (TYullong + Tnext = element).
-    if (e.Eoper == OPind && e.E1)
-    {
-        const(elem)* addr = e.E1;
-        if (addr.Eoper == OPvar && addr.Vsym && addr.Vsym.Stype)
-        {
-            const(type)* sliceTy = addr.Vsym.Stype.Tnext;
-            // pointee must be TYullong (= TYdarray on WASM32) with an element type.
-            if (sliceTy && tybasic(sliceTy.Tty) == TYullong && sliceTy.Tnext)
-                return true;
-        }
-    }
-    return false;
-}
-
-// Emit a single function argument. D slices (TYdarray = TYullong on WASM32)
+// Emit a single function argument. D slices (TYdarray = TYullong+Tnext on WASM32)
 // are split into two i32 params (lo=len, hi=ptr) to match the WASM32/LDC2 ABI.
 private void genOneArg(ref WasmCG cg, elem* e) @trusted
 {
     genElem(cg, e);
-    const bool isDynArray = isSliceElem(e);
+    const tym_t aty = tybasic(e.Ety);
+    // D slice (TYdarray = TYullong+Tnext): split i64 into (lo=len, hi=ptr).
+    // Check Tnext via e.ET (for struct/array expressions) or via OPvar's Stype.
+    bool isDynArray = false;
+    if (aty == TYullong)
+    {
+        if (e.ET && e.ET.Tnext)
+            isDynArray = true;
+        else if (e.Eoper == OPvar && e.Vsym && e.Vsym.Stype && e.Vsym.Stype.Tnext)
+            isDynArray = true;
+    }
     if (isDynArray)
     {
         uint tmp = cg.allocTemp(WASM_I64);
@@ -2234,41 +2173,6 @@ private uint funcIndex(Symbol* sfunc) @trusted
 }
 
 // ---------------------------------------------------------------------------
-// ---------------------------------------------------------------------------
-// Control-flow condition helpers
-// ---------------------------------------------------------------------------
-
-// Ensure a condition value on the WASM stack is an i32 suitable for br_if.
-// For i64 (D slice / long): emit i64.eqz + i32.eqz to produce 1 if nonzero.
-// For i32: nothing needed (already a valid br_if operand).
-private void emitCondToI32(ref WasmCG cg, elem* condElem) @trusted
-{
-    if (!condElem) return;
-    const tym_t ty = tybasic(condElem.Ety);
-    if (ty == TYllong || ty == TYullong)
-    {
-        cg.emit(OP_I64_EQZ); // i64 → i32: 1 if zero, 0 if nonzero
-        cg.emit(OP_I32_EQZ); // invert: 1 if nonzero (truthy)
-    }
-}
-
-// Emit the inversion of a condition for "branch if FALSE" patterns (cond; eqz; br_if).
-// For i64: i64.eqz produces 1 when zero (false).
-// For i32: i32.eqz produces 1 when zero (false).
-private void emitCondInvert(ref WasmCG cg, elem* condElem) @trusted
-{
-    if (!condElem)
-    {
-        cg.emit(OP_I32_EQZ);
-        return;
-    }
-    const tym_t ty = tybasic(condElem.Ety);
-    if (ty == TYllong || ty == TYullong)
-        cg.emit(OP_I64_EQZ);
-    else
-        cg.emit(OP_I32_EQZ);
-}
-
 // Structured control flow synthesis (block CFG => WASM)
 // ---------------------------------------------------------------------------
 
@@ -2586,7 +2490,6 @@ private void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn) @
                     cg.emit(OP_I32_CONST);
                     cg.emitSLEB(0);
                 }
-                emitCondToI32(cg, b.Belem);
                 size_t lf = loopFrame(takenIdx);
                 if (lf < stack.length)
                 {
@@ -2616,7 +2519,7 @@ private void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn) @
                     cg.emit(OP_I32_CONST);
                     cg.emitSLEB(0);
                 }
-                emitCondInvert(cg, b.Belem);
+                cg.emit(OP_I32_EQZ);
                 size_t lf = loopFrame(nottakenIdx);
                 if (lf < stack.length)
                 {
@@ -2640,14 +2543,13 @@ private void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn) @
                 if (nottakenIdx == exitBlockIdx)
                 {
                     // condition true => stay in loop, false => exit
-                    emitCondInvert(cg, b.Belem);
+                    cg.emit(OP_I32_EQZ);
                     cg.emit(OP_BR_IF);
                     cg.emitULEB(brDepth(outerLoop - 1));
                 }
                 else
                 {
                     // condition true => exit, false => stay
-                    emitCondToI32(cg, b.Belem);
                     cg.emit(OP_BR_IF);
                     cg.emitULEB(brDepth(outerLoop - 1));
                 }
@@ -2694,7 +2596,7 @@ private void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn) @
                         cg.emit(OP_I32_CONST);
                         cg.emitSLEB(0);
                     }
-                    emitCondInvert(cg, b.Belem);
+                    cg.emit(OP_I32_EQZ);
                     cg.emit(OP_BR_IF);
                     cg.emitULEB(0);
                 }
@@ -2712,7 +2614,6 @@ private void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn) @
                         cg.emit(OP_I32_CONST);
                         cg.emitSLEB(0);
                     }
-                    emitCondToI32(cg, b.Belem);
                     cg.emit(OP_BR_IF);
                     cg.emitULEB(0);
                 }
