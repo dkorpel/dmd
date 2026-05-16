@@ -191,6 +191,8 @@ enum : ubyte
     OP_I64_REINTERPRET_F64 = 0xBD,
     OP_F32_REINTERPRET_I32 = 0xBE,
     OP_F64_REINTERPRET_I64 = 0xBF,
+    // Bulk-memory prefix (sub-opcode follows as ULEB128)
+    OP_FC_PREFIX = 0xFC,
     // Sign extension (MVP extension)
     OP_I32_EXTEND8_S = 0xC0,
     OP_I32_EXTEND16_S = 0xC1,
@@ -479,6 +481,24 @@ private MemOps memOpsFor(tym_t ty) @safe
         case TYwchar_t, TYushort:                return MemOps(OP_I32_LOAD16_U, OP_I32_STORE16, 1);
         default:                                 return MemOps(OP_I32_LOAD,     OP_I32_STORE,   2);
     }
+}
+
+// Emit `memory.copy 0 0` (stack: dst, src, n → empty).
+// Bulk-memory proposal — supported by every current wasm runtime.
+private void emitMemoryCopy(ref WasmCG cg) @trusted
+{
+    cg.emit(OP_FC_PREFIX);
+    cg.emitULEB(10); // memory.copy sub-opcode
+    cg.emit(0x00);   // dst memidx
+    cg.emit(0x00);   // src memidx
+}
+
+// Emit `memory.fill 0` (stack: dst, val, n → empty).
+private void emitMemoryFill(ref WasmCG cg) @trusted
+{
+    cg.emit(OP_FC_PREFIX);
+    cg.emitULEB(11); // memory.fill sub-opcode
+    cg.emit(0x00);   // memidx
 }
 
 private void emitLoad(ref WasmCG cg, tym_t ty) @trusted
@@ -1728,125 +1748,43 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
             uint sz = e.ET ? cast(uint) type_size(e.ET) : 0;
             if (sz == 0)
                 return false;
-            // Get source and destination addresses into temps.
-            uint srcTmp = cg.allocTemp(WASM_I32);
             uint dstTmp = cg.allocTemp(WASM_I32);
-            genElemAddr(cg, e.E2);
-            cg.emit(OP_LOCAL_SET);
-            cg.emitULEB(srcTmp);
             genElemAddr(cg, e.E1);
             cg.emit(OP_LOCAL_TEE);
-            cg.emitULEB(dstTmp);
-            // Copy 4-byte words then remaining bytes.
-            uint off = 0;
-            while (off + 4 <= sz)
-            {
-                cg.emit(OP_LOCAL_GET);
-                cg.emitULEB(dstTmp);
-                cg.emit(OP_LOCAL_GET);
-                cg.emitULEB(srcTmp);
-                cg.emit(OP_I32_LOAD);
-                cg.emitMemArg(2, off);
-                cg.emit(OP_I32_STORE);
-                cg.emitMemArg(2, off);
-                off += 4;
-            }
-            while (off < sz)
-            {
-                cg.emit(OP_LOCAL_GET);
-                cg.emitULEB(dstTmp);
-                cg.emit(OP_LOCAL_GET);
-                cg.emitULEB(srcTmp);
-                cg.emit(OP_I32_LOAD8_U);
-                cg.emitMemArg(0, off);
-                cg.emit(OP_I32_STORE8);
-                cg.emitMemArg(0, off);
-                off++;
-            }
-            // Result: destination address.
+            cg.emitULEB(dstTmp);              // stack: dst
+            genElemAddr(cg, e.E2);            // stack: dst, src
+            cg.emit(OP_I32_CONST);
+            cg.emitSLEB(sz);                  // stack: dst, src, n
+            emitMemoryCopy(cg);
             cg.emit(OP_LOCAL_GET);
-            cg.emitULEB(dstTmp);
+            cg.emitULEB(dstTmp);              // result: dst
             return true;
         }
 
     case OPmemcpy:
         {
-            // OPmemcpy: copy count bytes from src to dst.
-            // IR: OPmemcpy(dst_addr, OPparam(src_addr, count))
-            // E1 = destination address, E2 = OPparam(E2.E1=count, E2.E2=src) or similar
-            // Fall back to a simple loop implementation using WASM locals.
+            // IR: OPmemcpy(dst, OPparam(count, src)). Result is dst.
             uint dstTmp = cg.allocTemp(WASM_I32);
-            uint srcTmp = cg.allocTemp(WASM_I32);
-            uint cntTmp = cg.allocTemp(WASM_I32);
-            uint idxTmp = cg.allocTemp(WASM_I32);
-            // Push dst
             genElem(cg, e.E1);
             cg.emit(OP_LOCAL_TEE);
-            cg.emitULEB(dstTmp);
-            // E2 = OPparam: E2.E2 = src, E2.E1 = count (after arg-order fix)
+            cg.emitULEB(dstTmp);              // stack: dst
             if (e.E2 && e.E2.Eoper == OPparam)
             {
-                genElem(cg, e.E2.E2); // src
-                cg.emit(OP_LOCAL_SET);
-                cg.emitULEB(srcTmp);
-                genElem(cg, e.E2.E1); // count
-                cg.emit(OP_LOCAL_SET);
-                cg.emitULEB(cntTmp);
+                genElem(cg, e.E2.E2);         // src
+                genElem(cg, e.E2.E1);         // count
             }
             else if (e.E2)
             {
-                genElem(cg, e.E2);
-                cg.emit(OP_LOCAL_SET);
-                cg.emitULEB(srcTmp);
+                genElem(cg, e.E2);            // src
                 cg.emit(OP_I32_CONST);
-                cg.emitSLEB(0);
-                cg.emit(OP_LOCAL_SET);
-                cg.emitULEB(cntTmp);
+                cg.emitSLEB(0);               // count = 0
             }
-            // idx = 0; loop while idx < count: dst[idx] = src[idx]; idx++
-            cg.emit(OP_I32_CONST);
-            cg.emitSLEB(0);
-            cg.emit(OP_LOCAL_SET);
-            cg.emitULEB(idxTmp);
-            cg.emit(OP_BLOCK);
-            cg.emit(WASM_VOID_BLOCK);
-            cg.emit(OP_LOOP);
-            cg.emit(WASM_VOID_BLOCK);
-            cg.emit(OP_LOCAL_GET);
-            cg.emitULEB(idxTmp);
-            cg.emit(OP_LOCAL_GET);
-            cg.emitULEB(cntTmp);
-            cg.emit(OP_I32_GE_U);
-            cg.emit(OP_BR_IF);
-            cg.emitULEB(1); // exit block
-            // dst[idx] = src[idx]
-            cg.emit(OP_LOCAL_GET);
-            cg.emitULEB(dstTmp);
-            cg.emit(OP_LOCAL_GET);
-            cg.emitULEB(idxTmp);
-            cg.emit(OP_I32_ADD);
-            cg.emit(OP_LOCAL_GET);
-            cg.emitULEB(srcTmp);
-            cg.emit(OP_LOCAL_GET);
-            cg.emitULEB(idxTmp);
-            cg.emit(OP_I32_ADD);
-            cg.emit(OP_I32_LOAD8_U);
-            cg.emitMemArg(0, 0);
-            cg.emit(OP_I32_STORE8);
-            cg.emitMemArg(0, 0);
-            // idx++
-            cg.emit(OP_LOCAL_GET);
-            cg.emitULEB(idxTmp);
-            cg.emit(OP_I32_CONST);
-            cg.emitSLEB(1);
-            cg.emit(OP_I32_ADD);
-            cg.emit(OP_LOCAL_SET);
-            cg.emitULEB(idxTmp);
-            cg.emit(OP_BR);
-            cg.emitULEB(0); // continue loop
-            cg.emit(OP_END); // end loop
-            cg.emit(OP_END); // end block
-            // Result: dst (for return value of memcpy)
+            else
+            {
+                cg.emit(OP_I32_CONST); cg.emitSLEB(0);
+                cg.emit(OP_I32_CONST); cg.emitSLEB(0);
+            }
+            emitMemoryCopy(cg);
             cg.emit(OP_LOCAL_GET);
             cg.emitULEB(dstTmp);
             return true;
@@ -1854,70 +1792,22 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
 
     case OPmemset:
         {
-            // OPmemset: set count bytes at dst to val.
-            // E1 = destination, E2 = OPparam(count, val) or similar
+            // IR: OPmemset(dst, OPparam(count, val)). Result is dst.
             uint dstTmp = cg.allocTemp(WASM_I32);
-            uint valTmp = cg.allocTemp(WASM_I32);
-            uint cntTmp = cg.allocTemp(WASM_I32);
-            uint idxTmp = cg.allocTemp(WASM_I32);
             genElem(cg, e.E1);
             cg.emit(OP_LOCAL_TEE);
-            cg.emitULEB(dstTmp);
+            cg.emitULEB(dstTmp);              // stack: dst
             if (e.E2 && e.E2.Eoper == OPparam)
             {
-                genElem(cg, e.E2.E2); // val
-                cg.emit(OP_LOCAL_SET);
-                cg.emitULEB(valTmp);
-                genElem(cg, e.E2.E1); // count
-                cg.emit(OP_LOCAL_SET);
-                cg.emitULEB(cntTmp);
+                genElem(cg, e.E2.E2);         // val
+                genElem(cg, e.E2.E1);         // count
             }
             else
             {
-                cg.emit(OP_I32_CONST);
-                cg.emitSLEB(0);
-                cg.emit(OP_LOCAL_SET);
-                cg.emitULEB(valTmp);
-                cg.emit(OP_I32_CONST);
-                cg.emitSLEB(0);
-                cg.emit(OP_LOCAL_SET);
-                cg.emitULEB(cntTmp);
+                cg.emit(OP_I32_CONST); cg.emitSLEB(0); // val
+                cg.emit(OP_I32_CONST); cg.emitSLEB(0); // count
             }
-            cg.emit(OP_I32_CONST);
-            cg.emitSLEB(0);
-            cg.emit(OP_LOCAL_SET);
-            cg.emitULEB(idxTmp);
-            cg.emit(OP_BLOCK);
-            cg.emit(WASM_VOID_BLOCK);
-            cg.emit(OP_LOOP);
-            cg.emit(WASM_VOID_BLOCK);
-            cg.emit(OP_LOCAL_GET);
-            cg.emitULEB(idxTmp);
-            cg.emit(OP_LOCAL_GET);
-            cg.emitULEB(cntTmp);
-            cg.emit(OP_I32_GE_U);
-            cg.emit(OP_BR_IF);
-            cg.emitULEB(1);
-            cg.emit(OP_LOCAL_GET);
-            cg.emitULEB(dstTmp);
-            cg.emit(OP_LOCAL_GET);
-            cg.emitULEB(idxTmp);
-            cg.emit(OP_I32_ADD);
-            cg.emit(OP_LOCAL_GET);
-            cg.emitULEB(valTmp);
-            cg.emit(OP_I32_STORE8);
-            cg.emitMemArg(0, 0);
-            cg.emit(OP_LOCAL_GET);
-            cg.emitULEB(idxTmp);
-            cg.emit(OP_I32_CONST);
-            cg.emitSLEB(1);
-            cg.emit(OP_I32_ADD);
-            cg.emit(OP_LOCAL_SET);
-            cg.emitULEB(idxTmp);
-            cg.emit(OP_BR);
-            cg.emitULEB(0);
-            cg.emit(OP_END);
-            cg.emit(OP_END);
+            emitMemoryFill(cg);
             cg.emit(OP_LOCAL_GET);
             cg.emitULEB(dstTmp);
             return true;
