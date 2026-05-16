@@ -57,19 +57,13 @@ void rt_moduleTlsDtor() @nogc {}
 // Called by the compiler-generated C main(argc, argv).
 // mainFunc is a WASM table index for _Dmain — we ignore it and call _Dmain
 // directly by name to avoid the function-pointer call_indirect path.
-//
-// _Dmain is declared as (size_t ptr, size_t len) -> int instead of
-// (char[][] args) -> int because the WASM codegen currently emits i64.const 0
-// for a null D-slice argument, which fails WASM type validation.  Using two
-// explicit size_t parameters produces two separate i32.const 0 instructions,
-// matching _Dmain's actual WASM type (i32, i32) -> i32 exactly.
-private extern(C) int _Dmain(size_t argsPtr, size_t argsLen) nothrow;
+private extern(C) int _Dmain(char[][] args) nothrow;
 
 int _d_run_main(int argc, char** argv, void* mainFunc)
 {
     gc_init();
     rt_moduleCtor();
-    int result = _Dmain(0, 0); // empty args for now (no WASI argv yet)
+    int result = _Dmain(null); // empty args for now (no WASI argv yet)
     rt_moduleDtor();
     gc_term();
     return result;
