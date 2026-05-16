@@ -298,7 +298,7 @@ void ensureToolsExists(const string[string] env, const TestTool[] tools ...)
         }
 
         string[] buildCommand;
-        bool overrideEnv;
+        string[string] overrideEnv;
         if (tool.linksWithTests)
         {
             // This will compile the dshell library thus needs the actual
@@ -312,7 +312,18 @@ void ensureToolsExists(const string[string] env, const TestTool[] tools ...)
                 "-c",
                 sourceFile
             ] ~ getPicFlags(env);
-            overrideEnv = true;
+            // When targeting WASM, env["DFLAGS"] only has druntime (no Phobos).
+            // dshell_prebuilt imports std.meta so it needs Phobos; build it
+            // with native import paths regardless of the cross-compile target.
+            if (os == "wasm")
+            {
+                overrideEnv = env.dup;
+                auto druntimePath = environment.get("DRUNTIME_PATH", testPath(`../../druntime`));
+                auto phobosPath    = environment.get("PHOBOS_PATH",   testPath(`../../../phobos`));
+                overrideEnv["DFLAGS"] = "-I%s/import -I%s".format(druntimePath, phobosPath);
+            }
+            else
+                overrideEnv = env.dup;
         }
         else
         {
@@ -328,7 +339,7 @@ void ensureToolsExists(const string[string] env, const TestTool[] tools ...)
 
         writefln("Executing: %-(%s %)", buildCommand);
         stdout.flush();
-        if (spawnProcess(buildCommand, overrideEnv ? env : null).wait)
+        if (spawnProcess(buildCommand, overrideEnv.length ? overrideEnv : null).wait)
         {
             stderr.writefln("failed to build '%s'", targetBin);
             atomicOp!"+="(failCount, 1);
