@@ -401,7 +401,104 @@ two i32s. Fixed in `codgen.d`: OPpair/OPrpair with `TYullong` result packs into 
 
 ---
 
-## 11. Differences from x86 ABI (DMD implications)
+## 11. C Variadic Functions (`printf`, `...`)
+
+Tested with LDC 1.42.0 / LLVM 21, `-O0`.
+
+```d
+extern(C):
+int printf(const(char)* fmt, ...);
+int myVariadic(int count, ...);
+
+void testPrintf()      { printf("hello %d %f\n", 42, 3.14); }
+void testNoVarargs()   { printf("no args\n"); }
+void testUserVariadic(){ myVariadic(3, 1, 2, 3); }
+```
+
+### Function type
+
+C variadic functions have WASM type `(fixed_params..., i32 varargs_ptr) → result`.
+The `...` is replaced by a single trailing `i32` pointer regardless of how many
+variadic args are passed at any call site.
+
+```wat
+(import "env" "printf"     (func (param i32 i32) (result i32)))
+(import "env" "myVariadic" (func (param i32 i32) (result i32)))
+```
+
+### Caller convention
+
+1. **Fixed args** are pushed to the WASM value stack in left-to-right order.
+2. **Variadic args** are spilled to a shadow stack frame in left-to-right order
+   with natural C alignment (4-byte for i32/f32→f64, 8-byte for i64/f64).
+   C default argument promotions apply: `float → double`, `char/short → int`.
+3. A pointer to the varargs frame is pushed as the last `i32` parameter.
+4. If there are **no** variadic args, `i32.const 0` (null) is passed instead.
+5. `__stack_pointer` is restored after the call.
+
+### Generated WAT for `testPrintf` (LDC)
+
+```wat
+global.get __stack_pointer      ; sp_old
+i32.const 16
+i32.sub
+local.set 0                     ; sp = sp_old - 16
+local.get 0
+global.set __stack_pointer      ; __stack_pointer = sp
+
+local.get 0
+i64.const 4614253070214989087   ; 3.14 as f64 bit pattern
+i64.store offset=8              ; sp[8..15] = 3.14 (double)
+local.get 0
+i32.const 42
+i32.store                       ; sp[0..3] = 42 (int)
+
+i32.const 0                     ; fmt_ptr
+local.get 0                     ; varargs_ptr = sp
+call printf                     ; printf(fmt, sp)
+
+drop
+local.get 0
+i32.const 16
+i32.add
+global.set __stack_pointer      ; restore
+```
+
+### Varargs memory layout
+
+| Offset | Size | C type   | Value |
+|--------|------|----------|-------|
+| 0      | 4    | int      | 42    |
+| 4      | 4    | (pad)    | —     |
+| 8      | 8    | double   | 3.14  |
+
+Natural alignment: `int` at offset 0, `double` at offset 8 (next 8-byte boundary).
+Frame size rounded up to 16 bytes.
+
+### DMD vs LDC comparison
+
+| Aspect | LDC | DMD (after fix) |
+|--------|-----|-----------------|
+| Function type for `printf` | `(i32 fmt, i32 va_ptr) → i32` | `(i32 fmt, i32 va_ptr) → i32` ✓ |
+| No varargs | pass `i32.const 0` | pass `i32.const 0` ✓ |
+| `int` vararg | `i32.store` at natural offset | `i32.store` ✓ |
+| `double` vararg | `i64.store` (bit pattern) | `f64.store` ✓ (same bytes) |
+| `float` vararg | `f64.promote_f32` + `f64.store` | `f64.promote_f32` + `f64.store` ✓ |
+| Stack restore | after call | after call ✓ |
+
+The `i64.store` vs `f64.store` difference for double varargs is cosmetic — both
+write the same 8 bytes. The calling convention is fully compatible.
+
+### Implementation in DMD
+
+- `wasmobj.d: buildFuncType()`: appends `i32` to params when `variadic(t)`.
+- `codgen.d: case OPcall`: detects `variadic(calleeSym.Stype)`, collects args into
+  a flat array, emits fixed args to the WASM stack, spills variadic args to a
+  dynamically-allocated shadow frame, passes the frame pointer as the last `i32`.
+
+---
+
+## 12. Differences from x86 ABI (DMD implications)
 
 | Aspect | x86 DMD | WASM (LDC) |
 |--------|---------|------------|
