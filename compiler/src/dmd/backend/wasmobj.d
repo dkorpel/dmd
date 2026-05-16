@@ -927,9 +927,10 @@ private void emitLinkingSection(OutBuffer* out_) @trusted
     // Add a SYMTAB_TABLE entry for the function table so wasm-ld accepts it.
     if (hasTable)
     {
-        // Defined table: table index 0, binding local.
+        // Defined table: table index 0, weak binding so wasm-ld can merge it
+        // with __indirect_function_table provided by other inputs.
         symtab.writeByte(WASM_SYMTAB_TABLE);
-        appendULEB128(&symtab, WASM_SYM_BINDING_LOCAL | WASM_SYM_EXPLICIT_NAME);
+        appendULEB128(&symtab, WASM_SYM_BINDING_WEAK | WASM_SYM_EXPLICIT_NAME);
         appendULEB128(&symtab, 0); // table index 0
         appendName(&symtab, "__indirect_function_table");
     }
@@ -1073,8 +1074,15 @@ private void emitRelocCodeSection(OutBuffer* out_, uint codeSectionIdx) @trusted
         collectDataSyms(fb.dataAddrRelocs);
 
     // The data symbol table indices start right after the function symbol table.
+    // Count distinct function sym indices (shadowed funcs alias to a canonical
+    // index and must not inflate the count).
     uint dataSymBase = 0;
-    foreach (s; funcToSymIdx) if (s != uint.max) dataSymBase++;
+    foreach (size_t i, ref const WasmFunc f; wmod.funcs)
+    {
+        if (funcToSymIdx[i] == uint.max) continue;
+        if (isShadowedFunc(i)) continue;
+        dataSymBase++;
+    }
     // (TABLE symbol is emitted after data syms in the linking section, so it
     //  doesn't affect data sym indices here.)
 
@@ -1090,8 +1098,13 @@ private void emitRelocCodeSection(OutBuffer* out_, uint codeSectionIdx) @trusted
     foreach (ref const WasmFuncBody fb; wasmFuncBodies)
     {
         foreach (ref const WasmFuncBody.CodeReloc r; fb.codeRelocs)
-            if (funcToSymIdx[r.symIdx] != uint.max)
+        {
+            // R_WASM_TYPE_INDEX_LEB encodes a type-section index directly,
+            // not a symbol-table index. Always valid (typeIdx already chosen).
+            if (r.type == R_WASM_TYPE_INDEX_LEB ||
+                funcToSymIdx[r.symIdx] != uint.max)
                 totalRelocs++;
+        }
         foreach (ref const WasmFuncBody.DataAddrReloc r; fb.dataAddrRelocs)
             if (r.sym && dataSymIdx(r.sym) != uint.max)
                 totalRelocs++;
@@ -1115,9 +1128,20 @@ private void emitRelocCodeSection(OutBuffer* out_, uint codeSectionIdx) @trusted
     {
         foreach (ref const WasmFuncBody.CodeReloc r; fb.codeRelocs)
         {
-            uint sym = funcToSymIdx[r.symIdx];
-            if (sym == uint.max) continue;
-            allRelocs ~= AnyReloc(fb.codePayloadStart + r.offset, r.type, sym, 0);
+            uint idx;
+            if (r.type == R_WASM_TYPE_INDEX_LEB)
+            {
+                // Type relocs reference the type section directly; r.symIdx
+                // holds the funcIdx whose type we want to import-merge against.
+                if (r.symIdx >= wmod.funcs.length) continue;
+                idx = wmod.funcs[r.symIdx].typeIdx;
+            }
+            else
+            {
+                idx = funcToSymIdx[r.symIdx];
+                if (idx == uint.max) continue;
+            }
+            allRelocs ~= AnyReloc(fb.codePayloadStart + r.offset, r.type, idx, 0);
         }
         foreach (ref const WasmFuncBody.DataAddrReloc r; fb.dataAddrRelocs)
         {
@@ -1303,9 +1327,10 @@ void WasmObj_term(const(char)[] objfilename) @trusted
     if (wmod.stackPtrGlobalIdx >= 0)
         wmod.globals[wmod.stackPtrGlobalIdx].initVal = 65536;
 
-    // Use defined table (not imported) — matches pre-link behavior.
-    // The relocatable object has the table defined; wasm-ld owns it.
-    wmod.importFuncTable = false;
+    // In relocatable mode the linker owns __indirect_function_table; importing
+    // it (rather than defining it) lets wasm-ld merge tables across objects
+    // and avoids "reserved symbol must not be defined in input files".
+    wmod.importFuncTable = wmod.relocatable;
 
     // Emit all sections in canonical order and track section indices
     // so reloc.CODE can reference the code section by its module index.
@@ -1353,6 +1378,17 @@ void WasmObj_term(const(char)[] objfilename) @trusted
     emitCodeSection(out_);
     if (defined)
         sectionIdx++;
+
+    // BSS allocations advance dataHeap without writing to the data segment.
+    // Pad with zeros so all symbol addresses fall within the segment payload —
+    // wasm-ld rejects data symbols whose offset is past the segment size.
+    if (wmod.dataSegs.length > 0)
+    {
+        auto ds = &wmod.dataSegs[0];
+        uint needed = wmod.dataHeap > ds.offset ? wmod.dataHeap - ds.offset : 0;
+        while (ds.data.length() < needed)
+            ds.data.writeByte(0);
+    }
 
     uint dataSectionIdx = sectionIdx;
     emitDataSection(out_);
