@@ -415,11 +415,14 @@ nothrow:
 
     // Emit OP_CALL with a 5-byte padded ULEB128 function index and record a
     // R_WASM_FUNCTION_INDEX_LEB relocation so wasm-ld can patch the index.
-    void emitCall(uint fidx) @trusted
+    // Symbol* is recorded so that if wmod.funcs is reordered before term time
+    // (e.g. additional imports inserted), the relocation still resolves to the
+    // intended symbol rather than a stale funcIdx.
+    void emitCall(uint fidx, Symbol* sym = null) @trusted
     {
         emit(OP_CALL);
         codeRelocs ~= WasmFuncBody.CodeReloc(cast(uint) code.length,
-            R_WASM_FUNCTION_INDEX_LEB, fidx);
+            R_WASM_FUNCTION_INDEX_LEB, fidx, 0, sym);
         code.writeByte(cast(ubyte)((fidx & 0x7F) | 0x80));
         code.writeByte(cast(ubyte)(((fidx >> 7) & 0x7F) | 0x80));
         code.writeByte(cast(ubyte)(((fidx >> 14) & 0x7F) | 0x80));
@@ -1422,7 +1425,7 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
                         wmod_fixImportType(fidx, aparams, aresults);
                     }
 
-                    cg.emitCall(fidx);
+                    cg.emitCall(fidx, calleeSym);
 
                     // Restore __stack_pointer after the call.
                     if (spLocal != uint.max)
@@ -1489,7 +1492,7 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
                             aresults ~= wasmType(retTy2);
                         wmod_fixImportType(fidx, aparams, aresults);
                     }
-                    cg.emitCall(fidx);
+                    cg.emitCall(fidx, calleeSym);
                     // Noreturn (SFLexit) functions leave the stack empty. Emit unreachable
                     // so WASM's type checker accepts any type expectations after the call.
                     if (calleeSym.Sflags & SFLexit)
