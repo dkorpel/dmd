@@ -195,20 +195,19 @@ enum STATUS_FAILED = -1;
  *   eSink   = sink for error messages
  * Returns: 0 on success, non-zero on failure
  */
-// Locate the WASM druntime directory.
-// Uses the same path formula as dmd.conf: exe_dir/../../../../druntime.
-// Returns an empty slice if the directory cannot be found.
-private const(char)[] findWasmDruntimeDir() nothrow
+// Fallback WASM-druntime directory derived from argv0.
+// Only consulted when the user did not pass `-L-L<dir>` pointing at a directory
+// that contains `libdruntime-wasm.a`. Mirrors the dmd.conf layout
+// `exe_dir/../../../../druntime`.
+private const(char)[] argv0DruntimeDir() nothrow
 {
     import dmd.root.filename : FileName;
     const(char)* argv0ptr = global.params.argv0.ptr;
     if (!argv0ptr) return null;
     const argv0 = argv0ptr[0 .. strlen(argv0ptr)];
     if (!argv0.length) return null;
-    const exeDir = FileName.path(argv0).idup;  // e.g. generated/linux/release/64
-    // Navigate up four levels then into druntime/ — mirrors dmd.conf import path
-    const dir = FileName.combine(exeDir, "../../../../druntime");
-    return dir;
+    const exeDir = FileName.path(argv0).idup;
+    return FileName.combine(exeDir, "../../../../druntime");
 }
 
 private int runWasmLINK(bool verbose, ref Param params, ErrorSink eSink)
@@ -330,24 +329,24 @@ private int runWasmLINK(bool verbose, ref Param params, ErrorSink eSink)
     // Always use libdruntime-wasm.a regardless of -defaultlib=: DFLAGS from
     // the host dmd.conf may set -defaultlib=libphobos2.so (native default)
     // which is irrelevant for WASM and would cause wasm-ld to fail.
+    //
+    // Resolution: rely on wasm-ld's own search path. User-supplied
+    // `-L-L<dir>` flags were already forwarded above, so they take
+    // precedence. Append an argv0-relative fallback so out-of-the-box
+    // builds keep working when no explicit path is configured.
     if (hasDruntime)
     {
-        const druntimeDir = findWasmDruntimeDir();
-        enum wasmDruntimeLib = "libdruntime-wasm.a";
-
-        const(char)[] libPath = druntimeDir.length
-            ? FileName.combine(druntimeDir, wasmDruntimeLib)
-            : wasmDruntimeLib;
-        if (FileName.exists(libPath) == 1)
-            argv.push(libPath.xarraydup.ptr);
-
-        // libc.a — WASI C runtime (printf, memcpy, etc.)
-        if (druntimeDir.length)
+        const fallback = argv0DruntimeDir();
+        if (fallback.length)
         {
-            const libcPath = FileName.combine(druntimeDir, "libc.a");
-            if (FileName.exists(libcPath) == 1)
-                argv.push(libcPath.xarraydup.ptr);
+            char* lflag = cast(char*) mem.xmalloc(2 + fallback.length + 1);
+            lflag[0] = '-'; lflag[1] = 'L';
+            memcpy(lflag + 2, fallback.ptr, fallback.length);
+            lflag[2 + fallback.length] = 0;
+            argv.push(lflag);
         }
+        argv.push("-l:libdruntime-wasm.a");
+        argv.push("-l:libc.a"); // WASI C runtime (printf, memcpy, etc.)
     }
 
     foreach (p; params.dllfiles)
