@@ -837,9 +837,19 @@ private void emitLinkingSection(OutBuffer* out_) @trusted
         // own start address so wasm-ld computes: final_addr = segment_base + seg_off.
         const uint dsBase = wmod.dataSegs.length ? wmod.dataSegs[0].offset : 4;
         const uint segOff = sym.Soffset > dsBase ? cast(uint)(sym.Soffset - dsBase) : 0;
+        // Real symbol size if available (needed by --gc-sections / wasm-ld bounds
+        // checks). type_size returns the type size in bytes; for symbols whose
+        // type is unset, fall back to 0 (interpreted as opaque by wasm-ld).
+        uint symSize = 0;
+        if (sym.Stype)
+        {
+            const ts = type_size(sym.Stype);
+            if (ts <= uint.max)
+                symSize = cast(uint) ts;
+        }
         appendULEB128(&symtab, 0);              // segment index (single data seg)
         appendULEB128(&symtab, segOff);         // offset within segment
-        appendULEB128(&symtab, 0);              // size (0 = unknown/whole object)
+        appendULEB128(&symtab, symSize);        // size in bytes
     }
 
     // Add a SYMTAB_TABLE entry for the function table so wasm-ld accepts it.

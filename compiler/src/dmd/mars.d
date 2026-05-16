@@ -1001,48 +1001,22 @@ bool parseCommandLine(const ref Strings arguments, const size_t argc, out Param 
             continue; // skip druntime options, e.g. used to configure the GC
         }
         else if (arg == "-marm64") // https://dlang.org/dmd.html#switch-marm64
-        {
-            target.isAArch64 = true;
-            target.isX86    = false;
-            target.isX86_64 = false;
-            target.isWasm   = false;
-        }
+            target.setArch(aarch64: true);
         else if (arg == "-m32") // https://dlang.org/dmd.html#switch-m32
-        {
-            target.isAArch64 = false;
-            target.isX86     = true;
-            target.isX86_64  = false;
-            target.isWasm    = false;
-        }
+            target.setArch(x86: true);
         else if (arg == "-m64") // https://dlang.org/dmd.html#switch-m64
-        {
-            target.isAArch64 = false;
-            target.isX86     = false;
-            target.isX86_64  = true;
-            target.isWasm    = false;
-        }
+            target.setArch(x86_64: true);
         else if (arg == "-m32mscoff") // https://dlang.org/dmd.html#switch-m32mscoff
-        {
-            target.isAArch64 = false;
-            target.isX86     = true;
-            target.isX86_64  = false;
-            target.isWasm    = false;
-        }
+            target.setArch(x86: true);
         else if (arg == "-mwasm32")
         {
-            target.isWasm    = true;
-            target.os        = Target.OS.WASM;
-            target.isAArch64 = false;
-            target.isX86     = false;
-            target.isX86_64  = false;
+            target.setArch(wasm: true);
+            target.os = Target.OS.WASM;
         }
         else if (arg == "-mwasm64")
         {
-            target.isWasm    = true;
-            target.os        = Target.OS.WASM;
-            target.isAArch64 = false;
-            target.isX86     = false;
-            target.isX86_64  = true;
+            target.setArch(wasm: true, x86_64: true);
+            target.os = Target.OS.WASM;
         }
         else if (startsWith(p + 1, "mscrtlib="))
         {

@@ -610,10 +610,11 @@ private void emitCoerce(ref WasmCG cg, ubyte from, ubyte to) @trusted
     // Other combos: no-op (best effort)
 }
 
-// Returns true if a symbol's storage class means it needs a WASM local (not global mem).
-private bool isLocalSym(Symbol* s) @trusted
+// Returns true if a storage class indicates a global living in linear memory
+// (initialized data, BSS, TLS, external, or a constant data segment).
+private bool isDataSym(FL fl) @safe @nogc nothrow
 {
-    switch (s.Sfl)
+    switch (fl)
     {
     case FL.data:
     case FL.tlsdata:
@@ -621,16 +622,22 @@ private bool isLocalSym(Symbol* s) @trusted
     case FL.extern_:
     case FL.csdata:
     case FL.datseg:
-    case FL.func:
-        return false;
-    default:
         return true;
+    default:
+        return false;
     }
 }
 
-// Recursively scan an elem tree to find address-taken locals that need shadow frame.
+// Returns true if a symbol's storage class means it needs a WASM local (not global mem).
+private bool isLocalSym(Symbol* s) @trusted
+{
+    return !isDataSym(s.Sfl) && s.Sfl != FL.func;
+}
+
 // Walk the IR tree and pre-register any external function calls as imports.
-// Must run before code generation so that import indices are stable.
+// Must run before code generation so that import indices are stable across
+// the whole module (call_indirect type indices are encoded as fixed-width
+// LEBs, so they cannot grow after the fact).
 void preRegisterExternals(elem* e) @trusted
 {
     if (!e)
@@ -640,7 +647,6 @@ void preRegisterExternals(elem* e) @trusted
         return;
     if (op == OPcall || op == OPucall)
     {
-        // E1 is the function; E2 is args. Register external calls.
         if (e.E1 && e.E1.Eoper == OPvar)
         {
             Symbol* s = e.E1.Vsym;
@@ -648,10 +654,8 @@ void preRegisterExternals(elem* e) @trusted
                 s.Sclass != SC.fastpar)
                 funcIndex(s); // side-effect: registers as import if not defined
         }
-        if (e.E1)
-            preRegisterExternals(e.E1);
-        if (e.E2)
-            preRegisterExternals(e.E2);
+        if (e.E1) preRegisterExternals(e.E1);
+        if (e.E2) preRegisterExternals(e.E2);
         return;
     }
     if (OTunary(op))
@@ -798,19 +802,11 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
         {
             Symbol* s = e.Vsym;
             // Globals live in linear memory; locals/params live in WASM locals.
-            switch (s.Sfl)
+            if (isDataSym(s.Sfl))
             {
-            case FL.data:
-            case FL.tlsdata:
-            case FL.udata:
-            case FL.extern_:
-            case FL.csdata:
-            case FL.datseg:
                 cg.emitDataAddr(s, cast(uint) e.Voffset);
                 emitLoad(cg, e.Ety);
                 return true;
-            default:
-                break;
             }
             // Shadow-frame locals: load from linear memory.
             if (cg.inShadow(s))
@@ -902,14 +898,8 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
             if (e.E1.Eoper == OPvar)
             {
                 Symbol* lhs = e.E1.Vsym;
-                switch (lhs.Sfl)
+                if (isDataSym(lhs.Sfl))
                 {
-                case FL.data:
-                case FL.tlsdata:
-                case FL.udata:
-                case FL.extern_:
-                case FL.csdata:
-                case FL.datseg:
                     // Store to global in linear memory
                     cg.emitDataAddr(lhs, cast(uint) e.E1.Voffset);
                     genElem(cg, e.E2);
@@ -918,8 +908,6 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
                     cg.emitDataAddr(lhs, cast(uint) e.E1.Voffset);
                     emitLoad(cg, e.E1.Ety);
                     return true;
-                default:
-                    break;
                 }
                 // Shadow-frame local: store to linear memory, reload for result.
                 if (cg.inShadow(lhs))
@@ -1005,29 +993,19 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
             if (e.E1.Eoper == OPvar)
             {
                 Symbol* s = e.E1.Vsym;
-                switch (s.Sfl)
+                if (isDataSym(s.Sfl))
                 {
-                case FL.data:
-                case FL.tlsdata:
-                case FL.udata:
-                case FL.extern_:
-                case FL.csdata:
-                case FL.datseg:
-                    {
-                        // Global: load, op, store, load-result
-                        const uint addend = cast(uint) e.E1.Voffset;
-                        cg.emitDataAddr(s, addend);
-                        cg.emitDataAddr(s, addend);
-                        emitLoad(cg, e.E1.Ety);
-                        genElem(cg, e.E2);
-                        emitBinop(cg, compoundToBinop(op), e.Ety);
-                        emitStore(cg, e.E1.Ety);
-                        cg.emitDataAddr(s, addend);
-                        emitLoad(cg, e.E1.Ety);
-                        return true;
-                    }
-                default:
-                    break;
+                    // Global: load, op, store, load-result
+                    const uint addend = cast(uint) e.E1.Voffset;
+                    cg.emitDataAddr(s, addend);
+                    cg.emitDataAddr(s, addend);
+                    emitLoad(cg, e.E1.Ety);
+                    genElem(cg, e.E2);
+                    emitBinop(cg, compoundToBinop(op), e.Ety);
+                    emitStore(cg, e.E1.Ety);
+                    cg.emitDataAddr(s, addend);
+                    emitLoad(cg, e.E1.Ety);
+                    return true;
                 }
                 // Shadow-frame local compound assignment.
                 if (cg.inShadow(s))
@@ -1603,8 +1581,13 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
                                 collectArgTypes(p.E1);
                                 return;
                             }
-                            const tym_t pty = tybasic(p.Ety);
-                            params ~= wasmType(pty);
+                            if (isSliceElem(p)) // D slice splits into (len, ptr)
+                            {
+                                params ~= WASM_I32;
+                                params ~= WASM_I32;
+                            }
+                            else
+                                params ~= wasmType(tybasic(p.Ety));
                         }
 
                         collectArgTypes(e.E2);
@@ -2015,18 +1998,10 @@ private void genElemAddr(ref WasmCG cg, elem* e) @trusted
                 return;
             }
             // Global: its Soffset is the linear memory address.
-            switch (s.Sfl)
+            if (isDataSym(s.Sfl))
             {
-            case FL.data:
-            case FL.tlsdata:
-            case FL.udata:
-            case FL.extern_:
-            case FL.csdata:
-            case FL.datseg:
                 cg.emitDataAddr(s, cast(uint) e.Voffset);
                 return;
-            default:
-                break;
             }
             // Local in a WASM local — can't take address unless shadow-framed.
             // Fall through to genElem (will push the value, not the address).
