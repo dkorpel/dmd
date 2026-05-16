@@ -57,7 +57,7 @@ Backend is self-contained behind `objmod`. Shared backend touch points (cdef/dou
 - [x] **F6** *Fixed.* `glue/e2ir.d` silent null-pointer returns for `new` on WASM now raise a proper compile error via `irs.eSink.error`.
 - [x] **F7** *Fixed.* Replaced three `target.isWasm` checks in `glue/s2ir.d` with `config.ehmethod == EHmethod.EH_NONE`. `cfg.ehmethod` is already set to `EH_NONE` for WASM in `backconfig.d:295`, so this is a clean per-target flag.
 - [x] **F8** *Not a bug.* `emitCondToI32` is gated by `ty == TYllong || TYullong`; only fires on i64 conditions where i64→i32 truth conversion is required.
-- [x] **F9** *Deferred (backend bug).* `_Dmain` `(size_t,size_t)` workaround in `core/internal/entrypoint.d:42` masks a backend null-slice codegen bug. Reproducing and fixing the underlying `i64.const 0`-for-null-slice issue needs an isolated test case and proper backend debugging.
+- [x] **F9** *Fixed.* Null-slice argument (`i64.const 0`) is now split into two `i32` operands when the callee parameter is a D slice. `genOneArg` accepts a `forceSlice` flag and the non-variadic direct-call path walks `Tparamtypes` alongside the args via `paramIsSlice`, so an OPconst null passed where `char[]`/`char[][]` is expected matches the split `(i32, i32)` ABI. Workaround in `rt/wasm/start.d` (`_Dmain(size_t,size_t)`) reverted to `_Dmain(char[][])`.
 
 ### Simplification (line economy)
 

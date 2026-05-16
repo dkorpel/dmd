@@ -1423,34 +1423,46 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
                 else
                 {
                     // Non-variadic direct call.
-                    // Push arguments (right-to-left in elem tree => emit left-first for WASM)
-                    genArgs(cg, e.E2);
+                    // Gather args left-to-right (OPparam tree is right-to-left at top).
+                    elem*[] callArgs;
+                    void gatherCallArgs(elem* p) nothrow @trusted
+                    {
+                        if (!p)
+                            return;
+                        if (p.Eoper == OPparam)
+                        {
+                            gatherCallArgs(p.E2);
+                            gatherCallArgs(p.E1);
+                            return;
+                        }
+                        callArgs ~= p;
+                    }
+                    gatherCallArgs(e.E2);
+
+                    // Walk param chain in parallel: a slice param forces split even when
+                    // the elem itself isn't recognised as a slice (e.g. OPconst null).
+                    param_t* pp = (calleeSym.Stype !is null) ? calleeSym.Stype.Tparamtypes : null;
+                    ubyte[] aparams;
+                    foreach (a; callArgs)
+                    {
+                        const bool sliceParam = paramIsSlice(pp);
+                        const bool asSlice = sliceParam || isSliceElem(a);
+                        genOneArg(cg, a, sliceParam);
+                        if (asSlice)
+                        {
+                            aparams ~= WASM_I32;
+                            aparams ~= WASM_I32;
+                        }
+                        else
+                            aparams ~= wasmType(tybasic(a.Ety));
+                        if (pp)
+                            pp = pp.Pnext;
+                    }
 
                     // Runtime symbols (memcmp, __assert, etc.) are registered with a
                     // generic empty type because rtlsym.d uses type_fake(TYnfunc). Fix
                     // the import type from the actual call-site argument/return types.
-                    ubyte[] aparams;
                     {
-                        void collectArgTys(elem* p) nothrow @trusted
-                        {
-                            if (!p)
-                                return;
-                            if (p.Eoper == OPparam)
-                            {
-                                collectArgTys(p.E2);
-                                collectArgTys(p.E1);
-                                return;
-                            }
-                            if (isSliceElem(p)) // D slice: split into two i32 params
-                            {
-                                aparams ~= WASM_I32;
-                                aparams ~= WASM_I32;
-                            }
-                            else
-                                aparams ~= wasmType(tybasic(p.Ety));
-                        }
-
-                        collectArgTys(e.E2);
                         const tym_t retTy2 = tybasic(e.Ety);
                         ubyte[] aresults;
                         if (retTy2 != TYvoid && retTy2 != TYnoreturn)
@@ -1999,12 +2011,23 @@ private bool isSliceElem(const(elem)* e) @trusted
     return false;
 }
 
+// True if a callee parameter type is a D slice (TYdarray == TYullong+Tnext on WASM32).
+private bool paramIsSlice(const(param_t)* p) @trusted
+{
+    if (!p || !p.Ptype)
+        return false;
+    const(type)* t = p.Ptype;
+    return tybasic(t.Tty) == TYullong && t.Tnext !is null;
+}
+
 // Emit a single function argument. D slices (TYdarray = TYullong on WASM32)
 // are split into two i32 params (lo=len, hi=ptr) to match the WASM32/LDC2 ABI.
-private void genOneArg(ref WasmCG cg, elem* e) @trusted
+// `forceSlice` forces the split even when the elem itself isn't recognised as
+// a slice (e.g. an OPconst null passed where the callee expects char[]).
+private void genOneArg(ref WasmCG cg, elem* e, bool forceSlice = false) @trusted
 {
     genElem(cg, e);
-    const bool isDynArray = isSliceElem(e);
+    const bool isDynArray = forceSlice || isSliceElem(e);
     if (isDynArray)
     {
         uint tmp = cg.allocTemp(WASM_I64);
