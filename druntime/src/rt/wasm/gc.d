@@ -98,3 +98,21 @@ void gc_removeRange(void* p) {}
 void gc_runFinalizers(const scope void[] segment) {}
 
 GC.BlkInfo gc_query(return scope void* p) pure @nogc { return GC.BlkInfo.init; }
+
+// Stub: in a leaking GC, "expanding used" always succeeds (no real capacity tracking).
+bool gc_expandArrayUsed(void[] slice, size_t newUsed, bool atomic) @nogc { return true; }
+
+uint gc_getAttr(void* p) @nogc { return 0; }
+uint gc_setAttr(void* p, uint a) @nogc { return 0; }
+uint gc_clrAttr(void* p, uint a) @nogc { return 0; }
+
+void* _d_allocmemory(size_t sz) { return gc_malloc(sz, 0, null); }
+void _d_callfinalizer(void* p) {}
+void _d_callinterfacefinalizer(void* p) {}
+
+// Capacity growth helper used by array append operations.
+size_t newCapacity(size_t newlength, size_t elemsize) pure nothrow @nogc
+{
+    // Simple linear growth: 2x requested size to reduce reallocations.
+    return newlength * elemsize * 2;
+}

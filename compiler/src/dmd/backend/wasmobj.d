@@ -451,6 +451,13 @@ private WasmFuncType buildFuncType(type* t) @trusted
         p = p.Pnext;
     }
 
+    // C variadic (`...`): append a trailing i32 varargs-pointer parameter.
+    // Matches the LDC2/wasi-libc ABI: caller spills variadic args to the shadow
+    // stack and passes a pointer to that region as the last function parameter.
+    import dmd.backend.type : variadic;
+    if (variadic(t))
+        ft.params ~= WASM_I32;
+
     // Return type (void and noreturn both produce no WASM result)
     if (hiddenPtr)
         ft.results ~= WASM_I32; // returns hidden ptr
@@ -1525,6 +1532,18 @@ int WasmObj_data_start(Symbol* sdata, targ_size_t datasize, int seg) @trusted
 
 
 // Update an import's WASM function type. Called from codgen when the actual
+// Returns the number of WASM parameters for a function at index fidx.
+// Used to detect variadic-style extra args (pushed count > WASM param count).
+uint wmod_func_param_count(uint fidx) @trusted
+{
+    if (fidx >= wmod.funcs.length)
+        return 0;
+    const typeIdx = wmod.funcs[fidx].typeIdx;
+    if (typeIdx >= wmod.funcTypes.length)
+        return 0;
+    return cast(uint) wmod.funcTypes[typeIdx].params.length;
+}
+
 // argument types are known at the call site (runtime symbols use a generic
 // placeholder type that lacks parameter info).
 void wmod_fixImportType(uint fidx, const(ubyte)[] params, const(ubyte)[] results) @trusted
