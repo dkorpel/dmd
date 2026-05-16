@@ -1545,11 +1545,18 @@ int WasmObj_external(Symbol* s) @trusted
 {
     if (!s || !s.Stype)
         return 0;
-    // If a non-import function with the same name is already defined in the module
-    // (e.g. user provides `extern(C) int memcmp(...)`), use that instead of importing.
+    // If the same symbol is already registered (import or defined), return its index.
     const(char)[] id = s.Sident.ptr[0 .. strlen(s.Sident.ptr)];
     foreach (size_t i, ref const WasmFunc f; wmod.funcs)
     {
+        // Deduplicate imports: multiple D modules may declare the same extern(C) symbol.
+        if (f.isImport && f.importName == id)
+        {
+            s.Sseg = cast(int) i;
+            return s.Sseg;
+        }
+        // If a non-import function with the same name is already defined (e.g. user provides
+        // `extern(C) int memcmp(...)`), use that instead of importing.
         if (!f.isImport && f.sym && f.sym.Sident.ptr != s.Sident.ptr)
         {
             const(char)[] fname = f.sym.Sident.ptr[0 .. strlen(f.sym.Sident.ptr)];
