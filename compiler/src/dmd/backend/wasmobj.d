@@ -252,8 +252,10 @@ struct WasmFuncBody
     {
         uint offset; // byte offset within code buffer (before the 5-byte ULEB)
         ubyte type; // R_WASM_FUNCTION_INDEX_LEB, R_WASM_TYPE_INDEX_LEB, etc.
-        uint symIdx; // symbol table index
+        uint symIdx; // funcIdx snapshot at emit time (resolved via funcToSymIdx, or via sym at term time)
         uint addend; // for R_WASM_MEMORY_ADDR_LEB: offset within the segment
+        Symbol* sym; // preferred: Symbol* whose current funcIdx is looked up at term time
+                     // (decouples from wmod.funcs reordering during late codegen)
     }
 
     // Data-address code relocations: R_WASM_MEMORY_ADDR_LEB entries.
@@ -1093,6 +1095,20 @@ private void emitRelocCodeSection(OutBuffer* out_, uint codeSectionIdx) @trusted
         return uint.max;
     }
 
+    // Resolve a CodeReloc's funcIdx to the current wmod.funcs index. Prefers
+    // r.sym (stable across post-codegen import insertions); falls back to the
+    // funcIdx snapshot recorded at emit time.
+    uint currentFuncIdx(ref const WasmFuncBody.CodeReloc r)
+    {
+        if (r.sym)
+        {
+            foreach (size_t k, ref const WasmFunc f; wmod.funcs)
+                if (f.sym == r.sym)
+                    return cast(uint) k;
+        }
+        return r.symIdx;
+    }
+
     // Count total relocations.
     uint totalRelocs = 0;
     foreach (ref const WasmFuncBody fb; wasmFuncBodies)
@@ -1101,8 +1117,9 @@ private void emitRelocCodeSection(OutBuffer* out_, uint codeSectionIdx) @trusted
         {
             // R_WASM_TYPE_INDEX_LEB encodes a type-section index directly,
             // not a symbol-table index. Always valid (typeIdx already chosen).
+            uint fi = currentFuncIdx(r);
             if (r.type == R_WASM_TYPE_INDEX_LEB ||
-                funcToSymIdx[r.symIdx] != uint.max)
+                (fi < funcToSymIdx.length && funcToSymIdx[fi] != uint.max))
                 totalRelocs++;
         }
         foreach (ref const WasmFuncBody.DataAddrReloc r; fb.dataAddrRelocs)
@@ -1129,16 +1146,18 @@ private void emitRelocCodeSection(OutBuffer* out_, uint codeSectionIdx) @trusted
         foreach (ref const WasmFuncBody.CodeReloc r; fb.codeRelocs)
         {
             uint idx;
+            uint fi = currentFuncIdx(r);
             if (r.type == R_WASM_TYPE_INDEX_LEB)
             {
                 // Type relocs reference the type section directly; r.symIdx
                 // holds the funcIdx whose type we want to import-merge against.
-                if (r.symIdx >= wmod.funcs.length) continue;
-                idx = wmod.funcs[r.symIdx].typeIdx;
+                if (fi >= wmod.funcs.length) continue;
+                idx = wmod.funcs[fi].typeIdx;
             }
             else
             {
-                idx = funcToSymIdx[r.symIdx];
+                if (fi >= funcToSymIdx.length) continue;
+                idx = funcToSymIdx[fi];
                 if (idx == uint.max) continue;
             }
             allRelocs ~= AnyReloc(fb.codePayloadStart + r.offset, r.type, idx, 0);
