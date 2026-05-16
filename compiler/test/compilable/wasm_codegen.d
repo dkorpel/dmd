@@ -534,6 +534,20 @@ void testVirtualDispatch()
     assert(a2 == 12.0); // 3.0 * 4.0
 }
 
+// C variadic ABI: variadic args spilled to shadow stack, pointer passed as last param.
+extern (C) int printf(const(char)* fmt, ...);
+extern (C) int myVariadic(int count, ...);
+
+void testCVariadic()
+{
+    // Call with int and double varargs (compile-only: verifies correct WASM type emission).
+    printf("hello %d %f\n", 42, 3.14);
+    // Call with no varargs (should pass null varargs pointer).
+    printf("no args\n");
+    // User-defined variadic.
+    myVariadic(3, 1, 2, 3);
+}
+
 extern (C) int main()
 {
     // Basic arithmetic

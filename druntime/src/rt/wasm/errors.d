@@ -39,3 +39,29 @@ noreturn _d_arraybounds_indexp(immutable(char)* file, uint line,
 // ── null pointer ──────────────────────────────────────────────────────────────
 
 noreturn _d_nullpointerp(immutable(char)* file, uint line) @nogc { wasm_abort(); }
+
+// ── out of memory ─────────────────────────────────────────────────────────────
+// signature must match the extern(C) declaration in core.exception:
+//   onOutOfMemoryError(void* pretend_sideffect, string file, size_t line)
+// D string = (ptr: i32, len: i32) in WASM32, so 4 i32 params total.
+
+noreturn onOutOfMemoryError(void* pretend_sideffect = null, string file = null, size_t line = 0) @trusted @nogc nothrow
+{
+    wasm_abort();
+}
+
+noreturn onOutOfMemoryErrorNoGC(string file = null, size_t line = 0) @trusted @nogc nothrow
+{
+    wasm_abort();
+}
+
+noreturn onInvalidMemoryOperationError(void* pretend_sideffect = null, string file = null, size_t line = 0) @trusted @nogc nothrow
+{
+    wasm_abort();
+}
+
+// ── C assert ─────────────────────────────────────────────────────────────────
+// musl libc may call __assert(file, line, msg) when an assert fires.
+
+noreturn __assert(const(char)* file, int line, const(char)* msg) @nogc nothrow { wasm_abort(); }
+noreturn __assert_fail(const(char)* msg, const(char)* file, uint line, const(char)* func) @nogc nothrow { wasm_abort(); }

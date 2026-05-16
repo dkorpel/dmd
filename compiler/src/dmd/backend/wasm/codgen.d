@@ -1334,90 +1334,211 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
     case OPcall:
     case OPucall:
         {
-            // Push arguments (right-to-left in elem tree => emit left-first for WASM)
-            genArgs(cg, e.E2);
-
             // E1 is the function.
             // Direct call: E1 is OPvar of a function symbol.
             if (e.E1.Eoper == OPvar && e.E1.Vsym && e.E1.Vsym.Sclass != SC.auto_ &&
                 e.E1.Vsym.Sclass != SC.parameter && e.E1.Vsym.Sclass != SC.fastpar)
             {
-                uint fidx = funcIndex(e.E1.Vsym);
-                // Runtime symbols (memcmp, __assert, etc.) are registered with a
-                // generic empty type because rtlsym.d uses type_fake(TYnfunc). Fix
-                // the import type from the actual call-site argument/return types.
-                ubyte[] aparams;
-                {
-                    import dmd.backend.wasmobj : wmod_fixImportType;
+                import dmd.backend.type : variadic;
+                import dmd.backend.cc : param_t;
+                import dmd.backend.wasmobj : wmod_fixImportType, wmod_getOrCreateStackPtrGlobal;
 
-                    void collectArgTys(elem* p) nothrow @trusted
+                Symbol* calleeSym = e.E1.Vsym;
+                uint fidx = funcIndex(calleeSym);
+                const bool isCVariadic = calleeSym.Stype !is null && variadic(calleeSym.Stype);
+
+                if (isCVariadic)
+                {
+                    // C variadic ABI (matches LDC2/wasi-libc): variadic args are spilled
+                    // to a shadow stack frame; a pointer to that frame is passed as the
+                    // last i32 parameter after all fixed args.  When there are no variadic
+                    // args the pointer is null (i32.const 0).
+                    //
+                    // C default promotions apply inside `...`:
+                    //   float  → double (f64)
+                    //   char/short → int (i32)
+
+                    // Collect all args left-to-right (E2-first in OPparam tree).
+                    elem*[] allArgs;
+                    void gatherArgs(elem* p) nothrow @trusted
                     {
                         if (!p)
                             return;
                         if (p.Eoper == OPparam)
                         {
-                            collectArgTys(p.E2);
-                            collectArgTys(p.E1);
-                            return;
-                        }
-                        if (isSliceElem(p)) // D slice: split into two i32 params
-                        {
-                            aparams ~= WASM_I32;
-                            aparams ~= WASM_I32;
+                            gatherArgs(p.E2);
+                            gatherArgs(p.E1);
                         }
                         else
-                            aparams ~= wasmType(tybasic(p.Ety));
+                            allArgs ~= p;
                     }
+                    gatherArgs(e.E2);
 
-                    collectArgTys(e.E2);
-                    const tym_t retTy2 = tybasic(e.Ety);
-                    ubyte[] aresults;
-                    if (retTy2 != TYvoid && retTy2 != TYnoreturn)
-                        aresults ~= wasmType(retTy2);
-                    wmod_fixImportType(fidx, aparams, aresults);
-                }
-                cg.emitCall(fidx);
-                // Noreturn (SFLexit) functions leave the stack empty. Emit unreachable
-                // so WASM's type checker accepts any type expectations after the call.
-                if (e.E1.Vsym.Sflags & SFLexit)
-                    cg.emit(OP_UNREACHABLE);
-                else if (e.E1.Vsym.Stype && variadic(e.E1.Vsym.Stype))
-                {
-                    // Variadic C functions (printf, etc.) are imported with only their
-                    // fixed parameters.  The variadic arguments are pushed deeper on the
-                    // WASM stack and remain after the call.  Clean them up so the block
-                    // stack is balanced: save the return value (if any), drop the extras,
-                    // then restore the return value.
-                    uint fixedParams = 0;
-                    for (param_t* p = e.E1.Vsym.Stype.Tparamtypes; p; p = p.Pnext)
+                    // Count fixed (non-variadic) params from the function type.
+                    int nFixed = 0;
+                    for (param_t* p = calleeSym.Stype.Tparamtypes; p; p = p.Pnext)
+                        nFixed++;
+
+                    // Emit fixed args to the WASM value stack.
+                    foreach (a; allArgs[0 .. nFixed])
+                        genOneArg(cg, a);
+
+                    // Compute variadic args layout and emit shadow-stack spill.
+                    elem*[] varArgs = allArgs[nFixed .. $];
+                    uint spLocal = uint.max;
+                    uint vaFrameSize = 0;
+
+                    if (varArgs.length > 0)
                     {
-                        if (p.Ptype && tybasic(p.Ptype.Tty) != TYvoid)
+                        struct VaSlot { elem* e; uint off; ubyte storeOp; uint alignLog2; bool promoteF32; }
+                        VaSlot[] slots;
+                        uint offset = 0;
+                        foreach (va; varArgs)
                         {
-                            const tym_t pty = tybasic(p.Ptype.Tty);
-                            // D slice (TYullong + Tnext on WASM32) counts as two i32 WASM params.
-                            fixedParams += (pty == TYullong && p.Ptype.Tnext) ? 2 : 1;
+                            ubyte storeOp;
+                            uint sz, al;
+                            bool promF32 = false;
+                            switch (tybasic(va.Ety))
+                            {
+                            case TYllong:
+                            case TYullong:
+                                storeOp = OP_I64_STORE; sz = 8; al = 3; break;
+                            case TYdouble:
+                            case TYdouble_alias:
+                            case TYreal:
+                            case TYireal:
+                                storeOp = OP_F64_STORE; sz = 8; al = 3; break;
+                            case TYfloat:
+                            case TYifloat:
+                                // C promotes float to double in varargs
+                                storeOp = OP_F64_STORE; sz = 8; al = 3; promF32 = true; break;
+                            default:
+                                storeOp = OP_I32_STORE; sz = 4; al = 2; break;
+                            }
+                            uint byteAlign = 1u << al;
+                            offset = (offset + byteAlign - 1) & ~(byteAlign - 1);
+                            slots ~= VaSlot(va, offset, storeOp, al, promF32);
+                            offset += sz;
                         }
-                    }
-                    const int extra = cast(int)aparams.length - cast(int)fixedParams;
-                    if (extra > 0)
-                    {
-                        const tym_t retTy3 = tybasic(e.Ety);
-                        const bool hasRet = (retTy3 != TYvoid && retTy3 != TYnoreturn);
-                        uint retTmp = 0;
-                        if (hasRet)
-                        {
-                            retTmp = cg.allocTemp(wasmType(retTy3));
-                            cg.emit(OP_LOCAL_SET);
-                            cg.emitULEB(retTmp);
-                        }
-                        foreach (_; 0 .. extra)
-                            cg.emit(OP_DROP);
-                        if (hasRet)
+                        vaFrameSize = (offset + 15) & ~15;
+
+                        // Allocate shadow stack frame for varargs.
+                        uint spIdx = wmod_getOrCreateStackPtrGlobal();
+                        spLocal = cg.allocTemp(WASM_I32);
+                        cg.emit(OP_GLOBAL_GET);
+                        cg.emitULEB(spIdx);
+                        cg.emit(OP_I32_CONST);
+                        cg.emitSLEB(cast(int) vaFrameSize);
+                        cg.emit(OP_I32_SUB);
+                        cg.emit(OP_LOCAL_TEE);
+                        cg.emitULEB(spLocal);
+                        cg.emit(OP_GLOBAL_SET);
+                        cg.emitULEB(spIdx);
+
+                        // Store each variadic arg into the frame.
+                        foreach (ref sl; slots)
                         {
                             cg.emit(OP_LOCAL_GET);
-                            cg.emitULEB(retTmp);
+                            cg.emitULEB(spLocal);   // addr
+                            genElem(cg, sl.e);       // value
+                            if (sl.promoteF32)
+                                cg.emit(OP_F64_PROMOTE_F32);
+                            cg.emit(sl.storeOp);
+                            cg.emitMemArg(sl.alignLog2, sl.off);
                         }
+
+                        // Push varargs pointer as the last parameter.
+                        cg.emit(OP_LOCAL_GET);
+                        cg.emitULEB(spLocal);
                     }
+                    else
+                    {
+                        // No variadic args: pass null pointer per LDC2 convention.
+                        cg.emit(OP_I32_CONST);
+                        cg.emitSLEB(0);
+                    }
+
+                    // Register import type: (fixed_params..., i32 varargs_ptr) -> result.
+                    {
+                        ubyte[] aparams;
+                        foreach (a; allArgs[0 .. nFixed])
+                        {
+                            if (isSliceElem(a))
+                            {
+                                aparams ~= WASM_I32;
+                                aparams ~= WASM_I32;
+                            }
+                            else
+                                aparams ~= wasmType(tybasic(a.Ety));
+                        }
+                        aparams ~= WASM_I32; // varargs ptr
+                        const tym_t retTy2 = tybasic(e.Ety);
+                        ubyte[] aresults;
+                        if (retTy2 != TYvoid && retTy2 != TYnoreturn)
+                            aresults ~= wasmType(retTy2);
+                        wmod_fixImportType(fidx, aparams, aresults);
+                    }
+
+                    cg.emitCall(fidx);
+
+                    // Restore __stack_pointer after the call.
+                    if (spLocal != uint.max)
+                    {
+                        uint spIdx = wmod_getOrCreateStackPtrGlobal();
+                        cg.emit(OP_LOCAL_GET);
+                        cg.emitULEB(spLocal);
+                        cg.emit(OP_I32_CONST);
+                        cg.emitSLEB(cast(int) vaFrameSize);
+                        cg.emit(OP_I32_ADD);
+                        cg.emit(OP_GLOBAL_SET);
+                        cg.emitULEB(spIdx);
+                    }
+
+                    if (calleeSym.Sflags & SFLexit)
+                        cg.emit(OP_UNREACHABLE);
+                }
+                else
+                {
+                    // Non-variadic direct call.
+                    // Push arguments (right-to-left in elem tree => emit left-first for WASM)
+                    genArgs(cg, e.E2);
+
+                    // Runtime symbols (memcmp, __assert, etc.) are registered with a
+                    // generic empty type because rtlsym.d uses type_fake(TYnfunc). Fix
+                    // the import type from the actual call-site argument/return types.
+                    ubyte[] aparams;
+                    {
+                        void collectArgTys(elem* p) nothrow @trusted
+                        {
+                            if (!p)
+                                return;
+                            if (p.Eoper == OPparam)
+                            {
+                                collectArgTys(p.E2);
+                                collectArgTys(p.E1);
+                                return;
+                            }
+                            if (isSliceElem(p)) // D slice: split into two i32 params
+                            {
+                                aparams ~= WASM_I32;
+                                aparams ~= WASM_I32;
+                            }
+                            else
+                                aparams ~= wasmType(tybasic(p.Ety));
+                        }
+
+                        collectArgTys(e.E2);
+                        const tym_t retTy2 = tybasic(e.Ety);
+                        ubyte[] aresults;
+                        if (retTy2 != TYvoid && retTy2 != TYnoreturn)
+                            aresults ~= wasmType(retTy2);
+                        wmod_fixImportType(fidx, aparams, aresults);
+                    }
+                    cg.emitCall(fidx);
+                    // Noreturn (SFLexit) functions leave the stack empty. Emit unreachable
+                    // so WASM's type checker accepts any type expectations after the call.
+                    if (calleeSym.Sflags & SFLexit)
+                        cg.emit(OP_UNREACHABLE);
                 }
             }
             else
