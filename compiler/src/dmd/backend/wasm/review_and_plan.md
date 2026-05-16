@@ -66,7 +66,7 @@ Backend is self-contained behind `objmod`. Shared backend touch points (cdef/dou
 - [x] **S1** *Done.* `emitBinop`/`emitRelop` collapsed via `pickByKind(ty, f32, f64, i64, i32)` helper. ~170 lines → ~50 lines.
 - [x] **S3** *Done.* `emitLoad`/`emitStore` share a `memOpsFor(ty)` table returning `(loadOp, storeOp, alignLog2)`. ~85 lines → ~30 lines.
 - [x] **S8** *Done.* Extracted `buildFuncToSymIdx()` helper; three reloc emitters now share it. ~40 lines saved.
-- [ ] **S2** *Pending.* `codgen.d:1710-1912` `OPstreq`/`OPmemcpy`/`OPmemset` — bulk-mem `memory.copy`/`memory.fill` (~150 lines, faster). Needs feature-detect of bulk-memory proposal in the consumer (wasmtime, browsers — supported by all current runtimes).
+- [x] **S2** *Done.* `OPstreq`/`OPmemcpy`/`OPmemset` now emit `memory.copy` / `memory.fill` (added `OP_FC_PREFIX`, `emitMemoryCopy`, `emitMemoryFill`). The hand-rolled byte-copy and runtime-count loops are gone. ~150 lines → ~50 lines. Bulk-memory is in the WebAssembly MVP+ baseline; supported by every current runtime (wasmtime, V8, SpiderMonkey, JSC, wasmer).
 - [ ] **S6** *Skipped.* `wasmobj.d:481-673` section emitters vary too much (skip-if-empty rules, mixed init-expr emission) for a clean `emitVecSection` template; estimated savings ~30 lines at a real clarity cost.
 - [ ] **S7** *Pending.* `lib/elf.d:308-422` vs `lib/wasm.d:150-264` — parameterize `writeLibToBuffer` (~150 lines). Cross-cutting change to lib infrastructure.
 
@@ -85,4 +85,4 @@ Backend is self-contained behind `objmod`. Shared backend touch points (cdef/dou
 
 ## 7. Summary of changes applied this round
 
-12 items resolved (F1, F4, F5, F6, F7, F8, I1, I3, S1, S3, S5, S8) and 2 deferred items investigated and documented (F2 not-a-bug, S4 confirmed required). Build and `./run.d quick` pass after every change (`OS=wasm compilable/wasm_codegen.d` always green; unrelated pre-existing failures on branch in bcraii2/pragmainline2/b16976/vcg-ast). Remaining work (F3, F9, S2/S6/S7, I2, I4) is documented above with rationale for deferral; each is a distinct follow-up PR. Net diff after the simplification round: ~200 lines removed across `codgen.d` + `wasmobj.d`.
+14 items resolved (F1, F4, F5, F6, F7, F8, F9, I1, I3, S1, S2, S3, S5, S8) and 2 deferred items investigated and documented (F2 not-a-bug, S4 confirmed required). Build and `./run.d quick` pass after every change (`OS=wasm compilable/wasm_codegen.d` and `OS=wasm runnable/ai.d` always green; unrelated pre-existing failures on branch in bcraii2/pragmainline2/b16976/vcg-ast/test6952/dwarf). Remaining work (F3, S6/S7, I2, I4) is documented above with rationale for deferral; each is a distinct follow-up PR. Net diff after the simplification round: ~300 lines removed across `codgen.d` + `wasmobj.d`.
