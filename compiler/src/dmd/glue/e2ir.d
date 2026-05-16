@@ -1449,7 +1449,10 @@ elem* toElem(Expression e, ref IRState irs)
             {
                 import dmd.target : target;
                 if (target.isWasm)
-                    return el_long(TYnptr, 0); // betterC WASM: new struct not supported
+                {
+                    irs.eSink.error(ne.loc, "`new` is not supported for the WebAssembly target (no `_d_newitemT` hook in druntime)");
+                    return el_long(TYnptr, 0);
+                }
                 assert(0, "This case should have been rewritten to `_d_newitemT` in the semantic phase");
             }
 
@@ -1532,7 +1535,10 @@ elem* toElem(Expression e, ref IRState irs)
             {
                 import dmd.target : target;
                 if (target.isWasm)
-                    return el_long(TYnptr, 0); // betterC WASM: new not supported
+                {
+                    irs.eSink.error(ne.loc, "`new` is not supported for the WebAssembly target (no `_d_newitemT` hook in druntime)");
+                    return el_long(TYnptr, 0);
+                }
                 assert(0, "This case should have been rewritten to `_d_newitemT` in the semantic phase");
             }
 
@@ -4301,8 +4307,8 @@ elem* toElem(Expression e, ref IRState irs)
  */
 elem* toElemRVO(Expression e, elem* ehidden, ref IRState irs)
 {
-    // For WASM, class types might reach here due to betterC class restrictions.
-    // Return a no-op rather than crashing; the semantic phase should have caught this.
+    // WASM: class types may reach here under betterC-like class restrictions.
+    // Fall back to plain toElem for non-aggregate types rather than asserting.
     import dmd.target : target;
     if (target.isWasm)
     {
