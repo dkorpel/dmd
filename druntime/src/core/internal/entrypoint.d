@@ -20,46 +20,35 @@ template _d_cmain()
 {
     version (WebAssembly)
     {
-        // On WASM the compiler mangles the user's D main() to __d_user_main so
-        // it doesn't collide with the _Dmain wrapper we generate here.
-        // We use pragma(mangle) for the C main wrapper so it exports the name
-        // "main" at ABI level without introducing a D-level symbol named "main"
-        // — keeping the D name 'main' unambiguous (it refers to the user's
-        // function) inside __wasm_Dmain's static-if.
-
+        // WASM needs a typed _Dmain wrapper (always `(char[][]) -> int`) because
+        // call_indirect requires an exact signature match, and the user's main
+        // may have a different one. The compiler mangles the user's main as
+        // `__d_user_main` so this wrapper can own the `_Dmain` symbol. We use
+        // pragma(mangle) on both wrappers so that `main` inside the template
+        // body still refers to the user's function.
         private extern(C) int _d_run_main(int argc, char** argv, void* mainFunc) nothrow;
 
-        // C entry point — exported as "main" for WASI / wasmtime.
         pragma(mangle, "main")
         extern(C) int __wasm_c_main(int argc, char** argv) nothrow
         {
             return _d_run_main(argc, argv, &__wasm_Dmain);
         }
 
-        // Typed _Dmain wrapper: always (char[][] args) -> int so _d_run_main
-        // can call it via call_indirect with the correct WASM type.
-        // 'main' inside this body unambiguously names the user's D main because
-        // our C wrapper uses a different D identifier (__wasm_c_main).
         pragma(mangle, "_Dmain")
         extern(C) int __wasm_Dmain(char[][] args)
         {
-            static if (is(typeof(main(cast(string[]) args)) == int))
-                return main(cast(string[]) args); // int main(string[] args)
-            else static if (is(typeof(main(args)) == int))
-                return main(args);                // int main(char[][] args)
-            else static if (is(typeof(main()) == int))
-                return main();                    // int main()
-            else static if (is(typeof(main(cast(string[]) args)) == void))
-            {
-                main(cast(string[]) args); return 0; // void main(string[] args)
-            }
-            else static if (is(typeof(main(args)) == void))
-            {
-                main(args); return 0;             // void main(char[][] args)
-            }
+            static if (is(typeof(main(cast(string[]) args))))
+                alias call = () => main(cast(string[]) args);
+            else static if (is(typeof(main(args))))
+                alias call = () => main(args);
+            else
+                alias call = () => main();
+
+            static if (is(typeof(call()) == int))
+                return call();
             else
             {
-                main();                           // void main()
+                call();
                 return 0;
             }
         }
