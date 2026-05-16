@@ -395,6 +395,17 @@ extern (C++) struct Target
     bool isWasm;            // generate WebAssembly code
     bool isLP64;            // pointers are 64 bits
 
+    /// Set the target architecture, clearing the other arch flags.
+    /// Pass exactly one `true` argument.
+    extern (D) void setArch(bool aarch64 = false, bool x86 = false,
+                            bool x86_64 = false, bool wasm = false) @safe
+    {
+        isAArch64 = aarch64;
+        isX86     = x86;
+        isX86_64  = x86_64;
+        isWasm    = wasm;
+    }
+
     // Environmental
     const(char)[] obj_ext;    /// extension for object files
     const(char)[] lib_ext;    /// extension for static library files

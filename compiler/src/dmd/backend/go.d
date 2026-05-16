@@ -290,6 +290,11 @@ void optfunc(ref GlobalOptimizer go, ref BlockOpt bo)
 
         /* Only scan once to prevent recursive functions from endlessly being inlined
          * https://issues.dlang.org/show_bug.cgi?id=23857
+         *
+         * WASM: scanForInlines is disabled because it asserts on WASM IR (the
+         * inliner expects x86-style elem trees and/or x87/sret conventions that
+         * the WASM frontend does not produce). Re-enable once the inliner is
+         * audited for WASM-safe operator subsets. TODO: file an issue.
          */
         if (iter == 1 && config.objfmt != OBJ_WASM)
             scanForInlines(funcsym_p);

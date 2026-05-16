@@ -836,10 +836,9 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
         BlockState* blx = irs.blx;
 
         incUsage(irs, s.loc);
-        import dmd.target : target;
-        if (target.isWasm)
+        if (config.ehmethod == EHmethod.EH_NONE)
         {
-            // WASM: no exception runtime; evaluate expression for side effects, then halt.
+            // No exception runtime; evaluate expression for side effects, then halt.
             elem* e2 = toElemDtor(s.exp, irs);
             block_appendexp(blx.curblock, e2);
             elem* eh = el_calloc();
@@ -870,10 +869,9 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
     {
         BlockState* blx = irs.blx;
 
-        import dmd.target : target;
-        if (target.isWasm)
+        if (config.ehmethod == EHmethod.EH_NONE)
         {
-            // WASM: no exception runtime. Emit just the try body; catch blocks are
+            // No exception runtime. Emit just the try body; catch blocks are
             // unreachable (throw generates halt). Skip all EH block machinery.
             StmtState mystate = StmtState(stmtstate, s);
             if (s._body)
@@ -1177,10 +1175,9 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
 
         BlockState* blx = irs.blx;
 
-        import dmd.target : target;
-        if (target.isWasm)
+        if (config.ehmethod == EHmethod.EH_NONE)
         {
-            // WASM: no exception unwinding. Emit try body, then finally body sequentially.
+            // No exception unwinding. Emit try body, then finally body sequentially.
             StmtState mystate = StmtState(stmtstate, s);
             if (s._body)
                 Statement_toIR(s._body, irs, &mystate);
