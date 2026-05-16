@@ -75,7 +75,7 @@ Backend is self-contained behind `objmod`. Shared backend touch points (cdef/dou
 - [x] **I1** *Done.* Added `Target.setArch()` helper in `target.d`; mars.d arch-flag boilerplate dropped from 40 lines to 12.
 - [x] **I3** *No action.* `ObjMemDecl` in `backend/obj.d:507` is a dead helper not invoked anywhere. No symmetry needed.
 - [ ] **I2** *Pending.* `link.d:runWasmLINK` is 230 lines glued onto `runLINK`. Worth splitting into a `LinkBackend` interface, but a substantial restructure.
-- [ ] **I4** *Pending.* `link.d:200-211` `findWasmDruntimeDir` uses brittle `argv0 + ../../../../druntime` path. Should plumb through config / `imppath`.
+- [x] **I4** *Done.* `link.d` no longer passes a hardcoded full path to wasm-ld. The user's `-L-L<dir>` linkswitches are already forwarded, and an argv0-derived `-L` is appended as fallback; druntime + libc are pulled in via `-l:libdruntime-wasm.a` / `-l:libc.a` so wasm-ld resolves them through its standard search path. `argv0DruntimeDir` is now a clearly-named fallback, not the primary mechanism.
 
 ## 6. Out of scope
 
@@ -85,4 +85,4 @@ Backend is self-contained behind `objmod`. Shared backend touch points (cdef/dou
 
 ## 7. Summary of changes applied this round
 
-14 items resolved (F1, F4, F5, F6, F7, F8, F9, I1, I3, S1, S2, S3, S5, S8) and 2 deferred items investigated and documented (F2 not-a-bug, S4 confirmed required). Build and `./run.d quick` pass after every change (`OS=wasm compilable/wasm_codegen.d` and `OS=wasm runnable/ai.d` always green; unrelated pre-existing failures on branch in bcraii2/pragmainline2/b16976/vcg-ast/test6952/dwarf). Remaining work (F3, S6/S7, I2, I4) is documented above with rationale for deferral; each is a distinct follow-up PR. Net diff after the simplification round: ~300 lines removed across `codgen.d` + `wasmobj.d`.
+15 items resolved (F1, F4, F5, F6, F7, F8, F9, I1, I3, I4, S1, S2, S3, S5, S8) and 2 deferred items investigated and documented (F2 not-a-bug, S4 confirmed required). Build and `./run.d quick` pass after every change (`OS=wasm compilable/wasm_codegen.d` and `OS=wasm runnable/ai.d` always green; unrelated pre-existing failures on branch in bcraii2/pragmainline2/b16976/vcg-ast/test6952/dwarf). Remaining work (F3, S6/S7, I2, I4) is documented above with rationale for deferral; each is a distinct follow-up PR. Net diff after the simplification round: ~300 lines removed across `codgen.d` + `wasmobj.d`.
