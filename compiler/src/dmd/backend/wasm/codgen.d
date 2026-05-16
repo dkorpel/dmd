@@ -462,93 +462,38 @@ nothrow:
 }
 
 // Emit a typed load from the address already on the stack.
-private void emitLoad(ref WasmCG cg, tym_t ty) @trusted
+// Per-type (load opcode, store opcode, natural-alignment log2).
+// Load variants of narrow ints carry their signedness; stores share one op.
+private struct MemOps { ubyte loadOp, storeOp, alignLog2; }
+private MemOps memOpsFor(tym_t ty) @safe
 {
     switch (tybasic(ty))
     {
-    case TYllong:
-    case TYullong:
-        cg.emit(OP_I64_LOAD);
-        cg.emitMemArg(3, 0);
-        break;
-    case TYfloat:
-    case TYifloat:
-        cg.emit(OP_F32_LOAD);
-        cg.emitMemArg(2, 0);
-        break;
-    case TYdouble:
-    case TYdouble_alias:
-    case TYreal:
-    case TYireal:
-        cg.emit(OP_F64_LOAD);
-        cg.emitMemArg(3, 0);
-        break;
-    case TYchar:
-    case TYschar:
-        cg.emit(OP_I32_LOAD8_S);
-        cg.emitMemArg(0, 0);
-        break;
-    case TYuchar:
-    case TYbool:
-        cg.emit(OP_I32_LOAD8_U);
-        cg.emitMemArg(0, 0);
-        break;
-    case TYshort:
-        cg.emit(OP_I32_LOAD16_S);
-        cg.emitMemArg(1, 0);
-        break;
-    case TYwchar_t:
-    case TYushort:
-        cg.emit(OP_I32_LOAD16_U);
-        cg.emitMemArg(1, 0);
-        break;
-    default:
-        cg.emit(OP_I32_LOAD);
-        cg.emitMemArg(2, 0);
-        break;
+        case TYllong, TYullong:                  return MemOps(OP_I64_LOAD,     OP_I64_STORE,   3);
+        case TYfloat, TYifloat:                  return MemOps(OP_F32_LOAD,     OP_F32_STORE,   2);
+        case TYdouble, TYdouble_alias,
+             TYreal,   TYireal:                  return MemOps(OP_F64_LOAD,     OP_F64_STORE,   3);
+        case TYchar, TYschar:                    return MemOps(OP_I32_LOAD8_S,  OP_I32_STORE8,  0);
+        case TYuchar, TYbool:                    return MemOps(OP_I32_LOAD8_U,  OP_I32_STORE8,  0);
+        case TYshort:                            return MemOps(OP_I32_LOAD16_S, OP_I32_STORE16, 1);
+        case TYwchar_t, TYushort:                return MemOps(OP_I32_LOAD16_U, OP_I32_STORE16, 1);
+        default:                                 return MemOps(OP_I32_LOAD,     OP_I32_STORE,   2);
     }
+}
+
+private void emitLoad(ref WasmCG cg, tym_t ty) @trusted
+{
+    const m = memOpsFor(ty);
+    cg.emit(m.loadOp);
+    cg.emitMemArg(m.alignLog2, 0);
 }
 
 // Emit a typed store (address then value already on stack).
 private void emitStore(ref WasmCG cg, tym_t ty) @trusted
 {
-    switch (tybasic(ty))
-    {
-    case TYllong:
-    case TYullong:
-        cg.emit(OP_I64_STORE);
-        cg.emitMemArg(3, 0);
-        break;
-    case TYfloat:
-    case TYifloat:
-        cg.emit(OP_F32_STORE);
-        cg.emitMemArg(2, 0);
-        break;
-    case TYdouble:
-    case TYdouble_alias:
-    case TYreal:
-    case TYireal:
-        cg.emit(OP_F64_STORE);
-        cg.emitMemArg(3, 0);
-        break;
-    case TYchar:
-    case TYschar:
-    case TYuchar:
-    case TYbool:
-        cg.emit(OP_I32_STORE8);
-        cg.emitMemArg(0, 0);
-        break;
-    case TYshort:
-    case TYwchar_t:
-    case TYushort:
-        cg.emit(OP_I32_STORE16);
-        cg.emitMemArg(1, 0);
-        break;
-    default:
-        cg.emit(OP_I32_STORE);
-        cg.emitMemArg(2, 0);
-        break;
-    }
+    const m = memOpsFor(ty);
+    cg.emit(m.storeOp);
+    cg.emitMemArg(m.alignLog2, 0);
 }
 
 // Emit a type coercion when a value's actual WASM type differs from what e.Ety expects.
@@ -2094,84 +2039,45 @@ private void genArgs(ref WasmCG cg, elem* e) @trusted
     }
 }
 
+// Pick the WASM opcode variant matching the IR operand's numeric kind.
+// Order: f32, f64, i64, i32. Pass OP_UNREACHABLE for kinds that don't apply.
+private ubyte pickByKind(tym_t ty, ubyte f32, ubyte f64, ubyte i64, ubyte i32) @safe
+{
+    switch (tybasic(ty))
+    {
+        case TYfloat, TYifloat:                              return f32;
+        case TYdouble, TYdouble_alias, TYreal, TYireal:      return f64;
+        case TYllong, TYullong:                              return i64;
+        default:                                             return i32;
+    }
+}
+
 // Binary operation opcode selection by IR operator
 private void emitBinop(ref WasmCG cg, int op, tym_t ty) @trusted
 {
-    const bool is64 = (tybasic(ty) == TYllong || tybasic(ty) == TYullong);
-    const bool isF32 = (tybasic(ty) == TYfloat);
-    const bool isF64 = (tybasic(ty) == TYdouble || tybasic(ty) == TYdouble_alias || tybasic(ty) == TYreal);
+    const U = OP_UNREACHABLE;
     const bool isUns = tyuns(ty) != 0;
-
+    ubyte oc = U;
     switch (op)
     {
-    case OPadd:
-        if (isF32)
-            cg.emit(OP_F32_ADD);
-        else if (isF64)
-            cg.emit(OP_F64_ADD);
-        else if (is64)
-            cg.emit(OP_I64_ADD);
-        else
-            cg.emit(OP_I32_ADD);
-        break;
-    case OPmin:
-        if (isF32)
-            cg.emit(OP_F32_SUB);
-        else if (isF64)
-            cg.emit(OP_F64_SUB);
-        else if (is64)
-            cg.emit(OP_I64_SUB);
-        else
-            cg.emit(OP_I32_SUB);
-        break;
-    case OPmul:
-        if (isF32)
-            cg.emit(OP_F32_MUL);
-        else if (isF64)
-            cg.emit(OP_F64_MUL);
-        else if (is64)
-            cg.emit(OP_I64_MUL);
-        else
-            cg.emit(OP_I32_MUL);
-        break;
-    case OPdiv:
-        if (isF32)
-            cg.emit(OP_F32_DIV);
-        else if (isF64)
-            cg.emit(OP_F64_DIV);
-        else if (is64)
-            cg.emit(isUns ? OP_I64_DIV_U : OP_I64_DIV_S);
-        else
-            cg.emit(isUns ? OP_I32_DIV_U : OP_I32_DIV_S);
-        break;
-    case OPmod:
-        if (is64)
-            cg.emit(isUns ? OP_I64_REM_U : OP_I64_REM_S);
-        else
-            cg.emit(isUns ? OP_I32_REM_U : OP_I32_REM_S);
-        break;
-    case OPand:
-        cg.emit(is64 ? OP_I64_AND : OP_I32_AND);
-        break;
-    case OPor:
-        cg.emit(is64 ? OP_I64_OR : OP_I32_OR);
-        break;
-    case OPxor:
-        cg.emit(is64 ? OP_I64_XOR : OP_I32_XOR);
-        break;
-    case OPshl:
-        cg.emit(is64 ? OP_I64_SHL : OP_I32_SHL);
-        break;
-    case OPshr:
-        cg.emit(is64 ? OP_I64_SHR_U : OP_I32_SHR_U);
-        break;
-    case OPashr:
-        cg.emit(is64 ? OP_I64_SHR_S : OP_I32_SHR_S);
-        break;
-    default:
-        cg.emit(OP_UNREACHABLE);
-        break;
+    case OPadd:  oc = pickByKind(ty, OP_F32_ADD, OP_F64_ADD, OP_I64_ADD, OP_I32_ADD); break;
+    case OPmin:  oc = pickByKind(ty, OP_F32_SUB, OP_F64_SUB, OP_I64_SUB, OP_I32_SUB); break;
+    case OPmul:  oc = pickByKind(ty, OP_F32_MUL, OP_F64_MUL, OP_I64_MUL, OP_I32_MUL); break;
+    case OPdiv:  oc = pickByKind(ty, OP_F32_DIV, OP_F64_DIV,
+                                     isUns ? OP_I64_DIV_U : OP_I64_DIV_S,
+                                     isUns ? OP_I32_DIV_U : OP_I32_DIV_S); break;
+    case OPmod:  oc = pickByKind(ty, U, U,
+                                     isUns ? OP_I64_REM_U : OP_I64_REM_S,
+                                     isUns ? OP_I32_REM_U : OP_I32_REM_S); break;
+    case OPand:  oc = pickByKind(ty, U, U, OP_I64_AND,   OP_I32_AND);   break;
+    case OPor:   oc = pickByKind(ty, U, U, OP_I64_OR,    OP_I32_OR);    break;
+    case OPxor:  oc = pickByKind(ty, U, U, OP_I64_XOR,   OP_I32_XOR);   break;
+    case OPshl:  oc = pickByKind(ty, U, U, OP_I64_SHL,   OP_I32_SHL);   break;
+    case OPshr:  oc = pickByKind(ty, U, U, OP_I64_SHR_U, OP_I32_SHR_U); break;
+    case OPashr: oc = pickByKind(ty, U, U, OP_I64_SHR_S, OP_I32_SHR_S); break;
+    default: break;
     }
+    cg.emit(oc);
 }
 
 // Map compound-assignment op to its binary counterpart
@@ -2180,120 +2086,27 @@ alias compoundToBinop = opeqtoop;
 // Emit a relational/comparison opcode
 private void emitRelop(ref WasmCG cg, int op, tym_t operandTy) @trusted
 {
-    const bool is64 = (tybasic(operandTy) == TYllong || tybasic(operandTy) == TYullong);
-    const bool isF32 = (tybasic(operandTy) == TYfloat);
-    const bool isF64 = (tybasic(operandTy) == TYdouble || tybasic(operandTy) == TYdouble_alias || tybasic(
-            operandTy) == TYreal);
     const bool isUns = tyuns(operandTy) != 0;
-
-    if (isF32)
-    {
-        switch (op)
-        {
-        case OPeqeq:
-            cg.emit(OP_F32_EQ);
-            break;
-        case OPne:
-            cg.emit(OP_F32_NE);
-            break;
-        case OPlt:
-            cg.emit(OP_F32_LT);
-            break;
-        case OPle:
-            cg.emit(OP_F32_LE);
-            break;
-        case OPgt:
-            cg.emit(OP_F32_GT);
-            break;
-        case OPge:
-            cg.emit(OP_F32_GE);
-            break;
-        default:
-            cg.emit(OP_UNREACHABLE);
-            break;
-        }
-        return;
-    }
-    if (isF64)
-    {
-        switch (op)
-        {
-        case OPeqeq:
-            cg.emit(OP_F64_EQ);
-            break;
-        case OPne:
-            cg.emit(OP_F64_NE);
-            break;
-        case OPlt:
-            cg.emit(OP_F64_LT);
-            break;
-        case OPle:
-            cg.emit(OP_F64_LE);
-            break;
-        case OPgt:
-            cg.emit(OP_F64_GT);
-            break;
-        case OPge:
-            cg.emit(OP_F64_GE);
-            break;
-        default:
-            cg.emit(OP_UNREACHABLE);
-            break;
-        }
-        return;
-    }
-    if (is64)
-    {
-        switch (op)
-        {
-        case OPeqeq:
-            cg.emit(OP_I64_EQ);
-            break;
-        case OPne:
-            cg.emit(OP_I64_NE);
-            break;
-        case OPlt:
-            cg.emit(isUns ? OP_I64_LT_U : OP_I64_LT_S);
-            break;
-        case OPle:
-            cg.emit(isUns ? OP_I64_LE_U : OP_I64_LE_S);
-            break;
-        case OPgt:
-            cg.emit(isUns ? OP_I64_GT_U : OP_I64_GT_S);
-            break;
-        case OPge:
-            cg.emit(isUns ? OP_I64_GE_U : OP_I64_GE_S);
-            break;
-        default:
-            cg.emit(OP_UNREACHABLE);
-            break;
-        }
-        return;
-    }
+    ubyte oc = OP_UNREACHABLE;
     switch (op)
     {
-    case OPeqeq:
-        cg.emit(OP_I32_EQ);
-        break;
-    case OPne:
-        cg.emit(OP_I32_NE);
-        break;
-    case OPlt:
-        cg.emit(isUns ? OP_I32_LT_U : OP_I32_LT_S);
-        break;
-    case OPle:
-        cg.emit(isUns ? OP_I32_LE_U : OP_I32_LE_S);
-        break;
-    case OPgt:
-        cg.emit(isUns ? OP_I32_GT_U : OP_I32_GT_S);
-        break;
-    case OPge:
-        cg.emit(isUns ? OP_I32_GE_U : OP_I32_GE_S);
-        break;
-    default:
-        cg.emit(OP_UNREACHABLE);
-        break;
+    case OPeqeq: oc = pickByKind(operandTy, OP_F32_EQ, OP_F64_EQ, OP_I64_EQ, OP_I32_EQ); break;
+    case OPne:   oc = pickByKind(operandTy, OP_F32_NE, OP_F64_NE, OP_I64_NE, OP_I32_NE); break;
+    case OPlt:   oc = pickByKind(operandTy, OP_F32_LT, OP_F64_LT,
+                                            isUns ? OP_I64_LT_U : OP_I64_LT_S,
+                                            isUns ? OP_I32_LT_U : OP_I32_LT_S); break;
+    case OPle:   oc = pickByKind(operandTy, OP_F32_LE, OP_F64_LE,
+                                            isUns ? OP_I64_LE_U : OP_I64_LE_S,
+                                            isUns ? OP_I32_LE_U : OP_I32_LE_S); break;
+    case OPgt:   oc = pickByKind(operandTy, OP_F32_GT, OP_F64_GT,
+                                            isUns ? OP_I64_GT_U : OP_I64_GT_S,
+                                            isUns ? OP_I32_GT_U : OP_I32_GT_S); break;
+    case OPge:   oc = pickByKind(operandTy, OP_F32_GE, OP_F64_GE,
+                                            isUns ? OP_I64_GE_U : OP_I64_GE_S,
+                                            isUns ? OP_I32_GE_U : OP_I32_GE_S); break;
+    default: break;
     }
+    cg.emit(oc);
 }
 
 // ---------------------------------------------------------------------------

@@ -63,12 +63,12 @@ Backend is self-contained behind `objmod`. Shared backend touch points (cdef/dou
 
 - [x] **S4** *Confirmed in use.* `preRegisterExternals` is called from `wasmobj.d:1192` as Phase 1 of two-phase codegen. Required for import-index stability with fixed-width LEBs. Cannot be dropped without switching to relocations for all function references.
 - [x] **S5** *Done.* Added `isDataSym(FL)` helper. Replaced 4 duplicated `switch ... case FL.data..datseg` patterns in `codgen.d:803, 902, 998, 2003` with `if (isDataSym(s.Sfl))`. Saved ~30 lines.
-- [ ] **S1** *Pending.* `codgen.d:2123-2322` `emitBinop`/`emitRelop` — table-driven (~150 lines). Large mechanical refactor; recommend dedicated PR with thorough tests.
-- [ ] **S2** *Pending.* `codgen.d:1782-1984` `OPstreq`/`OPmemcpy`/`OPmemset` — bulk-mem `memory.copy`/`memory.fill` (~120 lines, faster). Needs feature-detect of bulk-memory proposal in the consumer (wasmtime, browsers — supported by all current runtimes).
-- [ ] **S3** *Pending.* `codgen.d:465-552` `emitLoad`/`emitStore` — `(loadOp, storeOp, alignLog2)` table (~90 lines).
-- [ ] **S6** *Pending.* `wasmobj.d:481-673` section emitters → `emitVecSection!(id,T)` (~80 lines).
+- [x] **S1** *Done.* `emitBinop`/`emitRelop` collapsed via `pickByKind(ty, f32, f64, i64, i32)` helper. ~170 lines → ~50 lines.
+- [x] **S3** *Done.* `emitLoad`/`emitStore` share a `memOpsFor(ty)` table returning `(loadOp, storeOp, alignLog2)`. ~85 lines → ~30 lines.
+- [x] **S8** *Done.* Extracted `buildFuncToSymIdx()` helper; three reloc emitters now share it. ~40 lines saved.
+- [ ] **S2** *Pending.* `codgen.d:1710-1912` `OPstreq`/`OPmemcpy`/`OPmemset` — bulk-mem `memory.copy`/`memory.fill` (~150 lines, faster). Needs feature-detect of bulk-memory proposal in the consumer (wasmtime, browsers — supported by all current runtimes).
+- [ ] **S6** *Skipped.* `wasmobj.d:481-673` section emitters vary too much (skip-if-empty rules, mixed init-expr emission) for a clean `emitVecSection` template; estimated savings ~30 lines at a real clarity cost.
 - [ ] **S7** *Pending.* `lib/elf.d:308-422` vs `lib/wasm.d:150-264` — parameterize `writeLibToBuffer` (~150 lines). Cross-cutting change to lib infrastructure.
-- [ ] **S8** *Pending.* `wasmobj.d:879/951/999` — cache `funcToSymIdx` on `wmod` (~30 lines).
 
 ### Integration polish
 
@@ -85,4 +85,4 @@ Backend is self-contained behind `objmod`. Shared backend touch points (cdef/dou
 
 ## 7. Summary of changes applied this round
 
-9 items resolved (F1, F4, F5, F6, F7, F8, I1, I3, S5) and 2 deferred items investigated and documented (F2 not-a-bug, S4 confirmed required). Build and `./run.d quick` pass after every change. Remaining work (F3, F9, S1/S2/S3/S6/S7/S8, I2, I4) is documented above with rationale for deferral; each is a distinct follow-up PR.
+12 items resolved (F1, F4, F5, F6, F7, F8, I1, I3, S1, S3, S5, S8) and 2 deferred items investigated and documented (F2 not-a-bug, S4 confirmed required). Build and `./run.d quick` pass after every change (`OS=wasm compilable/wasm_codegen.d` always green; unrelated pre-existing failures on branch in bcraii2/pragmainline2/b16976/vcg-ast). Remaining work (F3, F9, S2/S6/S7, I2, I4) is documented above with rationale for deferral; each is a distinct follow-up PR. Net diff after the simplification round: ~200 lines removed across `codgen.d` + `wasmobj.d`.

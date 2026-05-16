@@ -117,6 +117,25 @@ private void appendULEB128_5(OutBuffer* buf, uint v) @trusted
 }
 
 // Write a custom section: section id 0, size, name, then payload bytes
+// Build mapping: function index → linking-section symbol index.
+// Functions without a name get uint.max (excluded from the symbol table).
+private uint[] buildFuncToSymIdx() @trusted
+{
+    uint[] funcToSymIdx;
+    funcToSymIdx.length = wmod.funcs.length;
+    uint si = 0;
+    foreach (size_t i, ref const WasmFunc f; wmod.funcs)
+    {
+        const(char)[] name;
+        if (f.sym)
+            name = f.sym.Sident.ptr[0 .. strlen(f.sym.Sident.ptr)];
+        else
+            name = f.importName.length ? f.importName : f.name[];
+        funcToSymIdx[i] = name.length ? si++ : uint.max;
+    }
+    return funcToSymIdx;
+}
+
 private void writeCustomSection(OutBuffer* out_, const(char)[] name, OutBuffer* payload) @trusted
 {
     OutBuffer header;
@@ -885,19 +904,7 @@ private void emitRelocDataSection(OutBuffer* out_, uint dataSectionIdx) @trusted
     if (!wmod.funcRelocations.length || !wmod.dataSegs.length)
         return;
 
-    // Build funcToSymIdx mapping
-    uint[] funcToSymIdx;
-    funcToSymIdx.length = wmod.funcs.length;
-    uint si = 0;
-    foreach (size_t i, ref const WasmFunc f; wmod.funcs)
-    {
-        const(char)[] name;
-        if (f.sym)
-            name = f.sym.Sident.ptr[0 .. strlen(f.sym.Sident.ptr)];
-        else
-            name = f.importName.length ? f.importName : f.name[];
-        funcToSymIdx[i] = name.length ? si++ : uint.max;
-    }
+    uint[] funcToSymIdx = buildFuncToSymIdx();
 
     // Compute the data section payload prefix size:
     // [count=1 ULEB] + [seg_kind=0] + [i32.const=0x41] + [offset=4 ULEB] + [end=0x0B]
@@ -958,19 +965,7 @@ private void emitRelocElemSection(OutBuffer* out_, uint elemSectionIdx) @trusted
     if (!wmod.elemFuncRelocOffsets.length)
         return;
 
-    // Build funcToSymIdx mapping (same logic as emitRelocCodeSection)
-    uint[] funcToSymIdx;
-    funcToSymIdx.length = wmod.funcs.length;
-    uint si = 0;
-    foreach (size_t i, ref const WasmFunc f; wmod.funcs)
-    {
-        const(char)[] name;
-        if (f.sym)
-            name = f.sym.Sident.ptr[0 .. strlen(f.sym.Sident.ptr)];
-        else
-            name = f.importName.length ? f.importName : f.name[];
-        funcToSymIdx[i] = name.length ? si++ : uint.max;
-    }
+    uint[] funcToSymIdx = buildFuncToSymIdx();
 
     // Two-pass: count valid relocs first, then write.
     uint relCount = 0;
@@ -1005,19 +1000,7 @@ private void emitRelocElemSection(OutBuffer* out_, uint elemSectionIdx) @trusted
 // codeSectionIdx: the 0-based section index of the code section in the module.
 private void emitRelocCodeSection(OutBuffer* out_, uint codeSectionIdx) @trusted
 {
-    // Build mapping: function index → symbol table index (for function relocs).
-    uint[] funcToSymIdx;
-    funcToSymIdx.length = wmod.funcs.length;
-    uint si = 0;
-    foreach (size_t i, ref const WasmFunc f; wmod.funcs)
-    {
-        const(char)[] name;
-        if (f.sym)
-            name = f.sym.Sident.ptr[0 .. strlen(f.sym.Sident.ptr)];
-        else
-            name = f.importName.length ? f.importName : f.name[];
-        funcToSymIdx[i] = name.length ? si++ : uint.max;
-    }
+    uint[] funcToSymIdx = buildFuncToSymIdx();
 
     // Build ordered list of referenced data symbols and their symbol-table indices.
     // Data symbols follow function symbols in the linking symbol table.
@@ -1037,7 +1020,8 @@ private void emitRelocCodeSection(OutBuffer* out_, uint codeSectionIdx) @trusted
         collectDataSyms(fb.dataAddrRelocs);
 
     // The data symbol table indices start right after the function symbol table.
-    uint dataSymBase = cast(uint)(si); // si = number of named function symbols
+    uint dataSymBase = 0;
+    foreach (s; funcToSymIdx) if (s != uint.max) dataSymBase++;
     // (TABLE symbol is emitted after data syms in the linking section, so it
     //  doesn't affect data sym indices here.)
 
