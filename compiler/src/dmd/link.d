@@ -202,10 +202,27 @@ enum STATUS_FAILED = -1;
  *   eSink   = sink for error messages
  * Returns: 0 on success, non-zero on failure
  */
-// Fallback WASM-druntime directory derived from argv0.
+// Fallback WASM library directories derived from argv0.
 // Only consulted when the user did not pass `-L-L<dir>` pointing at a directory
-// that contains `libdruntime-wasm.a`. Mirrors the dmd.conf layout
-// `exe_dir/../../../../druntime`.
+// that contains `libdruntime-wasm.a` / `libc.a`.
+//
+// libdruntime-wasm.a is built by `make wasm -C druntime` and lands in the
+// per-target generated tree (`exe_dir/../../wasm/release/wasm32`) — same
+// pattern as native libdruntime.a at `generated/<os>/<build>/<model>/`.
+//
+// libc.a is a vendored wasi-libc binary kept at `druntime/libc.a`, reached
+// via `exe_dir/../../../../druntime`.
+private const(char)[] argv0WasmGeneratedDir() nothrow
+{
+    import dmd.root.filename : FileName;
+    const(char)* argv0ptr = global.params.argv0.ptr;
+    if (!argv0ptr) return null;
+    const argv0 = argv0ptr[0 .. strlen(argv0ptr)];
+    if (!argv0.length) return null;
+    const exeDir = FileName.path(argv0).idup;
+    return FileName.combine(exeDir, "../../../wasm/release/wasm32");
+}
+
 private const(char)[] argv0DruntimeDir() nothrow
 {
     import dmd.root.filename : FileName;
@@ -343,15 +360,19 @@ private int runWasmLINK(bool verbose, ref Param params, ErrorSink eSink)
     // builds keep working when no explicit path is configured.
     if (hasDruntime)
     {
-        const fallback = argv0DruntimeDir();
-        if (fallback.length)
+        void pushLPath(const(char)[] dir)
         {
-            char* lflag = cast(char*) mem.xmalloc(2 + fallback.length + 1);
+            if (!dir.length) return;
+            char* lflag = cast(char*) mem.xmalloc(2 + dir.length + 1);
             lflag[0] = '-'; lflag[1] = 'L';
-            memcpy(lflag + 2, fallback.ptr, fallback.length);
-            lflag[2 + fallback.length] = 0;
+            memcpy(lflag + 2, dir.ptr, dir.length);
+            lflag[2 + dir.length] = 0;
             argv.push(lflag);
         }
+        // libdruntime-wasm.a sits in generated/wasm/release/wasm32/ (built by
+        // `make wasm -C druntime`); libc.a is vendored in druntime/.
+        pushLPath(argv0WasmGeneratedDir());
+        pushLPath(argv0DruntimeDir());
         argv.push("-l:libdruntime-wasm.a");
         argv.push("-l:libc.a"); // WASI C runtime (printf, memcpy, etc.)
     }
