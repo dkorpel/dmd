@@ -1222,11 +1222,20 @@ private bool genElem(ref WasmCG cg, elem* e)
                     for (param_t* q = (calleeSym.Stype !is null) ? calleeSym.Stype.Tparamtypes
                         : null; q; q = q.Pnext)
                         declParams ~= q;
-                    foreach (k; 0 .. declParams.length / 2)
+                    // Only D-linkage (TYjfunc) reverses params in globsym; the
+                    // gathered callArgs walk matches that reversed order. For
+                    // extern(C) (TYnfunc) and other C-style linkages, declParams
+                    // is already in source order — same as callArgs.
+                    const calleeTy = (calleeSym.Stype !is null)
+                        ? tybasic(calleeSym.Stype.Tty) : TYnfunc;
+                    if (calleeTy == TYjfunc)
                     {
-                        auto t = declParams[k];
-                        declParams[k] = declParams[declParams.length - 1 - k];
-                        declParams[declParams.length - 1 - k] = t;
+                        foreach (k; 0 .. declParams.length / 2)
+                        {
+                            auto t = declParams[k];
+                            declParams[k] = declParams[declParams.length - 1 - k];
+                            declParams[declParams.length - 1 - k] = t;
+                        }
                     }
                     size_t hiddenLead = (callArgs.length > declParams.length)
                         ? callArgs.length - declParams.length : 0;
@@ -1639,6 +1648,23 @@ private bool isSliceElem(const(elem)* e)
     // OPpair/OPrpair always construct a (len, ptr) D slice.
     if (e.Eoper == OPpair || e.Eoper == OPrpair)
         return true;
+    // OPcall/OPucall: look at the callee's declared return type for Tnext.
+    // The call elem's own Ety is TYullong without Tnext, but the callee
+    // symbol's Stype.Tnext carries the slice element type.
+    if (e.Eoper == OPcall || e.Eoper == OPucall)
+    {
+        const(elem)* callee = e.E1;
+        // Strip semantic OPind on function pointers.
+        if (callee && callee.Eoper == OPind && callee.E1)
+            callee = callee.E1;
+        if (callee && callee.Eoper == OPvar && callee.Vsym && callee.Vsym.Stype)
+        {
+            const(type)* ft = callee.Vsym.Stype;
+            const(type)* rt = ft.Tnext; // return type
+            if (rt && tybasic(rt.Tty) == TYullong && rt.Tnext)
+                return true;
+        }
+    }
     // OPind: dereferencing a pointer-to-slice. e.ET (the loaded type) is
     // the most reliable signal — for a slice load it has Tnext (element).
     if (e.Eoper == OPind)
