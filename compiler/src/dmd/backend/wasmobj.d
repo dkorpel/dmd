@@ -634,9 +634,9 @@ private void emitElementSection(ref OutBuffer out_)
     s.writeuLEB128(1); // 1 element segment
     // Segment payload:
     s.writeByte(0x00); // kind: active, table 0, funcref, offset init-expr, funcidx vec
-    s.writeByte(0x41); // i32.const
+    s.writeByte(OP_I32_CONST);
     s.writeByte(0x00); // offset = 0
-    s.writeByte(0x0B); // end
+    s.writeByte(OP_END);
     s.writeuLEB128(defined); // count of function indices
     // Byte offset from start of element section PAYLOAD (after section id + size bytes).
     // Payload starts with: [count=1 ULEB] + [kind=0] + [0x41]+[0x00]+[0x0B] + [defined ULEB]
@@ -792,7 +792,7 @@ private void emitDataSection(ref OutBuffer out_)
     {
         s.writeByte(0x00); // active segment, memory 0
         // offset initializer: i32.const <offset> end
-        s.writeByte(0x41); // i32.const
+        s.writeByte(OP_I32_CONST); // i32.const
         s.writeuLEB128(ds.offset);
         s.writeByte(OP_END);
         s.writeuLEB128(cast(uint) ds.data.length());
