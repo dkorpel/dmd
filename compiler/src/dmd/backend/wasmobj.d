@@ -773,8 +773,8 @@ private void emitCodeSection(ref OutBuffer out_)
         if (fb && fb.code.length())
             s.write(fb.code.peekSlice());
         else
-            s.writeByte(WASM_UNREACHABLE);
-        s.writeByte(WASM_END);
+            s.writeByte(OP_UNREACHABLE);
+        s.writeByte(OP_END);
 
         payloadOffset += bodySizeBytes + bodySize;
     }
@@ -794,7 +794,7 @@ private void emitDataSection(ref OutBuffer out_)
         // offset initializer: i32.const <offset> end
         s.writeByte(0x41); // i32.const
         s.writeuLEB128(ds.offset);
-        s.writeByte(WASM_END);
+        s.writeByte(OP_END);
         s.writeuLEB128(cast(uint) ds.data.length());
         s.write(ds.data.peekSlice());
     }

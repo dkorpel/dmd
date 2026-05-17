@@ -220,13 +220,6 @@ enum : ubyte
     WASM_EXPORT_GLOBAL = 0x03,
 }
 
-// Instructions
-enum : ubyte
-{
-    WASM_UNREACHABLE = 0x00,
-    WASM_END = 0x0B,
-}
-
 // WASM relocation types (WebAssembly tool conventions / linking metadata)
 enum : ubyte
 {
