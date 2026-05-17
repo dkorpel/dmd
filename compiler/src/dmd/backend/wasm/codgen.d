@@ -1475,9 +1475,18 @@ private bool genElem(ref WasmCG cg, elem* e)
             cg.emitConst(OP_I32_CONST, 1);
             cg.emit(OP_ELSE);
             cg.genElem(e.E2);
-            emitCondToI32(cg, e.E2);
-            cg.emitConst(OP_I32_CONST, 0);
-            cg.emit(OP_I32_NE);
+            if (tybasic(e.E2.Ety) == TYvoid || tybasic(e.E2.Ety) == TYnoreturn)
+            {
+                // Void RHS leaves nothing on the stack; synthesise a result so
+                // the if-block type checks. Caller will typically drop it.
+                cg.emitConst(OP_I32_CONST, 0);
+            }
+            else
+            {
+                emitCondToI32(cg, e.E2);
+                cg.emitConst(OP_I32_CONST, 0);
+                cg.emit(OP_I32_NE);
+            }
             cg.emit(OP_END);
             return true;
         }
@@ -1490,9 +1499,16 @@ private bool genElem(ref WasmCG cg, elem* e)
             cg.emit(OP_IF);
             cg.emit(WASM_I32);
             cg.genElem(e.E2);
-            emitCondToI32(cg, e.E2);
-            cg.emitConst(OP_I32_CONST, 0);
-            cg.emit(OP_I32_NE);
+            if (tybasic(e.E2.Ety) == TYvoid || tybasic(e.E2.Ety) == TYnoreturn)
+            {
+                cg.emitConst(OP_I32_CONST, 0);
+            }
+            else
+            {
+                emitCondToI32(cg, e.E2);
+                cg.emitConst(OP_I32_CONST, 0);
+                cg.emit(OP_I32_NE);
+            }
             cg.emit(OP_ELSE);
             cg.emitConst(OP_I32_CONST, 0);
             cg.emit(OP_END);
