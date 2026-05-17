@@ -2714,6 +2714,14 @@ void wasm_codgen(Symbol* sfunc)
     if (cg.hasShadowFrame)
         emitShadowEpilogue(cg);
 
+    // If the function has a return type but every path that reaches here did
+    // so via an unreachable construct (infinite loop with internal returns,
+    // assert-noreturn tail, etc.), the implicit-return point still needs to
+    // satisfy WASM's type checker. Emit unreachable so the validator treats
+    // the fallthrough as a polymorphic stack.
+    if (hasReturn)
+        cg.emit(OP_UNREACHABLE);
+
     // Store results back into the WasmFuncBody
     fb.locals = cg.locals;
     fb.numParams = cg.numParams;
