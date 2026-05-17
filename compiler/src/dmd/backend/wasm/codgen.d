@@ -238,14 +238,20 @@ nothrow:
     // (type indices are stable for single-file linking via reorderImportTypesFirst).
     void emitCallIndirectType(uint typeIdx)
     {
-        import dmd.backend.wasmobj : wmod_findFuncForType, wasm_relocatable;
+        import dmd.backend.wasmobj : wmod_findFuncForType, wmod_funcs, wasm_relocatable;
 
         if (wasm_relocatable)
         {
             uint fidx = wmod_findFuncForType(typeIdx);
             if (fidx != uint.max)
             {
-                codeRelocs ~= WasmFuncBody.CodeReloc(cast(uint) code.length, R_WASM_TYPE_INDEX_LEB, fidx);
+                // Anchor the reloc to the function's Symbol* so currentFuncIdx
+                // resolves it correctly even after wmod.funcs is reordered late
+                // in codegen — otherwise the stored fidx points at a different
+                // function whose typeIdx is unrelated (and often type 0).
+                auto reloc = WasmFuncBody.CodeReloc(cast(uint) code.length, R_WASM_TYPE_INDEX_LEB, fidx);
+                reloc.sym = wmod_funcs(fidx);
+                codeRelocs ~= reloc;
 
                 // 5-byte padded ULEB128 so wasm-ld has room to write the patched index.
                 emitULEBpadded(typeIdx);
@@ -1283,90 +1289,91 @@ private bool genElem(ref WasmCG cg, elem* e)
                 // loading from memory.
                 import dmd.backend.wasmobj : wmod_internFuncPtrType;
 
-                uint typeIdx = 0;
+                // Emit args first (e.E2). For OPucall, e.E2 is null and this is a no-op.
+                // Then the function pointer, then call_indirect.
+                genArgs(cg, e.E2);
+
+                // Derive the indirect-call type authoritatively from the call site
+                // (e.E2 for args, e.Ety for result). The symbol's Stype on a
+                // function-pointer local is often a plain int/void* and yields no
+                // function-type info — relying on it produced wrong (type 0) sigs.
+                import dmd.backend.wasmobj : wmod_internType;
+
+                ubyte[] callParams;
+                void collectArgTypes(elem* p) nothrow
+                {
+                    if (!p)
+                        return;
+                    if (p.Eoper == OPparam)
+                    {
+                        collectArgTypes(p.E2);
+                        collectArgTypes(p.E1);
+                        return;
+                    }
+                    if (isSliceElem(p)) // D slice splits into (len, ptr)
+                    {
+                        callParams ~= WASM_I32;
+                        callParams ~= WASM_I32;
+                    }
+                    else
+                        callParams ~= wasmType(tybasic(p.Ety));
+                }
+                collectArgTypes(e.E2);
+                ubyte[] callResults;
+                {
+                    const tym_t retTy0 = tybasic(e.Ety);
+                    if (retTy0 != TYvoid && retTy0 != TYnoreturn)
+                        callResults ~= wasmType(retTy0);
+                }
+                uint typeIdx = wmod_internType(callParams, callResults);
+
                 elem* fexpr = e.E1;
                 Symbol* fpSym = null;
                 if (fexpr.Eoper == OPind && fexpr.E1 && fexpr.E1.Eoper == OPvar)
                 {
                     // OPind(OPvar(fptr)) — fptr holds a table index.
-                    // For WASM locals: load the local value directly.
-                    // For globals (FL.data etc.): load the table index from linear memory.
                     fpSym = fexpr.E1.Vsym;
-                    if (fpSym && fpSym.Stype)
-                        typeIdx = wmod_internFuncPtrType(fpSym.Stype);
                     if (fpSym && isLocalSym(fpSym) && !cg.inShadow(fpSym))
                     {
-                        // Local variable: its value IS the table index.
                         const uint idx = cg.localFor(fpSym);
                         cg.emit(OP_LOCAL_GET);
                         cg.emitULEB(idx);
                     }
                     else
                     {
-                        // Global variable: load table index from linear memory.
-                        cg.genElem(fexpr.E1); // push address or value
-                        // If it loaded a value (for FL.data OPvar emits load), we're done.
-                        // If it only pushed an address (shadow/relconst), emit a load too.
+                        cg.genElem(fexpr.E1);
                     }
                 }
                 else
                 {
-                    // For virtual dispatch and function pointer calls, the outermost
-                    // OPind is semantic ("call through pointer"), not a memory load.
-                    // Strip it so we evaluate the inner expression to get the table index.
+                    // Virtual dispatch / general function pointer.
                     elem* fn = (fexpr.Eoper == OPind) ? fexpr.E1 : fexpr;
-                    if (fn.Eoper == OPvar && fn.Vsym && fn.Vsym.Stype)
-                    {
-                        typeIdx = wmod_internFuncPtrType(fn.Vsym.Stype);
-                    }
-                    else
-                    {
-                        // Virtual dispatch: derive the call type from the call expression.
-                        // Params come from e.E2 (already pushed above); return from e.Ety.
-                        // Build a WASM type that matches what was registered for the method.
-                        import dmd.backend.wasmobj : wmod_internType;
-
-                        ubyte[] params;
-                        void collectArgTypes(elem* p) nothrow
-                        {
-                            if (!p)
-                                return;
-                            if (p.Eoper == OPparam)
-                            {
-                                collectArgTypes(p.E2);
-                                collectArgTypes(p.E1);
-                                return;
-                            }
-                            if (isSliceElem(p)) // D slice splits into (len, ptr)
-                            {
-                                params ~= WASM_I32;
-                                params ~= WASM_I32;
-                            }
-                            else
-                                params ~= wasmType(tybasic(p.Ety));
-                        }
-
-                        collectArgTypes(e.E2);
-                        ubyte[] results;
-                        const tym_t retTy = tybasic(e.Ety);
-                        if (retTy != TYvoid && retTy != TYnoreturn)
-                            results ~= wasmType(retTy);
-                        typeIdx = wmod_internType(params, results);
-                    }
                     cg.genElem(fn);
                 }
                 cg.emit(OP_CALL_INDIRECT);
                 cg.emitCallIndirectType(typeIdx);
                 cg.emitULEB(0); // table index 0
             }
+            // Whether the call left a value on the WASM stack depends on the
+            // callee's WASM signature, not e.Ety. For direct calls to a function
+            // defined in this module, e.Ety can disagree with the function's
+            // actual return type (e.g. a void member call appearing in an
+            // OPcomma chain): trust the callee's Stype.Tnext.
             const retTy = tybasic(e.Ety);
-            return retTy != TYvoid;
+            bool pushedValue = retTy != TYvoid && retTy != TYnoreturn;
+            if (e.E1.Eoper == OPvar && e.E1.Vsym && e.E1.Vsym.Stype && e.E1.Vsym.Stype.Tnext)
+            {
+                const tym_t calleeRet = tybasic(e.E1.Vsym.Stype.Tnext.Tty);
+                pushedValue = calleeRet != TYvoid && calleeRet != TYnoreturn;
+            }
+            return pushedValue;
         }
 
     case OPcond:
         {
             // e.E1 ? e.E2.E1 : e.E2.E2
             cg.genElem(e.E1);
+            emitCondToI32(cg, e.E1); // i64 cond → i32 truthiness
             const ubyte rty = wasmType(e.Ety);
             cg.emit(OP_IF);
             cg.emit(rty);
@@ -1381,11 +1388,13 @@ private bool genElem(ref WasmCG cg, elem* e)
         {
             // a || b  =>  if (a) 1 else (b != 0)
             cg.genElem(e.E1);
+            emitCondToI32(cg, e.E1); // i64 cond → i32 truthiness
             cg.emit(OP_IF);
             cg.emit(WASM_I32);
             cg.emitConst(OP_I32_CONST, 1);
             cg.emit(OP_ELSE);
             cg.genElem(e.E2);
+            emitCondToI32(cg, e.E2);
             cg.emitConst(OP_I32_CONST, 0);
             cg.emit(OP_I32_NE);
             cg.emit(OP_END);
@@ -1396,9 +1405,11 @@ private bool genElem(ref WasmCG cg, elem* e)
         {
             // a && b  =>  if (a) (b != 0) else 0
             cg.genElem(e.E1);
+            emitCondToI32(cg, e.E1);
             cg.emit(OP_IF);
             cg.emit(WASM_I32);
             cg.genElem(e.E2);
+            emitCondToI32(cg, e.E2);
             cg.emitConst(OP_I32_CONST, 0);
             cg.emit(OP_I32_NE);
             cg.emit(OP_ELSE);
