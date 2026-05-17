@@ -41,12 +41,14 @@ private void wasi_write(int fd, const(char)* p, size_t len)
 }
 
 // ── printf (minimal, format-string-only calling convention) ───────────────────
-// DMD pushes fixed args right-to-left; for `printf(fmt, a, b)` the top of the
-// WASM stack is fmt and a,b are below it — but the import type is (i32)->i32 so
-// only fmt is consumed.  Extra args are discarded by the caller after the call.
-// We therefore print the format string literally, replacing every %…spec with "(?)".
+// DMD's WASM variadic ABI (matches LDC2/wasi-libc): caller spills `...` args to
+// a shadow-stack frame and passes a pointer to that frame as the trailing i32
+// parameter after all fixed args.  The signature here is therefore
+// (fmt: i32, vargs: i32) -> i32.  We ignore vargs and substitute "(?)" for any
+// %spec; this lets D programs that use printf for simple output compile and run.
+// A proper varargs-aware printf would decode `vargs` per the format string.
 
-extern (C) int printf(const(char)* fmt)
+extern (C) int printf(const(char)* fmt, void* vargs)
 {
     if (!fmt) return 0;
     const(char)* p   = fmt;
