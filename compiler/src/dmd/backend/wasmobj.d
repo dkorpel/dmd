@@ -1100,8 +1100,10 @@ private void emitRelocCodeSection(ref OutBuffer out_, uint codeSectionIdx) @trus
     }
 
     // Resolve a CodeReloc's funcIdx to the current wmod.funcs index. Prefers
-    // r.sym (stable across post-codegen import insertions); falls back to the
-    // funcIdx snapshot recorded at emit time.
+    // r.sym (stable across post-codegen import insertions); falls back to a
+    // name-based match (an RTL symbol may have been deduped against a defined
+    // function of the same name, so the original Symbol* never landed in funcs);
+    // last resort is the funcIdx snapshot recorded at emit time.
     uint currentFuncIdx(ref const WasmFuncBody.CodeReloc r)
     {
         if (r.sym)
@@ -1109,6 +1111,14 @@ private void emitRelocCodeSection(ref OutBuffer out_, uint codeSectionIdx) @trus
             foreach (size_t k, ref const WasmFunc f; wmod.funcs)
                 if (f.sym == r.sym)
                     return cast(uint) k;
+            if (r.sym.Sident.ptr)
+            {
+                import core.stdc.string : strlen;
+                const(char)[] rname = r.sym.Sident.ptr[0 .. strlen(r.sym.Sident.ptr)];
+                foreach (size_t k, ref const WasmFunc f; wmod.funcs)
+                    if (funcName(f) == rname)
+                        return cast(uint) k;
+            }
         }
         return r.symIdx;
     }
@@ -2058,9 +2068,10 @@ void WasmObj_func_start(Symbol* sfunc) @trusted
     if (!sfunc || !sfunc.Stype)
         return;
     WasmFuncType ft = buildFuncType(sfunc.Stype);
-    // D member functions (Fmember) receive 'this' as an implicit first parameter,
-    // which is not in Tparamtypes. Prepend an i32 for the 'this' pointer.
-    if (sfunc.Sfunc && sfunc.Sfunc.Fflags3 & Fmember)
+    // D member functions (Fmember) receive 'this' as an implicit first parameter.
+    // D nested functions (Fnested) receive a static-link/closure pointer.
+    // Neither is in Tparamtypes, so prepend an i32.
+    if (sfunc.Sfunc && (sfunc.Sfunc.Fflags3 & (Fmember | Fnested)))
         ft.params = WASM_I32 ~ ft.params;
     WasmFunc f;
     f.typeIdx = wmod.internType(ft);

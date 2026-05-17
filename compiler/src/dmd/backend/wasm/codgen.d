@@ -1091,7 +1091,13 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
 
                 Symbol* calleeSym = e.E1.Vsym;
                 uint fidx = funcIndex(calleeSym);
-                const bool isCVariadic = calleeSym.Stype !is null && variadic(calleeSym.Stype);
+                // C variadic requires at least one fixed parameter (e.g. `printf(fmt, ...)`).
+                // Bare TYnfunc/TYjfunc types set TF.prototype with no Tparamtypes — those are
+                // unprototyped declarations (typical of runtime/RTL symbols built via type_fake),
+                // not real variadics, and must not enter the spill-to-shadow path.
+                const bool isCVariadic = calleeSym.Stype !is null &&
+                    calleeSym.Stype.Tparamtypes !is null &&
+                    variadic(calleeSym.Stype);
 
                 if (isCVariadic)
                 {
