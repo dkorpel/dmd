@@ -1299,6 +1299,22 @@ private bool genElem(ref WasmCG cg, elem* e)
                             aparams ~= WASM_I32;
                             continue;
                         }
+                        // Also detect OPind(OPadd(OPvar(struct-typed local), const))
+                        // with i64 result type — a "load struct value from a
+                        // pointer into an aggregate", which arises when an arg
+                        // expression dereferences a struct field of an enclosing
+                        // aggregate (param-ptr or shadow-frame). Pass the address.
+                        if (a.Eoper == OPind && a.E1 && a.E1.Eoper == OPadd &&
+                            a.E1.E1 && a.E1.E1.Eoper == OPvar && a.E1.E1.Vsym &&
+                            a.E1.E1.Vsym.Stype &&
+                            (tybasic(a.E1.E1.Vsym.Stype.Tty) == TYstruct ||
+                             tybasic(a.E1.E1.Vsym.Stype.Tty) == TYarray) &&
+                            (tybasic(a.Ety) == TYllong || tybasic(a.Ety) == TYullong))
+                        {
+                            cg.genElem(a.E1);
+                            aparams ~= WASM_I32;
+                            continue;
+                        }
                         genOneArg(cg, a, asSlice);
                         if (asSlice)
                         {
