@@ -187,8 +187,6 @@ enum : ubyte
     WASM_I64 = 0x7E,
     WASM_F32 = 0x7D,
     WASM_F64 = 0x7C,
-    WASM_VOID = 0x40, // used in blocktype for void blocks
-
 }
 
 /// Block type for void blocks
