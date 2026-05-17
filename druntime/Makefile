@@ -427,6 +427,34 @@ $(DRUNTIME): $(OBJS) $(SRCS) $(DMD)
 
 lib: $(DRUNTIME)
 
+################### WASM cross-target #########################
+# Cross-compile a minimal WASM druntime archive.  Independent of the host
+# build (OS/MODEL/BUILD) — wasm32-unknown-unknown is a single fixed target.
+# Output layout mirrors $(ROOT_OF_THEM_ALL)/<os>/<build>/<model>/ for the
+# native build, with os=wasm, build=release, model=wasm32.
+#
+# `dmd -lib -mwasm32` currently miscompiles the archive ("corrupt WASM
+# object"), so we emit per-module .wasm objects and assemble them with `ar`.
+
+WASM_DMD    ?= $(DMD)
+WASM_ROOT   := $(ROOT_OF_THEM_ALL)/wasm/release/wasm32
+WASM_LIB    := $(WASM_ROOT)/libdruntime-wasm.a
+WASM_RT_DIR := src/rt/wasm
+WASM_MODULES := start gc sync errors eh
+WASM_OBJS   := $(addprefix $(WASM_ROOT)/rt_,$(addsuffix .wasm,$(WASM_MODULES)))
+WASM_FLAGS  := -c -mwasm32 -os=wasm -betterC -conf= -Isrc -Iimport -w -de
+
+$(WASM_ROOT)/rt_%.wasm : $(WASM_RT_DIR)/%.d $(DMD)
+	@mkdir -p $(dir $@)
+	$(WASM_DMD) $(WASM_FLAGS) -of$@ $<
+
+$(WASM_LIB): $(WASM_OBJS)
+	rm -f $@
+	ar rcs $@ $(WASM_OBJS)
+
+.PHONY: wasm
+wasm: $(WASM_LIB)
+
 UT_SRCS:=$(SRCS)
 UT_MODULES:=$(patsubst src/%.d,$(ROOT)/unittest/%,$(UT_SRCS))
 HAS_ADDITIONAL_TESTS:=$(shell test -d test && echo 1)
