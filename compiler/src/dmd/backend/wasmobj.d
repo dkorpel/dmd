@@ -57,22 +57,6 @@ nothrow:
 // LEB128 encoding helpers
 // ---------------------------------------------------------------------------
 
-// Append signed LEB128 (for relocation addends)
-private void appendSLEB128(ref OutBuffer buf, int val) @trusted
-{
-    bool more;
-    do
-    {
-        ubyte b = val & 0x7F;
-        val >>= 7; // arithmetic right shift
-        more = !((val == 0 && !(b & 0x40)) || (val == -1 && (b & 0x40)));
-        if (more)
-            b |= 0x80;
-        buf.writeByte(b);
-    }
-    while (more);
-}
-
 // Append unsigned LEB128
 private void appendULEB128(ref OutBuffer buf, uint val) @trusted
 {
@@ -90,7 +74,7 @@ private void appendULEB128(ref OutBuffer buf, uint val) @trusted
 // Append a name string (length-prefixed)
 private void appendName(ref OutBuffer buf, const(char)[] name) @trusted
 {
-    appendULEB128(buf, cast(uint) name.length);
+    buf.writeuLEB128(cast(uint) name.length);
     buf.write(name.ptr[0 .. name.length]);
 }
 
@@ -205,7 +189,7 @@ private void writeCustomSection(ref OutBuffer out_, const(char)[] name, OutBuffe
     OutBuffer header;
     appendName(header, name);
     out_.writeByte(0); // custom section id
-    appendULEB128(out_, cast(uint)(header.length() + payload.length()));
+    out_.writeuLEB128(cast(uint)(header.length() + payload.length()));
     out_.write(header.peekSlice());
     out_.write(payload.peekSlice());
 }
@@ -560,7 +544,7 @@ private WasmFuncType buildFuncType(type* t) @trusted
 private void writeSection(ref OutBuffer out_, WasmSection id, OutBuffer* payload) @trusted
 {
     out_.writeByte(cast(ubyte) id);
-    appendULEB128(out_, cast(uint) payload.length());
+    out_.writeuLEB128(cast(uint) payload.length());
     out_.write(payload.peekSlice());
 }
 
@@ -782,16 +766,16 @@ private void emitCodeSection(ref OutBuffer out_) @trusted
         if (fb && fb.code.length())
         {
             numLocalGroups = cast(uint)(fb.locals.length - fb.numParams);
-            appendULEB128(locBuf, numLocalGroups);
+            locBuf.writeuLEB128(numLocalGroups);
             foreach (ref const WasmLocal l; fb.locals[fb.numParams .. $])
             {
-                appendULEB128(locBuf, 1); // count of this type
+                locBuf.writeuLEB128(1); // count of this type
                 locBuf.writeByte(l.ty);
             }
         }
         else
         {
-            appendULEB128(locBuf, 0); // 0 local groups
+            locBuf.writeuLEB128(0); // 0 local groups
         }
 
         uint codeLen = fb && fb.code.length() ? cast(uint) fb.code.length() : 1; // 1 = unreachable
@@ -841,7 +825,7 @@ private void emitDataSection(ref OutBuffer out_) @trusted
 private void emitLinkingSection(ref OutBuffer out_) @trusted
 {
     OutBuffer body_;
-    appendULEB128(body_, 2); // linking metadata version 2
+    body_.writeuLEB128(2); // linking metadata version 2
 
     // WASM_LINKING_SYMBOL_TABLE subsection
     OutBuffer symtab;
@@ -867,7 +851,7 @@ private void emitLinkingSection(ref OutBuffer out_) @trusted
     const bool hasImportedTable = wmod.importFuncTable;
     if (hasTable || hasImportedTable)
         symCount++;
-    appendULEB128(symtab, symCount);
+    symtab.writeuLEB128(symCount);
 
     foreach (size_t i, ref const WasmFunc f; wmod.funcs)
     {
@@ -898,8 +882,8 @@ private void emitLinkingSection(ref OutBuffer out_) @trusted
             // (omit WASM_SYM_BINDING_LOCAL so wasm-ld can use them for type relocs)
         }
 
-        appendULEB128(symtab, flags);
-        appendULEB128(symtab, cast(uint) i); // function index
+        symtab.writeuLEB128(flags);
+        symtab.writeuLEB128(cast(uint) i); // function index
         if (flags & WASM_SYM_EXPLICIT_NAME)
             appendName(symtab, name); // only for defined symbols
     }
@@ -912,7 +896,7 @@ private void emitLinkingSection(ref OutBuffer out_) @trusted
         const(char)[] name = sym.Sident.ptr[0 .. strlen(sym.Sident.ptr)];
         symtab.writeByte(WASM_SYMTAB_DATA);
         // Use local binding so same-named temporaries in different objects don't conflict.
-        appendULEB128(symtab, WASM_SYM_BINDING_LOCAL | WASM_SYM_EXPLICIT_NAME);
+        symtab.writeuLEB128(WASM_SYM_BINDING_LOCAL | WASM_SYM_EXPLICIT_NAME);
         appendName(symtab, name);
         // Data symbol payload: segment index (0), offset in segment, size.
         // sym.Soffset is the linear memory address (including the null-pointer slot
@@ -930,9 +914,9 @@ private void emitLinkingSection(ref OutBuffer out_) @trusted
             if (ts <= uint.max)
                 symSize = cast(uint) ts;
         }
-        appendULEB128(symtab, 0); // segment index (single data seg)
-        appendULEB128(symtab, segOff); // offset within segment
-        appendULEB128(symtab, symSize); // size in bytes
+        symtab.writeuLEB128(0); // segment index (single data seg)
+        symtab.writeuLEB128(segOff); // offset within segment
+        symtab.writeuLEB128(symSize); // size in bytes
     }
 
     // Add a SYMTAB_TABLE entry for the function table so wasm-ld accepts it.
@@ -941,20 +925,20 @@ private void emitLinkingSection(ref OutBuffer out_) @trusted
         // Defined table: table index 0, weak binding so wasm-ld can merge it
         // with __indirect_function_table provided by other inputs.
         symtab.writeByte(WASM_SYMTAB_TABLE);
-        appendULEB128(symtab, WASM_SYM_BINDING_WEAK | WASM_SYM_EXPLICIT_NAME);
-        appendULEB128(symtab, 0); // table index 0
+        symtab.writeuLEB128(WASM_SYM_BINDING_WEAK | WASM_SYM_EXPLICIT_NAME);
+        symtab.writeuLEB128(0); // table index 0
         appendName(symtab, "__indirect_function_table");
     }
     else if (hasImportedTable)
     {
         // Imported table: table index 0, undefined.
         symtab.writeByte(WASM_SYMTAB_TABLE);
-        appendULEB128(symtab, WASM_SYM_UNDEFINED);
-        appendULEB128(symtab, 0); // table index 0
+        symtab.writeuLEB128(WASM_SYM_UNDEFINED);
+        symtab.writeuLEB128(0); // table index 0
     }
 
     body_.writeByte(WASM_LINKING_SYMBOL_TABLE);
-    appendULEB128(body_, cast(uint) symtab.length());
+    body_.writeuLEB128(cast(uint) symtab.length());
     body_.write(symtab.peekSlice());
 
     writeCustomSection(out_, "linking", &body_);
@@ -996,8 +980,8 @@ private void emitRelocDataSection(ref OutBuffer out_, uint dataSectionIdx) @trus
         return;
 
     OutBuffer payload;
-    appendULEB128(payload, dataSectionIdx);
-    appendULEB128(payload, relCount);
+    payload.writeuLEB128(dataSectionIdx);
+    payload.writeuLEB128(relCount);
 
     foreach (ref WasmModule.FuncReloc rel; wmod.funcRelocations)
     {
@@ -1015,8 +999,8 @@ private void emitRelocDataSection(ref OutBuffer out_, uint dataSectionIdx) @trus
             continue;
 
         payload.writeByte(R_WASM_TABLE_INDEX_I32);
-        appendULEB128(payload, dataSectionPrefix + rel.dataByteOffset);
-        appendULEB128(payload, sym);
+        payload.writeuLEB128(dataSectionPrefix + rel.dataByteOffset);
+        payload.writeuLEB128(sym);
     }
 
     writeCustomSection(out_, "reloc.DATA", &payload);
@@ -1044,8 +1028,8 @@ private void emitRelocElemSection(ref OutBuffer out_, uint elemSectionIdx) @trus
         return;
 
     OutBuffer payload;
-    appendULEB128(payload, elemSectionIdx);
-    appendULEB128(payload, relCount);
+    payload.writeuLEB128(elemSectionIdx);
+    payload.writeuLEB128(relCount);
 
     foreach (size_t k, uint payloadOff; wmod.elemFuncRelocOffsets)
     {
@@ -1054,8 +1038,8 @@ private void emitRelocElemSection(ref OutBuffer out_, uint elemSectionIdx) @trus
         if (sym == uint.max)
             continue;
         payload.writeByte(R_WASM_FUNCTION_INDEX_LEB);
-        appendULEB128(payload, payloadOff);
-        appendULEB128(payload, sym);
+        payload.writeuLEB128(payloadOff);
+        payload.writeuLEB128(sym);
     }
 
     writeCustomSection(out_, "reloc.ELEM", &payload);
@@ -1213,16 +1197,16 @@ private void emitRelocCodeSection(ref OutBuffer out_, uint codeSectionIdx) @trus
     }
 
     OutBuffer payload;
-    appendULEB128(payload, codeSectionIdx);
-    appendULEB128(payload, cast(uint) allRelocs.length);
+    payload.writeuLEB128(codeSectionIdx);
+    payload.writeuLEB128(cast(uint) allRelocs.length);
 
     foreach (ref const AnyReloc r; allRelocs)
     {
         payload.writeByte(r.type);
-        appendULEB128(payload, r.absOffset);
-        appendULEB128(payload, r.sym);
+        payload.writeuLEB128(r.absOffset);
+        payload.writeuLEB128(r.sym);
         if (r.type == R_WASM_MEMORY_ADDR_LEB)
-            appendSLEB128(payload, cast(int) r.addend); // addend is SLEB per spec
+            payload.writesLEB128(cast(int) r.addend); // addend is SLEB per spec
     }
 
     writeCustomSection(out_, "reloc.CODE", &payload);
