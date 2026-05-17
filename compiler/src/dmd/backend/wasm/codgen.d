@@ -30,194 +30,15 @@ import dmd.backend.oper;
 import dmd.backend.ty;
 import dmd.backend.type;
 import dmd.backend.var : globsym;
-import dmd.backend.wasm : R_WASM_FUNCTION_INDEX_LEB, R_WASM_TYPE_INDEX_LEB;
+import dmd.backend.wasm;
 import dmd.backend.wasmobj : WasmFuncBody, wasmFuncBodies, WasmLocal;
 
 import dmd.common.outbuffer;
 
 nothrow:
 
-/// WASM instruction opcodes (subset used by the codegen)
-enum : ubyte
-{
-    // Control
-    OP_UNREACHABLE = 0x00,
-    OP_NOP = 0x01,
-    OP_BLOCK = 0x02,
-    OP_LOOP = 0x03,
-    OP_IF = 0x04,
-    OP_ELSE = 0x05,
-    OP_END = 0x0B,
-    OP_BR = 0x0C,
-    OP_BR_IF = 0x0D,
-    OP_BR_TABLE = 0x0E,
-    OP_RETURN = 0x0F,
-    // Call
-    OP_CALL = 0x10,
-    OP_CALL_INDIRECT = 0x11,
-    OP_DROP = 0x1A,
-    OP_SELECT = 0x1B,
-    // Locals
-    OP_LOCAL_GET = 0x20,
-    OP_LOCAL_SET = 0x21,
-    OP_LOCAL_TEE = 0x22,
-    // Globals
-    OP_GLOBAL_GET = 0x23,
-    OP_GLOBAL_SET = 0x24,
-    // Memory
-    OP_I32_LOAD = 0x28,
-    OP_I64_LOAD = 0x29,
-    OP_F32_LOAD = 0x2A,
-    OP_F64_LOAD = 0x2B,
-    OP_I32_LOAD8_S = 0x2C,
-    OP_I32_LOAD8_U = 0x2D,
-    OP_I32_LOAD16_S = 0x2E,
-    OP_I32_LOAD16_U = 0x2F,
-    OP_I32_STORE = 0x36,
-    OP_I64_STORE = 0x37,
-    OP_F32_STORE = 0x38,
-    OP_F64_STORE = 0x39,
-    OP_I32_STORE8 = 0x3A,
-    OP_I32_STORE16 = 0x3B,
-    // Constants
-    OP_I32_CONST = 0x41,
-    OP_I64_CONST = 0x42,
-    OP_F32_CONST = 0x43,
-    OP_F64_CONST = 0x44,
-    // i32 comparisons
-    OP_I32_EQZ = 0x45,
-    OP_I32_EQ = 0x46,
-    OP_I32_NE = 0x47,
-    OP_I32_LT_S = 0x48,
-    OP_I32_LT_U = 0x49,
-    OP_I32_GT_S = 0x4A,
-    OP_I32_GT_U = 0x4B,
-    OP_I32_LE_S = 0x4C,
-    OP_I32_LE_U = 0x4D,
-    OP_I32_GE_S = 0x4E,
-    OP_I32_GE_U = 0x4F,
-    // i64 comparisons
-    OP_I64_EQZ = 0x50,
-    OP_I64_EQ = 0x51,
-    OP_I64_NE = 0x52,
-    OP_I64_LT_S = 0x53,
-    OP_I64_LT_U = 0x54,
-    OP_I64_GT_S = 0x55,
-    OP_I64_GT_U = 0x56,
-    OP_I64_LE_S = 0x57,
-    OP_I64_LE_U = 0x58,
-    OP_I64_GE_S = 0x59,
-    OP_I64_GE_U = 0x5A,
-    // f32/f64 comparisons
-    OP_F32_EQ = 0x5B,
-    OP_F32_NE = 0x5C,
-    OP_F32_LT = 0x5D,
-    OP_F32_GT = 0x5E,
-    OP_F32_LE = 0x5F,
-    OP_F32_GE = 0x60,
-    OP_F64_EQ = 0x61,
-    OP_F64_NE = 0x62,
-    OP_F64_LT = 0x63,
-    OP_F64_GT = 0x64,
-    OP_F64_LE = 0x65,
-    OP_F64_GE = 0x66,
-    // i32 arithmetic
-    OP_I32_CLZ = 0x67,
-    OP_I32_CTZ = 0x68,
-    OP_I32_ADD = 0x6A,
-    OP_I32_SUB = 0x6B,
-    OP_I32_MUL = 0x6C,
-    OP_I32_DIV_S = 0x6D,
-    OP_I32_DIV_U = 0x6E,
-    OP_I32_REM_S = 0x6F,
-    OP_I32_REM_U = 0x70,
-    OP_I32_AND = 0x71,
-    OP_I32_OR = 0x72,
-    OP_I32_XOR = 0x73,
-    OP_I32_SHL = 0x74,
-    OP_I32_SHR_S = 0x75,
-    OP_I32_SHR_U = 0x76,
-    OP_I32_ROTL = 0x77,
-    OP_I32_ROTR = 0x78,
-    // i64 arithmetic
-    OP_I64_CLZ = 0x79,
-    OP_I64_CTZ = 0x7A,
-    OP_I64_ADD = 0x7C,
-    OP_I64_SUB = 0x7D,
-    OP_I64_MUL = 0x7E,
-    OP_I64_DIV_S = 0x7F,
-    OP_I64_DIV_U = 0x80,
-    OP_I64_REM_S = 0x81,
-    OP_I64_REM_U = 0x82,
-    OP_I64_AND = 0x83,
-    OP_I64_OR = 0x84,
-    OP_I64_XOR = 0x85,
-    OP_I64_SHL = 0x86,
-    OP_I64_SHR_S = 0x87,
-    OP_I64_SHR_U = 0x88,
-    // f32 arithmetic
-    OP_F32_ABS = 0x8B,
-    OP_F32_NEG = 0x8C,
-    OP_F32_SQRT = 0x91,
-    OP_F32_ADD = 0x92,
-    OP_F32_SUB = 0x93,
-    OP_F32_MUL = 0x94,
-    OP_F32_DIV = 0x95,
-    // f64 arithmetic
-    OP_F64_ABS = 0x99,
-    OP_F64_NEG = 0x9A,
-    OP_F64_SQRT = 0x9F,
-    OP_F64_ADD = 0xA0,
-    OP_F64_SUB = 0xA1,
-    OP_F64_MUL = 0xA2,
-    OP_F64_DIV = 0xA3,
-    // Conversions
-    OP_I32_WRAP_I64 = 0xA7,
-    OP_I32_TRUNC_F32_S = 0xA8,
-    OP_I32_TRUNC_F64_S = 0xAA,
-    OP_I64_EXTEND_I32_S = 0xAC,
-    OP_I64_EXTEND_I32_U = 0xAD,
-    OP_I64_TRUNC_F32_S = 0xAE,
-    OP_I64_TRUNC_F64_S = 0xB0,
-    OP_F32_CONVERT_I32_S = 0xB2,
-    OP_F32_CONVERT_I32_U = 0xB3,
-    OP_F32_CONVERT_I64_S = 0xB4,
-    OP_F32_DEMOTE_F64 = 0xB6,
-    OP_F64_CONVERT_I32_S = 0xB7,
-    OP_F64_CONVERT_I32_U = 0xB8,
-    OP_F64_CONVERT_I64_S = 0xB9,
-    OP_F64_PROMOTE_F32 = 0xBB,
-    OP_I32_REINTERPRET_F32 = 0xBC,
-    OP_I64_REINTERPRET_F64 = 0xBD,
-    OP_F32_REINTERPRET_I32 = 0xBE,
-    OP_F64_REINTERPRET_I64 = 0xBF,
-    // Bulk-memory prefix (sub-opcode follows as ULEB128)
-    OP_FC_PREFIX = 0xFC,
-    // Sign extension (MVP extension)
-    OP_I32_EXTEND8_S = 0xC0,
-    OP_I32_EXTEND16_S = 0xC1,
-    OP_I64_EXTEND8_S = 0xC2,
-    OP_I64_EXTEND16_S = 0xC3,
-    OP_I64_EXTEND32_S = 0xC4,
-}
-
-/// Value type bytes
-enum : ubyte
-{
-    WASM_I32 = 0x7F,
-    WASM_I64 = 0x7E,
-    WASM_F32 = 0x7D,
-    WASM_F64 = 0x7C
-}
-
-/// Block type for void blocks
-enum ubyte WASM_VOID_BLOCK = 0x40;
-
-// ---------------------------------------------------------------------------
-// LEB128 helpers
-// ---------------------------------------------------------------------------
-
-private void uleb(OutBuffer* b, uint v) @trusted
+/// LEB128 helpers
+private void uleb(ref OutBuffer b, uint v) @trusted
 {
     do
     {
@@ -230,7 +51,7 @@ private void uleb(OutBuffer* b, uint v) @trusted
     while (v);
 }
 
-private void sleb(OutBuffer* b, long v) @trusted
+private void sleb(ref OutBuffer b, long v) @trusted
 {
     bool more = true;
     while (more)
@@ -243,10 +64,8 @@ private void sleb(OutBuffer* b, long v) @trusted
         b.writeByte(bt);
     }
 }
-// ---------------------------------------------------------------------------
-// WASM value type for a backend type
-// ---------------------------------------------------------------------------
 
+/// Returns: WASM value type for a backend type `ty`
 ubyte wasmType(tym_t ty) @trusted
 {
     switch (tybasic(ty))
@@ -294,7 +113,9 @@ struct WasmCG
 
 nothrow:
 
-    // Allocate an anonymous temp local of the given WASM type
+    /// Allocate an anonymous temp local of the given WASM type
+    ///
+    /// Returns: index of allocated temp in `locals` array
     uint allocTemp(ubyte ty) @trusted
     {
         WasmLocal l;
@@ -304,7 +125,9 @@ nothrow:
         return cast(uint)(locals.length - 1);
     }
 
-    // Allocate or look up a local for a symbol; return its index
+    /// Allocate or look up a local for a symbol
+    ///
+    /// Returns: its index
     uint localFor(Symbol* s) @trusted
     {
         foreach (size_t i, ref const WasmLocal l; locals)
@@ -317,7 +140,7 @@ nothrow:
         return cast(uint)(locals.length - 1);
     }
 
-    // Returns true if symbol s lives in the shadow frame.
+    /// Returns: true if symbol `s` lives in the shadow frame.
     bool inShadow(Symbol* s) const @trusted
     {
         foreach (ref const ShadowEntry e; shadowEntries)
@@ -326,7 +149,7 @@ nothrow:
         return false;
     }
 
-    // Returns the byte offset of s in the shadow frame (assumes inShadow).
+    /// Returns: byte offset of `s` in the shadow frame (assumes inShadow).
     uint shadowOffset(Symbol* s) const @trusted
     {
         foreach (ref const ShadowEntry e; shadowEntries)
@@ -335,7 +158,7 @@ nothrow:
         return 0;
     }
 
-    // Register a symbol in the shadow frame (idempotent).
+    /// Register a symbol in the shadow frame (idempotent).
     void registerShadow(Symbol* s) @trusted
     {
         if (inShadow(s))
@@ -368,12 +191,22 @@ nothrow:
 
     void emitULEB(uint v) @trusted
     {
-        uleb(&code, v);
+        uleb(code, v);
     }
 
     void emitSLEB(long v) @trusted
     {
-        sleb(&code, v);
+        sleb(code, v);
+    }
+
+    // 5-byte padded ULEB128 so wasm-ld has room to write a patched value over it
+    void emitULEBpadded(ulong addr)
+    {
+        code.writeByte(cast(ubyte)((addr & 0x7F) | 0x80));
+        code.writeByte(cast(ubyte)(((addr >> 7) & 0x7F) | 0x80));
+        code.writeByte(cast(ubyte)(((addr >> 14) & 0x7F) | 0x80));
+        code.writeByte(cast(ubyte)(((addr >> 21) & 0x7F) | 0x80));
+        code.writeByte(cast(ubyte)((addr >> 28) & 0x0F));
     }
 
     // Emit OP_I32_CONST with a data-segment address.
@@ -401,11 +234,7 @@ nothrow:
         {
             // 5-byte padded ULEB128 for wasm-ld relocation patching.
             dataAddrRelocs ~= WasmFuncBody.DataAddrReloc(cast(uint) code.length, sym, addend);
-            code.writeByte(cast(ubyte)((addr & 0x7F) | 0x80));
-            code.writeByte(cast(ubyte)(((addr >> 7) & 0x7F) | 0x80));
-            code.writeByte(cast(ubyte)(((addr >> 14) & 0x7F) | 0x80));
-            code.writeByte(cast(ubyte)(((addr >> 21) & 0x7F) | 0x80));
-            code.writeByte(cast(ubyte)((addr >> 28) & 0x0F));
+            emitULEBpadded(addr);
         }
         else
         {
@@ -421,13 +250,8 @@ nothrow:
     void emitCall(uint fidx, Symbol* sym = null) @trusted
     {
         emit(OP_CALL);
-        codeRelocs ~= WasmFuncBody.CodeReloc(cast(uint) code.length,
-            R_WASM_FUNCTION_INDEX_LEB, fidx, 0, sym);
-        code.writeByte(cast(ubyte)((fidx & 0x7F) | 0x80));
-        code.writeByte(cast(ubyte)(((fidx >> 7) & 0x7F) | 0x80));
-        code.writeByte(cast(ubyte)(((fidx >> 14) & 0x7F) | 0x80));
-        code.writeByte(cast(ubyte)(((fidx >> 21) & 0x7F) | 0x80));
-        code.writeByte(cast(ubyte)((fidx >> 28) & 0x0F));
+        codeRelocs ~= WasmFuncBody.CodeReloc(cast(uint) code.length, R_WASM_FUNCTION_INDEX_LEB, fidx, 0, sym);
+        emitULEBpadded(fidx);
     }
 
     // Emit the type index operand of call_indirect.
@@ -446,14 +270,10 @@ nothrow:
             uint fidx = wmod_findFuncForType(typeIdx);
             if (fidx != uint.max)
             {
-                codeRelocs ~= WasmFuncBody.CodeReloc(cast(uint) code.length,
-                    R_WASM_TYPE_INDEX_LEB, fidx);
+                codeRelocs ~= WasmFuncBody.CodeReloc(cast(uint) code.length, R_WASM_TYPE_INDEX_LEB, fidx);
+
                 // 5-byte padded ULEB128 so wasm-ld has room to write the patched index.
-                code.writeByte(cast(ubyte)((typeIdx & 0x7F) | 0x80));
-                code.writeByte(cast(ubyte)(((typeIdx >> 7) & 0x7F) | 0x80));
-                code.writeByte(cast(ubyte)(((typeIdx >> 14) & 0x7F) | 0x80));
-                code.writeByte(cast(ubyte)(((typeIdx >> 21) & 0x7F) | 0x80));
-                code.writeByte(cast(ubyte)((typeIdx >> 28) & 0x0F));
+                emitULEBpadded(typeIdx);
                 return;
             }
         }
@@ -462,8 +282,8 @@ nothrow:
 
     void emitMemArg(uint align_, uint offset) @trusted
     {
-        uleb(&code, align_); // alignment (log2)
-        uleb(&code, offset); // byte offset
+        uleb(code, align_); // alignment (log2)
+        uleb(code, offset); // byte offset
     }
 }
 
@@ -538,57 +358,32 @@ private void emitCoerce(ref WasmCG cg, ubyte from, ubyte to) @trusted
 {
     if (from == to)
         return;
-    if (from == WASM_I64 && to == WASM_I32)
+
+    static ubyte coerceOp(ubyte from, ubyte to)
     {
-        cg.emit(OP_I32_WRAP_I64);
-        return;
+        static int X(ubyte from, ubyte to) { return from << 8 | to; }
+
+        switch (X(from, to))
+        {
+            case X(WASM_I64, WASM_I32): return OP_I32_WRAP_I64;
+            case X(WASM_I32, WASM_I64): return OP_I64_EXTEND_I32_S;
+            case X(WASM_F32, WASM_F64): return OP_F64_PROMOTE_F32;
+            case X(WASM_F64, WASM_F32): return OP_F32_DEMOTE_F64;
+            case X(WASM_I32, WASM_F32): return OP_F32_CONVERT_I32_S;
+            case X(WASM_I32, WASM_F64): return OP_F64_CONVERT_I32_S;
+            case X(WASM_I64, WASM_F64): return OP_F64_CONVERT_I64_S;
+            case X(WASM_F32, WASM_I32): return OP_I32_TRUNC_F32_S;
+            case X(WASM_F64, WASM_I32): return OP_I32_TRUNC_F64_S;
+            case X(WASM_F64, WASM_I64): return OP_I64_TRUNC_F64_S;
+            // Other combos: no-op (best effort)
+            default: return 0;
+        }
     }
-    if (from == WASM_I32 && to == WASM_I64)
+
+    if (auto op = coerceOp(from, to))
     {
-        cg.emit(OP_I64_EXTEND_I32_S);
-        return;
+        cg.emit(op);
     }
-    if (from == WASM_F32 && to == WASM_F64)
-    {
-        cg.emit(OP_F64_PROMOTE_F32);
-        return;
-    }
-    if (from == WASM_F64 && to == WASM_F32)
-    {
-        cg.emit(OP_F32_DEMOTE_F64);
-        return;
-    }
-    if (from == WASM_I32 && to == WASM_F32)
-    {
-        cg.emit(OP_F32_CONVERT_I32_S);
-        return;
-    }
-    if (from == WASM_I32 && to == WASM_F64)
-    {
-        cg.emit(OP_F64_CONVERT_I32_S);
-        return;
-    }
-    if (from == WASM_I64 && to == WASM_F64)
-    {
-        cg.emit(OP_F64_CONVERT_I64_S);
-        return;
-    }
-    if (from == WASM_F32 && to == WASM_I32)
-    {
-        cg.emit(OP_I32_TRUNC_F32_S);
-        return;
-    }
-    if (from == WASM_F64 && to == WASM_I32)
-    {
-        cg.emit(OP_I32_TRUNC_F64_S);
-        return;
-    }
-    if (from == WASM_F64 && to == WASM_I64)
-    {
-        cg.emit(OP_I64_TRUNC_F64_S);
-        return;
-    }
-    // Other combos: no-op (best effort)
 }
 
 // Returns true if a storage class indicates a global living in linear memory
@@ -730,6 +525,34 @@ private void emitShadowEpilogue(ref WasmCG cg) @trusted
     cg.emitULEB(spIdx);
 }
 
+/// Mask result of small integer operation, since WASM operations are at least 32-bit
+/// For a 16-bit or 8-bit type `ty`, generate code to truncate to that size
+private void maskSmallInt(ref WasmCG cg, tym_t ty) // TY
+{
+    switch (tybasic(ty)) // e.E1.Ety
+    {
+    case TYbool:
+    case TYchar:
+    case TYschar:
+    case TYuchar:
+    case TYchar8:
+        cg.emit(OP_I32_CONST);
+        cg.emitSLEB(0xFF);
+        cg.emit(OP_I32_AND);
+        break;
+    case TYshort:
+    case TYwchar_t:
+    case TYushort:
+    case TYchar16:
+        cg.emit(OP_I32_CONST);
+        cg.emitSLEB(0xFFFF);
+        cg.emit(OP_I32_AND);
+        break;
+    default:
+        break;
+    }
+}
+
 // Expression code generation
 
 // Returns: true if the expression has a result on the stack after genElem
@@ -788,20 +611,20 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
             if (isDataSym(s.Sfl))
             {
                 cg.emitDataAddr(s, cast(uint) e.Voffset);
-                emitLoad(cg, e.Ety);
+                cg.emitLoad(e.Ety);
                 return true;
             }
             // Shadow-frame locals: load from linear memory.
             if (cg.inShadow(s))
             {
-                emitShadowAddr(cg, s);
+                cg.emitShadowAddr(s);
                 if (e.Voffset != 0)
                 {
                     cg.emit(OP_I32_CONST);
                     cg.emitSLEB(cast(int) e.Voffset);
                     cg.emit(OP_I32_ADD);
                 }
-                emitLoad(cg, e.Ety);
+                cg.emitLoad(e.Ety);
                 return true;
             }
             const uint idx = cg.localFor(s);
@@ -828,7 +651,7 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
             if (rs && isLocalSym(rs) && cg.inShadow(rs))
             {
                 // Address of a shadow-frame local.
-                emitShadowAddr(cg, rs);
+                cg.emitShadowAddr(rs);
                 if (e.Voffset != 0)
                 {
                     cg.emit(OP_I32_CONST);
@@ -861,7 +684,7 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
                 Symbol* as = e.E1.Vsym;
                 if (as && isLocalSym(as) && cg.inShadow(as))
                 {
-                    emitShadowAddr(cg, as);
+                    cg.emitShadowAddr(as);
                     return true;
                 }
             }
@@ -872,7 +695,7 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
     case OPind:
         {
             genElem(cg, e.E1); // address on stack
-            emitLoad(cg, e.Ety);
+            cg.emitLoad(e.Ety);
             return true;
         }
 
@@ -886,16 +709,16 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
                     // Store to global in linear memory
                     cg.emitDataAddr(lhs, cast(uint) e.E1.Voffset);
                     genElem(cg, e.E2);
-                    emitStore(cg, e.E1.Ety);
+                    cg.emitStore(e.E1.Ety);
                     // Re-load for expression result
                     cg.emitDataAddr(lhs, cast(uint) e.E1.Voffset);
-                    emitLoad(cg, e.E1.Ety);
+                    cg.emitLoad(e.E1.Ety);
                     return true;
                 }
                 // Shadow-frame local: store to linear memory, reload for result.
                 if (cg.inShadow(lhs))
                 {
-                    emitShadowAddr(cg, lhs);
+                    cg.emitShadowAddr(lhs);
                     if (e.E1.Voffset != 0)
                     {
                         cg.emit(OP_I32_CONST);
@@ -903,39 +726,21 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
                         cg.emit(OP_I32_ADD);
                     }
                     genElem(cg, e.E2);
-                    emitStore(cg, e.E1.Ety);
-                    emitShadowAddr(cg, lhs);
-                    emitLoad(cg, e.E1.Ety);
+                    cg.emitStore(e.E1.Ety);
+                    cg.emitShadowAddr(lhs);
+                    cg.emitLoad(e.E1.Ety);
                     return true;
                 }
                 const uint idx = cg.localFor(lhs);
                 genElem(cg, e.E2);
+
                 // Coerce i32→i64 if needed (e.g. assigning integer to ulong local).
                 if (cg.locals[idx].ty == WASM_I64 && wasmType(e.E2.Ety) == WASM_I32)
                     cg.emit(OP_I64_EXTEND_I32_S);
+
                 // Mask if storing into a narrow-type local (ubyte, bool, short, etc.).
-                switch (tybasic(e.E1.Ety))
-                {
-                case TYbool:
-                case TYchar:
-                case TYschar:
-                case TYuchar:
-                case TYchar8:
-                    cg.emit(OP_I32_CONST);
-                    cg.emitSLEB(0xFF);
-                    cg.emit(OP_I32_AND);
-                    break;
-                case TYshort:
-                case TYwchar_t:
-                case TYushort:
-                case TYchar16:
-                    cg.emit(OP_I32_CONST);
-                    cg.emitSLEB(0xFFFF);
-                    cg.emit(OP_I32_AND);
-                    break;
-                default:
-                    break;
-                }
+                cg.maskSmallInt(e.E1.Ety);
+
                 cg.emit(OP_LOCAL_TEE);
                 cg.emitULEB(idx);
                 return true;
@@ -949,7 +754,7 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
                 uint valTmp = cg.allocTemp(wasmType(e.Ety));
                 cg.emit(OP_LOCAL_TEE);
                 cg.emitULEB(valTmp); // save, keep on stack
-                emitStore(cg, e.E1.Ety); // store [addr, val]
+                cg.emitStore(e.E1.Ety); // store [addr, val]
                 cg.emit(OP_LOCAL_GET);
                 cg.emitULEB(valTmp); // result
                 return true;
@@ -982,61 +787,41 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
                     const uint addend = cast(uint) e.E1.Voffset;
                     cg.emitDataAddr(s, addend);
                     cg.emitDataAddr(s, addend);
-                    emitLoad(cg, e.E1.Ety);
+                    cg.emitLoad(e.E1.Ety);
                     genElem(cg, e.E2);
-                    emitBinop(cg, compoundToBinop(op), e.Ety);
-                    emitStore(cg, e.E1.Ety);
+                    cg.emitBinop(compoundToBinop(op), e.Ety);
+                    cg.emitStore(e.E1.Ety);
                     cg.emitDataAddr(s, addend);
-                    emitLoad(cg, e.E1.Ety);
+                    cg.emitLoad(e.E1.Ety);
                     return true;
                 }
                 // Shadow-frame local compound assignment.
                 if (cg.inShadow(s))
                 {
-                    emitShadowAddr(cg, s);
-                    emitLoad(cg, e.E1.Ety);
+                    cg.emitShadowAddr(s);
+                    cg.emitLoad(e.E1.Ety);
                     genElem(cg, e.E2);
-                    emitBinop(cg, compoundToBinop(op), e.Ety);
-                    emitShadowAddr(cg, s);
+                    cg.emitBinop(compoundToBinop(op), e.Ety);
+                    cg.emitShadowAddr(s);
                     // swap addr and value using temp
                     uint valTmp2 = cg.allocTemp(wasmType(e.Ety));
                     cg.emit(OP_LOCAL_SET);
                     cg.emitULEB(valTmp2);
                     cg.emit(OP_LOCAL_GET);
                     cg.emitULEB(valTmp2);
-                    emitStore(cg, e.E1.Ety);
-                    emitShadowAddr(cg, s);
-                    emitLoad(cg, e.E1.Ety);
+                    cg.emitStore(e.E1.Ety);
+                    cg.emitShadowAddr(s);
+                    cg.emitLoad(e.E1.Ety);
                     return true;
                 }
                 const uint idx = cg.localFor(s);
                 cg.emit(OP_LOCAL_GET);
                 cg.emitULEB(idx);
                 genElem(cg, e.E2);
-                emitBinop(cg, compoundToBinop(op), e.Ety);
+                cg.emitBinop(compoundToBinop(op), e.Ety);
                 // Mask for narrow types (ubyte, ushort, etc.) to preserve wrapping.
-                switch (tybasic(e.E1.Ety))
-                {
-                case TYbool:
-                case TYchar:
-                case TYschar:
-                case TYuchar:
-                case TYchar8:
-                    cg.emit(OP_I32_CONST);
-                    cg.emitSLEB(0xFF);
-                    cg.emit(OP_I32_AND);
-                    break;
-                case TYshort:
-                case TYwchar_t:
-                case TYushort:
-                case TYchar16:
-                    cg.emit(OP_I32_CONST);
-                    cg.emitSLEB(0xFFFF);
-                    cg.emit(OP_I32_AND);
-                    break;
-                default:
-                    break;
-                }
+                cg.maskSmallInt(e.E1.Ety);
+
                 cg.emit(OP_LOCAL_TEE);
                 cg.emitULEB(idx);
                 return true;
@@ -1050,9 +835,9 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
                 uint tmp = cg.allocTemp(WASM_I32);
                 cg.emit(OP_LOCAL_TEE);
                 cg.emitULEB(tmp);
-                emitLoad(cg, e.E1.Ety);
+                cg.emitLoad(e.E1.Ety);
                 genElem(cg, e.E2);
-                emitBinop(cg, compoundToBinop(op), e.Ety);
+                cg.emitBinop(compoundToBinop(op), e.Ety);
                 // Now: result on stack. Store then reload.
                 // We need addr again: local.get tmp; swap; store; local.get tmp; load
                 uint valTmp = cg.allocTemp(wasmType(e.Ety));
@@ -1062,10 +847,10 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
                 cg.emitULEB(tmp);
                 cg.emit(OP_LOCAL_GET);
                 cg.emitULEB(valTmp);
-                emitStore(cg, e.E1.Ety);
+                cg.emitStore(e.E1.Ety);
                 cg.emit(OP_LOCAL_GET);
                 cg.emitULEB(tmp);
-                emitLoad(cg, e.E1.Ety);
+                cg.emitLoad(e.E1.Ety);
                 return true;
             }
             genElem(cg, e.E2);
@@ -1089,7 +874,7 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
             emitCoerce(cg, wasmType(e.E1.Ety), rty);
             genElem(cg, e.E2);
             emitCoerce(cg, wasmType(e.E2.Ety), rty);
-            emitBinop(cg, op, e.Ety);
+            cg.emitBinop(op, e.Ety);
             return true;
         }
 
@@ -1768,7 +1553,7 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
                 cg.emit(OP_LOCAL_GET);
                 cg.emitULEB(idx);
                 genElem(cg, e.E2);
-                emitBinop(cg, op == OPpostinc ? OPadd : OPmin, e.Ety);
+                cg.emitBinop(op == OPpostinc ? OPadd : OPmin, e.Ety);
                 cg.emit(OP_LOCAL_SET);
                 cg.emitULEB(idx);
                 return true;
@@ -1786,7 +1571,7 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
                 cg.emit(OP_LOCAL_GET);
                 cg.emitULEB(idx);
                 genElem(cg, e.E2);
-                emitBinop(cg, op == OPpreinc ? OPadd : OPmin, e.Ety);
+                cg.emitBinop(op == OPpreinc ? OPadd : OPmin, e.Ety);
                 cg.emit(OP_LOCAL_TEE);
                 cg.emitULEB(idx);
                 return true;
@@ -1922,7 +1707,7 @@ private void genElemAddr(ref WasmCG cg, elem* e) @trusted
             // Shadow-frame variable: emit its address.
             if (cg.inShadow(s))
             {
-                emitShadowAddr(cg, s);
+                cg.emitShadowAddr(s);
                 return;
             }
             // Global: its Soffset is the linear memory address.
@@ -2062,53 +1847,45 @@ private ubyte pickByKind(tym_t ty, ubyte f32, ubyte f64, ubyte i64, ubyte i32) @
 // Binary operation opcode selection by IR operator
 private void emitBinop(ref WasmCG cg, int op, tym_t ty) @trusted
 {
-    const U = OP_UNREACHABLE;
-    const bool isUns = tyuns(ty) != 0;
-    ubyte oc = U;
-    switch (op)
+    static ubyte binOp(int op, tym_t ty)
     {
-    case OPadd:
-        oc = pickByKind(ty, OP_F32_ADD, OP_F64_ADD, OP_I64_ADD, OP_I32_ADD);
-        break;
-    case OPmin:
-        oc = pickByKind(ty, OP_F32_SUB, OP_F64_SUB, OP_I64_SUB, OP_I32_SUB);
-        break;
-    case OPmul:
-        oc = pickByKind(ty, OP_F32_MUL, OP_F64_MUL, OP_I64_MUL, OP_I32_MUL);
-        break;
-    case OPdiv:
-        oc = pickByKind(ty, OP_F32_DIV, OP_F64_DIV,
-            isUns ? OP_I64_DIV_U
-                : OP_I64_DIV_S,
-            isUns ? OP_I32_DIV_U : OP_I32_DIV_S);
-        break;
-    case OPmod:
-        oc = pickByKind(ty, U, U,
-            isUns ? OP_I64_REM_U : OP_I64_REM_S,
-            isUns ? OP_I32_REM_U : OP_I32_REM_S);
-        break;
-    case OPand:
-        oc = pickByKind(ty, U, U, OP_I64_AND, OP_I32_AND);
-        break;
-    case OPor:
-        oc = pickByKind(ty, U, U, OP_I64_OR, OP_I32_OR);
-        break;
-    case OPxor:
-        oc = pickByKind(ty, U, U, OP_I64_XOR, OP_I32_XOR);
-        break;
-    case OPshl:
-        oc = pickByKind(ty, U, U, OP_I64_SHL, OP_I32_SHL);
-        break;
-    case OPshr:
-        oc = pickByKind(ty, U, U, OP_I64_SHR_U, OP_I32_SHR_U);
-        break;
-    case OPashr:
-        oc = pickByKind(ty, U, U, OP_I64_SHR_S, OP_I32_SHR_S);
-        break;
-    default:
-        break;
+        alias U = OP_UNREACHABLE;
+        const bool isUns = tyuns(ty) != 0;
+        switch (op)
+        {
+        case OPadd:
+            return pickByKind(ty, OP_F32_ADD, OP_F64_ADD, OP_I64_ADD, OP_I32_ADD);
+        case OPmin:
+            return pickByKind(ty, OP_F32_SUB, OP_F64_SUB, OP_I64_SUB, OP_I32_SUB);
+        case OPmul:
+            return pickByKind(ty, OP_F32_MUL, OP_F64_MUL, OP_I64_MUL, OP_I32_MUL);
+        case OPdiv:
+            return pickByKind(ty, OP_F32_DIV, OP_F64_DIV,
+                isUns ? OP_I64_DIV_U
+                    : OP_I64_DIV_S,
+                isUns ? OP_I32_DIV_U : OP_I32_DIV_S);
+        case OPmod:
+            return pickByKind(ty, U, U,
+                isUns ? OP_I64_REM_U : OP_I64_REM_S,
+                isUns ? OP_I32_REM_U : OP_I32_REM_S);
+        case OPand:
+            return pickByKind(ty, U, U, OP_I64_AND, OP_I32_AND);
+        case OPor:
+            return pickByKind(ty, U, U, OP_I64_OR, OP_I32_OR);
+        case OPxor:
+            return pickByKind(ty, U, U, OP_I64_XOR, OP_I32_XOR);
+        case OPshl:
+            return pickByKind(ty, U, U, OP_I64_SHL, OP_I32_SHL);
+        case OPshr:
+            return pickByKind(ty, U, U, OP_I64_SHR_U, OP_I32_SHR_U);
+        case OPashr:
+            return pickByKind(ty, U, U, OP_I64_SHR_S, OP_I32_SHR_S);
+        default:
+            return OP_UNREACHABLE;
+        }
     }
-    cg.emit(oc);
+
+    cg.emit(binOp(op, ty));
 }
 
 // Map compound-assignment op to its binary counterpart
