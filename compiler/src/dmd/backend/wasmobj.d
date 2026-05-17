@@ -64,9 +64,10 @@ private void appendSLEB128(OutBuffer* buf, int val) @trusted
     do
     {
         ubyte b = val & 0x7F;
-        val >>= 7;                 // arithmetic right shift
+        val >>= 7; // arithmetic right shift
         more = !((val == 0 && !(b & 0x40)) || (val == -1 && (b & 0x40)));
-        if (more) b |= 0x80;
+        if (more)
+            b |= 0x80;
         buf.writeByte(b);
     }
     while (more);
@@ -138,17 +139,21 @@ private uint canonicalFuncForName(size_t i) @trusted
     uint firstImport = uint.max;
     foreach (size_t j, ref const WasmFunc g; wmod.funcs)
     {
-        if (funcName(g) != name) continue;
+        if (funcName(g) != name)
+            continue;
         if (g.isImport)
         {
-            if (firstImport == uint.max) firstImport = cast(uint) j;
+            if (firstImport == uint.max)
+                firstImport = cast(uint) j;
         }
         else
         {
-            if (firstDefined == uint.max) firstDefined = cast(uint) j;
+            if (firstDefined == uint.max)
+                firstDefined = cast(uint) j;
         }
     }
-    if (firstDefined != uint.max) return firstDefined;
+    if (firstDefined != uint.max)
+        return firstDefined;
     return firstImport;
 }
 
@@ -188,7 +193,8 @@ private uint[] buildFuncToSymIdx() @trusted
     // Resolve shadowed funcs to the canonical func's sym index.
     foreach (size_t i; 0 .. wmod.funcs.length)
     {
-        if (funcToSymIdx[i] != SHADOWED) continue;
+        if (funcToSymIdx[i] != SHADOWED)
+            continue;
         funcToSymIdx[i] = funcToSymIdx[canonicalFuncForName(i)];
     }
     return funcToSymIdx;
@@ -255,7 +261,7 @@ struct WasmFuncBody
         uint symIdx; // funcIdx snapshot at emit time (resolved via funcToSymIdx, or via sym at term time)
         uint addend; // for R_WASM_MEMORY_ADDR_LEB: offset within the segment
         Symbol* sym; // preferred: Symbol* whose current funcIdx is looked up at term time
-                     // (decouples from wmod.funcs reordering during late codegen)
+        // (decouples from wmod.funcs reordering during late codegen)
     }
 
     // Data-address code relocations: R_WASM_MEMORY_ADDR_LEB entries.
@@ -268,7 +274,7 @@ struct WasmFuncBody
         uint addend; // extra offset beyond sym.Soffset
     }
 
-    CodeReloc[]    codeRelocs;
+    CodeReloc[] codeRelocs;
     DataAddrReloc[] dataAddrRelocs;
     uint codePayloadStart; // set by emitCodeSection
 }
@@ -534,6 +540,7 @@ private WasmFuncType buildFuncType(type* t) @trusted
     // Matches the LDC2/wasi-libc ABI: caller spills variadic args to the shadow
     // stack and passes a pointer to that region as the last function parameter.
     import dmd.backend.type : variadic;
+
     if (variadic(t))
         ft.params ~= WASM_I32;
 
@@ -844,8 +851,10 @@ private void emitLinkingSection(OutBuffer* out_) @trusted
     foreach (size_t i, ref const WasmFunc f; wmod.funcs)
     {
         const(char)[] name = funcName(f);
-        if (!name.length) continue;
-        if (isShadowedFunc(i)) continue;
+        if (!name.length)
+            continue;
+        if (isShadowedFunc(i))
+            continue;
         symCount++;
     }
     // Data symbols referenced by code relocations.
@@ -921,9 +930,9 @@ private void emitLinkingSection(OutBuffer* out_) @trusted
             if (ts <= uint.max)
                 symSize = cast(uint) ts;
         }
-        appendULEB128(&symtab, 0);              // segment index (single data seg)
-        appendULEB128(&symtab, segOff);         // offset within segment
-        appendULEB128(&symtab, symSize);        // size in bytes
+        appendULEB128(&symtab, 0); // segment index (single data seg)
+        appendULEB128(&symtab, segOff); // offset within segment
+        appendULEB128(&symtab, symSize); // size in bytes
     }
 
     // Add a SYMTAB_TABLE entry for the function table so wasm-ld accepts it.
@@ -1066,12 +1075,20 @@ private void emitRelocCodeSection(OutBuffer* out_, uint codeSectionIdx) @trusted
     {
         foreach (ref const r; relocs)
         {
-            if (!r.sym) continue;
+            if (!r.sym)
+                continue;
             bool found = false;
-            foreach (ds; datasyms) if (ds == r.sym) { found = true; break; }
-            if (!found) datasyms ~= cast(Symbol*) r.sym;
+            foreach (ds; datasyms)
+                if (ds == r.sym)
+                {
+                    found = true;
+                    break;
+                }
+            if (!found)
+                datasyms ~= cast(Symbol*) r.sym;
         }
     }
+
     foreach (ref const WasmFuncBody fb; wasmFuncBodies)
         collectDataSyms(fb.dataAddrRelocs);
 
@@ -1081,8 +1098,10 @@ private void emitRelocCodeSection(OutBuffer* out_, uint codeSectionIdx) @trusted
     uint dataSymBase = 0;
     foreach (size_t i, ref const WasmFunc f; wmod.funcs)
     {
-        if (funcToSymIdx[i] == uint.max) continue;
-        if (isShadowedFunc(i)) continue;
+        if (funcToSymIdx[i] == uint.max)
+            continue;
+        if (isShadowedFunc(i))
+            continue;
         dataSymBase++;
     }
     // (TABLE symbol is emitted after data syms in the linking section, so it
@@ -1091,7 +1110,8 @@ private void emitRelocCodeSection(OutBuffer* out_, uint codeSectionIdx) @trusted
     uint dataSymIdx(const(Symbol)* sym)
     {
         foreach (size_t k, ds; datasyms)
-            if (ds == sym) return dataSymBase + cast(uint) k;
+            if (ds == sym)
+                return dataSymBase + cast(uint) k;
         return uint.max;
     }
 
@@ -1136,8 +1156,9 @@ private void emitRelocCodeSection(OutBuffer* out_, uint codeSectionIdx) @trusted
         uint absOffset; // fb.codePayloadStart + r.offset
         ubyte type;
         uint sym;
-        uint addend;     // only for MEMORY_ADDR_LEB
+        uint addend; // only for MEMORY_ADDR_LEB
     }
+
     AnyReloc[] allRelocs;
     allRelocs.reserve(totalRelocs);
 
@@ -1151,22 +1172,27 @@ private void emitRelocCodeSection(OutBuffer* out_, uint codeSectionIdx) @trusted
             {
                 // Type relocs reference the type section directly; r.symIdx
                 // holds the funcIdx whose type we want to import-merge against.
-                if (fi >= wmod.funcs.length) continue;
+                if (fi >= wmod.funcs.length)
+                    continue;
                 idx = wmod.funcs[fi].typeIdx;
             }
             else
             {
-                if (fi >= funcToSymIdx.length) continue;
+                if (fi >= funcToSymIdx.length)
+                    continue;
                 idx = funcToSymIdx[fi];
-                if (idx == uint.max) continue;
+                if (idx == uint.max)
+                    continue;
             }
             allRelocs ~= AnyReloc(fb.codePayloadStart + r.offset, r.type, idx, 0);
         }
         foreach (ref const WasmFuncBody.DataAddrReloc r; fb.dataAddrRelocs)
         {
-            if (!r.sym) continue;
+            if (!r.sym)
+                continue;
             uint sym = dataSymIdx(r.sym);
-            if (sym == uint.max) continue;
+            if (sym == uint.max)
+                continue;
             // addend = offset relative to the symbol's base (usually 0 or Voffset)
             allRelocs ~= AnyReloc(fb.codePayloadStart + r.offset,
                 R_WASM_MEMORY_ADDR_LEB, sym, r.addend);
@@ -1211,10 +1237,17 @@ private Symbol*[] collectRelocDataSyms() @trusted
     {
         foreach (ref const WasmFuncBody.DataAddrReloc r; fb.dataAddrRelocs)
         {
-            if (!r.sym) continue;
+            if (!r.sym)
+                continue;
             bool found = false;
-            foreach (ds; datasyms) if (ds == r.sym) { found = true; break; }
-            if (!found) datasyms ~= cast(Symbol*) r.sym;
+            foreach (ds; datasyms)
+                if (ds == r.sym)
+                {
+                    found = true;
+                    break;
+                }
+            if (!found)
+                datasyms ~= cast(Symbol*) r.sym;
         }
     }
     return datasyms;
@@ -1635,7 +1668,6 @@ int WasmObj_data_start(Symbol* sdata, targ_size_t datasize, int seg) @trusted
     return 1;
 }
 
-
 // Update an import's WASM function type. Called from codgen when the actual
 // Returns the number of WASM parameters for a function at index fidx.
 // Used to detect variadic-style extra args (pushed count > WASM param count).
@@ -1921,10 +1953,11 @@ uint wmod_findFuncForType(uint typeIdx) @trusted
 // beyond sym.Soffset (typically e.Voffset in the IR).
 void wmod_recordDataAddrReloc(uint codeOffset, Symbol* sym, uint addend) @trusted
 {
-    if (!wasmFuncBodies.length) return;
+    if (!wasmFuncBodies.length)
+        return;
     WasmFuncBody.DataAddrReloc r;
     r.offset = codeOffset;
-    r.sym    = sym;
+    r.sym = sym;
     r.addend = addend;
     wasmFuncBodies[$ - 1].dataAddrRelocs ~= r;
 }
