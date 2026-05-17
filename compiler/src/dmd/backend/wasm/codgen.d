@@ -903,11 +903,7 @@ private bool genElem(ref WasmCG cg, elem* e)
     case OPnot:
         {
             cg.genElem(e.E1);
-            const ty = tybasic(e.E1.Ety);
-            if (ty == TYllong || ty == TYullong)
-                cg.emit(OP_I64_EQZ);
-            else
-                cg.emit(OP_I32_EQZ);
+            emitCondInvert(cg, e.E1); // !x: produces i32 (1 if x is zero/false)
             return true;
         }
 
@@ -1436,16 +1432,12 @@ private bool genElem(ref WasmCG cg, elem* e)
     case OPbool:
         {
             cg.genElem(e.E1);
-            // Convert to bool: nonzero => 1, zero => 0
-            // WASM i32: x != 0 is equivalent to i32.const 0; i32.ne
+            emitCondToI32(cg, e.E1); // i64/f32/f64 → i32 truthiness; i32 is already bool-ish
             const ty = tybasic(e.E1.Ety);
-            if (ty == TYllong || ty == TYullong)
+            if (ty != TYllong && ty != TYullong && ty != TYfloat && ty != TYifloat &&
+                ty != TYdouble && ty != TYdouble_alias && ty != TYreal && ty != TYireal)
             {
-                cg.emit(OP_I64_EQZ); // i64 => i32 (1 if zero)
-                cg.emit(OP_I32_EQZ); // invert: 1 if nonzero
-            }
-            else
-            {
+                // i32 path: normalize to {0,1}.
                 cg.emitConst(OP_I32_CONST, 0);
                 cg.emit(OP_I32_NE);
             }
