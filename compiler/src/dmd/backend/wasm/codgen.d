@@ -1640,11 +1640,14 @@ private bool genElem(ref WasmCG cg, elem* e)
             if (e.E2 && e.E2.Eoper == OPparam)
             {
                 cg.genElem(e.E2.E2); // src
+                emitCoerce(cg, wasmType(e.E2.E2.Ety), WASM_I32);
                 cg.genElem(e.E2.E1); // count
+                emitCoerce(cg, wasmType(e.E2.E1.Ety), WASM_I32);
             }
             else if (e.E2)
             {
                 cg.genElem(e.E2); // src
+                emitCoerce(cg, wasmType(e.E2.Ety), WASM_I32);
                 cg.emitConst(OP_I32_CONST, 0); // count = 0
             }
             else
@@ -1668,7 +1671,9 @@ private bool genElem(ref WasmCG cg, elem* e)
             if (e.E2 && e.E2.Eoper == OPparam)
             {
                 cg.genElem(e.E2.E2); // val
+                emitCoerce(cg, wasmType(e.E2.E2.Ety), WASM_I32);
                 cg.genElem(e.E2.E1); // count
+                emitCoerce(cg, wasmType(e.E2.E1.Ety), WASM_I32);
             }
             else
             {
