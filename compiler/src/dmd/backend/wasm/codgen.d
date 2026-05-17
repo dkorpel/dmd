@@ -2024,7 +2024,7 @@ private void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         return stack.length; // sentinel: not found
     }
 
-    for (size_t bi = 0; bi < N; bi++)
+    foreach (const bi; 0 .. N)
     {
         block* b = blocks[bi];
 
@@ -2257,11 +2257,9 @@ private void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
             cg.emitULEB(defaultDepth); // default label
             continue;
         }
-        else if (b.bc == BC.ifthen) // switch converted to if-then chain — same as iftrue
-            goto case_iftrue;
-        else if (b.bc == BC.iftrue)
-    case_iftrue :
+        else if (b.bc == BC.ifthen || b.bc == BC.iftrue)
         {
+            // switch converted to if-then chain is same as iftrue
             block* taken = succ(b, 0);
             block* nottaken = succ(b, 1);
             int takenIdx = blockIdx(taken);
