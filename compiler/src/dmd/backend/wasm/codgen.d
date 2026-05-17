@@ -56,6 +56,18 @@ ubyte wasmType(tym_t ty)
     case TYreal:
     case TYireal:
         return WASM_F64;
+    case TYint:
+    case TYuint:
+    case TYshort:
+    case TYushort:
+    case TYchar:
+    case TYuchar:
+    case TYschar:
+    case TYwchar_t:
+    case TYbool:
+    case TYenum:
+        return WASM_I32; // int, pointer, bool, etc.
+
     default:
         return WASM_I32; // int, pointer, bool, etc.
     }
@@ -90,11 +102,9 @@ nothrow:
     /// Returns: index of allocated temp in `locals` array
     uint allocTemp(ubyte ty)
     {
-        WasmLocal l;
-        l.sym = null;
-        l.ty = ty;
-        locals ~= l;
-        return cast(uint)(locals.length - 1);
+        const uint result = cast(uint)(locals.length - 1);
+        locals ~= WasmLocal(null, ty);
+        return result;
     }
 
     /// Allocate or look up a local for a symbol
@@ -105,10 +115,8 @@ nothrow:
         foreach (size_t i, ref const WasmLocal l; locals)
             if (l.sym == s)
                 return cast(uint) i;
-        WasmLocal nl;
-        nl.sym = s;
-        nl.ty = wasmType(s.ty());
-        locals ~= nl;
+
+        locals ~= WasmLocal(s, s.ty().wasmType());
         return cast(uint)(locals.length - 1);
     }
 
@@ -515,20 +523,13 @@ private void emitShadowEpilogue(ref WasmCG cg)
 /// For a 16-bit or 8-bit type `ty`, generate code to truncate to that size
 private void maskSmallInt(ref WasmCG cg, tym_t ty) // TY
 {
-    switch (tybasic(ty)) // e.E1.Ety
+    switch (tysize(ty))
     {
-    case TYbool:
-    case TYchar:
-    case TYschar:
-    case TYuchar:
-    case TYchar8:
+    case 8:
         cg.emitConst(OP_I32_CONST, 0xFF);
         cg.emit(OP_I32_AND);
         break;
-    case TYshort:
-    case TYwchar_t:
-    case TYushort:
-    case TYchar16:
+    case 16:
         cg.emitConst(OP_I32_CONST, 0xFFFF);
         cg.emit(OP_I32_AND);
         break;
@@ -921,7 +922,7 @@ private bool genElem(ref WasmCG cg, elem* e)
             return true;
         }
 
-    // unsigned widening: already zero-extended as i32 — no-op
+    // unsigned widening is a no-op
     case OPu8_16:
     case OPu16_32:
         cg.genElem(e.E1);
@@ -969,8 +970,7 @@ private bool genElem(ref WasmCG cg, elem* e)
 
     case OPcomma:
         {
-            const bool r1 = cg.genElem(e.E1);
-            if (r1)
+            if (cg.genElem(e.E1))
                 cg.emit(OP_DROP); // discard left-hand result
             return cg.genElem(e.E2);
         }
@@ -1928,18 +1928,15 @@ private void genArgs(ref WasmCG cg, elem* e)
 
 // Pick the WASM opcode variant matching the IR operand's numeric kind.
 // Order: f32, f64, i64, i32. Pass OP_UNREACHABLE for kinds that don't apply.
-private ubyte pickByKind(tym_t ty, ubyte f32, ubyte f64, ubyte i64, ubyte i32) @safe
+private ubyte pickByKind(tym_t ty, ubyte f32, ubyte f64, ubyte i64, ubyte i32)
 {
-    switch (tybasic(ty))
+    switch (tybasic(ty).wasmType)
     {
-    case TYfloat, TYifloat:
-        return f32;
-    case TYdouble, TYdouble_alias, TYreal, TYireal:
-        return f64;
-    case TYllong, TYullong:
-        return i64;
-    default:
-        return i32;
+    case WASM_F32: return f32;
+    case WASM_F64: return f64;
+    case WASM_I64: return i64;
+    case WASM_I32: return i32;
+    default: return i32;
     }
 }
 
@@ -2066,11 +2063,6 @@ private uint funcIndex(Symbol* sfunc)
     return 0;
 }
 
-// ---------------------------------------------------------------------------
-// ---------------------------------------------------------------------------
-// Control-flow condition helpers
-// ---------------------------------------------------------------------------
-
 // Ensure a condition value on the WASM stack is an i32 suitable for br_if.
 // For i64 (D slice / long): emit i64.eqz + i32.eqz to produce 1 if nonzero.
 // For i32: nothing needed (already a valid br_if operand).
@@ -2132,8 +2124,6 @@ private void emitCondInvert(ref WasmCG cg, elem* condElem)
         cg.emit(OP_I32_EQZ);
 }
 
-// Structured control flow synthesis (block CFG => WASM)
-// ---------------------------------------------------------------------------
 
 // Per-block metadata computed during analysis
 private struct BlkInfo
@@ -2167,6 +2157,7 @@ private block* succ(block* b, int n)
     return null;
 }
 
+// Structured control flow synthesis (block CFG => WASM)
 private void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
 {
     block*[] blocks = collectBlocks(startblock);
