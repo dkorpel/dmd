@@ -283,7 +283,7 @@ struct WasmCG
     OutBuffer code; /// bytecode being emitted
     WasmLocal[] locals; /// local variable table (params first)
     uint numParams; /// number of parameters (= first numParams locals)
-    WasmFuncBody.CodeReloc[]    codeRelocs;     /// relocations for direct function calls
+    WasmFuncBody.CodeReloc[] codeRelocs; /// relocations for direct function calls
     WasmFuncBody.DataAddrReloc[] dataAddrRelocs; /// R_WASM_MEMORY_ADDR_LEB relocations
 
     // Shadow stack frame (for locals whose address is taken)
@@ -385,6 +385,7 @@ nothrow:
     void emitDataAddr(Symbol* sym, uint addend) @trusted
     {
         import dmd.backend.wasmobj : wasm_relocatable;
+
         emit(OP_I32_CONST);
         const uint addr = cast(uint)(sym.Soffset + addend);
         // Only relocate symbols in the INITIALIZED data section (FL.data, FL.csdata,
@@ -439,6 +440,7 @@ nothrow:
     void emitCallIndirectType(uint typeIdx) @trusted
     {
         import dmd.backend.wasmobj : wmod_findFuncForType, wasm_relocatable;
+
         if (wasm_relocatable)
         {
             uint fidx = wmod_findFuncForType(typeIdx);
@@ -468,20 +470,32 @@ nothrow:
 // Emit a typed load from the address already on the stack.
 // Per-type (load opcode, store opcode, natural-alignment log2).
 // Load variants of narrow ints carry their signedness; stores share one op.
-private struct MemOps { ubyte loadOp, storeOp, alignLog2; }
+private struct MemOps
+{
+    ubyte loadOp, storeOp, alignLog2;
+}
+
 private MemOps memOpsFor(tym_t ty) @safe
 {
     switch (tybasic(ty))
     {
-        case TYllong, TYullong:                  return MemOps(OP_I64_LOAD,     OP_I64_STORE,   3);
-        case TYfloat, TYifloat:                  return MemOps(OP_F32_LOAD,     OP_F32_STORE,   2);
-        case TYdouble, TYdouble_alias,
-             TYreal,   TYireal:                  return MemOps(OP_F64_LOAD,     OP_F64_STORE,   3);
-        case TYchar, TYschar:                    return MemOps(OP_I32_LOAD8_S,  OP_I32_STORE8,  0);
-        case TYuchar, TYbool:                    return MemOps(OP_I32_LOAD8_U,  OP_I32_STORE8,  0);
-        case TYshort:                            return MemOps(OP_I32_LOAD16_S, OP_I32_STORE16, 1);
-        case TYwchar_t, TYushort:                return MemOps(OP_I32_LOAD16_U, OP_I32_STORE16, 1);
-        default:                                 return MemOps(OP_I32_LOAD,     OP_I32_STORE,   2);
+    case TYllong, TYullong:
+        return MemOps(OP_I64_LOAD, OP_I64_STORE, 3);
+    case TYfloat, TYifloat:
+        return MemOps(OP_F32_LOAD, OP_F32_STORE, 2);
+    case TYdouble, TYdouble_alias,
+        TYreal, TYireal:
+        return MemOps(OP_F64_LOAD, OP_F64_STORE, 3);
+    case TYchar, TYschar:
+        return MemOps(OP_I32_LOAD8_S, OP_I32_STORE8, 0);
+    case TYuchar, TYbool:
+        return MemOps(OP_I32_LOAD8_U, OP_I32_STORE8, 0);
+    case TYshort:
+        return MemOps(OP_I32_LOAD16_S, OP_I32_STORE16, 1);
+    case TYwchar_t, TYushort:
+        return MemOps(OP_I32_LOAD16_U, OP_I32_STORE16, 1);
+    default:
+        return MemOps(OP_I32_LOAD, OP_I32_STORE, 2);
     }
 }
 
@@ -491,8 +505,8 @@ private void emitMemoryCopy(ref WasmCG cg) @trusted
 {
     cg.emit(OP_FC_PREFIX);
     cg.emitULEB(10); // memory.copy sub-opcode
-    cg.emit(0x00);   // dst memidx
-    cg.emit(0x00);   // src memidx
+    cg.emit(0x00); // dst memidx
+    cg.emit(0x00); // src memidx
 }
 
 // Emit `memory.fill 0` (stack: dst, val, n → empty).
@@ -500,7 +514,7 @@ private void emitMemoryFill(ref WasmCG cg) @trusted
 {
     cg.emit(OP_FC_PREFIX);
     cg.emitULEB(11); // memory.fill sub-opcode
-    cg.emit(0x00);   // memidx
+    cg.emit(0x00); // memidx
 }
 
 private void emitLoad(ref WasmCG cg, tym_t ty) @trusted
@@ -621,8 +635,10 @@ void preRegisterExternals(elem* e) @trusted
                 s.Sclass != SC.fastpar)
                 funcIndex(s); // side-effect: registers as import if not defined
         }
-        if (e.E1) preRegisterExternals(e.E1);
-        if (e.E2) preRegisterExternals(e.E2);
+        if (e.E1)
+            preRegisterExternals(e.E1);
+        if (e.E2)
+            preRegisterExternals(e.E2);
         return;
     }
     if (OTunary(op))
@@ -1317,6 +1333,7 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
                         else
                             allArgs ~= p;
                     }
+
                     gatherArgs(e.E2);
 
                     // Count fixed (non-variadic) params from the function type.
@@ -1335,7 +1352,15 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
 
                     if (varArgs.length > 0)
                     {
-                        struct VaSlot { elem* e; uint off; ubyte storeOp; uint alignLog2; bool promoteF32; }
+                        struct VaSlot
+                        {
+                            elem* e;
+                            uint off;
+                            ubyte storeOp;
+                            uint alignLog2;
+                            bool promoteF32;
+                        }
+
                         VaSlot[] slots;
                         uint offset = 0;
                         foreach (va; varArgs)
@@ -1347,18 +1372,31 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
                             {
                             case TYllong:
                             case TYullong:
-                                storeOp = OP_I64_STORE; sz = 8; al = 3; break;
+                                storeOp = OP_I64_STORE;
+                                sz = 8;
+                                al = 3;
+                                break;
                             case TYdouble:
                             case TYdouble_alias:
                             case TYreal:
                             case TYireal:
-                                storeOp = OP_F64_STORE; sz = 8; al = 3; break;
+                                storeOp = OP_F64_STORE;
+                                sz = 8;
+                                al = 3;
+                                break;
                             case TYfloat:
                             case TYifloat:
                                 // C promotes float to double in varargs
-                                storeOp = OP_F64_STORE; sz = 8; al = 3; promF32 = true; break;
+                                storeOp = OP_F64_STORE;
+                                sz = 8;
+                                al = 3;
+                                promF32 = true;
+                                break;
                             default:
-                                storeOp = OP_I32_STORE; sz = 4; al = 2; break;
+                                storeOp = OP_I32_STORE;
+                                sz = 4;
+                                al = 2;
+                                break;
                             }
                             uint byteAlign = 1u << al;
                             offset = (offset + byteAlign - 1) & ~(byteAlign - 1);
@@ -1384,8 +1422,8 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
                         foreach (ref sl; slots)
                         {
                             cg.emit(OP_LOCAL_GET);
-                            cg.emitULEB(spLocal);   // addr
-                            genElem(cg, sl.e);       // value
+                            cg.emitULEB(spLocal); // addr
+                            genElem(cg, sl.e); // value
                             if (sl.promoteF32)
                                 cg.emit(OP_F64_PROMOTE_F32);
                             cg.emit(sl.storeOp);
@@ -1467,6 +1505,7 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
                         }
                         callArgs ~= p;
                     }
+
                     gatherCallArgs(e.E2);
 
                     // Slice handling: the WASM callee ABI splits each D slice
@@ -1493,8 +1532,8 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
                     // args (this/shidden) when callArgs has more entries
                     // than declared params.
                     param_t*[] declParams;
-                    for (param_t* q = (calleeSym.Stype !is null) ? calleeSym.Stype.Tparamtypes : null;
-                         q; q = q.Pnext)
+                    for (param_t* q = (calleeSym.Stype !is null) ? calleeSym.Stype.Tparamtypes
+                        : null; q; q = q.Pnext)
                         declParams ~= q;
                     foreach (k; 0 .. declParams.length / 2)
                     {
@@ -1789,13 +1828,13 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
             uint dstTmp = cg.allocTemp(WASM_I32);
             genElemAddr(cg, e.E1);
             cg.emit(OP_LOCAL_TEE);
-            cg.emitULEB(dstTmp);              // stack: dst
-            genElemAddr(cg, e.E2);            // stack: dst, src
+            cg.emitULEB(dstTmp); // stack: dst
+            genElemAddr(cg, e.E2); // stack: dst, src
             cg.emit(OP_I32_CONST);
-            cg.emitSLEB(sz);                  // stack: dst, src, n
+            cg.emitSLEB(sz); // stack: dst, src, n
             emitMemoryCopy(cg);
             cg.emit(OP_LOCAL_GET);
-            cg.emitULEB(dstTmp);              // result: dst
+            cg.emitULEB(dstTmp); // result: dst
             return true;
         }
 
@@ -1805,22 +1844,24 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
             uint dstTmp = cg.allocTemp(WASM_I32);
             genElem(cg, e.E1);
             cg.emit(OP_LOCAL_TEE);
-            cg.emitULEB(dstTmp);              // stack: dst
+            cg.emitULEB(dstTmp); // stack: dst
             if (e.E2 && e.E2.Eoper == OPparam)
             {
-                genElem(cg, e.E2.E2);         // src
-                genElem(cg, e.E2.E1);         // count
+                genElem(cg, e.E2.E2); // src
+                genElem(cg, e.E2.E1); // count
             }
             else if (e.E2)
             {
-                genElem(cg, e.E2);            // src
+                genElem(cg, e.E2); // src
                 cg.emit(OP_I32_CONST);
-                cg.emitSLEB(0);               // count = 0
+                cg.emitSLEB(0); // count = 0
             }
             else
             {
-                cg.emit(OP_I32_CONST); cg.emitSLEB(0);
-                cg.emit(OP_I32_CONST); cg.emitSLEB(0);
+                cg.emit(OP_I32_CONST);
+                cg.emitSLEB(0);
+                cg.emit(OP_I32_CONST);
+                cg.emitSLEB(0);
             }
             emitMemoryCopy(cg);
             cg.emit(OP_LOCAL_GET);
@@ -1834,16 +1875,18 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
             uint dstTmp = cg.allocTemp(WASM_I32);
             genElem(cg, e.E1);
             cg.emit(OP_LOCAL_TEE);
-            cg.emitULEB(dstTmp);              // stack: dst
+            cg.emitULEB(dstTmp); // stack: dst
             if (e.E2 && e.E2.Eoper == OPparam)
             {
-                genElem(cg, e.E2.E2);         // val
-                genElem(cg, e.E2.E1);         // count
+                genElem(cg, e.E2.E2); // val
+                genElem(cg, e.E2.E1); // count
             }
             else
             {
-                cg.emit(OP_I32_CONST); cg.emitSLEB(0); // val
-                cg.emit(OP_I32_CONST); cg.emitSLEB(0); // count
+                cg.emit(OP_I32_CONST);
+                cg.emitSLEB(0); // val
+                cg.emit(OP_I32_CONST);
+                cg.emitSLEB(0); // count
             }
             emitMemoryFill(cg);
             cg.emit(OP_LOCAL_GET);
@@ -2005,10 +2048,14 @@ private ubyte pickByKind(tym_t ty, ubyte f32, ubyte f64, ubyte i64, ubyte i32) @
 {
     switch (tybasic(ty))
     {
-        case TYfloat, TYifloat:                              return f32;
-        case TYdouble, TYdouble_alias, TYreal, TYireal:      return f64;
-        case TYllong, TYullong:                              return i64;
-        default:                                             return i32;
+    case TYfloat, TYifloat:
+        return f32;
+    case TYdouble, TYdouble_alias, TYreal, TYireal:
+        return f64;
+    case TYllong, TYullong:
+        return i64;
+    default:
+        return i32;
     }
 }
 
@@ -2020,22 +2067,46 @@ private void emitBinop(ref WasmCG cg, int op, tym_t ty) @trusted
     ubyte oc = U;
     switch (op)
     {
-    case OPadd:  oc = pickByKind(ty, OP_F32_ADD, OP_F64_ADD, OP_I64_ADD, OP_I32_ADD); break;
-    case OPmin:  oc = pickByKind(ty, OP_F32_SUB, OP_F64_SUB, OP_I64_SUB, OP_I32_SUB); break;
-    case OPmul:  oc = pickByKind(ty, OP_F32_MUL, OP_F64_MUL, OP_I64_MUL, OP_I32_MUL); break;
-    case OPdiv:  oc = pickByKind(ty, OP_F32_DIV, OP_F64_DIV,
-                                     isUns ? OP_I64_DIV_U : OP_I64_DIV_S,
-                                     isUns ? OP_I32_DIV_U : OP_I32_DIV_S); break;
-    case OPmod:  oc = pickByKind(ty, U, U,
-                                     isUns ? OP_I64_REM_U : OP_I64_REM_S,
-                                     isUns ? OP_I32_REM_U : OP_I32_REM_S); break;
-    case OPand:  oc = pickByKind(ty, U, U, OP_I64_AND,   OP_I32_AND);   break;
-    case OPor:   oc = pickByKind(ty, U, U, OP_I64_OR,    OP_I32_OR);    break;
-    case OPxor:  oc = pickByKind(ty, U, U, OP_I64_XOR,   OP_I32_XOR);   break;
-    case OPshl:  oc = pickByKind(ty, U, U, OP_I64_SHL,   OP_I32_SHL);   break;
-    case OPshr:  oc = pickByKind(ty, U, U, OP_I64_SHR_U, OP_I32_SHR_U); break;
-    case OPashr: oc = pickByKind(ty, U, U, OP_I64_SHR_S, OP_I32_SHR_S); break;
-    default: break;
+    case OPadd:
+        oc = pickByKind(ty, OP_F32_ADD, OP_F64_ADD, OP_I64_ADD, OP_I32_ADD);
+        break;
+    case OPmin:
+        oc = pickByKind(ty, OP_F32_SUB, OP_F64_SUB, OP_I64_SUB, OP_I32_SUB);
+        break;
+    case OPmul:
+        oc = pickByKind(ty, OP_F32_MUL, OP_F64_MUL, OP_I64_MUL, OP_I32_MUL);
+        break;
+    case OPdiv:
+        oc = pickByKind(ty, OP_F32_DIV, OP_F64_DIV,
+            isUns ? OP_I64_DIV_U
+                : OP_I64_DIV_S,
+            isUns ? OP_I32_DIV_U : OP_I32_DIV_S);
+        break;
+    case OPmod:
+        oc = pickByKind(ty, U, U,
+            isUns ? OP_I64_REM_U : OP_I64_REM_S,
+            isUns ? OP_I32_REM_U : OP_I32_REM_S);
+        break;
+    case OPand:
+        oc = pickByKind(ty, U, U, OP_I64_AND, OP_I32_AND);
+        break;
+    case OPor:
+        oc = pickByKind(ty, U, U, OP_I64_OR, OP_I32_OR);
+        break;
+    case OPxor:
+        oc = pickByKind(ty, U, U, OP_I64_XOR, OP_I32_XOR);
+        break;
+    case OPshl:
+        oc = pickByKind(ty, U, U, OP_I64_SHL, OP_I32_SHL);
+        break;
+    case OPshr:
+        oc = pickByKind(ty, U, U, OP_I64_SHR_U, OP_I32_SHR_U);
+        break;
+    case OPashr:
+        oc = pickByKind(ty, U, U, OP_I64_SHR_S, OP_I32_SHR_S);
+        break;
+    default:
+        break;
     }
     cg.emit(oc);
 }
@@ -2050,21 +2121,38 @@ private void emitRelop(ref WasmCG cg, int op, tym_t operandTy) @trusted
     ubyte oc = OP_UNREACHABLE;
     switch (op)
     {
-    case OPeqeq: oc = pickByKind(operandTy, OP_F32_EQ, OP_F64_EQ, OP_I64_EQ, OP_I32_EQ); break;
-    case OPne:   oc = pickByKind(operandTy, OP_F32_NE, OP_F64_NE, OP_I64_NE, OP_I32_NE); break;
-    case OPlt:   oc = pickByKind(operandTy, OP_F32_LT, OP_F64_LT,
-                                            isUns ? OP_I64_LT_U : OP_I64_LT_S,
-                                            isUns ? OP_I32_LT_U : OP_I32_LT_S); break;
-    case OPle:   oc = pickByKind(operandTy, OP_F32_LE, OP_F64_LE,
-                                            isUns ? OP_I64_LE_U : OP_I64_LE_S,
-                                            isUns ? OP_I32_LE_U : OP_I32_LE_S); break;
-    case OPgt:   oc = pickByKind(operandTy, OP_F32_GT, OP_F64_GT,
-                                            isUns ? OP_I64_GT_U : OP_I64_GT_S,
-                                            isUns ? OP_I32_GT_U : OP_I32_GT_S); break;
-    case OPge:   oc = pickByKind(operandTy, OP_F32_GE, OP_F64_GE,
-                                            isUns ? OP_I64_GE_U : OP_I64_GE_S,
-                                            isUns ? OP_I32_GE_U : OP_I32_GE_S); break;
-    default: break;
+    case OPeqeq:
+        oc = pickByKind(operandTy, OP_F32_EQ, OP_F64_EQ, OP_I64_EQ, OP_I32_EQ);
+        break;
+    case OPne:
+        oc = pickByKind(operandTy, OP_F32_NE, OP_F64_NE, OP_I64_NE, OP_I32_NE);
+        break;
+    case OPlt:
+        oc = pickByKind(operandTy, OP_F32_LT, OP_F64_LT,
+            isUns ? OP_I64_LT_U
+                : OP_I64_LT_S,
+            isUns ? OP_I32_LT_U : OP_I32_LT_S);
+        break;
+    case OPle:
+        oc = pickByKind(operandTy, OP_F32_LE, OP_F64_LE,
+            isUns ? OP_I64_LE_U
+                : OP_I64_LE_S,
+            isUns ? OP_I32_LE_U : OP_I32_LE_S);
+        break;
+    case OPgt:
+        oc = pickByKind(operandTy, OP_F32_GT, OP_F64_GT,
+            isUns ? OP_I64_GT_U
+                : OP_I64_GT_S,
+            isUns ? OP_I32_GT_U : OP_I32_GT_S);
+        break;
+    case OPge:
+        oc = pickByKind(operandTy, OP_F32_GE, OP_F64_GE,
+            isUns ? OP_I64_GE_U
+                : OP_I64_GE_S,
+            isUns ? OP_I32_GE_U : OP_I32_GE_S);
+        break;
+    default:
+        break;
     }
     cg.emit(oc);
 }
@@ -2112,7 +2200,8 @@ private uint funcIndex(Symbol* sfunc) @trusted
 // For i32: nothing needed (already a valid br_if operand).
 private void emitCondToI32(ref WasmCG cg, elem* condElem) @trusted
 {
-    if (!condElem) return;
+    if (!condElem)
+        return;
     const tym_t ty = tybasic(condElem.Ety);
     if (ty == TYllong || ty == TYullong)
     {
@@ -2407,10 +2496,10 @@ private void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn) @
             // Use if-else chain when: values are i64, or the range is too
             // sparse (table would exceed 1024 entries).
             const bool is64bit = (b.Belem && (tybasic(b.Belem.Ety) == TYllong ||
-                                               tybasic(b.Belem.Ety) == TYullong));
+                    tybasic(b.Belem.Ety) == TYullong));
             const ulong tableLen64 = cast(ulong)(vmax - vmin) + 1;
             const bool useBrTable = !is64bit && tableLen64 <= 1024 &&
-                                    tableLen64 <= b.Bswitch.length * 4UL + 4;
+                tableLen64 <= b.Bswitch.length * 4UL + 4;
 
             if (!useBrTable)
             {
@@ -2433,7 +2522,7 @@ private void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn) @
                     else
                     {
                         cg.emit(OP_I32_CONST);
-                        cg.emitSLEB(cast(int)cv);
+                        cg.emitSLEB(cast(int) cv);
                         cg.emit(OP_I32_EQ);
                     }
                     cg.emit(OP_BR_IF);
@@ -2845,7 +2934,7 @@ void wasm_codgen(Symbol* sfunc) @trusted
     // Store results back into the WasmFuncBody
     fb.locals = cg.locals;
     fb.numParams = cg.numParams;
-    fb.codeRelocs    = cg.codeRelocs;
+    fb.codeRelocs = cg.codeRelocs;
     fb.dataAddrRelocs = cg.dataAddrRelocs;
     fb.code.reset();
     fb.code.write(cg.code.peekSlice());
