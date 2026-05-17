@@ -38,9 +38,17 @@ private extern(C) int main_fn(int argc, char** argv) nothrow
 // Using pragma(mangle) to avoid clashing with D's special 'main' treatment.
 pragma(mangle, "main") private extern(C) int __wasm_rt_main(int, char**) nothrow;
 
+// wasm-ld synthesizes __wasm_call_ctors from object .init_array / .ctors and
+// .Linking custom-section init functions.  wasi-libc relies on it to set up
+// stdio buffers (FILE* for stdout/stderr) before any printf can succeed.
+private extern(C) void __wasm_call_ctors() @nogc nothrow;
+private extern(C) void __wasm_call_dtors() @nogc nothrow;
+
 export void _start() nothrow
 {
+    __wasm_call_ctors();
     int rc = __wasm_rt_main(0, null);
+    __wasm_call_dtors();
     proc_exit(rc);
     while (true) {}
 }
