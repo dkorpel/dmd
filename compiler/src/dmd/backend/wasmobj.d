@@ -1266,14 +1266,7 @@ void WasmObj_term(const(char)[] objfilename)
 void WasmObj_term2(const(char)[] objfilename, ref OutBuffer out_)
 {
     // WASM magic + version
-    out_.writeByte(WASM_MAGIC_0);
-    out_.writeByte(WASM_MAGIC_1);
-    out_.writeByte(WASM_MAGIC_2);
-    out_.writeByte(WASM_MAGIC_3);
-    out_.writeByte(WASM_VERSION_0);
-    out_.writeByte(WASM_VERSION_1);
-    out_.writeByte(WASM_VERSION_2);
-    out_.writeByte(WASM_VERSION_3);
+    out_.put("\x00\x61\x73\x6D\x01\x00\x00\x00");
 
     // Two-phase code generation:
     // Phase 1: pre-scan all function IRs to register all external imports.
