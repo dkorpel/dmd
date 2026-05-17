@@ -1254,6 +1254,18 @@ private bool genElem(ref WasmCG cg, elem* e)
                         bool asSlice = false;
                         if (aty == TYullong || aty == TYllong)
                             asSlice = isSliceElem(a) || paramIsSlice(pp);
+                        // Aggregate (struct/static-array) param is passed by pointer
+                        // (i32) per buildFuncType. If the arg expression is OPind(addr),
+                        // strip the load — pass the address directly instead of the
+                        // dereferenced value. Otherwise an sret-returning callee that
+                        // produces the struct address gets its result loaded as a
+                        // value and the callee receives garbage / wrong WASM type.
+                        if (paramIsAggregate(pp) && a.Eoper == OPind && a.E1)
+                        {
+                            cg.genElem(a.E1);
+                            aparams ~= WASM_I32;
+                            continue;
+                        }
                         genOneArg(cg, a, asSlice);
                         if (asSlice)
                         {
@@ -1704,6 +1716,14 @@ private bool paramIsSlice(const(param_t)* p)
         return false;
     const(type)* t = p.Ptype;
     return tybasic(t.Tty) == TYullong && t.Tnext !is null;
+}
+
+private bool paramIsAggregate(const(param_t)* p)
+{
+    if (!p || !p.Ptype)
+        return false;
+    const tym_t tb = tybasic(p.Ptype.Tty);
+    return tb == TYstruct || tb == TYarray;
 }
 
 // Emit a single function argument. D slices (TYdarray = TYullong on WASM32)
