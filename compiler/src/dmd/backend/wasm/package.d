@@ -194,19 +194,6 @@ enum : ubyte
 /// Block type for void blocks
 enum ubyte WASM_VOID_BLOCK = 0x40;
 
-enum : ubyte
-{
-    WASM_MAGIC_0 = 0x00,
-    WASM_MAGIC_1 = 0x61, // 'a'
-    WASM_MAGIC_2 = 0x73, // 's'
-    WASM_MAGIC_3 = 0x6D, // 'm'
-
-    WASM_VERSION_0 = 0x01,
-    WASM_VERSION_1 = 0x00,
-    WASM_VERSION_2 = 0x00,
-    WASM_VERSION_3 = 0x00,
-}
-
 // Section IDs
 enum WasmSection : ubyte
 {
