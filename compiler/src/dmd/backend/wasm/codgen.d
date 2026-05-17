@@ -1263,35 +1263,10 @@ private bool genElem(ref WasmCG cg, elem* e)
                         // Otherwise the callee would receive a loaded i64/i32
                         // struct value where its WASM signature expects an i32
                         // pointer.
-                        if (paramIsAggregate(pp))
+                        if (paramIsAggregate(pp) && emitAggregateArgAsPointer(cg, a))
                         {
-                            if (a.Eoper == OPind && a.E1)
-                            {
-                                cg.genElem(a.E1);
-                                aparams ~= WASM_I32;
-                                continue;
-                            }
-                            if (a.Eoper == OPvar && a.Vsym)
-                            {
-                                Symbol* vs = a.Vsym;
-                                if (cg.inShadow(vs))
-                                {
-                                    cg.emitShadowAddr(vs);
-                                    if (a.Voffset != 0)
-                                    {
-                                        cg.emitConst(OP_I32_CONST, cast(int) a.Voffset);
-                                        cg.emit(OP_I32_ADD);
-                                    }
-                                    aparams ~= WASM_I32;
-                                    continue;
-                                }
-                                if (isDataSym(vs.Sfl))
-                                {
-                                    cg.emitDataAddr(vs, cast(uint) a.Voffset);
-                                    aparams ~= WASM_I32;
-                                    continue;
-                                }
-                            }
+                            aparams ~= WASM_I32;
+                            continue;
                         }
                         genOneArg(cg, a, asSlice);
                         if (asSlice)
@@ -1751,6 +1726,51 @@ private bool paramIsAggregate(const(param_t)* p)
         return false;
     const tym_t tb = tybasic(p.Ptype.Tty);
     return tb == TYstruct || tb == TYarray;
+}
+
+// Emit a call argument whose declared param is an aggregate (struct/static
+// array) as its address (i32), instead of the loaded struct value. Unwraps
+// OPcomma chains, OPind, OPvar of shadow/data symbols. Returns true if it
+// emitted the address; false if it didn't recognize the form (caller should
+// fall back to genOneArg).
+private bool emitAggregateArgAsPointer(ref WasmCG cg, elem* a)
+{
+    // OPcomma(E1, E2): evaluate E1 for side effects (drop result), then
+    // unwrap to E2 — the actual value of the comma expression.
+    while (a && a.Eoper == OPcomma)
+    {
+        const bool r1 = cg.genElem(a.E1);
+        if (r1)
+            cg.emit(OP_DROP);
+        a = a.E2;
+    }
+    if (!a)
+        return false;
+    if (a.Eoper == OPind && a.E1)
+    {
+        cg.genElem(a.E1);
+        return true;
+    }
+    if (a.Eoper == OPvar && a.Vsym)
+    {
+        Symbol* vs = a.Vsym;
+        if (cg.inShadow(vs))
+        {
+            cg.emitShadowAddr(vs);
+            if (a.Voffset != 0)
+            {
+                cg.emitConst(OP_I32_CONST, cast(int) a.Voffset);
+                cg.emit(OP_I32_ADD);
+            }
+            return true;
+        }
+        if (isDataSym(vs.Sfl))
+        {
+            cg.emitDataAddr(vs, cast(uint) a.Voffset);
+            return true;
+        }
+    }
+    return false;
 }
 
 // Emit a single function argument. D slices (TYdarray = TYullong on WASM32)
