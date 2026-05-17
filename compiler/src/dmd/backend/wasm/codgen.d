@@ -767,6 +767,7 @@ private bool genElem(ref WasmCG cg, elem* e)
                     cg.emitDataAddr(s, addend);
                     cg.emitLoad(e.E1.Ety);
                     cg.genElem(e.E2);
+                    emitCoerce(cg, wasmType(e.E2.Ety), wasmType(e.Ety));
                     cg.emitBinop(compoundToBinop(op), e.Ety);
                     cg.emitStore(e.E1.Ety);
                     cg.emitDataAddr(s, addend);
@@ -779,6 +780,7 @@ private bool genElem(ref WasmCG cg, elem* e)
                     cg.emitShadowAddr(s);
                     cg.emitLoad(e.E1.Ety);
                     cg.genElem(e.E2);
+                    emitCoerce(cg, wasmType(e.E2.Ety), wasmType(e.Ety));
                     cg.emitBinop(compoundToBinop(op), e.Ety);
                     cg.emitShadowAddr(s);
                     // swap addr and value using temp
@@ -796,6 +798,7 @@ private bool genElem(ref WasmCG cg, elem* e)
                 cg.emit(OP_LOCAL_GET);
                 cg.emitULEB(idx);
                 cg.genElem(e.E2);
+                emitCoerce(cg, wasmType(e.E2.Ety), wasmType(e.Ety));
                 cg.emitBinop(compoundToBinop(op), e.Ety);
                 // Mask for narrow types (ubyte, ushort, etc.) to preserve wrapping.
                 cg.maskSmallInt(e.E1.Ety);
@@ -815,6 +818,7 @@ private bool genElem(ref WasmCG cg, elem* e)
                 cg.emitULEB(tmp);
                 cg.emitLoad(e.E1.Ety);
                 cg.genElem(e.E2);
+                emitCoerce(cg, wasmType(e.E2.Ety), wasmType(e.Ety));
                 cg.emitBinop(compoundToBinop(op), e.Ety);
                 // Now: result on stack. Store then reload.
                 // We need addr again: local.get tmp; swap; store; local.get tmp; load
