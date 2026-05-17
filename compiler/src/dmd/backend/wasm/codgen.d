@@ -1255,16 +1255,43 @@ private bool genElem(ref WasmCG cg, elem* e)
                         if (aty == TYullong || aty == TYllong)
                             asSlice = isSliceElem(a) || paramIsSlice(pp);
                         // Aggregate (struct/static-array) param is passed by pointer
-                        // (i32) per buildFuncType. If the arg expression is OPind(addr),
-                        // strip the load — pass the address directly instead of the
-                        // dereferenced value. Otherwise an sret-returning callee that
-                        // produces the struct address gets its result loaded as a
-                        // value and the callee receives garbage / wrong WASM type.
-                        if (paramIsAggregate(pp) && a.Eoper == OPind && a.E1)
+                        // (i32) per buildFuncType. Emit the arg's address instead
+                        // of its loaded value:
+                        //   OPind(addr) → addr
+                        //   OPvar(shadow-frame sym) → shadow address + Voffset
+                        //   OPvar(data sym) → data address + Voffset
+                        // Otherwise the callee would receive a loaded i64/i32
+                        // struct value where its WASM signature expects an i32
+                        // pointer.
+                        if (paramIsAggregate(pp))
                         {
-                            cg.genElem(a.E1);
-                            aparams ~= WASM_I32;
-                            continue;
+                            if (a.Eoper == OPind && a.E1)
+                            {
+                                cg.genElem(a.E1);
+                                aparams ~= WASM_I32;
+                                continue;
+                            }
+                            if (a.Eoper == OPvar && a.Vsym)
+                            {
+                                Symbol* vs = a.Vsym;
+                                if (cg.inShadow(vs))
+                                {
+                                    cg.emitShadowAddr(vs);
+                                    if (a.Voffset != 0)
+                                    {
+                                        cg.emitConst(OP_I32_CONST, cast(int) a.Voffset);
+                                        cg.emit(OP_I32_ADD);
+                                    }
+                                    aparams ~= WASM_I32;
+                                    continue;
+                                }
+                                if (isDataSym(vs.Sfl))
+                                {
+                                    cg.emitDataAddr(vs, cast(uint) a.Voffset);
+                                    aparams ~= WASM_I32;
+                                    continue;
+                                }
+                            }
                         }
                         genOneArg(cg, a, asSlice);
                         if (asSlice)
