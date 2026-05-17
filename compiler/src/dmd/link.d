@@ -312,6 +312,24 @@ private int runWasmLINK(bool verbose, ref Param params, ErrorSink eSink)
         argv.push("--no-gc-sections");
     }
 
+    // Push our vendored -L paths FIRST so `-l:libc.a` / `-l:libdruntime-wasm.a`
+    // resolve against the WASM-targeted archives, not host /usr/lib (which a
+    // user's dmd.conf may put on the search path via -L-L/usr/lib).
+    if (hasDruntime)
+    {
+        void pushLPathEarly(const(char)[] dir)
+        {
+            if (!dir.length) return;
+            char* lflag = cast(char*) mem.xmalloc(2 + dir.length + 1);
+            lflag[0] = '-'; lflag[1] = 'L';
+            memcpy(lflag + 2, dir.ptr, dir.length);
+            lflag[2 + dir.length] = 0;
+            argv.push(lflag);
+        }
+        pushLPathEarly(argv0WasmGeneratedDir());
+        pushLPathEarly(argv0DruntimeDir());
+    }
+
     // Link switches: pass directly to wasm-ld, filtering out switches that
     // are host-native only (e.g. -rpath, which wasm-ld rejects or ignores).
     foreach (pi, p; params.linkswitches)
@@ -360,19 +378,8 @@ private int runWasmLINK(bool verbose, ref Param params, ErrorSink eSink)
     // builds keep working when no explicit path is configured.
     if (hasDruntime)
     {
-        void pushLPath(const(char)[] dir)
-        {
-            if (!dir.length) return;
-            char* lflag = cast(char*) mem.xmalloc(2 + dir.length + 1);
-            lflag[0] = '-'; lflag[1] = 'L';
-            memcpy(lflag + 2, dir.ptr, dir.length);
-            lflag[2 + dir.length] = 0;
-            argv.push(lflag);
-        }
-        // libdruntime-wasm.a sits in generated/wasm/release/wasm32/ (built by
-        // `make wasm -C druntime`); libc.a is vendored in druntime/.
-        pushLPath(argv0WasmGeneratedDir());
-        pushLPath(argv0DruntimeDir());
+        // -L paths for these archives were pushed earlier so they outrank any
+        // host paths a user's dmd.conf may have appended via linkswitches.
         argv.push("-l:libdruntime-wasm.a");
         argv.push("-l:libc.a"); // WASI C runtime (printf, memcpy, etc.)
     }
