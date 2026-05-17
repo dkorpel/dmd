@@ -794,11 +794,11 @@ private bool genElem(ref WasmCG cg, elem* e)
                     cg.genElem(e.E2);
                     emitCoerce(cg, wasmType(e.E2.Ety), wasmType(e.Ety));
                     cg.emitBinop(compoundToBinop(op), e.Ety);
-                    cg.emitShadowAddr(s);
-                    // swap addr and value using temp
+                    // Stash result, then push [addr, value] in store order.
                     uint valTmp2 = cg.allocTemp(wasmType(e.Ety));
                     cg.emit(OP_LOCAL_SET);
                     cg.emitULEB(valTmp2);
+                    cg.emitShadowAddr(s);
                     cg.emit(OP_LOCAL_GET);
                     cg.emitULEB(valTmp2);
                     cg.emitStore(e.E1.Ety);
@@ -1322,7 +1322,27 @@ private bool genElem(ref WasmCG cg, elem* e)
                             aparams ~= WASM_I32;
                         }
                         else
-                            aparams ~= wasmType(aty);
+                        {
+                            // Coerce pushed type to the callee's declared param
+                            // type when they differ (e.g. i32 ptr sign-extended
+                            // to i64 by an OPs32_64 cast, but callee declared
+                            // the param as a plain i32 pointer).
+                            ubyte pushedTy = wasmType(aty);
+                            if (pp && pp.Ptype && !paramIsSlice(pp))
+                            {
+                                ubyte declTy = wasmType(pp.Ptype.Tty);
+                                // Only coerce within the integer domain. Crossing
+                                // into float would misinterpret pointer-like ints
+                                // as numeric values.
+                                bool intDomain(ubyte t) { return t == WASM_I32 || t == WASM_I64; }
+                                if (declTy != pushedTy && intDomain(declTy) && intDomain(pushedTy))
+                                {
+                                    emitCoerce(cg, pushedTy, declTy);
+                                    pushedTy = declTy;
+                                }
+                            }
+                            aparams ~= pushedTy;
+                        }
                     }
 
                     // Runtime symbols (memcmp, __assert, etc.) are registered with a
