@@ -385,8 +385,7 @@ private void emitCoerce(ref WasmCG cg, ubyte from, ubyte to)
     }
 }
 
-// Returns true if a storage class indicates a global living in linear memory
-// (initialized data, BSS, TLS, external, or a constant data segment).
+/// Returns: true if a storage class indicates a global living in linear memory
 private bool isDataSym(FL fl) @safe @nogc nothrow
 {
     switch (fl)
@@ -403,7 +402,7 @@ private bool isDataSym(FL fl) @safe @nogc nothrow
     }
 }
 
-// Returns true if a symbol's storage class means it needs a WASM local (not global mem).
+/// Returns: true if a symbol's storage class means it needs a WASM local (not global mem).
 private bool isLocalSym(Symbol* s)
 {
     return !isDataSym(s.Sfl) && s.Sfl != FL.func;
@@ -2064,66 +2063,44 @@ private uint funcIndex(Symbol* sfunc)
 }
 
 // Ensure a condition value on the WASM stack is an i32 suitable for br_if.
-// For i64 (D slice / long): emit i64.eqz + i32.eqz to produce 1 if nonzero.
-// For i32: nothing needed (already a valid br_if operand).
-private void emitCondToI32(ref WasmCG cg, elem* condElem)
+private void emitCondToI32(ref WasmCG cg, elem* condElem, bool invert = false)
 {
     if (!condElem)
+    {
+        if (invert)
+            cg.emit(OP_I32_EQZ);
         return;
-    const tym_t ty = tybasic(condElem.Ety);
-    if (ty == TYllong || ty == TYullong)
+    }
+    const ty = tybasic(condElem.Ety).wasmType;
+    if (ty == WASM_I64)
     {
         cg.emit(OP_I64_EQZ); // i64 → i32: 1 if zero, 0 if nonzero
-        cg.emit(OP_I32_EQZ); // invert: 1 if nonzero (truthy)
+
+        if (!invert)
+            cg.emit(OP_I32_EQZ); // invert again, `cast(bool) i = !!i`
     }
-    else if (ty == TYfloat || ty == TYifloat)
+    else if (ty == WASM_F32)
     {
         // f32 truthiness: nonzero (NaN is truthy under WASM's NE semantics).
         cg.emit(OP_F32_CONST);
         float fz = 0.0f;
         cg.code.write(&fz, 4);
-        cg.emit(OP_F32_NE);
+        cg.emit(invert ? OP_F32_NE : OP_F32_EQ);
     }
-    else if (ty == TYdouble || ty == TYdouble_alias || ty == TYreal || ty == TYireal)
+    else if (ty == WASM_F64)
     {
         cg.emit(OP_F64_CONST);
         double dz = 0.0;
         cg.code.write(&dz, 8);
-        cg.emit(OP_F64_NE);
+        cg.emit(invert ? OP_F64_NE : OP_F64_EQ);
     }
 }
 
 // Emit the inversion of a condition for "branch if FALSE" patterns (cond; eqz; br_if).
-// For i64: i64.eqz produces 1 when zero (false).
-// For i32: i32.eqz produces 1 when zero (false).
 private void emitCondInvert(ref WasmCG cg, elem* condElem)
 {
-    if (!condElem)
-    {
-        cg.emit(OP_I32_EQZ);
-        return;
-    }
-    const tym_t ty = tybasic(condElem.Ety);
-    if (ty == TYllong || ty == TYullong)
-        cg.emit(OP_I64_EQZ);
-    else if (ty == TYfloat || ty == TYifloat)
-    {
-        cg.emit(OP_F32_CONST);
-        float fz = 0.0f;
-        cg.code.write(&fz, 4);
-        cg.emit(OP_F32_EQ);
-    }
-    else if (ty == TYdouble || ty == TYdouble_alias || ty == TYreal || ty == TYireal)
-    {
-        cg.emit(OP_F64_CONST);
-        double dz = 0.0;
-        cg.code.write(&dz, 8);
-        cg.emit(OP_F64_EQ);
-    }
-    else
-        cg.emit(OP_I32_EQZ);
+    return emitCondToI32(cg, condElem, true);
 }
-
 
 // Per-block metadata computed during analysis
 private struct BlkInfo

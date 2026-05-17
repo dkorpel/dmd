@@ -1966,8 +1966,8 @@ uint wmod_getOrCreateStackPtrGlobal()
     g.valType = WASM_I32;
     g.mutable_ = true;
     g.initVal = 65536; // placeholder; updated in WasmObj_term from dataHeap
+    wmod.stackPtrGlobalIdx = cast(int) wmod.globals.length;
     wmod.globals ~= g;
-    wmod.stackPtrGlobalIdx = cast(int)(wmod.globals.length - 1);
     wmod.needsMemory = true; // shadow stack lives in linear memory
     return cast(uint) wmod.stackPtrGlobalIdx;
 }
