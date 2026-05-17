@@ -523,13 +523,20 @@ private void maskSmallInt(ref WasmCG cg, tym_t ty) // TY
 
 // Expression code generation
 
-// Returns: true if the expression has a result on the stack after genElem
+/// Returns: true if the expression has a result on the stack after genElem
 private bool genElem(ref WasmCG cg, elem* e)
 {
     if (!e)
         return false;
 
     const op = e.Eoper;
+
+    bool unaryOp(ubyte op)
+    {
+        genElem(cg, e.E1);
+        cg.emit(op);
+        return true;
+    }
 
     switch (op)
     {
@@ -922,42 +929,26 @@ private bool genElem(ref WasmCG cg, elem* e)
             return true;
         }
 
-    case OPu16_32:
-    case OPs16_32:
+    // unsigned widening: already zero-extended as i32 — no-op
     case OPu8_16:
-    case OPs8_16:
-        {
-            genElem(cg, e.E1);
-            if (op == OPs8_16)
-            {
-                cg.emit(OP_I32_EXTEND8_S);
-            }
-            else if (op == OPs16_32)
-            {
-                cg.emit(OP_I32_EXTEND16_S);
-            }
-            // unsigned widening: already zero-extended as i32 — no-op
-            return true;
-        }
+    case OPu16_32:
+        genElem(cg, e.E1);
+        return true;
 
-    case OPu32_64:
-        {
-            genElem(cg, e.E1);
-            cg.emit(OP_I64_EXTEND_I32_U);
-            return true;
-        }
-    case OPs32_64:
-        {
-            genElem(cg, e.E1);
-            cg.emit(OP_I64_EXTEND_I32_S);
-            return true;
-        }
-    case OP64_32:
-        {
-            genElem(cg, e.E1);
-            cg.emit(OP_I32_WRAP_I64);
-            return true;
-        }
+    case OPs8_16: return unaryOp(OP_I32_EXTEND8_S);
+    case OPs16_32: return unaryOp(OP_I32_EXTEND16_S);
+    case OPu32_64: return unaryOp(OP_I64_EXTEND_I32_U);
+    case OPs32_64: return unaryOp(OP_I64_EXTEND_I32_S);
+    case OP64_32: return unaryOp(OP_I32_WRAP_I64);
+    case OPd_f: return unaryOp(OP_F32_DEMOTE_F64);
+    case OPf_d: return unaryOp(OP_F64_PROMOTE_F32);
+    case OPd_s32: return unaryOp(OP_I32_TRUNC_F64_S);
+    case OPd_s64: return unaryOp(OP_I64_TRUNC_F64_S);
+    case OPs32_d: return unaryOp(OP_F64_CONVERT_I32_S);
+    case OPs64_d: return unaryOp(OP_F64_CONVERT_I64_S);
+    case OPu32_d: return unaryOp(OP_F64_CONVERT_I32_U);
+    case OPu64_d: return unaryOp(OP_F64_CONVERT_I64_S);
+
     case OPmsw:
         {
             // Extract high 32 bits of a 64-bit value (ptr part of D slice on wasm32).
@@ -984,56 +975,6 @@ private bool genElem(ref WasmCG cg, elem* e)
             cg.emit(OP_I32_CONST);
             cg.emitSLEB(0xFFFF);
             cg.emit(OP_I32_AND);
-            return true;
-        }
-
-    case OPd_f:
-        {
-            genElem(cg, e.E1);
-            cg.emit(OP_F32_DEMOTE_F64);
-            return true;
-        }
-    case OPf_d:
-        {
-            genElem(cg, e.E1);
-            cg.emit(OP_F64_PROMOTE_F32);
-            return true;
-        }
-
-    case OPd_s32:
-        {
-            genElem(cg, e.E1);
-            cg.emit(OP_I32_TRUNC_F64_S);
-            return true;
-        }
-    case OPd_s64:
-        {
-            genElem(cg, e.E1);
-            cg.emit(OP_I64_TRUNC_F64_S);
-            return true;
-        }
-    case OPs32_d:
-        {
-            genElem(cg, e.E1);
-            cg.emit(OP_F64_CONVERT_I32_S);
-            return true;
-        }
-    case OPs64_d:
-        {
-            genElem(cg, e.E1);
-            cg.emit(OP_F64_CONVERT_I64_S);
-            return true;
-        }
-    case OPu32_d:
-        {
-            genElem(cg, e.E1);
-            cg.emit(OP_F64_CONVERT_I32_U);
-            return true;
-        }
-    case OPu64_d:
-        {
-            genElem(cg, e.E1);
-            cg.emit(OP_F64_CONVERT_I64_S);
             return true;
         }
 
