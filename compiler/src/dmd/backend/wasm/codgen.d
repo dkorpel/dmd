@@ -243,7 +243,6 @@ private void sleb(OutBuffer* b, long v) @trusted
         b.writeByte(bt);
     }
 }
-
 // ---------------------------------------------------------------------------
 // WASM value type for a backend type
 // ---------------------------------------------------------------------------
@@ -1446,7 +1445,15 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
                 else
                 {
                     // Non-variadic direct call.
-                    // Gather args left-to-right (OPparam tree is right-to-left at top).
+                    // Gather args in WASM call order. For D linkage (TYjfunc),
+                    // the function signature's globsym is built by reversing
+                    // the source params then prepending sthis/shidden, so the
+                    // declared param order is [this, shidden, line, file, args]
+                    // (reversed src + leading hidden). The caller-side OPparam
+                    // tree is built as left-fold of source-order args with
+                    // ethis (and ehidden) appended last: OPparam(.. (args,file) .. line), this).
+                    // Visiting E2 first then E1 walks this tree to produce the
+                    // matching order: [this, line, file, args].
                     elem*[] callArgs;
                     void gatherCallArgs(elem* p) nothrow @trusted
                     {
@@ -1462,24 +1469,58 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
                     }
                     gatherCallArgs(e.E2);
 
-                    // Walk param chain in parallel: a slice param forces split even when
-                    // the elem itself isn't recognised as a slice (e.g. OPconst null).
-                    param_t* pp = (calleeSym.Stype !is null) ? calleeSym.Stype.Tparamtypes : null;
-                    ubyte[] aparams;
-                    foreach (a; callArgs)
+                    // Slice handling: the WASM callee ABI splits each D slice
+                    // parameter into two i32s (len, ptr). At IR level, many
+                    // callers pre-split slice args into separate (OPconst
+                    // length, OPrelconst ptr) entries — those flow through
+                    // as plain i32 args. Other callers pass a packed i64
+                    // slice value (OPpair, OPvar of a slice local, OPind of
+                    // slice address, OPcall returning a slice). For the
+                    // latter we must split on the value stack: pop i64,
+                    // push wrap(lo) and shr(hi).
+                    //
+                    // Split only when the arg width is i64 (TYullong/TYllong)
+                    // AND there's evidence the value is a slice — either the
+                    // elem itself looks like a slice, or the matching callee
+                    // parameter is declared as a slice.
+                    //
+                    // Param alignment: Tparamtypes is in source-declaration
+                    // order. D linkage (TYjfunc) reverses params in globsym,
+                    // so callArgs (gathered to match the callee's WASM ABI
+                    // order) is reversed relative to source declaration. We
+                    // reverse Tparamtypes into a flat array to align by
+                    // position, then prepend nulls for any hidden leading
+                    // args (this/shidden) when callArgs has more entries
+                    // than declared params.
+                    param_t*[] declParams;
+                    for (param_t* q = (calleeSym.Stype !is null) ? calleeSym.Stype.Tparamtypes : null;
+                         q; q = q.Pnext)
+                        declParams ~= q;
+                    foreach (k; 0 .. declParams.length / 2)
                     {
-                        const bool sliceParam = paramIsSlice(pp);
-                        const bool asSlice = sliceParam || isSliceElem(a);
-                        genOneArg(cg, a, sliceParam);
+                        auto t = declParams[k];
+                        declParams[k] = declParams[declParams.length - 1 - k];
+                        declParams[declParams.length - 1 - k] = t;
+                    }
+                    size_t hiddenLead = (callArgs.length > declParams.length)
+                        ? callArgs.length - declParams.length : 0;
+                    ubyte[] aparams;
+                    foreach (i, a; callArgs)
+                    {
+                        const tym_t aty = tybasic(a.Ety);
+                        param_t* pp = (i >= hiddenLead && i - hiddenLead < declParams.length)
+                            ? declParams[i - hiddenLead] : null;
+                        bool asSlice = false;
+                        if (aty == TYullong || aty == TYllong)
+                            asSlice = isSliceElem(a) || paramIsSlice(pp);
+                        genOneArg(cg, a, asSlice);
                         if (asSlice)
                         {
                             aparams ~= WASM_I32;
                             aparams ~= WASM_I32;
                         }
                         else
-                            aparams ~= wasmType(tybasic(a.Ety));
-                        if (pp)
-                            pp = pp.Pnext;
+                            aparams ~= wasmType(aty);
                     }
 
                     // Runtime symbols (memcmp, __assert, etc.) are registered with a
@@ -1718,27 +1759,21 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
     case OPpair:
     case OPrpair:
         {
-            // For i64 results (D slices, long long): pack two i32 halves into one i64.
+            // OPpair always packs two i32 halves into one i64 quadword
+            // (D slices, long long, delegates). The Ety can be TYullong,
+            // TYllong, TYdelegate (= TYllong), or wrapper types — always pack.
             // OPpair:  E1=lo (len), E2=hi (ptr) → i64 = (E2<<32) | E1
             // OPrpair: E1=hi (ptr), E2=lo (len) → i64 = (E1<<32) | E2
-            const tym_t resultTy = tybasic(e.Ety);
-            if (resultTy == TYullong || resultTy == TYllong)
-            {
-                elem* loE = (e.Eoper == OPrpair) ? e.E2 : e.E1;
-                elem* hiE = (e.Eoper == OPrpair) ? e.E1 : e.E2;
-                genElem(cg, hiE);
-                cg.emit(OP_I64_EXTEND_I32_U);
-                cg.emit(OP_I64_CONST);
-                cg.emitSLEB(32);
-                cg.emit(OP_I64_SHL);
-                genElem(cg, loE);
-                cg.emit(OP_I64_EXTEND_I32_U);
-                cg.emit(OP_I64_OR);
-                return true;
-            }
-            // Other (multi-value): push both separately.
-            genElem(cg, e.E1);
-            genElem(cg, e.E2);
+            elem* loE = (e.Eoper == OPrpair) ? e.E2 : e.E1;
+            elem* hiE = (e.Eoper == OPrpair) ? e.E1 : e.E2;
+            genElem(cg, hiE);
+            cg.emit(OP_I64_EXTEND_I32_U);
+            cg.emit(OP_I64_CONST);
+            cg.emitSLEB(32);
+            cg.emit(OP_I64_SHL);
+            genElem(cg, loE);
+            cg.emit(OP_I64_EXTEND_I32_U);
+            cg.emit(OP_I64_OR);
             return true;
         }
 
@@ -1882,23 +1917,28 @@ private bool isSliceElem(const(elem)* e) @trusted
     // Explicit element type with Tnext indicates a slice.
     if (e.ET && e.ET.Tnext)
         return true;
-    // OPvar: check symbol's declared type for Tnext.
+    // OPvar: check symbol's declared type for Tnext (slice element type).
     if (e.Eoper == OPvar && e.Vsym && e.Vsym.Stype && e.Vsym.Stype.Tnext)
         return true;
     // OPpair/OPrpair always construct a (len, ptr) D slice.
     if (e.Eoper == OPpair || e.Eoper == OPrpair)
         return true;
-    // OPind: dereferencing a pointer-to-slice.
-    // addr.Vsym.Stype = ptr type; .Tnext = slice type (TYullong + Tnext = element).
-    if (e.Eoper == OPind && e.E1)
+    // OPind: dereferencing a pointer-to-slice. e.ET (the loaded type) is
+    // the most reliable signal — for a slice load it has Tnext (element).
+    if (e.Eoper == OPind)
     {
-        const(elem)* addr = e.E1;
-        if (addr.Eoper == OPvar && addr.Vsym && addr.Vsym.Stype)
+        if (e.ET && e.ET.Tnext && tybasic(e.ET.Tty) == TYullong)
+            return true;
+        if (e.E1)
         {
-            const(type)* sliceTy = addr.Vsym.Stype.Tnext;
-            // pointee must be TYullong (= TYdarray on WASM32) with an element type.
-            if (sliceTy && tybasic(sliceTy.Tty) == TYullong && sliceTy.Tnext)
-                return true;
+            const(elem)* addr = e.E1;
+            // OPind(OPvar(p)) where p has type pointer-to-slice.
+            if (addr.Eoper == OPvar && addr.Vsym && addr.Vsym.Stype)
+            {
+                const(type)* sliceTy = addr.Vsym.Stype.Tnext;
+                if (sliceTy && tybasic(sliceTy.Tty) == TYullong && sliceTy.Tnext)
+                    return true;
+            }
         }
     }
     return false;
@@ -1938,16 +1978,20 @@ private void genOneArg(ref WasmCG cg, elem* e, bool forceSlice = false) @trusted
     }
 }
 
-// In DMD IR, OPparam(E1, E2) is right-to-left: E2 is the leftmost argument.
-// WASM args are left-to-right on the stack, so emit E2 before E1.
+// Walk the OPparam tree to push args in the declared param order.
+// For D linkage (TYjfunc), globsym is built by reversing the source-order
+// params then prepending sthis/shidden, while the OPparam tree from e2ir is
+// a left-fold of source-order args with sthis/shidden appended at the tail
+// (root.E2). Visiting E2 first then E1 yields [this, line, file, args] — the
+// matching push order.
 private void genArgs(ref WasmCG cg, elem* e) @trusted
 {
     if (!e)
         return;
     if (e.Eoper == OPparam)
     {
-        genArgs(cg, e.E2); // leftmost arg first
-        genArgs(cg, e.E1); // rightmost arg second
+        genArgs(cg, e.E2);
+        genArgs(cg, e.E1);
     }
     else
     {
