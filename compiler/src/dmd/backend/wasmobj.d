@@ -53,24 +53,6 @@ private void pushSegData(int idx) nothrow @trusted
 
 nothrow:
 
-// ---------------------------------------------------------------------------
-// LEB128 encoding helpers
-// ---------------------------------------------------------------------------
-
-// Append unsigned LEB128
-private void appendULEB128(ref OutBuffer buf, uint val) @trusted
-{
-    do
-    {
-        ubyte b = val & 0x7F;
-        val >>= 7;
-        if (val != 0)
-            b |= 0x80;
-        buf.writeByte(b);
-    }
-    while (val != 0);
-}
-
 // Append a name string (length-prefixed)
 private void appendName(ref OutBuffer buf, const(char)[] name) @trusted
 {
@@ -92,7 +74,7 @@ private uint ulebSize(uint v) @trusted
 }
 
 // Emit a 5-byte padded ULEB128 (fixed-width, allowing linker relocation patching)
-private void appendULEB128_5(ref OutBuffer buf, uint v) @trusted
+private void writeuLEB128_5(ref OutBuffer buf, uint v) @trusted
 {
     buf.writeByte(cast(ubyte)((v & 0x7F) | 0x80));
     buf.writeByte(cast(ubyte)(((v >> 7) & 0x7F) | 0x80));
@@ -552,14 +534,14 @@ private void emitTypeSection(ref OutBuffer out_) @trusted
 {
     OutBuffer* s = &wmod.scratch;
     s.reset();
-    appendULEB128(*s, cast(uint) wmod.funcTypes.length);
+    s.writeuLEB128(cast(uint) wmod.funcTypes.length);
     foreach (ref const WasmFuncType ft; wmod.funcTypes)
     {
         s.writeByte(0x60); // func type indicator
-        appendULEB128(*s, cast(uint) ft.params.length);
+        s.writeuLEB128(cast(uint) ft.params.length);
         foreach (ubyte v; ft.params)
             s.writeByte(v);
-        appendULEB128(*s, cast(uint) ft.results.length);
+        s.writeuLEB128(cast(uint) ft.results.length);
         foreach (ubyte v; ft.results)
             s.writeByte(v);
     }
@@ -574,13 +556,13 @@ private void emitImportSection(ref OutBuffer out_) @trusted
         return;
     OutBuffer* s = &wmod.scratch;
     s.reset();
-    appendULEB128(*s, count);
+    s.writeuLEB128(count);
     foreach (ref const WasmFunc f; wmod.funcs[0 .. wmod.numImports])
     {
         appendName(*s, f.importModule);
         appendName(*s, f.importName);
         s.writeByte(WASM_EXPORT_FUNC); // import kind: function
-        appendULEB128(*s, f.typeIdx);
+        s.writeuLEB128(f.typeIdx);
     }
     if (wmod.importFuncTable)
     {
@@ -590,7 +572,7 @@ private void emitImportSection(ref OutBuffer out_) @trusted
         s.writeByte(0x01); // import kind: table
         s.writeByte(0x70); // funcref element type
         s.writeByte(0x00); // limits: no max
-        appendULEB128(*s, 0); // min size = 0 (linker sets actual size)
+        s.writeuLEB128(0); // min size = 0 (linker sets actual size)
     }
     writeSection(out_, WasmSection.import_, s);
 }
@@ -602,9 +584,9 @@ private void emitFunctionSection(ref OutBuffer out_) @trusted
         return;
     OutBuffer* s = &wmod.scratch;
     s.reset();
-    appendULEB128(*s, defined);
+    s.writeuLEB128(defined);
     foreach (ref const WasmFunc f; wmod.funcs[wmod.numImports .. $])
-        appendULEB128(*s, f.typeIdx);
+        s.writeuLEB128(f.typeIdx);
     writeSection(out_, WasmSection.function_, s);
 }
 
@@ -619,11 +601,11 @@ private bool emitTableSection(ref OutBuffer out_) @trusted
         return false;
     OutBuffer* s = &wmod.scratch;
     s.reset();
-    appendULEB128(*s, 1); // 1 table
+    s.writeuLEB128(1); // 1 table
     s.writeByte(0x70); // funcref type
     s.writeByte(0x01); // has min and max (limits flag)
-    appendULEB128(*s, defined); // min = number of defined functions
-    appendULEB128(*s, defined); // max = same
+    s.writeuLEB128(defined); // min = number of defined functions
+    s.writeuLEB128(defined); // max = same
     writeSection(out_, WasmSection.table, s);
     return true;
 }
@@ -639,13 +621,13 @@ private void emitElementSection(ref OutBuffer out_) @trusted
         return;
     OutBuffer* s = &wmod.scratch;
     s.reset();
-    appendULEB128(*s, 1); // 1 element segment
+    s.writeuLEB128(1); // 1 element segment
     // Segment payload:
     s.writeByte(0x00); // kind: active, table 0, funcref, offset init-expr, funcidx vec
     s.writeByte(0x41); // i32.const
     s.writeByte(0x00); // offset = 0
     s.writeByte(0x0B); // end
-    appendULEB128(*s, defined); // count of function indices
+    s.writeuLEB128(defined); // count of function indices
     // Byte offset from start of element section PAYLOAD (after section id + size bytes).
     // Payload starts with: [count=1 ULEB] + [kind=0] + [0x41]+[0x00]+[0x0B] + [defined ULEB]
     // = 1 + 1 + 3 + 1 = 6 bytes before the first function index.
@@ -656,7 +638,7 @@ private void emitElementSection(ref OutBuffer out_) @trusted
     {
         uint fidx = cast(uint) i;
         wmod.elemFuncRelocOffsets ~= entryOffset; // offset of this 5-byte entry
-        appendULEB128_5(*s, fidx); // 5-byte padded ULEB for linker relocation patching
+        (*s).writeuLEB128_5(fidx); // 5-byte padded ULEB for linker relocation patching
         entryOffset += 5;
     }
     writeSection(out_, WasmSection.element, s);
@@ -668,9 +650,9 @@ private void emitMemorySection(ref OutBuffer out_) @trusted
     // or array indexing needs it, and it's harmless when unused.
     OutBuffer* s = &wmod.scratch;
     s.reset();
-    appendULEB128(*s, 1); // one memory
+    s.writeuLEB128(1); // one memory
     s.writeByte(0x00); // flags: no maximum
-    appendULEB128(*s, wmod.memoryPageCount ? wmod.memoryPageCount : 1);
+    s.writeuLEB128(wmod.memoryPageCount ? wmod.memoryPageCount : 1);
     writeSection(out_, WasmSection.memory, s);
 }
 
@@ -680,7 +662,7 @@ private void emitGlobalSection(ref OutBuffer out_) @trusted
         return;
     OutBuffer* s = &wmod.scratch;
     s.reset();
-    appendULEB128(*s, cast(uint) wmod.globals.length);
+    s.writeuLEB128(cast(uint) wmod.globals.length);
     foreach (ref const WasmGlobal g; wmod.globals)
     {
         s.writeByte(g.valType);
@@ -688,24 +670,13 @@ private void emitGlobalSection(ref OutBuffer out_) @trusted
         // constant-expression initializer
         if (g.valType == WASM_I32)
         {
-            s.writeByte(0x41); // i32.const
-            // signed LEB128 for init value
-            long v = g.initVal;
-            bool more = true;
-            while (more)
-            {
-                ubyte b = v & 0x7F;
-                v >>= 7;
-                more = !((v == 0 && !(b & 0x40)) || (v == -1 && (b & 0x40)));
-                if (more)
-                    b |= 0x80;
-                s.writeByte(b);
-            }
+            s.writeByte(OP_I32_CONST);
+            s.writesLEB128(g.initVal);
         }
         else
         {
             // Fallback: emit i32.const 0 for unknown types
-            s.writeByte(0x41);
+            s.writeByte(OP_I32_CONST);
             s.writeByte(0x00);
         }
         s.writeByte(0x0B); // end
@@ -724,12 +695,12 @@ private void emitExportSection(ref OutBuffer out_) @trusted
     ++count; // always export "memory"
     if (!count)
         return;
-    appendULEB128(*s, count);
+    s.writeuLEB128(count);
     // Always export memory (index 0)
     {
         appendName(*s, "memory");
         s.writeByte(WASM_EXPORT_MEM);
-        appendULEB128(*s, 0); // memory index 0
+        s.writeuLEB128(0); // memory index 0
     }
     foreach (size_t i, ref const WasmFunc f; wmod.funcs)
     {
@@ -738,7 +709,7 @@ private void emitExportSection(ref OutBuffer out_) @trusted
         const(char)[] name = f.sym ? f.sym.Sident.ptr[0 .. strlen(f.sym.Sident.ptr)] : f.importName;
         appendName(*s, name);
         s.writeByte(WASM_EXPORT_FUNC);
-        appendULEB128(*s, cast(uint) i);
+        s.writeuLEB128(cast(uint) i);
     }
     writeSection(out_, WasmSection.export_, s);
 }
@@ -750,7 +721,7 @@ private void emitCodeSection(ref OutBuffer out_) @trusted
         return;
     OutBuffer* s = &wmod.scratch;
     s.reset();
-    appendULEB128(*s, defined);
+    s.writeuLEB128(defined);
 
     // Track running byte offset from start of code section payload
     // to compute absolute relocation offsets for reloc.CODE.
@@ -787,7 +758,7 @@ private void emitCodeSection(ref OutBuffer out_) @trusted
         if (fb)
             fb.codePayloadStart = payloadOffset + bodySizeBytes + cast(uint) locBuf.length();
 
-        appendULEB128(*s, bodySize);
+        s.writeuLEB128(bodySize);
         s.write(locBuf.peekSlice());
         if (fb && fb.code.length())
             s.write(fb.code.peekSlice());
@@ -806,15 +777,15 @@ private void emitDataSection(ref OutBuffer out_) @trusted
         return;
     OutBuffer* s = &wmod.scratch;
     s.reset();
-    appendULEB128(*s, cast(uint) wmod.dataSegs.length);
+    s.writeuLEB128(cast(uint) wmod.dataSegs.length);
     foreach (ref WasmDataSeg ds; wmod.dataSegs)
     {
         s.writeByte(0x00); // active segment, memory 0
         // offset initializer: i32.const <offset> end
         s.writeByte(0x41); // i32.const
-        appendULEB128(*s, ds.offset);
+        s.writeuLEB128(ds.offset);
         s.writeByte(WASM_END);
-        appendULEB128(*s, cast(uint) ds.data.length());
+        s.writeuLEB128(cast(uint) ds.data.length());
         s.write(ds.data.peekSlice());
     }
     writeSection(out_, WasmSection.data, s);
