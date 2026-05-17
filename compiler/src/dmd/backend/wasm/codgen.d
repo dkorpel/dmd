@@ -558,35 +558,23 @@ private bool genElem(ref WasmCG cg, elem* e)
     {
     case OPconst:
         {
-            const ty = tybasic(e.Ety); // TODO: simplify using .wasmType
-            switch (ty)
+            switch (tybasic(e.Ety).wasmType)
             {
-            case TYllong:
-            case TYullong:
-            case TYcent:
-            case TYucent:
+            case WASM_I64:
                 cg.emitConst(OP_I64_CONST, e.Vllong);
                 break;
-            case TYfloat:
-            case TYifloat:
-                {
-                    cg.emit(OP_F32_CONST);
-                    float f = e.Vfloat;
-                    cg.code.write(&f, 4);
-                    break;
-                }
-            case TYdouble:
-            case TYdouble_alias:
-            case TYidouble:
-            case TYreal:
-            case TYireal:
-                {
-                    cg.emit(OP_F64_CONST);
-                    double d = e.Vdouble;
-                    cg.code.write(&d, 8);
-                    break;
-                }
-            default:
+            case WASM_F32:
+                cg.emit(OP_F32_CONST);
+                float f = e.Vfloat;
+                cg.code.write(&f, 4);
+                break;
+            case WASM_F64:
+                cg.emit(OP_F64_CONST);
+                double d = e.Vdouble;
+                cg.code.write(&d, 8);
+                break;
+            case WASM_I32:
+            default: // TODO: assert for unknown types instead of assuming default
                 cg.emitConst(OP_I32_CONST, cast(int) e.Vlong);
                 break;
             }
