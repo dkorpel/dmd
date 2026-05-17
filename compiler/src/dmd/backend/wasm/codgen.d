@@ -628,7 +628,13 @@ private bool genElem(ref WasmCG cg, elem* e)
                 cg.emit(OP_I64_SHR_U);
             }
             // Coerce if expression type differs from the local's stored type.
-            emitCoerce(cg, cg.locals[idx].ty, wasmType(e.Ety));
+            // Skip when e.Ety is an aggregate (TYstruct/TYarray): aggregates
+            // live by reference (i32 pointer in linear memory), so don't sign-
+            // extend the pointer into an i64 struct-value just because Ety
+            // claims a struct type wider than the actual local.
+            const tym_t eebTy = tybasic(e.Ety);
+            if (eebTy != TYstruct && eebTy != TYarray)
+                emitCoerce(cg, cg.locals[idx].ty, wasmType(e.Ety));
             return true;
         }
 
