@@ -172,12 +172,14 @@ nothrow:
         code.writesLEB128(v);
     }
 
+    /// Write constant value `v`
     void emitConst(ubyte OP, long v)
     {
         emit(OP);
         emitSLEB(v);
     }
 
+    /// Access local at index `v`
     void emitLocal(ubyte OP, long v)
     {
         emit(OP);
@@ -459,8 +461,7 @@ private void scanShadow(elem* e, ref WasmCG cg)
 // Emit address of a shadow-frame symbol onto the value stack: local.get $base; i32.const offset; i32.add
 private void emitShadowAddr(ref WasmCG cg, Symbol* s)
 {
-    cg.emit(OP_LOCAL_GET);
-    cg.emitULEB(cg.shadowBaseLocal);
+    cg.emitLocal(OP_LOCAL_GET, cg.shadowBaseLocal);
     uint off = cg.shadowOffset(s);
     if (off != 0)
     {
@@ -503,8 +504,7 @@ private void emitShadowEpilogue(ref WasmCG cg)
     uint fsz = (cg.shadowFrameSize + 15) & ~15u;
 
     // Emit: __stack_pointer = shadow_base + frame_size
-    cg.emit(OP_LOCAL_GET);
-    cg.emitULEB(cg.shadowBaseLocal);
+    cg.emitLocal(OP_LOCAL_GET, cg.shadowBaseLocal);
     cg.emitConst(OP_I32_CONST, cast(int) fsz);
     cg.emit(OP_I32_ADD);
     cg.emit(OP_GLOBAL_SET);
@@ -616,8 +616,7 @@ private bool genElem(ref WasmCG cg, elem* e)
                 return true;
             }
             const uint idx = cg.localFor(s);
-            cg.emit(OP_LOCAL_GET);
-            cg.emitULEB(idx);
+            cg.emitLocal(OP_LOCAL_GET, idx);
             // For i64 locals (packed structs like D slices): field access via Voffset.
             // D slice layout: {size_t len (offset 0), T* ptr (offset 4)} packed as i64.
             //   Voffset=0 → low 32 bits (len)  → i32.wrap_i64
@@ -745,8 +744,7 @@ private bool genElem(ref WasmCG cg, elem* e)
                 cg.emit(OP_LOCAL_TEE);
                 cg.emitULEB(valTmp); // save, keep on stack
                 cg.emitStore(e.E1.Ety); // store [addr, val]
-                cg.emit(OP_LOCAL_GET);
-                cg.emitULEB(valTmp); // result
+                cg.emitLocal(OP_LOCAL_GET, valTmp); // result
                 return true;
             }
             // Fallthrough: unsupported, just evaluate RHS
@@ -799,16 +797,14 @@ private bool genElem(ref WasmCG cg, elem* e)
                     cg.emit(OP_LOCAL_SET);
                     cg.emitULEB(valTmp2);
                     cg.emitShadowAddr(s);
-                    cg.emit(OP_LOCAL_GET);
-                    cg.emitULEB(valTmp2);
+                    cg.emitLocal(OP_LOCAL_GET, valTmp2);
                     cg.emitStore(e.E1.Ety);
                     cg.emitShadowAddr(s);
                     cg.emitLoad(e.E1.Ety);
                     return true;
                 }
                 const uint idx = cg.localFor(s);
-                cg.emit(OP_LOCAL_GET);
-                cg.emitULEB(idx);
+                cg.emitLocal(OP_LOCAL_GET, idx);
                 cg.genElem(e.E2);
                 emitCoerce(cg, wasmType(e.E2.Ety), wasmType(e.Ety));
                 cg.emitBinop(compoundToBinop(op), e.Ety);
@@ -837,13 +833,10 @@ private bool genElem(ref WasmCG cg, elem* e)
                 uint valTmp = cg.allocTemp(wasmType(e.Ety));
                 cg.emit(OP_LOCAL_SET);
                 cg.emitULEB(valTmp);
-                cg.emit(OP_LOCAL_GET);
-                cg.emitULEB(tmp);
-                cg.emit(OP_LOCAL_GET);
-                cg.emitULEB(valTmp);
+                cg.emitLocal(OP_LOCAL_GET, tmp);
+                cg.emitLocal(OP_LOCAL_GET, valTmp);
                 cg.emitStore(e.E1.Ety);
-                cg.emit(OP_LOCAL_GET);
-                cg.emitULEB(tmp);
+                cg.emitLocal(OP_LOCAL_GET, tmp);
                 cg.emitLoad(e.E1.Ety);
                 return true;
             }
@@ -1128,8 +1121,7 @@ private bool genElem(ref WasmCG cg, elem* e)
                         // Store each variadic arg into the frame.
                         foreach (ref sl; slots)
                         {
-                            cg.emit(OP_LOCAL_GET);
-                            cg.emitULEB(spLocal); // addr
+                            cg.emitLocal(OP_LOCAL_GET, spLocal); // addr
                             cg.genElem(sl.e); // value
                             if (sl.promoteF32)
                                 cg.emit(OP_F64_PROMOTE_F32);
@@ -1138,8 +1130,7 @@ private bool genElem(ref WasmCG cg, elem* e)
                         }
 
                         // Push varargs pointer as the last parameter.
-                        cg.emit(OP_LOCAL_GET);
-                        cg.emitULEB(spLocal);
+                        cg.emitLocal(OP_LOCAL_GET, spLocal);
                     }
                     else
                     {
@@ -1174,8 +1165,7 @@ private bool genElem(ref WasmCG cg, elem* e)
                     if (spLocal != uint.max)
                     {
                         uint spIdx = wmod_getOrCreateStackPtrGlobal();
-                        cg.emit(OP_LOCAL_GET);
-                        cg.emitULEB(spLocal);
+                        cg.emitLocal(OP_LOCAL_GET, spLocal);
                         cg.emitConst(OP_I32_CONST, cast(int) vaFrameSize);
                         cg.emit(OP_I32_ADD);
                         cg.emit(OP_GLOBAL_SET);
@@ -1445,8 +1435,7 @@ private bool genElem(ref WasmCG cg, elem* e)
                     if (fpSym && isLocalSym(fpSym) && !cg.inShadow(fpSym))
                     {
                         const uint idx = cg.localFor(fpSym);
-                        cg.emit(OP_LOCAL_GET);
-                        cg.emitULEB(idx);
+                        cg.emitLocal(OP_LOCAL_GET, idx);
                     }
                     else
                     {
@@ -1585,10 +1574,8 @@ private bool genElem(ref WasmCG cg, elem* e)
             if (e.E1.Eoper == OPvar)
             {
                 const uint idx = cg.localFor(e.E1.Vsym);
-                cg.emit(OP_LOCAL_GET);
-                cg.emitULEB(idx); // old value (result)
-                cg.emit(OP_LOCAL_GET);
-                cg.emitULEB(idx);
+                cg.emitLocal(OP_LOCAL_GET, idx); // old value (result)
+                cg.emitLocal(OP_LOCAL_GET, idx);
                 cg.genElem(e.E2);
                 cg.emitBinop(op == OPpostinc ? OPadd : OPmin, e.Ety);
                 cg.emit(OP_LOCAL_SET);
@@ -1605,8 +1592,7 @@ private bool genElem(ref WasmCG cg, elem* e)
             if (e.E1.Eoper == OPvar)
             {
                 const uint idx = cg.localFor(e.E1.Vsym);
-                cg.emit(OP_LOCAL_GET);
-                cg.emitULEB(idx);
+                cg.emitLocal(OP_LOCAL_GET, idx);
                 cg.genElem(e.E2);
                 cg.emitBinop(op == OPpreinc ? OPadd : OPmin, e.Ety);
                 cg.emit(OP_LOCAL_TEE);
@@ -1653,8 +1639,7 @@ private bool genElem(ref WasmCG cg, elem* e)
             genElemAddr(cg, e.E2); // stack: dst, src
             cg.emitConst(OP_I32_CONST, sz); // stack: dst, src, n
             emitMemoryCopy(cg);
-            cg.emit(OP_LOCAL_GET);
-            cg.emitULEB(dstTmp); // result: dst
+            cg.emitLocal(OP_LOCAL_GET, dstTmp); // result: dst
             return true;
         }
 
@@ -1684,8 +1669,7 @@ private bool genElem(ref WasmCG cg, elem* e)
                 cg.emitConst(OP_I32_CONST, 0);
             }
             emitMemoryCopy(cg);
-            cg.emit(OP_LOCAL_GET);
-            cg.emitULEB(dstTmp);
+            cg.emitLocal(OP_LOCAL_GET, dstTmp);
             return true;
         }
 
@@ -1709,8 +1693,7 @@ private bool genElem(ref WasmCG cg, elem* e)
                 cg.emitConst(OP_I32_CONST, 0); // count
             }
             emitMemoryFill(cg);
-            cg.emit(OP_LOCAL_GET);
-            cg.emitULEB(dstTmp);
+            cg.emitLocal(OP_LOCAL_GET, dstTmp);
             return true;
         }
 
@@ -1925,11 +1908,9 @@ private void genOneArg(ref WasmCG cg, elem* e, bool forceSlice = false)
         uint tmp = cg.allocTemp(WASM_I64);
         cg.emit(OP_LOCAL_SET);
         cg.emitULEB(tmp);
-        cg.emit(OP_LOCAL_GET);
-        cg.emitULEB(tmp);
+        cg.emitLocal(OP_LOCAL_GET, tmp);
         cg.emit(OP_I32_WRAP_I64); // lo = len (low 32 bits)
-        cg.emit(OP_LOCAL_GET);
-        cg.emitULEB(tmp);
+        cg.emitLocal(OP_LOCAL_GET, tmp);
         cg.emitConst(OP_I64_CONST, 32);
         cg.emit(OP_I64_SHR_U);
         cg.emit(OP_I32_WRAP_I64); // hi = ptr (high 32 bits)
@@ -2344,8 +2325,7 @@ private void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
                     cg.emit(OP_LOCAL_SET);
                     cg.emitULEB(retTmp);
                     emitShadowEpilogue(cg);
-                    cg.emit(OP_LOCAL_GET);
-                    cg.emitULEB(retTmp);
+                    cg.emitLocal(OP_LOCAL_GET, retTmp);
                 }
                 else
                 {
@@ -2446,8 +2426,7 @@ private void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
                 foreach (size_t ci, long cv; b.Bswitch)
                 {
                     int caseIdx = blockIdx(b.nthSucc(cast(int)(ci + 1)));
-                    cg.emit(OP_LOCAL_GET);
-                    cg.emitULEB(condLocal);
+                    cg.emitLocal(OP_LOCAL_GET, condLocal);
                     if (is64bit)
                     {
                         cg.emitConst(OP_I64_CONST, cv);
@@ -2799,13 +2778,11 @@ void wasm_codgen(Symbol* sfunc)
     foreach (ref sp; splitParams)
     {
         // i64 = (ptr << 32) | len  (D slice layout: lo32=len, hi32=ptr)
-        cg.emit(OP_LOCAL_GET);
-        cg.emitULEB(sp.hiIdx); // ptr
+        cg.emitLocal(OP_LOCAL_GET, sp.hiIdx); // ptr
         cg.emit(OP_I64_EXTEND_I32_U);
         cg.emitConst(OP_I64_CONST, 32);
         cg.emit(OP_I64_SHL);
-        cg.emit(OP_LOCAL_GET);
-        cg.emitULEB(sp.loIdx); // len
+        cg.emitLocal(OP_LOCAL_GET, sp.loIdx); // len
         cg.emit(OP_I64_EXTEND_I32_U);
         cg.emit(OP_I64_OR);
         cg.emit(OP_LOCAL_SET);
