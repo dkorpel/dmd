@@ -38,7 +38,7 @@ import dmd.common.outbuffer;
 nothrow:
 
 /// Returns: WASM value type for a backend type `ty`
-ubyte wasmType(tym_t ty) @trusted
+ubyte wasmType(tym_t ty)
 {
     switch (tybasic(ty))
     {
@@ -88,7 +88,7 @@ nothrow:
     /// Allocate an anonymous temp local of the given WASM type
     ///
     /// Returns: index of allocated temp in `locals` array
-    uint allocTemp(ubyte ty) @trusted
+    uint allocTemp(ubyte ty)
     {
         WasmLocal l;
         l.sym = null;
@@ -100,7 +100,7 @@ nothrow:
     /// Allocate or look up a local for a symbol
     ///
     /// Returns: its index
-    uint localFor(Symbol* s) @trusted
+    uint localFor(Symbol* s)
     {
         foreach (size_t i, ref const WasmLocal l; locals)
             if (l.sym == s)
@@ -113,7 +113,7 @@ nothrow:
     }
 
     /// Returns: true if symbol `s` lives in the shadow frame.
-    bool inShadow(Symbol* s) const @trusted
+    bool inShadow(Symbol* s) const
     {
         foreach (ref const ShadowEntry e; shadowEntries)
             if (e.sym == s)
@@ -122,7 +122,7 @@ nothrow:
     }
 
     /// Returns: byte offset of `s` in the shadow frame (assumes inShadow).
-    uint shadowOffset(Symbol* s) const @trusted
+    uint shadowOffset(Symbol* s) const
     {
         foreach (ref const ShadowEntry e; shadowEntries)
             if (e.sym == s)
@@ -131,7 +131,7 @@ nothrow:
     }
 
     /// Register a symbol in the shadow frame (idempotent).
-    void registerShadow(Symbol* s) @trusted
+    void registerShadow(Symbol* s)
     {
         if (inShadow(s))
             return;
@@ -156,29 +156,25 @@ nothrow:
         shadowFrameSize = off + sz;
     }
 
-    void emit(ubyte b) @trusted
+    void emit(ubyte b)
     {
         code.writeByte(b);
     }
 
-    void emitULEB(uint v) @trusted
+    void emitULEB(uint v)
     {
         code.writeuLEB128(v);
     }
 
-    void emitSLEB(long v) @trusted
+    void emitSLEB(long v)
     {
         code.writesLEB128(v);
     }
 
-    // 5-byte padded ULEB128 so wasm-ld has room to write a patched value over it
-    void emitULEBpadded(ulong addr)
+    /// 5-byte padded ULEB128 so wasm-ld has room to write a patched value over it
+    void emitULEBpadded(uint addr)
     {
-        code.writeByte(cast(ubyte)((addr & 0x7F) | 0x80));
-        code.writeByte(cast(ubyte)(((addr >> 7) & 0x7F) | 0x80));
-        code.writeByte(cast(ubyte)(((addr >> 14) & 0x7F) | 0x80));
-        code.writeByte(cast(ubyte)(((addr >> 21) & 0x7F) | 0x80));
-        code.writeByte(cast(ubyte)((addr >> 28) & 0x0F));
+        code.writeuLEB128_5(addr);
     }
 
     // Emit OP_I32_CONST with a data-segment address.
@@ -187,7 +183,7 @@ nothrow:
     // moving the data section to its final location.
     // In non-relocatable (final) mode, emits a compact SLEB128 — the data
     // section is already at its final address in that case.
-    void emitDataAddr(Symbol* sym, uint addend) @trusted
+    void emitDataAddr(Symbol* sym, uint addend)
     {
         import dmd.backend.wasmobj : wasm_relocatable;
 
@@ -219,7 +215,7 @@ nothrow:
     // Symbol* is recorded so that if wmod.funcs is reordered before term time
     // (e.g. additional imports inserted), the relocation still resolves to the
     // intended symbol rather than a stale funcIdx.
-    void emitCall(uint fidx, Symbol* sym = null) @trusted
+    void emitCall(uint fidx, Symbol* sym = null)
     {
         emit(OP_CALL);
         codeRelocs ~= WasmFuncBody.CodeReloc(cast(uint) code.length, R_WASM_FUNCTION_INDEX_LEB, fidx, 0, sym);
@@ -233,7 +229,7 @@ nothrow:
     // a wasm-ld 22 crash on locally-defined symbol targets.  If no suitable
     // function is found yet (rare), fall back to compact ULEB without relocation
     // (type indices are stable for single-file linking via reorderImportTypesFirst).
-    void emitCallIndirectType(uint typeIdx) @trusted
+    void emitCallIndirectType(uint typeIdx)
     {
         import dmd.backend.wasmobj : wmod_findFuncForType, wasm_relocatable;
 
@@ -252,7 +248,7 @@ nothrow:
         emitULEB(typeIdx); // single-file / no matching symbol: compact ULEB
     }
 
-    void emitMemArg(uint align_, uint offset) @trusted
+    void emitMemArg(uint align_, uint offset)
     {
         code.writeuLEB128(align_); // alignment (log2)
         code.writeuLEB128(offset); // byte offset
@@ -293,7 +289,7 @@ private MemOps memOpsFor(tym_t ty) @safe
 
 // Emit `memory.copy 0 0` (stack: dst, src, n → empty).
 // Bulk-memory proposal — supported by every current wasm runtime.
-private void emitMemoryCopy(ref WasmCG cg) @trusted
+private void emitMemoryCopy(ref WasmCG cg)
 {
     cg.emit(OP_FC_PREFIX);
     cg.emitULEB(10); // memory.copy sub-opcode
@@ -302,14 +298,14 @@ private void emitMemoryCopy(ref WasmCG cg) @trusted
 }
 
 // Emit `memory.fill 0` (stack: dst, val, n → empty).
-private void emitMemoryFill(ref WasmCG cg) @trusted
+private void emitMemoryFill(ref WasmCG cg)
 {
     cg.emit(OP_FC_PREFIX);
     cg.emitULEB(11); // memory.fill sub-opcode
     cg.emit(0x00); // memidx
 }
 
-private void emitLoad(ref WasmCG cg, tym_t ty) @trusted
+private void emitLoad(ref WasmCG cg, tym_t ty)
 {
     const m = memOpsFor(ty);
     cg.emit(m.loadOp);
@@ -317,7 +313,7 @@ private void emitLoad(ref WasmCG cg, tym_t ty) @trusted
 }
 
 // Emit a typed store (address then value already on stack).
-private void emitStore(ref WasmCG cg, tym_t ty) @trusted
+private void emitStore(ref WasmCG cg, tym_t ty)
 {
     const m = memOpsFor(ty);
     cg.emit(m.storeOp);
@@ -326,7 +322,7 @@ private void emitStore(ref WasmCG cg, tym_t ty) @trusted
 
 // Emit a type coercion when a value's actual WASM type differs from what e.Ety expects.
 // This handles cases where the optimizer elides explicit cast operators.
-private void emitCoerce(ref WasmCG cg, ubyte from, ubyte to) @trusted
+private void emitCoerce(ref WasmCG cg, ubyte from, ubyte to)
 {
     if (from == to)
         return;
@@ -377,7 +373,7 @@ private bool isDataSym(FL fl) @safe @nogc nothrow
 }
 
 // Returns true if a symbol's storage class means it needs a WASM local (not global mem).
-private bool isLocalSym(Symbol* s) @trusted
+private bool isLocalSym(Symbol* s)
 {
     return !isDataSym(s.Sfl) && s.Sfl != FL.func;
 }
@@ -386,7 +382,7 @@ private bool isLocalSym(Symbol* s) @trusted
 // Must run before code generation so that import indices are stable across
 // the whole module (call_indirect type indices are encoded as fixed-width
 // LEBs, so they cannot grow after the fact).
-void preRegisterExternals(elem* e) @trusted
+void preRegisterExternals(elem* e)
 {
     if (!e)
         return;
@@ -417,7 +413,7 @@ void preRegisterExternals(elem* e) @trusted
     preRegisterExternals(e.E2);
 }
 
-private void scanShadow(elem* e, ref WasmCG cg) @trusted
+private void scanShadow(elem* e, ref WasmCG cg)
 {
     if (!e)
         return;
@@ -440,7 +436,7 @@ private void scanShadow(elem* e, ref WasmCG cg) @trusted
 }
 
 // Emit address of a shadow-frame symbol onto the value stack: local.get $base; i32.const offset; i32.add
-private void emitShadowAddr(ref WasmCG cg, Symbol* s) @trusted
+private void emitShadowAddr(ref WasmCG cg, Symbol* s)
 {
     cg.emit(OP_LOCAL_GET);
     cg.emitULEB(cg.shadowBaseLocal);
@@ -455,7 +451,7 @@ private void emitShadowAddr(ref WasmCG cg, Symbol* s) @trusted
 
 // Emit shadow stack frame prologue (called once at function entry).
 // Creates the shadow base local, gets __stack_pointer, subtracts frame size, stores back.
-private void emitShadowPrologue(ref WasmCG cg) @trusted
+private void emitShadowPrologue(ref WasmCG cg)
 {
     import dmd.backend.wasmobj : wmod_getOrCreateStackPtrGlobal;
 
@@ -480,7 +476,7 @@ private void emitShadowPrologue(ref WasmCG cg) @trusted
 }
 
 // Emit shadow stack frame epilogue (restore __stack_pointer).
-private void emitShadowEpilogue(ref WasmCG cg) @trusted
+private void emitShadowEpilogue(ref WasmCG cg)
 {
     import dmd.backend.wasmobj : wmod_getOrCreateStackPtrGlobal;
 
@@ -528,7 +524,7 @@ private void maskSmallInt(ref WasmCG cg, tym_t ty) // TY
 // Expression code generation
 
 // Returns: true if the expression has a result on the stack after genElem
-private bool genElem(ref WasmCG cg, elem* e) @trusted
+private bool genElem(ref WasmCG cg, elem* e)
 {
     if (!e)
         return false;
@@ -1084,7 +1080,7 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
 
                     // Collect all args left-to-right (E2-first in OPparam tree).
                     elem*[] allArgs;
-                    void gatherArgs(elem* p) nothrow @trusted
+                    void gatherArgs(elem* p) nothrow
                     {
                         if (!p)
                             return;
@@ -1256,7 +1252,7 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
                     // Visiting E2 first then E1 walks this tree to produce the
                     // matching order: [this, line, file, args].
                     elem*[] callArgs;
-                    void gatherCallArgs(elem* p) nothrow @trusted
+                    void gatherCallArgs(elem* p) nothrow
                     {
                         if (!p)
                             return;
@@ -1394,7 +1390,7 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
                         import dmd.backend.wasmobj : wmod_internType;
 
                         ubyte[] params;
-                        void collectArgTypes(elem* p) nothrow @trusted
+                        void collectArgTypes(elem* p) nothrow
                         {
                             if (!p)
                                 return;
@@ -1664,7 +1660,7 @@ private bool genElem(ref WasmCG cg, elem* e) @trusted
 }
 
 // Get the address of an lvalue expression (OPind → its pointer; OPvar in shadow → shadow addr; else genElem).
-private void genElemAddr(ref WasmCG cg, elem* e) @trusted
+private void genElemAddr(ref WasmCG cg, elem* e)
 {
     if (!e)
     {
@@ -1715,7 +1711,7 @@ private void genElemAddr(ref WasmCG cg, elem* e) @trusted
 // On WASM32, TYdarray == TYullong (util_set32 keeps var.d default of TYullong).
 // D slices are packed as i64 (len32 | ptr32<<32) and must be split into two
 // i32 WASM params when passed as function arguments.
-private bool isSliceElem(const(elem)* e) @trusted
+private bool isSliceElem(const(elem)* e)
 {
     const tym_t ty = tybasic(e.Ety);
     if (ty != TYullong && ty != TYllong)
@@ -1751,7 +1747,7 @@ private bool isSliceElem(const(elem)* e) @trusted
 }
 
 // True if a callee parameter type is a D slice (TYdarray == TYullong+Tnext on WASM32).
-private bool paramIsSlice(const(param_t)* p) @trusted
+private bool paramIsSlice(const(param_t)* p)
 {
     if (!p || !p.Ptype)
         return false;
@@ -1763,7 +1759,7 @@ private bool paramIsSlice(const(param_t)* p) @trusted
 // are split into two i32 params (lo=len, hi=ptr) to match the WASM32/LDC2 ABI.
 // `forceSlice` forces the split even when the elem itself isn't recognised as
 // a slice (e.g. an OPconst null passed where the callee expects char[]).
-private void genOneArg(ref WasmCG cg, elem* e, bool forceSlice = false) @trusted
+private void genOneArg(ref WasmCG cg, elem* e, bool forceSlice = false)
 {
     genElem(cg, e);
     const bool isDynArray = forceSlice || isSliceElem(e);
@@ -1790,7 +1786,7 @@ private void genOneArg(ref WasmCG cg, elem* e, bool forceSlice = false) @trusted
 // a left-fold of source-order args with sthis/shidden appended at the tail
 // (root.E2). Visiting E2 first then E1 yields [this, line, file, args] — the
 // matching push order.
-private void genArgs(ref WasmCG cg, elem* e) @trusted
+private void genArgs(ref WasmCG cg, elem* e)
 {
     if (!e)
         return;
@@ -1823,7 +1819,7 @@ private ubyte pickByKind(tym_t ty, ubyte f32, ubyte f64, ubyte i64, ubyte i32) @
 }
 
 // Binary operation opcode selection by IR operator
-private void emitBinop(ref WasmCG cg, int op, tym_t ty) @trusted
+private void emitBinop(ref WasmCG cg, int op, tym_t ty)
 {
     static ubyte binOp(int op, tym_t ty)
     {
@@ -1870,7 +1866,7 @@ private void emitBinop(ref WasmCG cg, int op, tym_t ty) @trusted
 alias compoundToBinop = opeqtoop;
 
 // Emit a relational/comparison opcode
-private void emitRelop(ref WasmCG cg, int op, tym_t operandTy) @trusted
+private void emitRelop(ref WasmCG cg, int op, tym_t operandTy)
 {
     const bool isUns = tyuns(operandTy) != 0;
     ubyte oc = OP_UNREACHABLE;
@@ -1916,7 +1912,7 @@ private void emitRelop(ref WasmCG cg, int op, tym_t operandTy) @trusted
 // Function index lookup
 // ---------------------------------------------------------------------------
 
-private uint funcIndex(Symbol* sfunc) @trusted
+private uint funcIndex(Symbol* sfunc)
 {
     import dmd.backend.wasmobj : wasmFuncBodies, wmod_funcs, wmod_numImports;
 
@@ -1953,7 +1949,7 @@ private uint funcIndex(Symbol* sfunc) @trusted
 // Ensure a condition value on the WASM stack is an i32 suitable for br_if.
 // For i64 (D slice / long): emit i64.eqz + i32.eqz to produce 1 if nonzero.
 // For i32: nothing needed (already a valid br_if operand).
-private void emitCondToI32(ref WasmCG cg, elem* condElem) @trusted
+private void emitCondToI32(ref WasmCG cg, elem* condElem)
 {
     if (!condElem)
         return;
@@ -1968,7 +1964,7 @@ private void emitCondToI32(ref WasmCG cg, elem* condElem) @trusted
 // Emit the inversion of a condition for "branch if FALSE" patterns (cond; eqz; br_if).
 // For i64: i64.eqz produces 1 when zero (false).
 // For i32: i32.eqz produces 1 when zero (false).
-private void emitCondInvert(ref WasmCG cg, elem* condElem) @trusted
+private void emitCondInvert(ref WasmCG cg, elem* condElem)
 {
     if (!condElem)
     {
@@ -1996,7 +1992,7 @@ private struct BlkInfo
     int[] jmptabDests; // for BC.jmptab: unique sorted destination block indices
 }
 
-private block*[] collectBlocks(block* start) @trusted
+private block*[] collectBlocks(block* start)
 {
     block*[] v;
     for (block* b = start; b; b = b.Bnext)
@@ -2004,20 +2000,20 @@ private block*[] collectBlocks(block* start) @trusted
     return v;
 }
 
-private int blockIdx(block* b) @trusted
+private int blockIdx(block* b)
 {
     return b ? b.Bdfoidx : int.max;
 }
 
 // Successor index in Bsucc list
-private block* succ(block* b, int n) @trusted
+private block* succ(block* b, int n)
 {
     if (n < b.numSucc())
         return b.nthSucc(n);
     return null;
 }
 
-private void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn) @trusted
+private void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
 {
     block*[] blocks = collectBlocks(startblock);
     const int N = cast(int) blocks.length;
@@ -2235,7 +2231,7 @@ private void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn) @
             }
 
             // Helper: depth for a given block index
-            uint depthOf(int destIdx) @trusted
+            uint depthOf(int destIdx)
             {
                 foreach (size_t di, int d; dests)
                     if (d == destIdx)
@@ -2552,7 +2548,7 @@ private void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn) @
 }
 
 /// Main entry point generating code for a function - called from dout.d
-void wasm_codgen(Symbol* sfunc) @trusted
+void wasm_codgen(Symbol* sfunc)
 {
     import dmd.backend.wasmobj : wasmFuncBodies, WasmFuncBody;
 
