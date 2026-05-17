@@ -1976,6 +1976,21 @@ private void emitCondToI32(ref WasmCG cg, elem* condElem)
         cg.emit(OP_I64_EQZ); // i64 → i32: 1 if zero, 0 if nonzero
         cg.emit(OP_I32_EQZ); // invert: 1 if nonzero (truthy)
     }
+    else if (ty == TYfloat || ty == TYifloat)
+    {
+        // f32 truthiness: nonzero (NaN is truthy under WASM's NE semantics).
+        cg.emit(OP_F32_CONST);
+        float fz = 0.0f;
+        cg.code.write(&fz, 4);
+        cg.emit(OP_F32_NE);
+    }
+    else if (ty == TYdouble || ty == TYdouble_alias || ty == TYreal || ty == TYireal)
+    {
+        cg.emit(OP_F64_CONST);
+        double dz = 0.0;
+        cg.code.write(&dz, 8);
+        cg.emit(OP_F64_NE);
+    }
 }
 
 // Emit the inversion of a condition for "branch if FALSE" patterns (cond; eqz; br_if).
@@ -1991,6 +2006,20 @@ private void emitCondInvert(ref WasmCG cg, elem* condElem)
     const tym_t ty = tybasic(condElem.Ety);
     if (ty == TYllong || ty == TYullong)
         cg.emit(OP_I64_EQZ);
+    else if (ty == TYfloat || ty == TYifloat)
+    {
+        cg.emit(OP_F32_CONST);
+        float fz = 0.0f;
+        cg.code.write(&fz, 4);
+        cg.emit(OP_F32_EQ);
+    }
+    else if (ty == TYdouble || ty == TYdouble_alias || ty == TYreal || ty == TYireal)
+    {
+        cg.emit(OP_F64_CONST);
+        double dz = 0.0;
+        cg.code.write(&dz, 8);
+        cg.emit(OP_F64_EQ);
+    }
     else
         cg.emit(OP_I32_EQZ);
 }
