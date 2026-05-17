@@ -537,7 +537,7 @@ private bool genElem(ref WasmCG cg, elem* e)
 
     bool unaryOp(ubyte op)
     {
-        genElem(cg, e.E1);
+        cg.genElem(e.E1);
         cg.emit(op);
         return true;
     }
@@ -662,12 +662,12 @@ private bool genElem(ref WasmCG cg, elem* e)
                 }
             }
             // Fallback: just evaluate E1 address (e.g., OPaddr of global)
-            return genElem(cg, e.E1);
+            return cg.genElem(e.E1);
         }
 
     case OPind:
         {
-            genElem(cg, e.E1); // address on stack
+            cg.genElem(e.E1); // address on stack
             cg.emitLoad(e.Ety);
             return true;
         }
@@ -681,7 +681,7 @@ private bool genElem(ref WasmCG cg, elem* e)
                 {
                     // Store to global in linear memory
                     cg.emitDataAddr(lhs, cast(uint) e.E1.Voffset);
-                    genElem(cg, e.E2);
+                    cg.genElem(e.E2);
                     cg.emitStore(e.E1.Ety);
                     // Re-load for expression result
                     cg.emitDataAddr(lhs, cast(uint) e.E1.Voffset);
@@ -697,14 +697,14 @@ private bool genElem(ref WasmCG cg, elem* e)
                         cg.emitConst(OP_I32_CONST, cast(int) e.E1.Voffset);
                         cg.emit(OP_I32_ADD);
                     }
-                    genElem(cg, e.E2);
+                    cg.genElem(e.E2);
                     cg.emitStore(e.E1.Ety);
                     cg.emitShadowAddr(lhs);
                     cg.emitLoad(e.E1.Ety);
                     return true;
                 }
                 const uint idx = cg.localFor(lhs);
-                genElem(cg, e.E2);
+                cg.genElem(e.E2);
 
                 // Coerce i32→i64 if needed (e.g. assigning integer to ulong local).
                 if (cg.locals[idx].ty == WASM_I64 && wasmType(e.E2.Ety) == WASM_I32)
@@ -721,8 +721,8 @@ private bool genElem(ref WasmCG cg, elem* e)
             {
                 // Store to memory. Save result in a temp to avoid re-evaluating
                 // E2 (which may have side effects like i++ in arr[k++] = L[i++]).
-                genElem(cg, e.E1.E1); // address
-                genElem(cg, e.E2); // value
+                cg.genElem(e.E1.E1); // address
+                cg.genElem(e.E2); // value
                 uint valTmp = cg.allocTemp(wasmType(e.Ety));
                 cg.emit(OP_LOCAL_TEE);
                 cg.emitULEB(valTmp); // save, keep on stack
@@ -732,7 +732,7 @@ private bool genElem(ref WasmCG cg, elem* e)
                 return true;
             }
             // Fallthrough: unsupported, just evaluate RHS
-            genElem(cg, e.E2);
+            cg.genElem(e.E2);
             return true;
         }
 
@@ -760,7 +760,7 @@ private bool genElem(ref WasmCG cg, elem* e)
                     cg.emitDataAddr(s, addend);
                     cg.emitDataAddr(s, addend);
                     cg.emitLoad(e.E1.Ety);
-                    genElem(cg, e.E2);
+                    cg.genElem(e.E2);
                     cg.emitBinop(compoundToBinop(op), e.Ety);
                     cg.emitStore(e.E1.Ety);
                     cg.emitDataAddr(s, addend);
@@ -772,7 +772,7 @@ private bool genElem(ref WasmCG cg, elem* e)
                 {
                     cg.emitShadowAddr(s);
                     cg.emitLoad(e.E1.Ety);
-                    genElem(cg, e.E2);
+                    cg.genElem(e.E2);
                     cg.emitBinop(compoundToBinop(op), e.Ety);
                     cg.emitShadowAddr(s);
                     // swap addr and value using temp
@@ -789,7 +789,7 @@ private bool genElem(ref WasmCG cg, elem* e)
                 const uint idx = cg.localFor(s);
                 cg.emit(OP_LOCAL_GET);
                 cg.emitULEB(idx);
-                genElem(cg, e.E2);
+                cg.genElem(e.E2);
                 cg.emitBinop(compoundToBinop(op), e.Ety);
                 // Mask for narrow types (ubyte, ushort, etc.) to preserve wrapping.
                 cg.maskSmallInt(e.E1.Ety);
@@ -802,13 +802,13 @@ private bool genElem(ref WasmCG cg, elem* e)
             {
                 // *ptr op= rhs : load ptr, dup, load, op, store, load-result
                 // Need ptr evaluated once; use a temp local for it
-                genElem(cg, e.E1.E1); // ptr addr on stack
+                cg.genElem(e.E1.E1); // ptr addr on stack
                 // Duplicate addr via a temp local
                 uint tmp = cg.allocTemp(WASM_I32);
                 cg.emit(OP_LOCAL_TEE);
                 cg.emitULEB(tmp);
                 cg.emitLoad(e.E1.Ety);
-                genElem(cg, e.E2);
+                cg.genElem(e.E2);
                 cg.emitBinop(compoundToBinop(op), e.Ety);
                 // Now: result on stack. Store then reload.
                 // We need addr again: local.get tmp; swap; store; local.get tmp; load
@@ -825,7 +825,7 @@ private bool genElem(ref WasmCG cg, elem* e)
                 cg.emitLoad(e.E1.Ety);
                 return true;
             }
-            genElem(cg, e.E2);
+            cg.genElem(e.E2);
             return true;
         }
 
@@ -842,9 +842,9 @@ private bool genElem(ref WasmCG cg, elem* e)
     case OPashr:
         {
             const ubyte rty = wasmType(e.Ety);
-            genElem(cg, e.E1);
+            cg.genElem(e.E1);
             emitCoerce(cg, wasmType(e.E1.Ety), rty);
-            genElem(cg, e.E2);
+            cg.genElem(e.E2);
             emitCoerce(cg, wasmType(e.E2.Ety), rty);
             cg.emitBinop(op, e.Ety);
             return true;
@@ -858,8 +858,8 @@ private bool genElem(ref WasmCG cg, elem* e)
     case OPge:
         {
             const ubyte cmpTy = wasmType(e.E1.Ety);
-            genElem(cg, e.E1);
-            genElem(cg, e.E2);
+            cg.genElem(e.E1);
+            cg.genElem(e.E2);
             emitCoerce(cg, wasmType(e.E2.Ety), cmpTy);
             emitRelop(cg, op, e.E1.Ety);
             return true;
@@ -870,25 +870,25 @@ private bool genElem(ref WasmCG cg, elem* e)
             const ty = tybasic(e.Ety);
             if (ty == TYfloat)
             {
-                genElem(cg, e.E1);
+                cg.genElem(e.E1);
                 cg.emit(OP_F32_NEG);
             }
             else if (ty == TYdouble || ty == TYdouble_alias || ty == TYreal)
             {
-                genElem(cg, e.E1);
+                cg.genElem(e.E1);
                 cg.emit(OP_F64_NEG);
             }
             else if (ty == TYllong || ty == TYullong)
             {
                 // i64.neg = 0 - x
                 cg.emitConst(OP_I64_CONST, 0);
-                genElem(cg, e.E1);
+                cg.genElem(e.E1);
                 cg.emit(OP_I64_SUB);
             }
             else
             {
                 cg.emitConst(OP_I32_CONST, 0);
-                genElem(cg, e.E1);
+                cg.genElem(e.E1);
                 cg.emit(OP_I32_SUB);
             }
             return true;
@@ -896,7 +896,7 @@ private bool genElem(ref WasmCG cg, elem* e)
 
     case OPnot:
         {
-            genElem(cg, e.E1);
+            cg.genElem(e.E1);
             const ty = tybasic(e.E1.Ety);
             if (ty == TYllong || ty == TYullong)
                 cg.emit(OP_I64_EQZ);
@@ -907,7 +907,7 @@ private bool genElem(ref WasmCG cg, elem* e)
 
     case OPcom:
         {
-            genElem(cg, e.E1);
+            cg.genElem(e.E1);
             const ty = tybasic(e.Ety);
             if (ty == TYllong || ty == TYullong)
             {
@@ -925,7 +925,7 @@ private bool genElem(ref WasmCG cg, elem* e)
     // unsigned widening: already zero-extended as i32 — no-op
     case OPu8_16:
     case OPu16_32:
-        genElem(cg, e.E1);
+        cg.genElem(e.E1);
         return true;
 
     case OPs8_16: return unaryOp(OP_I32_EXTEND8_S);
@@ -945,7 +945,7 @@ private bool genElem(ref WasmCG cg, elem* e)
     case OPmsw:
         {
             // Extract high 32 bits of a 64-bit value (ptr part of D slice on wasm32).
-            genElem(cg, e.E1);
+            cg.genElem(e.E1);
             cg.emitConst(OP_I64_CONST, 32);
             cg.emit(OP_I64_SHR_U);
             cg.emit(OP_I32_WRAP_I64);
@@ -954,7 +954,7 @@ private bool genElem(ref WasmCG cg, elem* e)
     case OP16_8:
         {
             // Truncate 16→8 bit (e.g. cast(char)(expr)). Mask low 8 bits.
-            genElem(cg, e.E1);
+            cg.genElem(e.E1);
             cg.emitConst(OP_I32_CONST, 0xFF);
             cg.emit(OP_I32_AND);
             return true;
@@ -962,7 +962,7 @@ private bool genElem(ref WasmCG cg, elem* e)
     case OP32_16:
         {
             // Truncate 32→16 bit (e.g. cast(short)(expr)). Mask low 16 bits.
-            genElem(cg, e.E1);
+            cg.genElem(e.E1);
             cg.emitConst(OP_I32_CONST, 0xFFFF);
             cg.emit(OP_I32_AND);
             return true;
@@ -970,10 +970,10 @@ private bool genElem(ref WasmCG cg, elem* e)
 
     case OPcomma:
         {
-            const bool r1 = genElem(cg, e.E1);
+            const bool r1 = cg.genElem(e.E1);
             if (r1)
                 cg.emit(OP_DROP); // discard left-hand result
-            return genElem(cg, e.E2);
+            return cg.genElem(e.E2);
         }
 
     case OPcall:
@@ -1112,7 +1112,7 @@ private bool genElem(ref WasmCG cg, elem* e)
                         {
                             cg.emit(OP_LOCAL_GET);
                             cg.emitULEB(spLocal); // addr
-                            genElem(cg, sl.e); // value
+                            cg.genElem(sl.e); // value
                             if (sl.promoteF32)
                                 cg.emit(OP_F64_PROMOTE_F32);
                             cg.emit(sl.storeOp);
@@ -1295,7 +1295,7 @@ private bool genElem(ref WasmCG cg, elem* e)
                     else
                     {
                         // Global variable: load table index from linear memory.
-                        genElem(cg, fexpr.E1); // push address or value
+                        cg.genElem(fexpr.E1); // push address or value
                         // If it loaded a value (for FL.data OPvar emits load), we're done.
                         // If it only pushed an address (shadow/relconst), emit a load too.
                     }
@@ -1344,7 +1344,7 @@ private bool genElem(ref WasmCG cg, elem* e)
                             results ~= wasmType(retTy);
                         typeIdx = wmod_internType(params, results);
                     }
-                    genElem(cg, fn);
+                    cg.genElem(fn);
                 }
                 cg.emit(OP_CALL_INDIRECT);
                 cg.emitCallIndirectType(typeIdx);
@@ -1357,13 +1357,13 @@ private bool genElem(ref WasmCG cg, elem* e)
     case OPcond:
         {
             // e.E1 ? e.E2.E1 : e.E2.E2
-            genElem(cg, e.E1);
+            cg.genElem(e.E1);
             const ubyte rty = wasmType(e.Ety);
             cg.emit(OP_IF);
             cg.emit(rty);
-            genElem(cg, e.E2.E1);
+            cg.genElem(e.E2.E1);
             cg.emit(OP_ELSE);
-            genElem(cg, e.E2.E2);
+            cg.genElem(e.E2.E2);
             cg.emit(OP_END);
             return tybasic(e.Ety) != TYvoid;
         }
@@ -1371,12 +1371,12 @@ private bool genElem(ref WasmCG cg, elem* e)
     case OPoror:
         {
             // a || b  =>  if (a) 1 else (b != 0)
-            genElem(cg, e.E1);
+            cg.genElem(e.E1);
             cg.emit(OP_IF);
             cg.emit(WASM_I32);
             cg.emitConst(OP_I32_CONST, 1);
             cg.emit(OP_ELSE);
-            genElem(cg, e.E2);
+            cg.genElem(e.E2);
             cg.emitConst(OP_I32_CONST, 0);
             cg.emit(OP_I32_NE);
             cg.emit(OP_END);
@@ -1386,10 +1386,10 @@ private bool genElem(ref WasmCG cg, elem* e)
     case OPandand:
         {
             // a && b  =>  if (a) (b != 0) else 0
-            genElem(cg, e.E1);
+            cg.genElem(e.E1);
             cg.emit(OP_IF);
             cg.emit(WASM_I32);
-            genElem(cg, e.E2);
+            cg.genElem(e.E2);
             cg.emitConst(OP_I32_CONST, 0);
             cg.emit(OP_I32_NE);
             cg.emit(OP_ELSE);
@@ -1401,7 +1401,7 @@ private bool genElem(ref WasmCG cg, elem* e)
         // ---- Bool conversion (while/for conditions) --------------------------
     case OPbool:
         {
-            genElem(cg, e.E1);
+            cg.genElem(e.E1);
             // Convert to bool: nonzero => 1, zero => 0
             // WASM i32: x != 0 is equivalent to i32.const 0; i32.ne
             const ty = tybasic(e.E1.Ety);
@@ -1419,7 +1419,7 @@ private bool genElem(ref WasmCG cg, elem* e)
         }
 
     case OPb_8:
-        genElem(cg, e.E1); // bool is already 0/1 as i32
+        cg.genElem(e.E1); // bool is already 0/1 as i32
         return true;
 
     case OPhalt:
@@ -1431,7 +1431,7 @@ private bool genElem(ref WasmCG cg, elem* e)
 
     case OPinfo:
         // Optimizer annotation, no code
-        return genElem(cg, e.E2); // only the right child has the value
+        return cg.genElem(e.E2); // only the right child has the value
 
     case OPsizeof:
         // Sizeof (compile-time constant, should be folded)
@@ -1448,13 +1448,13 @@ private bool genElem(ref WasmCG cg, elem* e)
                 cg.emitULEB(idx); // old value (result)
                 cg.emit(OP_LOCAL_GET);
                 cg.emitULEB(idx);
-                genElem(cg, e.E2);
+                cg.genElem(e.E2);
                 cg.emitBinop(op == OPpostinc ? OPadd : OPmin, e.Ety);
                 cg.emit(OP_LOCAL_SET);
                 cg.emitULEB(idx);
                 return true;
             }
-            genElem(cg, e.E1);
+            cg.genElem(e.E1);
             return true;
         }
 
@@ -1466,13 +1466,13 @@ private bool genElem(ref WasmCG cg, elem* e)
                 const uint idx = cg.localFor(e.E1.Vsym);
                 cg.emit(OP_LOCAL_GET);
                 cg.emitULEB(idx);
-                genElem(cg, e.E2);
+                cg.genElem(e.E2);
                 cg.emitBinop(op == OPpreinc ? OPadd : OPmin, e.Ety);
                 cg.emit(OP_LOCAL_TEE);
                 cg.emitULEB(idx);
                 return true;
             }
-            genElem(cg, e.E1);
+            cg.genElem(e.E1);
             return true;
         }
 
@@ -1486,11 +1486,11 @@ private bool genElem(ref WasmCG cg, elem* e)
             // OPrpair: E1=hi (ptr), E2=lo (len) → i64 = (E1<<32) | E2
             elem* loE = (e.Eoper == OPrpair) ? e.E2 : e.E1;
             elem* hiE = (e.Eoper == OPrpair) ? e.E1 : e.E2;
-            genElem(cg, hiE);
+            cg.genElem(hiE);
             cg.emit(OP_I64_EXTEND_I32_U);
             cg.emitConst(OP_I64_CONST, 32);
             cg.emit(OP_I64_SHL);
-            genElem(cg, loE);
+            cg.genElem(loE);
             cg.emit(OP_I64_EXTEND_I32_U);
             cg.emit(OP_I64_OR);
             return true;
@@ -1521,17 +1521,17 @@ private bool genElem(ref WasmCG cg, elem* e)
         {
             // IR: OPmemcpy(dst, OPparam(count, src)). Result is dst.
             uint dstTmp = cg.allocTemp(WASM_I32);
-            genElem(cg, e.E1);
+            cg.genElem(e.E1);
             cg.emit(OP_LOCAL_TEE);
             cg.emitULEB(dstTmp); // stack: dst
             if (e.E2 && e.E2.Eoper == OPparam)
             {
-                genElem(cg, e.E2.E2); // src
-                genElem(cg, e.E2.E1); // count
+                cg.genElem(e.E2.E2); // src
+                cg.genElem(e.E2.E1); // count
             }
             else if (e.E2)
             {
-                genElem(cg, e.E2); // src
+                cg.genElem(e.E2); // src
                 cg.emitConst(OP_I32_CONST, 0); // count = 0
             }
             else
@@ -1549,13 +1549,13 @@ private bool genElem(ref WasmCG cg, elem* e)
         {
             // IR: OPmemset(dst, OPparam(count, val)). Result is dst.
             uint dstTmp = cg.allocTemp(WASM_I32);
-            genElem(cg, e.E1);
+            cg.genElem(e.E1);
             cg.emit(OP_LOCAL_TEE);
             cg.emitULEB(dstTmp); // stack: dst
             if (e.E2 && e.E2.Eoper == OPparam)
             {
-                genElem(cg, e.E2.E2); // val
-                genElem(cg, e.E2.E1); // count
+                cg.genElem(e.E2.E2); // val
+                cg.genElem(e.E2.E1); // count
             }
             else
             {
@@ -1584,7 +1584,7 @@ private void genElemAddr(ref WasmCG cg, elem* e)
     }
     if (e.Eoper == OPind)
     {
-        genElem(cg, e.E1); // evaluate the pointer
+        cg.genElem(e.E1); // evaluate the pointer
         return;
     }
     if (e.Eoper == OPvar)
@@ -1611,11 +1611,11 @@ private void genElemAddr(ref WasmCG cg, elem* e)
     if (e.Eoper == OPrelconst)
     {
         // Address of something already in memory.
-        genElem(cg, e);
+        cg.genElem(e);
         return;
     }
     // Generic: evaluate the expression (which should produce an address).
-    genElem(cg, e);
+    cg.genElem(e);
 }
 
 // Emit argument list (OPparam chain or single elem)
@@ -1675,7 +1675,7 @@ private bool paramIsSlice(const(param_t)* p)
 // a slice (e.g. an OPconst null passed where the callee expects char[]).
 private void genOneArg(ref WasmCG cg, elem* e, bool forceSlice = false)
 {
-    genElem(cg, e);
+    cg.genElem(e);
     const bool isDynArray = forceSlice || isSliceElem(e);
     if (isDynArray)
     {
@@ -2062,7 +2062,7 @@ private void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         {
             // Return value: leave on stack, then return
             if (b.Belem)
-                genElem(cg, b.Belem);
+                cg.genElem(b.Belem);
             if (cg.hasShadowFrame)
             {
                 if (b.Belem) // return value is on the stack
@@ -2087,7 +2087,7 @@ private void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         {
             if (b.Belem)
             {
-                const bool v = genElem(cg, b.Belem);
+                const bool v = cg.genElem(b.Belem);
                 if (v)
                     cg.emit(OP_DROP);
             }
@@ -2105,7 +2105,7 @@ private void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         {
             if (b.Belem)
             {
-                const bool v = genElem(cg, b.Belem);
+                const bool v = cg.genElem(b.Belem);
                 if (v)
                     cg.emit(OP_DROP);
             }
@@ -2121,7 +2121,7 @@ private void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
 
             // Emit switch expression
             if (b.Belem)
-                genElem(cg, b.Belem);
+                cg.genElem(b.Belem);
             else
             {
                 cg.emitConst(OP_I32_CONST, 0);
@@ -2247,7 +2247,7 @@ private void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
             {
                 // Back edge: condition true => loop continue
                 if (b.Belem)
-                    genElem(cg, b.Belem);
+                    cg.genElem(b.Belem);
                 else
                 {
                     cg.emitConst(OP_I32_CONST, 0);
@@ -2276,7 +2276,7 @@ private void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
             {
                 // Back edge: condition false => loop continue
                 if (b.Belem)
-                    genElem(cg, b.Belem);
+                    cg.genElem(b.Belem);
                 else
                 {
                     cg.emitConst(OP_I32_CONST, 0);
@@ -2296,7 +2296,7 @@ private void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
             {
                 // Loop exit condition (condition block is loop header or part of loop)
                 if (b.Belem)
-                    genElem(cg, b.Belem);
+                    cg.genElem(b.Belem);
                 else
                 {
                     cg.emitConst(OP_I32_CONST, 0);
@@ -2352,7 +2352,7 @@ private void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
                     cg.emit(OP_BLOCK);
                     cg.emit(WASM_VOID_BLOCK);
                     if (b.Belem)
-                        genElem(cg, b.Belem);
+                        cg.genElem(b.Belem);
                     else
                     {
                         cg.emitConst(OP_I32_CONST, 0);
@@ -2369,7 +2369,7 @@ private void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
                     cg.emit(OP_BLOCK);
                     cg.emit(WASM_VOID_BLOCK);
                     if (b.Belem)
-                        genElem(cg, b.Belem);
+                        cg.genElem(b.Belem);
                     else
                     {
                         cg.emitConst(OP_I32_CONST, 0);
@@ -2383,7 +2383,7 @@ private void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
                     // Both branches non-immediate — complex; just evaluate.
                     if (b.Belem)
                     {
-                        bool v = genElem(cg, b.Belem);
+                        bool v = cg.genElem(b.Belem);
                         if (v)
                             cg.emit(OP_DROP);
                     }
@@ -2396,7 +2396,7 @@ private void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
             block* target = succ(b, 0);
             if (b.Belem)
             {
-                const bool v = genElem(cg, b.Belem);
+                const bool v = cg.genElem(b.Belem);
                 if (v)
                     cg.emit(OP_DROP);
             }
@@ -2435,7 +2435,7 @@ private void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         // Default: emit expression, discard result
         if (b.Belem)
         {
-            const bool hasVal = genElem(cg, b.Belem);
+            const bool hasVal = cg.genElem(b.Belem);
             if (hasVal)
                 cg.emit(OP_DROP);
         }
