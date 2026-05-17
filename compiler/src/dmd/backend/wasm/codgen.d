@@ -136,19 +136,20 @@ nothrow:
         if (inShadow(s))
             return;
         // Compute size and alignment for the type.
-        uint sz = 4, al = 4;
+        uint sz = 4;
+        uint al = 4;
         if (s.Stype)
         {
             import dmd.backend.type : type_size, type_alignsize;
 
-            targ_size_t ts = type_size(s.Stype);
+            const targ_size_t ts = type_size(s.Stype);
             if (ts != targ_size_t.max && ts > 0)
                 sz = cast(uint) ts;
-            uint ta = type_alignsize(s.Stype);
+            const uint ta = type_alignsize(s.Stype);
             if (ta > 0 && ta <= 16)
                 al = ta;
         }
-        uint off = (shadowFrameSize + al - 1) & ~(al - 1);
+        const uint off = (shadowFrameSize + al - 1) & ~(al - 1);
         ShadowEntry se;
         se.sym = s;
         se.offset = off;
@@ -169,6 +170,12 @@ nothrow:
     void emitSLEB(long v)
     {
         code.writesLEB128(v);
+    }
+
+    void emitConst(ubyte OP, long v)
+    {
+        emit(OP);
+        emitSLEB(v);
     }
 
     /// 5-byte padded ULEB128 so wasm-ld has room to write a patched value over it
@@ -260,7 +267,9 @@ nothrow:
 // Load variants of narrow ints carry their signedness; stores share one op.
 private struct MemOps
 {
-    ubyte loadOp, storeOp, alignLog2;
+    ubyte loadOp;
+    ubyte storeOp;
+    ubyte alignLog2;
 }
 
 private MemOps memOpsFor(tym_t ty) @safe
@@ -443,8 +452,7 @@ private void emitShadowAddr(ref WasmCG cg, Symbol* s)
     uint off = cg.shadowOffset(s);
     if (off != 0)
     {
-        cg.emit(OP_I32_CONST);
-        cg.emitSLEB(cast(int) off);
+        cg.emitConst(OP_I32_CONST, cast(int) off);
         cg.emit(OP_I32_ADD);
     }
 }
@@ -466,8 +474,7 @@ private void emitShadowPrologue(ref WasmCG cg)
     // Emit: shadow_base = __stack_pointer - frame_size; __stack_pointer = shadow_base
     cg.emit(OP_GLOBAL_GET);
     cg.emitULEB(spIdx);
-    cg.emit(OP_I32_CONST);
-    cg.emitSLEB(cast(int) fsz);
+    cg.emitConst(OP_I32_CONST, cast(int) fsz);
     cg.emit(OP_I32_SUB);
     cg.emit(OP_LOCAL_TEE);
     cg.emitULEB(cg.shadowBaseLocal);
@@ -486,8 +493,7 @@ private void emitShadowEpilogue(ref WasmCG cg)
     // Emit: __stack_pointer = shadow_base + frame_size
     cg.emit(OP_LOCAL_GET);
     cg.emitULEB(cg.shadowBaseLocal);
-    cg.emit(OP_I32_CONST);
-    cg.emitSLEB(cast(int) fsz);
+    cg.emitConst(OP_I32_CONST, cast(int) fsz);
     cg.emit(OP_I32_ADD);
     cg.emit(OP_GLOBAL_SET);
     cg.emitULEB(spIdx);
@@ -504,16 +510,14 @@ private void maskSmallInt(ref WasmCG cg, tym_t ty) // TY
     case TYschar:
     case TYuchar:
     case TYchar8:
-        cg.emit(OP_I32_CONST);
-        cg.emitSLEB(0xFF);
+        cg.emitConst(OP_I32_CONST, 0xFF);
         cg.emit(OP_I32_AND);
         break;
     case TYshort:
     case TYwchar_t:
     case TYushort:
     case TYchar16:
-        cg.emit(OP_I32_CONST);
-        cg.emitSLEB(0xFFFF);
+        cg.emitConst(OP_I32_CONST, 0xFFFF);
         cg.emit(OP_I32_AND);
         break;
     default:
@@ -549,8 +553,7 @@ private bool genElem(ref WasmCG cg, elem* e)
             case TYullong:
             case TYcent:
             case TYucent:
-                cg.emit(OP_I64_CONST);
-                cg.emitSLEB(e.Vllong);
+                cg.emitConst(OP_I64_CONST, e.Vllong);
                 break;
             case TYfloat:
             case TYifloat:
@@ -572,8 +575,7 @@ private bool genElem(ref WasmCG cg, elem* e)
                     break;
                 }
             default:
-                cg.emit(OP_I32_CONST);
-                cg.emitSLEB(cast(int) e.Vlong);
+                cg.emitConst(OP_I32_CONST, cast(int) e.Vlong);
                 break;
             }
             return true;
@@ -595,8 +597,7 @@ private bool genElem(ref WasmCG cg, elem* e)
                 cg.emitShadowAddr(s);
                 if (e.Voffset != 0)
                 {
-                    cg.emit(OP_I32_CONST);
-                    cg.emitSLEB(cast(int) e.Voffset);
+                    cg.emitConst(OP_I32_CONST, cast(int) e.Voffset);
                     cg.emit(OP_I32_ADD);
                 }
                 cg.emitLoad(e.Ety);
@@ -611,8 +612,7 @@ private bool genElem(ref WasmCG cg, elem* e)
             //   Voffset=4 → high 32 bits (ptr) → i64.shr_u 32; i32.wrap_i64
             if (cg.locals[idx].ty == WASM_I64 && e.Voffset == 4)
             {
-                cg.emit(OP_I64_CONST);
-                cg.emitSLEB(32);
+                cg.emitConst(OP_I64_CONST, 32);
                 cg.emit(OP_I64_SHR_U);
             }
             // Coerce if expression type differs from the local's stored type.
@@ -629,8 +629,7 @@ private bool genElem(ref WasmCG cg, elem* e)
                 cg.emitShadowAddr(rs);
                 if (e.Voffset != 0)
                 {
-                    cg.emit(OP_I32_CONST);
-                    cg.emitSLEB(cast(int) e.Voffset);
+                    cg.emitConst(OP_I32_CONST, cast(int) e.Voffset);
                     cg.emit(OP_I32_ADD);
                 }
             }
@@ -640,8 +639,7 @@ private bool genElem(ref WasmCG cg, elem* e)
                 import dmd.backend.wasmobj : wmod_funcTableIndex;
 
                 uint tidx = wmod_funcTableIndex(rs);
-                cg.emit(OP_I32_CONST);
-                cg.emitSLEB(cast(int) tidx);
+                cg.emitConst(OP_I32_CONST, cast(int) tidx);
             }
             else
             {
@@ -696,8 +694,7 @@ private bool genElem(ref WasmCG cg, elem* e)
                     cg.emitShadowAddr(lhs);
                     if (e.E1.Voffset != 0)
                     {
-                        cg.emit(OP_I32_CONST);
-                        cg.emitSLEB(cast(int) e.E1.Voffset);
+                        cg.emitConst(OP_I32_CONST, cast(int) e.E1.Voffset);
                         cg.emit(OP_I32_ADD);
                     }
                     genElem(cg, e.E2);
@@ -884,15 +881,13 @@ private bool genElem(ref WasmCG cg, elem* e)
             else if (ty == TYllong || ty == TYullong)
             {
                 // i64.neg = 0 - x
-                cg.emit(OP_I64_CONST);
-                cg.emitSLEB(0);
+                cg.emitConst(OP_I64_CONST, 0);
                 genElem(cg, e.E1);
                 cg.emit(OP_I64_SUB);
             }
             else
             {
-                cg.emit(OP_I32_CONST);
-                cg.emitSLEB(0);
+                cg.emitConst(OP_I32_CONST, 0);
                 genElem(cg, e.E1);
                 cg.emit(OP_I32_SUB);
             }
@@ -916,14 +911,12 @@ private bool genElem(ref WasmCG cg, elem* e)
             const ty = tybasic(e.Ety);
             if (ty == TYllong || ty == TYullong)
             {
-                cg.emit(OP_I64_CONST);
-                cg.emitSLEB(-1);
+                cg.emitConst(OP_I64_CONST, -1);
                 cg.emit(OP_I64_XOR);
             }
             else
             {
-                cg.emit(OP_I32_CONST);
-                cg.emitSLEB(-1);
+                cg.emitConst(OP_I32_CONST, -1);
                 cg.emit(OP_I32_XOR);
             }
             return true;
@@ -953,8 +946,7 @@ private bool genElem(ref WasmCG cg, elem* e)
         {
             // Extract high 32 bits of a 64-bit value (ptr part of D slice on wasm32).
             genElem(cg, e.E1);
-            cg.emit(OP_I64_CONST);
-            cg.emitSLEB(32);
+            cg.emitConst(OP_I64_CONST, 32);
             cg.emit(OP_I64_SHR_U);
             cg.emit(OP_I32_WRAP_I64);
             return true;
@@ -963,8 +955,7 @@ private bool genElem(ref WasmCG cg, elem* e)
         {
             // Truncate 16→8 bit (e.g. cast(char)(expr)). Mask low 8 bits.
             genElem(cg, e.E1);
-            cg.emit(OP_I32_CONST);
-            cg.emitSLEB(0xFF);
+            cg.emitConst(OP_I32_CONST, 0xFF);
             cg.emit(OP_I32_AND);
             return true;
         }
@@ -972,8 +963,7 @@ private bool genElem(ref WasmCG cg, elem* e)
         {
             // Truncate 32→16 bit (e.g. cast(short)(expr)). Mask low 16 bits.
             genElem(cg, e.E1);
-            cg.emit(OP_I32_CONST);
-            cg.emitSLEB(0xFFFF);
+            cg.emitConst(OP_I32_CONST, 0xFFFF);
             cg.emit(OP_I32_AND);
             return true;
         }
@@ -1110,8 +1100,7 @@ private bool genElem(ref WasmCG cg, elem* e)
                         spLocal = cg.allocTemp(WASM_I32);
                         cg.emit(OP_GLOBAL_GET);
                         cg.emitULEB(spIdx);
-                        cg.emit(OP_I32_CONST);
-                        cg.emitSLEB(cast(int) vaFrameSize);
+                        cg.emitConst(OP_I32_CONST, cast(int) vaFrameSize);
                         cg.emit(OP_I32_SUB);
                         cg.emit(OP_LOCAL_TEE);
                         cg.emitULEB(spLocal);
@@ -1137,8 +1126,7 @@ private bool genElem(ref WasmCG cg, elem* e)
                     else
                     {
                         // No variadic args: pass null pointer per LDC2 convention.
-                        cg.emit(OP_I32_CONST);
-                        cg.emitSLEB(0);
+                        cg.emitConst(OP_I32_CONST, 0);
                     }
 
                     // Register import type: (fixed_params..., i32 varargs_ptr) -> result.
@@ -1170,8 +1158,7 @@ private bool genElem(ref WasmCG cg, elem* e)
                         uint spIdx = wmod_getOrCreateStackPtrGlobal();
                         cg.emit(OP_LOCAL_GET);
                         cg.emitULEB(spLocal);
-                        cg.emit(OP_I32_CONST);
-                        cg.emitSLEB(cast(int) vaFrameSize);
+                        cg.emitConst(OP_I32_CONST, cast(int) vaFrameSize);
                         cg.emit(OP_I32_ADD);
                         cg.emit(OP_GLOBAL_SET);
                         cg.emitULEB(spIdx);
@@ -1387,12 +1374,10 @@ private bool genElem(ref WasmCG cg, elem* e)
             genElem(cg, e.E1);
             cg.emit(OP_IF);
             cg.emit(WASM_I32);
-            cg.emit(OP_I32_CONST);
-            cg.emitSLEB(1);
+            cg.emitConst(OP_I32_CONST, 1);
             cg.emit(OP_ELSE);
             genElem(cg, e.E2);
-            cg.emit(OP_I32_CONST);
-            cg.emitSLEB(0);
+            cg.emitConst(OP_I32_CONST, 0);
             cg.emit(OP_I32_NE);
             cg.emit(OP_END);
             return true;
@@ -1405,12 +1390,10 @@ private bool genElem(ref WasmCG cg, elem* e)
             cg.emit(OP_IF);
             cg.emit(WASM_I32);
             genElem(cg, e.E2);
-            cg.emit(OP_I32_CONST);
-            cg.emitSLEB(0);
+            cg.emitConst(OP_I32_CONST, 0);
             cg.emit(OP_I32_NE);
             cg.emit(OP_ELSE);
-            cg.emit(OP_I32_CONST);
-            cg.emitSLEB(0);
+            cg.emitConst(OP_I32_CONST, 0);
             cg.emit(OP_END);
             return true;
         }
@@ -1429,8 +1412,7 @@ private bool genElem(ref WasmCG cg, elem* e)
             }
             else
             {
-                cg.emit(OP_I32_CONST);
-                cg.emitSLEB(0);
+                cg.emitConst(OP_I32_CONST, 0);
                 cg.emit(OP_I32_NE);
             }
             return true;
@@ -1453,8 +1435,7 @@ private bool genElem(ref WasmCG cg, elem* e)
 
     case OPsizeof:
         // Sizeof (compile-time constant, should be folded)
-        cg.emit(OP_I32_CONST);
-        cg.emitSLEB(cast(int) e.Vlong);
+        cg.emitConst(OP_I32_CONST, cast(int) e.Vlong);
         return true;
 
     case OPpostinc:
@@ -1507,8 +1488,7 @@ private bool genElem(ref WasmCG cg, elem* e)
             elem* hiE = (e.Eoper == OPrpair) ? e.E1 : e.E2;
             genElem(cg, hiE);
             cg.emit(OP_I64_EXTEND_I32_U);
-            cg.emit(OP_I64_CONST);
-            cg.emitSLEB(32);
+            cg.emitConst(OP_I64_CONST, 32);
             cg.emit(OP_I64_SHL);
             genElem(cg, loE);
             cg.emit(OP_I64_EXTEND_I32_U);
@@ -1530,8 +1510,7 @@ private bool genElem(ref WasmCG cg, elem* e)
             cg.emit(OP_LOCAL_TEE);
             cg.emitULEB(dstTmp); // stack: dst
             genElemAddr(cg, e.E2); // stack: dst, src
-            cg.emit(OP_I32_CONST);
-            cg.emitSLEB(sz); // stack: dst, src, n
+            cg.emitConst(OP_I32_CONST, sz); // stack: dst, src, n
             emitMemoryCopy(cg);
             cg.emit(OP_LOCAL_GET);
             cg.emitULEB(dstTmp); // result: dst
@@ -1553,15 +1532,12 @@ private bool genElem(ref WasmCG cg, elem* e)
             else if (e.E2)
             {
                 genElem(cg, e.E2); // src
-                cg.emit(OP_I32_CONST);
-                cg.emitSLEB(0); // count = 0
+                cg.emitConst(OP_I32_CONST, 0); // count = 0
             }
             else
             {
-                cg.emit(OP_I32_CONST);
-                cg.emitSLEB(0);
-                cg.emit(OP_I32_CONST);
-                cg.emitSLEB(0);
+                cg.emitConst(OP_I32_CONST, 0);
+                cg.emitConst(OP_I32_CONST, 0);
             }
             emitMemoryCopy(cg);
             cg.emit(OP_LOCAL_GET);
@@ -1583,10 +1559,8 @@ private bool genElem(ref WasmCG cg, elem* e)
             }
             else
             {
-                cg.emit(OP_I32_CONST);
-                cg.emitSLEB(0); // val
-                cg.emit(OP_I32_CONST);
-                cg.emitSLEB(0); // count
+                cg.emitConst(OP_I32_CONST, 0); // val
+                cg.emitConst(OP_I32_CONST, 0); // count
             }
             emitMemoryFill(cg);
             cg.emit(OP_LOCAL_GET);
@@ -1605,8 +1579,7 @@ private void genElemAddr(ref WasmCG cg, elem* e)
 {
     if (!e)
     {
-        cg.emit(OP_I32_CONST);
-        cg.emitSLEB(0);
+        cg.emitConst(OP_I32_CONST, 0);
         return;
     }
     if (e.Eoper == OPind)
@@ -1714,8 +1687,7 @@ private void genOneArg(ref WasmCG cg, elem* e, bool forceSlice = false)
         cg.emit(OP_I32_WRAP_I64); // lo = len (low 32 bits)
         cg.emit(OP_LOCAL_GET);
         cg.emitULEB(tmp);
-        cg.emit(OP_I64_CONST);
-        cg.emitSLEB(32);
+        cg.emitConst(OP_I64_CONST, 32);
         cg.emit(OP_I64_SHR_U);
         cg.emit(OP_I32_WRAP_I64); // hi = ptr (high 32 bits)
     }
@@ -2152,8 +2124,7 @@ private void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
                 genElem(cg, b.Belem);
             else
             {
-                cg.emit(OP_I32_CONST);
-                cg.emitSLEB(0);
+                cg.emitConst(OP_I32_CONST, 0);
             }
 
             // Compute vmin/vmax from case values
@@ -2207,14 +2178,12 @@ private void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
                     cg.emitULEB(condLocal);
                     if (is64bit)
                     {
-                        cg.emit(OP_I64_CONST);
-                        cg.emitSLEB(cv);
+                        cg.emitConst(OP_I64_CONST, cv);
                         cg.emit(OP_I64_EQ);
                     }
                     else
                     {
-                        cg.emit(OP_I32_CONST);
-                        cg.emitSLEB(cast(int) cv);
+                        cg.emitConst(OP_I32_CONST, cast(int) cv);
                         cg.emit(OP_I32_EQ);
                     }
                     cg.emit(OP_BR_IF);
@@ -2233,8 +2202,7 @@ private void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
             // Adjust switch value to 0-based
             if (vmin != 0)
             {
-                cg.emit(OP_I32_CONST);
-                cg.emitSLEB(cast(int)-vmin);
+                cg.emitConst(OP_I32_CONST, cast(int)-vmin);
                 cg.emit(OP_I32_ADD);
             }
 
@@ -2282,8 +2250,7 @@ private void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
                     genElem(cg, b.Belem);
                 else
                 {
-                    cg.emit(OP_I32_CONST);
-                    cg.emitSLEB(0);
+                    cg.emitConst(OP_I32_CONST, 0);
                 }
                 emitCondToI32(cg, b.Belem);
                 size_t lf = loopFrame(takenIdx);
@@ -2312,8 +2279,7 @@ private void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
                     genElem(cg, b.Belem);
                 else
                 {
-                    cg.emit(OP_I32_CONST);
-                    cg.emitSLEB(0);
+                    cg.emitConst(OP_I32_CONST, 0);
                 }
                 emitCondInvert(cg, b.Belem);
                 size_t lf = loopFrame(nottakenIdx);
@@ -2333,8 +2299,7 @@ private void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
                     genElem(cg, b.Belem);
                 else
                 {
-                    cg.emit(OP_I32_CONST);
-                    cg.emitSLEB(0);
+                    cg.emitConst(OP_I32_CONST, 0);
                 }
                 if (nottakenIdx == exitBlockIdx)
                 {
@@ -2390,8 +2355,7 @@ private void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
                         genElem(cg, b.Belem);
                     else
                     {
-                        cg.emit(OP_I32_CONST);
-                        cg.emitSLEB(0);
+                        cg.emitConst(OP_I32_CONST, 0);
                     }
                     emitCondInvert(cg, b.Belem);
                     cg.emit(OP_BR_IF);
@@ -2408,8 +2372,7 @@ private void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
                         genElem(cg, b.Belem);
                     else
                     {
-                        cg.emit(OP_I32_CONST);
-                        cg.emitSLEB(0);
+                        cg.emitConst(OP_I32_CONST, 0);
                     }
                     emitCondToI32(cg, b.Belem);
                     cg.emit(OP_BR_IF);
@@ -2511,7 +2474,9 @@ void wasm_codgen(Symbol* sfunc)
     struct SplitParam
     {
         Symbol* sym;
-        uint loIdx, hiIdx, i64Idx;
+        uint loIdx;
+        uint hiIdx;
+        uint i64Idx;
     }
 
     SplitParam[] splitParams;
@@ -2565,8 +2530,7 @@ void wasm_codgen(Symbol* sfunc)
         cg.emit(OP_LOCAL_GET);
         cg.emitULEB(sp.hiIdx); // ptr
         cg.emit(OP_I64_EXTEND_I32_U);
-        cg.emit(OP_I64_CONST);
-        cg.emitSLEB(32);
+        cg.emitConst(OP_I64_CONST, 32);
         cg.emit(OP_I64_SHL);
         cg.emit(OP_LOCAL_GET);
         cg.emitULEB(sp.loIdx); // len
