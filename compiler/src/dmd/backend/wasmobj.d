@@ -495,9 +495,12 @@ private WasmFuncType buildFuncType(type* t)
     // C variadic (`...`): append a trailing i32 varargs-pointer parameter.
     // Matches the LDC2/wasi-libc ABI: caller spills variadic args to the shadow
     // stack and passes a pointer to that region as the last function parameter.
+    // A real C variadic requires at least one fixed param; bare type_fake(TYnfunc)
+    // symbols (RTL: _d_assertp, etc.) have TF.prototype set but Tparamtypes == null
+    // and must not get the trailing varargs ptr.
     import dmd.backend.type : variadic;
 
-    if (variadic(t))
+    if (variadic(t) && t.Tparamtypes !is null)
         ft.params ~= WASM_I32;
 
     // Return type (void and noreturn both produce no WASM result)
