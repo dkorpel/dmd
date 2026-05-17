@@ -1,9 +1,28 @@
 WebAssembly target support added to DMD
 
 DMD now recognizes WebAssembly as a compilation target via the `-mwasm32` and `-os=wasm` flags.
+This can be used to run D code in web browsers, or in local sandbox environments such as `wasmtime`.
+
+With wasmtime installed, and added to PATH (or set in the `WASMTIME` environment variable), try:
+
+```D
+import core.stdc.stdio;
+
+void main()
+{
+    printf("Hello WebAssembly!");
+}
+```
 
 $(CONSOLE
-$ dmd -mwasm32 -os=wasm -o- hello.d
+$ dmd -mwasm32 -os=wasm hello.d
+$ wasmtime run hello.wasm
+)
+
+Or:
+
+$(CONSOLE
+$ dmd -mwasm32 -os=wasm -run hello.d
 )
 
 Version identifiers defined when targeting WebAssembly:
@@ -15,3 +34,20 @@ $(UL
     $(LI `CppRuntime_LLVM`)
     $(LI `LittleEndian`)
 )
+
+The .wasm should be binary compatible with ldc2.
+
+```D
+import core.attribute : wasmImportModule;
+@wasmImportModule("wasi_snapshot_preview1") extern (C) void proc_exit(int code);
+
+// LDC way:
+import ldc.attributes;
+@llvmAttr("wasm-import-module", "wasi_snapshot_preview1")
+extern (C) void proc_exit(int code);
+```
+
+Limitations:
+- No phobos
+- No Exceptions
+- The Garbage Collector leaks, and doesn't scan
