@@ -178,6 +178,12 @@ nothrow:
         emitSLEB(v);
     }
 
+    void emitLocal(ubyte OP, long v)
+    {
+        emit(OP);
+        emitULEB(cast(uint) v);
+    }
+
     /// 5-byte padded ULEB128 so wasm-ld has room to write a patched value over it
     void emitULEBpadded(uint addr)
     {
@@ -552,7 +558,7 @@ private bool genElem(ref WasmCG cg, elem* e)
     {
     case OPconst:
         {
-            const ty = tybasic(e.Ety);
+            const ty = tybasic(e.Ety); // TODO: simplify using .wasmType
             switch (ty)
             {
             case TYllong:
@@ -1268,6 +1274,25 @@ private bool genElem(ref WasmCG cg, elem* e)
                             aparams ~= WASM_I32;
                             continue;
                         }
+                        // Independent of pp matching: when the arg expression
+                        // is OPind of an OPcall that returns a struct via sret,
+                        // the call leaves the sret address on the stack — load
+                        // would consume it and produce a struct value instead
+                        // of the pointer the callee expects. Treat as pointer.
+                        // (pp may be misclassified when the callee's slice
+                        // params get pre-split in callArgs and confuse the
+                        // leading-hidden count.)
+                        if (a.Eoper == OPind && a.E1 &&
+                            (a.E1.Eoper == OPcall || a.E1.Eoper == OPucall) &&
+                            a.E1.E1 && a.E1.E1.Eoper == OPvar && a.E1.E1.Vsym &&
+                            a.E1.E1.Vsym.Stype && a.E1.E1.Vsym.Stype.Tnext &&
+                            (tybasic(a.E1.E1.Vsym.Stype.Tnext.Tty) == TYstruct ||
+                             tybasic(a.E1.E1.Vsym.Stype.Tnext.Tty) == TYarray))
+                        {
+                            cg.genElem(a.E1);
+                            aparams ~= WASM_I32;
+                            continue;
+                        }
                         genOneArg(cg, a, asSlice);
                         if (asSlice)
                         {
@@ -1742,10 +1767,30 @@ private bool emitAggregateArgAsPointer(ref WasmCG cg, elem* a)
     }
     if (!a)
         return false;
-    if (a.Eoper == OPind && a.E1)
+    // Strip arbitrary nesting of OPstrpar and OPcomma chains.
+    while (a)
     {
-        cg.genElem(a.E1);
-        return true;
+        if (a.Eoper == OPstrpar && a.E1)
+            a = a.E1;
+        else if (a.Eoper == OPcomma)
+        {
+            const bool r1 = cg.genElem(a.E1);
+            if (r1)
+                cg.emit(OP_DROP);
+            a = a.E2;
+        }
+        else
+            break;
+    }
+    if (!a)
+        return false;
+    if (a.Eoper == OPind)
+    {
+        if (a.E1)
+        {
+            cg.genElem(a.E1);
+            return true;
+        }
     }
     if (a.Eoper == OPvar && a.Vsym)
     {
@@ -1765,6 +1810,13 @@ private bool emitAggregateArgAsPointer(ref WasmCG cg, elem* a)
             cg.emitDataAddr(vs, cast(uint) a.Voffset);
             return true;
         }
+    }
+    // OPcall returning a struct (sret) already leaves the sret address on
+    // the stack — exactly the pointer the callee expects. No extra load.
+    if (a.Eoper == OPcall || a.Eoper == OPucall)
+    {
+        cg.genElem(a);
+        return true;
     }
     return false;
 }
