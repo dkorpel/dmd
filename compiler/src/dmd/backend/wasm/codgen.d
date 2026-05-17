@@ -1255,14 +1255,42 @@ private bool genElem(ref WasmCG cg, elem* e)
                             declParams[declParams.length - 1 - k] = t;
                         }
                     }
-                    size_t hiddenLead = (callArgs.length > declParams.length)
-                        ? callArgs.length - declParams.length : 0;
+                    // Align each callArg to its matching declared param. Slice
+                    // params may appear in callArgs either as a single i64 packed
+                    // value or as two pre-split i32 entries (len, ptr) — walk
+                    // declParams right-to-left consuming callArgs from the end so
+                    // any hidden leading args (frame/this/sret) land at index < 0
+                    // and resolve to pp=null.
+                    param_t*[] ppPerArg;
+                    ppPerArg.length = callArgs.length;
+                    {
+                        ptrdiff_t ai = cast(ptrdiff_t) callArgs.length - 1;
+                        ptrdiff_t pi = cast(ptrdiff_t) declParams.length - 1;
+                        while (ai >= 0 && pi >= 0)
+                        {
+                            auto q = declParams[pi];
+                            if (paramIsSlice(q) && ai >= 1
+                                && tybasic(callArgs[ai].Ety) != TYullong
+                                && tybasic(callArgs[ai].Ety) != TYllong)
+                            {
+                                // Pre-split: (len, ptr) — both map to the slice pp.
+                                ppPerArg[ai] = q;
+                                ppPerArg[ai - 1] = q;
+                                ai -= 2;
+                            }
+                            else
+                            {
+                                ppPerArg[ai] = q;
+                                ai -= 1;
+                            }
+                            pi -= 1;
+                        }
+                    }
                     ubyte[] aparams;
                     foreach (i, a; callArgs)
                     {
                         const tym_t aty = tybasic(a.Ety);
-                        param_t* pp = (i >= hiddenLead && i - hiddenLead < declParams.length)
-                            ? declParams[i - hiddenLead] : null;
+                        param_t* pp = ppPerArg[i];
                         bool asSlice = false;
                         if (aty == TYullong || aty == TYllong)
                             asSlice = isSliceElem(a) || paramIsSlice(pp);
