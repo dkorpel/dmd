@@ -473,8 +473,26 @@ private WasmFuncType buildFuncType(type* t)
     // Parameters. D dynamic arrays (TYdarray = TYullong on WASM32) are decomposed
     // by toArgTypes_wasm into (size_t length, void* ptr) = (i32, i32), matching
     // LDC2's WebAssembly ABI. TYdarray is identified by Tnext != null (element type).
-    param_t* p = t.Tparamtypes;
-    while (p)
+    //
+    // For TYjfunc (D linkage), the globsym used to build the function's locals
+    // is reversed (see glue/package.d), and callers push args in reverse-source
+    // order. The WASM signature must match that order, so iterate Tparamtypes
+    // in reverse for TYjfunc.
+    const tym_t fty = tybasic(t.Tty);
+    const bool reversed = (fty == TYjfunc);
+    param_t*[] plist;
+    for (param_t* p = t.Tparamtypes; p; p = p.Pnext)
+        plist ~= p;
+    if (reversed)
+    {
+        foreach (k; 0 .. plist.length / 2)
+        {
+            auto tmp = plist[k];
+            plist[k] = plist[$ - 1 - k];
+            plist[$ - 1 - k] = tmp;
+        }
+    }
+    foreach (p; plist)
     {
         if (p.Ptype && tybasic(p.Ptype.Tty) != TYvoid)
         {
@@ -489,7 +507,6 @@ private WasmFuncType buildFuncType(type* t)
             else
                 ft.params ~= wasmValType(pty);
         }
-        p = p.Pnext;
     }
 
     // C variadic (`...`): append a trailing i32 varargs-pointer parameter.
