@@ -37,34 +37,6 @@ import dmd.common.outbuffer;
 
 nothrow:
 
-/// LEB128 helpers
-private void uleb(ref OutBuffer b, uint v) @trusted
-{
-    do
-    {
-        ubyte bt = v & 0x7F;
-        v >>= 7;
-        if (v)
-            bt |= 0x80;
-        b.writeByte(bt);
-    }
-    while (v);
-}
-
-private void sleb(ref OutBuffer b, long v) @trusted
-{
-    bool more = true;
-    while (more)
-    {
-        ubyte bt = v & 0x7F;
-        v >>= 7;
-        more = !((v == 0 && !(bt & 0x40)) || (v == -1 && (bt & 0x40)));
-        if (more)
-            bt |= 0x80;
-        b.writeByte(bt);
-    }
-}
-
 /// Returns: WASM value type for a backend type `ty`
 ubyte wasmType(tym_t ty) @trusted
 {
@@ -191,12 +163,12 @@ nothrow:
 
     void emitULEB(uint v) @trusted
     {
-        uleb(code, v);
+        code.writeuLEB128(v);
     }
 
     void emitSLEB(long v) @trusted
     {
-        sleb(code, v);
+        code.writesLEB128(v);
     }
 
     // 5-byte padded ULEB128 so wasm-ld has room to write a patched value over it
@@ -282,8 +254,8 @@ nothrow:
 
     void emitMemArg(uint align_, uint offset) @trusted
     {
-        uleb(code, align_); // alignment (log2)
-        uleb(code, offset); // byte offset
+        code.writeuLEB128(align_); // alignment (log2)
+        code.writeuLEB128(offset); // byte offset
     }
 }
 
