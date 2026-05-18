@@ -81,7 +81,6 @@ runnable/test22209.d
 runnable/test17899.d
 runnable/interpret.d
 runnable/xtest55.d
-runnable/test20687.d
 runnable/test20401.d
 runnable/nrvo.d
 runnable/link2644.d
@@ -280,7 +279,6 @@ runnable/cstuff4.c
 runnable/test13504.d
 runnable/aliasassign.d
 runnable/test23181.d
-runnable/test19679.d
 runnable/link9571.d
 runnable/test14613.d
 runnable/test23010.d
@@ -365,7 +363,6 @@ runnable/testbounds.d
 runnable/interface2.d
 runnable/a20.d
 runnable/bug846.d
-runnable/test45.d
 runnable/extern1.d
 runnable/test20809.d
 runnable/test21357.d
@@ -375,7 +372,6 @@ runnable/helloc.c
 runnable/no_assertz_cov.d
 runnable/test23722_2.d
 runnable/test57.d
-runnable/testkeyword.d
 runnable/test18456.sh
 runnable/link8023.d
 runnable/test8.d
