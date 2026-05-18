@@ -164,6 +164,13 @@ need to be started.
                         them under qemu-aarch64; requires clang, ld.lld, qemu-aarch64,
                         and an AArch64 sysroot for clang (e.g. gcc-aarch64-linux-gnu);
                         skipped automatically if any prerequisite is missing
+    wasm:               WASM regression target. Runs fail_compilation,
+                        compilable and runnable tests with OS=wasm and no
+                        permuted args. Tests listed in
+                        `wasm_known_failures.txt` are expected to fail and
+                        are ignored; if any of them now pass, the runner
+                        reports them so the list can be shrunk. Use this
+                        target while developing the WASM backend.
 
     clean:              remove all temporary or result files from previous runs
 
