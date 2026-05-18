@@ -7507,15 +7507,36 @@ Expression dotExp(Type mt, Scope* sc, Expression e, Identifier ident, DotExpFlag
         // then forward the property to the wrapped Type.
         if (e.op != EXP.type)
         {
+            const errors = global.startGagging();
             Expression efold = e.ctfeInterpret();
-            if (auto te = efold.isTypeExp())
-                e = te;
-            else
+            const gagged = global.endGagging(errors);
+            if (!gagged && efold)
+                if (auto te = efold.isTypeExp())
+                {
+                    e = te;
+                    goto Lfolded;
+                }
             {
+                // Defer until CTFE substitutes `e` to a TypeExp (e.g.
+                // function parameter resolved at call site). Only the
+                // well-known properties have a knowable result type.
+                Type resTy;
+                if (ident == Id.__sizeof || ident == Id.__xalignof)
+                    resTy = Type.tsize_t;
+                else if (ident == Id.stringof || ident == Id._mangleof)
+                    resTy = Type.tstring;
+                if (resTy)
+                {
+                    auto die = new DotIdExp(e.loc, e, ident);
+                    die.type = resTy;
+                    die.ttypeDeferred = true;
+                    return die;
+                }
                 error(e.loc, "expression `%s` of type `type_t` must be a compile-time constant", e.toChars());
                 return ErrorExp.get();
             }
         }
+    Lfolded:
         auto te = e.isTypeExp();
         Type wrapped = te.type;
         // Delegate property lookups (.sizeof / .stringof / .mangleof / .alignof) to the wrapped type

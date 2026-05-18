@@ -27,7 +27,7 @@ import dmd.errors;
 import dmd.expression;
 import dmd.expressionsem;
 import dmd.func;
-import dmd.globals : dinteger_t, sinteger_t, uinteger_t;
+import dmd.globals : dinteger_t, global, sinteger_t, uinteger_t;
 import dmd.location;
 import dmd.mtype;
 import dmd.root.bitarray;
@@ -1523,6 +1523,12 @@ Expression ctfeCast(UnionExp* pue, Loc loc, Type type, Type to, Expression e, bo
 
     if (e.op == EXP.null_)
         return paint();
+
+    // First-class types: a TypeExp is a value of `type_t`; casting to / from
+    // `type_t` is a no-op at CTFE.
+    if (global.params.firstClassTypes && e.op == EXP.type &&
+        (to.ty == Ttype || type.ty == Ttype))
+        return e;
 
     if (e.op == EXP.classReference)
     {

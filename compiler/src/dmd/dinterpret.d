@@ -1737,6 +1737,34 @@ public:
         result = e;
     }
 
+    override void visit(DotIdExp e)
+    {
+        debug (LOG)
+        {
+            printf("%s DotIdExp.interpret() %s\n", e.loc.toChars(), e.toChars());
+        }
+        // First-class types: a deferred property lookup on a `type_t`-typed
+        // expression — interpret e1 to a TypeExp, then forward to the
+        // wrapped type's getProperty.
+        if (!e.ttypeDeferred)
+        {
+            error(e.loc, "cannot interpret `%s` at compile time", e.toErrMsg());
+            result = CTFEExp.cantexp;
+            return;
+        }
+        Expression e1 = interpretRegion(e.e1, istate);
+        if (exceptionOrCant(e1))
+            return;
+        auto te = e1.isTypeExp();
+        if (!te)
+        {
+            error(e.loc, "expression `%s` of type `type_t` must be a compile-time constant", e.toErrMsg());
+            result = CTFEExp.cantexp;
+            return;
+        }
+        result = te.type.getProperty(null, e.loc, e.ident, 0);
+    }
+
     override void visit(ThisExp e)
     {
         debug (LOG)

@@ -9873,6 +9873,15 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
                 setError();
         }
 
+        // First-class types: a deferred property lookup on a non-foldable
+        // `type_t` value (e.g. a parameter) is already typed; resolution
+        // happens at CTFE call site once the value substitutes to a TypeExp.
+        if (exp.ttypeDeferred)
+        {
+            result = exp;
+            return;
+        }
+
         if (sc.inCfile)
         {
             if (exp.arrow) // ImportC only
@@ -10223,6 +10232,32 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
         {
             result = ex;
             return;
+        }
+
+        // First-class types: functions taking or returning `type_t` are
+        // CTFE-only (no codegen), so they have no runtime address.
+        if (global.params.firstClassTypes)
+        {
+            FuncDeclaration fd;
+            if (auto ve = exp.e1.isVarExp())
+                fd = ve.var.isFuncDeclaration();
+            else if (auto dve = exp.e1.isDotVarExp())
+                fd = dve.var.isFuncDeclaration();
+            if (fd)
+            {
+                if (auto tf = fd.type ? fd.type.isTypeFunction() : null)
+                {
+                    bool anyTtype = tf.next && tf.next.ty == Ttype;
+                    if (!anyTtype && tf.parameterList.parameters)
+                        foreach (p; *tf.parameterList.parameters)
+                            if (p.type && p.type.ty == Ttype) { anyTtype = true; break; }
+                    if (anyTtype)
+                    {
+                        error(exp.loc, "cannot take address of CTFE-only function `%s` (signature uses `type_t`)", fd.toChars());
+                        return setError();
+                    }
+                }
+            }
         }
 
         if (sc.inCfile)
@@ -16681,6 +16716,11 @@ private bool checkArithmetic(Expression e, EXP op)
 
     if ((op == EXP.add || op == EXP.min) && e.isTypeExp())
     {
+        if (global.params.firstClassTypes)
+        {
+            error(e.loc, "`type_t` value `%s` cannot be used in arithmetic", e.toChars);
+            return true;
+        }
         // @@@DEPRECATED_2.121@@@
         // Deprecated in 2.111
         // In 2.121, remove this branch to let `checkValue` raise the error
@@ -16688,6 +16728,13 @@ private bool checkArithmetic(Expression e, EXP op)
         if (!e.type.isOpaqueType)
             deprecationSupplemental(e.loc, "perhaps use `%s.init`", e.toChars);
         return false;
+    }
+
+    // First-class types: reject arithmetic on `type_t`-typed values
+    if (global.params.firstClassTypes && e.type.ty == Ttype)
+    {
+        error(e.loc, "`type_t` value `%s` cannot be used in arithmetic", e.toChars);
+        return true;
     }
 
     return e.checkValue();

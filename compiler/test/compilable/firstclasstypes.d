@@ -65,3 +65,28 @@ static assert(firstIf(false, int, long).sizeof == 8);
 // Nested calls fold via CTFE
 static assert(firstIf(true, firstIf(false, byte, short), int).sizeof == 2);
 static assert(firstIf(false, byte, firstIf(true, long, int)).stringof == "long");
+
+// Returning a literal type from a `type_t`-returning function
+type_t alwaysInt() { return int; }
+static assert(alwaysInt().sizeof == 4);
+static assert(alwaysInt().stringof == "int");
+
+// `type_t` parameter forwarded through a local `type_t` variable
+type_t viaLocal(type_t a)
+{
+    type_t local = a;
+    return local;
+}
+static assert(viaLocal(double).sizeof == 8);
+static assert(viaLocal(byte).stringof == "byte");
+
+// Deferred property lookup: `.sizeof` / `.stringof` on a `type_t` parameter
+// resolves once the call substitutes the argument's TypeExp.
+type_t largerType(type_t a, type_t b)
+{
+    return a.sizeof >= b.sizeof ? a : b;
+}
+static assert(largerType(int, long).sizeof == 8);
+static assert(largerType(short, byte).sizeof == 2);
+static assert(largerType(int, long).stringof == "long");
+static assert(largerType(largerType(byte, short), int).sizeof == 4);

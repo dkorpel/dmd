@@ -2693,7 +2693,12 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
                 rs.exp = resolveAliasThis(sc, rs.exp);
 
             rs.exp = resolveProperties(sc, rs.exp);
-            if (!rs.exp.hasValidType())
+            // First-class types: a TypeExp returned from a `type_t`-returning
+            // function is a value, not a type-as-symbol — skip the
+            // "type is not an expression" check.
+            const ttypeReturn = global.params.firstClassTypes
+                && tret && tret.ty == Ttype && rs.exp.isTypeExp();
+            if (!ttypeReturn && !rs.exp.hasValidType())
                 rs.exp = ErrorExp.get();
             if (auto f = isFuncAddress(rs.exp))
             {
