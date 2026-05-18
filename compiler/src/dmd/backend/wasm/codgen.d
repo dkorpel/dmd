@@ -860,63 +860,68 @@ private bool genElem(ref WasmCG cg, elem* e)
     case OPgt:
     case OPge:
         {
-            const ubyte cmpTy = wasmType(e.E1.Ety);
             cg.genElem(e.E1);
             cg.genElem(e.E2);
-            emitCoerce(cg, wasmType(e.E2.Ety), cmpTy);
+            emitCoerce(cg, wasmType(e.E2.Ety), wasmType(e.E1.Ety));
             emitRelop(cg, op, e.E1.Ety);
             return true;
         }
 
     case OPneg:
         {
-            const ty = tybasic(e.Ety);
-            if (ty == TYfloat)
+            const ty = tybasic(e.Ety).wasmType;
+            if (ty == WASM_F32)
             {
                 cg.genElem(e.E1);
                 cg.emit(OP_F32_NEG);
             }
-            else if (ty == TYdouble || ty == TYdouble_alias || ty == TYreal)
+            else if (ty == WASM_F64)
             {
                 cg.genElem(e.E1);
                 cg.emit(OP_F64_NEG);
             }
-            else if (ty == TYllong || ty == TYullong)
+            else if (ty == WASM_I64)
             {
                 // i64.neg = 0 - x
                 cg.emitConst(OP_I64_CONST, 0);
                 cg.genElem(e.E1);
                 cg.emit(OP_I64_SUB);
             }
-            else
+            else if (ty == WASM_I32)
             {
                 cg.emitConst(OP_I32_CONST, 0);
                 cg.genElem(e.E1);
                 cg.emit(OP_I32_SUB);
             }
+            else
+            {
+                assert(0); // - operator only works on primitive type
+            }
             return true;
         }
 
     case OPnot:
-        {
-            cg.genElem(e.E1);
-            emitCondInvert(cg, e.E1); // !x: produces i32 (1 if x is zero/false)
-            return true;
-        }
+        cg.genElem(e.E1);
+        emitCondInvert(cg, e.E1);
+        return true;
 
     case OPcom:
         {
             cg.genElem(e.E1);
-            const ty = tybasic(e.Ety);
-            if (ty == TYllong || ty == TYullong)
+            const ty = tybasic(e.Ety).wasmType;
+            if (ty == WASM_I64)
             {
                 cg.emitConst(OP_I64_CONST, -1);
                 cg.emit(OP_I64_XOR);
             }
-            else
+            else if (ty == WASM_I32)
             {
                 cg.emitConst(OP_I32_CONST, -1);
                 cg.emit(OP_I32_XOR);
+            }
+            else
+            {
+                assert(0); // ~ operator not defined for float types
             }
             return true;
         }
@@ -942,37 +947,31 @@ private bool genElem(ref WasmCG cg, elem* e)
     case OPu64_d: return unaryOp(OP_F64_CONVERT_I64_S);
 
     case OPmsw:
-        {
-            // Extract high 32 bits of a 64-bit value (ptr part of D slice on wasm32).
-            cg.genElem(e.E1);
-            cg.emitConst(OP_I64_CONST, 32);
-            cg.emit(OP_I64_SHR_U);
-            cg.emit(OP_I32_WRAP_I64);
-            return true;
-        }
+        // Extract high 32 bits of a 64-bit value (ptr part of D slice on wasm32).
+        cg.genElem(e.E1);
+        cg.emitConst(OP_I64_CONST, 32);
+        cg.emit(OP_I64_SHR_U);
+        cg.emit(OP_I32_WRAP_I64);
+        return true;
+
     case OP16_8:
-        {
-            // Truncate 16→8 bit (e.g. cast(char)(expr)). Mask low 8 bits.
-            cg.genElem(e.E1);
-            cg.emitConst(OP_I32_CONST, 0xFF);
-            cg.emit(OP_I32_AND);
-            return true;
-        }
+        // Truncate 16→8 bit (e.g. cast(char)(expr)). Mask low 8 bits.
+        cg.genElem(e.E1);
+        cg.emitConst(OP_I32_CONST, 0xFF);
+        cg.emit(OP_I32_AND);
+        return true;
+
     case OP32_16:
-        {
-            // Truncate 32→16 bit (e.g. cast(short)(expr)). Mask low 16 bits.
-            cg.genElem(e.E1);
-            cg.emitConst(OP_I32_CONST, 0xFFFF);
-            cg.emit(OP_I32_AND);
-            return true;
-        }
+        // Truncate 32→16 bit (e.g. cast(short)(expr)). Mask low 16 bits.
+        cg.genElem(e.E1);
+        cg.emitConst(OP_I32_CONST, 0xFFFF);
+        cg.emit(OP_I32_AND);
+        return true;
 
     case OPcomma:
-        {
-            if (cg.genElem(e.E1))
-                cg.emit(OP_DROP); // discard left-hand result
-            return cg.genElem(e.E2);
-        }
+        if (cg.genElem(e.E1))
+            cg.emit(OP_DROP); // discard left-hand result
+        return cg.genElem(e.E2);
 
     case OPcall:
     case OPucall:
@@ -1056,35 +1055,32 @@ private bool genElem(ref WasmCG cg, elem* e)
                             ubyte storeOp;
                             uint sz, al;
                             bool promF32 = false;
-                            switch (tybasic(va.Ety))
+                            switch (tybasic(va.Ety).wasmType)
                             {
-                            case TYllong:
-                            case TYullong:
+                            case WASM_I64:
                                 storeOp = OP_I64_STORE;
                                 sz = 8;
                                 al = 3;
                                 break;
-                            case TYdouble:
-                            case TYdouble_alias:
-                            case TYreal:
-                            case TYireal:
+                            case WASM_F64:
                                 storeOp = OP_F64_STORE;
                                 sz = 8;
                                 al = 3;
                                 break;
-                            case TYfloat:
-                            case TYifloat:
+                            case WASM_F32:
                                 // C promotes float to double in varargs
                                 storeOp = OP_F64_STORE;
                                 sz = 8;
                                 al = 3;
                                 promF32 = true;
                                 break;
-                            default:
+                            case WASM_I32:
                                 storeOp = OP_I32_STORE;
                                 sz = 4;
                                 al = 2;
                                 break;
+                            default:
+                                assert(0);
                             }
                             uint byteAlign = 1u << al;
                             offset = (offset + byteAlign - 1) & ~(byteAlign - 1);
@@ -1136,7 +1132,7 @@ private bool genElem(ref WasmCG cg, elem* e)
                                 aparams ~= WASM_I32;
                             }
                             else
-                                aparams ~= wasmType(tybasic(a.Ety));
+                                aparams ~= tybasic(a.Ety).wasmType;
                         }
                         aparams ~= WASM_I32; // varargs ptr
                         const tym_t retTy2 = tybasic(e.Ety);
@@ -1488,8 +1484,6 @@ private bool genElem(ref WasmCG cg, elem* e)
             else
             {
                 emitCondToI32(cg, e.E2);
-                cg.emitConst(OP_I32_CONST, 0);
-                cg.emit(OP_I32_NE);
             }
             cg.emit(OP_END);
             return true;
@@ -1519,21 +1513,10 @@ private bool genElem(ref WasmCG cg, elem* e)
             return true;
         }
 
-        // ---- Bool conversion (while/for conditions) --------------------------
     case OPbool:
-        {
-            cg.genElem(e.E1);
-            emitCondToI32(cg, e.E1); // i64/f32/f64 → i32 truthiness; i32 is already bool-ish
-            const ty = tybasic(e.E1.Ety);
-            if (ty != TYllong && ty != TYullong && ty != TYfloat && ty != TYifloat &&
-                ty != TYdouble && ty != TYdouble_alias && ty != TYreal && ty != TYireal)
-            {
-                // i32 path: normalize to {0,1}.
-                cg.emitConst(OP_I32_CONST, 0);
-                cg.emit(OP_I32_NE);
-            }
-            return true;
-        }
+        cg.genElem(e.E1);
+        emitCondToI32(cg, e.E1);
+        return true;
 
     case OPb_8:
         cg.genElem(e.E1); // bool is already 0/1 as i32
@@ -1939,6 +1922,19 @@ private ubyte pickByKind(tym_t ty, ubyte f32, ubyte f64, ubyte i64, ubyte i32)
     }
 }
 
+private ubyte pickByKindSigned(tym_t ty, ubyte f32, ubyte f64, ubyte i64, ubyte s64, ubyte i32, ubyte s32)
+{
+    const bool isUns = tyuns(ty) != 0;
+    switch (tybasic(ty).wasmType)
+    {
+    case WASM_F32: return f32;
+    case WASM_F64: return f64;
+    case WASM_I64: return isUns ? i64 : s64;
+    case WASM_I32: return isUns ? i32 : s32;
+    default: return i32;
+    }
+}
+
 // Binary operation opcode selection by IR operator
 private void emitBinop(ref WasmCG cg, int op, tym_t ty)
 {
@@ -1948,12 +1944,9 @@ private void emitBinop(ref WasmCG cg, int op, tym_t ty)
         const bool isUns = tyuns(ty) != 0;
         switch (op)
         {
-        case OPadd:
-            return pickByKind(ty, OP_F32_ADD, OP_F64_ADD, OP_I64_ADD, OP_I32_ADD);
-        case OPmin:
-            return pickByKind(ty, OP_F32_SUB, OP_F64_SUB, OP_I64_SUB, OP_I32_SUB);
-        case OPmul:
-            return pickByKind(ty, OP_F32_MUL, OP_F64_MUL, OP_I64_MUL, OP_I32_MUL);
+        case OPadd: return pickByKind(ty, OP_F32_ADD, OP_F64_ADD, OP_I64_ADD, OP_I32_ADD);
+        case OPmin: return pickByKind(ty, OP_F32_SUB, OP_F64_SUB, OP_I64_SUB, OP_I32_SUB);
+        case OPmul: return pickByKind(ty, OP_F32_MUL, OP_F64_MUL, OP_I64_MUL, OP_I32_MUL);
         case OPdiv:
             return pickByKind(ty, OP_F32_DIV, OP_F64_DIV,
                 isUns ? OP_I64_DIV_U
@@ -1963,18 +1956,12 @@ private void emitBinop(ref WasmCG cg, int op, tym_t ty)
             return pickByKind(ty, U, U,
                 isUns ? OP_I64_REM_U : OP_I64_REM_S,
                 isUns ? OP_I32_REM_U : OP_I32_REM_S);
-        case OPand:
-            return pickByKind(ty, U, U, OP_I64_AND, OP_I32_AND);
-        case OPor:
-            return pickByKind(ty, U, U, OP_I64_OR, OP_I32_OR);
-        case OPxor:
-            return pickByKind(ty, U, U, OP_I64_XOR, OP_I32_XOR);
-        case OPshl:
-            return pickByKind(ty, U, U, OP_I64_SHL, OP_I32_SHL);
-        case OPshr:
-            return pickByKind(ty, U, U, OP_I64_SHR_U, OP_I32_SHR_U);
-        case OPashr:
-            return pickByKind(ty, U, U, OP_I64_SHR_S, OP_I32_SHR_S);
+        case OPand:  return pickByKind(ty, U, U, OP_I64_AND, OP_I32_AND);
+        case OPor:   return pickByKind(ty, U, U, OP_I64_OR, OP_I32_OR);
+        case OPxor:  return pickByKind(ty, U, U, OP_I64_XOR, OP_I32_XOR);
+        case OPshl:  return pickByKind(ty, U, U, OP_I64_SHL, OP_I32_SHL);
+        case OPshr:  return pickByKind(ty, U, U, OP_I64_SHR_U, OP_I32_SHR_U);
+        case OPashr: return pickByKind(ty, U, U, OP_I64_SHR_S, OP_I32_SHR_S);
         default:
             return OP_UNREACHABLE;
         }
@@ -1987,52 +1974,43 @@ private void emitBinop(ref WasmCG cg, int op, tym_t ty)
 alias compoundToBinop = opeqtoop;
 
 // Emit a relational/comparison opcode
-private void emitRelop(ref WasmCG cg, int op, tym_t operandTy)
+private void emitRelop(ref WasmCG cg, int op, tym_t ty)
 {
-    const bool isUns = tyuns(operandTy) != 0;
-    ubyte oc = OP_UNREACHABLE;
-    switch (op)
+    static ubyte relOp(int op, tym_t ty)
     {
-    case OPeqeq:
-        oc = pickByKind(operandTy, OP_F32_EQ, OP_F64_EQ, OP_I64_EQ, OP_I32_EQ);
-        break;
-    case OPne:
-        oc = pickByKind(operandTy, OP_F32_NE, OP_F64_NE, OP_I64_NE, OP_I32_NE);
-        break;
-    case OPlt:
-        oc = pickByKind(operandTy, OP_F32_LT, OP_F64_LT,
-            isUns ? OP_I64_LT_U
-                : OP_I64_LT_S,
-            isUns ? OP_I32_LT_U : OP_I32_LT_S);
-        break;
-    case OPle:
-        oc = pickByKind(operandTy, OP_F32_LE, OP_F64_LE,
-            isUns ? OP_I64_LE_U
-                : OP_I64_LE_S,
-            isUns ? OP_I32_LE_U : OP_I32_LE_S);
-        break;
-    case OPgt:
-        oc = pickByKind(operandTy, OP_F32_GT, OP_F64_GT,
-            isUns ? OP_I64_GT_U
-                : OP_I64_GT_S,
-            isUns ? OP_I32_GT_U : OP_I32_GT_S);
-        break;
-    case OPge:
-        oc = pickByKind(operandTy, OP_F32_GE, OP_F64_GE,
-            isUns ? OP_I64_GE_U
-                : OP_I64_GE_S,
-            isUns ? OP_I32_GE_U : OP_I32_GE_S);
-        break;
-    default:
-        break;
+        const bool isUns = tyuns(ty) != 0;
+        switch (op)
+        {
+        case OPeqeq: return pickByKind(ty, OP_F32_EQ, OP_F64_EQ, OP_I64_EQ, OP_I32_EQ);
+        case OPne:   return pickByKind(ty, OP_F32_NE, OP_F64_NE, OP_I64_NE, OP_I32_NE);
+        case OPlt:
+            return pickByKind(ty, OP_F32_LT, OP_F64_LT,
+                isUns ? OP_I64_LT_U : OP_I64_LT_S,
+                isUns ? OP_I32_LT_U : OP_I32_LT_S);
+        case OPle:
+            return pickByKind(ty, OP_F32_LE, OP_F64_LE,
+                isUns ? OP_I64_LE_U : OP_I64_LE_S,
+                isUns ? OP_I32_LE_U : OP_I32_LE_S);
+        case OPgt:
+            return pickByKind(ty, OP_F32_GT, OP_F64_GT,
+                isUns ? OP_I64_GT_U : OP_I64_GT_S,
+                isUns ? OP_I32_GT_U : OP_I32_GT_S);
+            break;
+        case OPge:
+            return pickByKind(ty, OP_F32_GE, OP_F64_GE,
+                isUns ? OP_I64_GE_U : OP_I64_GE_S,
+                isUns ? OP_I32_GE_U : OP_I32_GE_S);
+            break;
+        default:
+            return OP_UNREACHABLE;
+        }
     }
-    cg.emit(oc);
+    cg.emit(relOp(op, ty));
 }
 
-// ---------------------------------------------------------------------------
-// Function index lookup
-// ---------------------------------------------------------------------------
-
+/// Function index lookup
+///
+/// Returns: index of `sfunc`
 private uint funcIndex(Symbol* sfunc)
 {
     import dmd.backend.wasmobj : wasmFuncBodies, wmod_funcs, wmod_numImports;
@@ -2085,14 +2063,19 @@ private void emitCondToI32(ref WasmCG cg, elem* condElem, bool invert = false)
         cg.emit(OP_F32_CONST);
         float fz = 0.0f;
         cg.code.write(&fz, 4);
-        cg.emit(invert ? OP_F32_NE : OP_F32_EQ);
+        cg.emit(invert ? OP_F32_EQ : OP_F32_NE);
     }
     else if (ty == WASM_F64)
     {
         cg.emit(OP_F64_CONST);
         double dz = 0.0;
         cg.code.write(&dz, 8);
-        cg.emit(invert ? OP_F64_NE : OP_F64_EQ);
+        cg.emit(invert ? OP_F64_EQ : OP_F64_NE);
+    }
+    else if (ty == WASM_I32)
+    {
+        cg.emitConst(OP_I32_CONST, 0);
+        cg.emit(invert ? OP_I32_EQ : OP_I32_NE);
     }
 }
 
