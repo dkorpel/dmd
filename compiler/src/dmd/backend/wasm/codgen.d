@@ -246,6 +246,26 @@ nothrow:
         emitULEBpadded(fidx);
     }
 
+    // Emit OP_I32_CONST with a function-table index, recording a
+    // R_WASM_TABLE_INDEX_SLEB relocation so wasm-ld patches the value to the
+    // function's runtime table slot after linker-side table layout is decided.
+    // Used for taking the address of a function (function pointer).
+    void emitTableIndex(uint fidx, Symbol* sym)
+    {
+        import dmd.backend.wasmobj : wasm_relocatable;
+        emit(OP_I32_CONST);
+        if (wasm_relocatable)
+        {
+            codeRelocs ~= WasmFuncBody.CodeReloc(cast(uint) code.length,
+                R_WASM_TABLE_INDEX_SLEB, fidx, 0, sym);
+            emitULEBpadded(fidx);
+        }
+        else
+        {
+            emitSLEB(cast(int) fidx);
+        }
+    }
+
     // Emit the type index operand of call_indirect.
     // In relocatable mode, emit R_WASM_TYPE_INDEX_LEB so wasm-ld can patch the
     // type index when merging type tables from multiple objects.  The relocation
@@ -658,11 +678,12 @@ private bool genElem(ref WasmCG cg, elem* e)
             }
             else if (rs && rs.Sfl == FL.func)
             {
-                // Address of a function → WASM table index for call_indirect.
-                import dmd.backend.wasmobj : wmod_funcTableIndex;
-
-                uint tidx = wmod_funcTableIndex(rs);
-                cg.emitConst(OP_I32_CONST, cast(int) tidx);
+                // Address of a function → emit i32.const placeholder with
+                // R_WASM_TABLE_INDEX_SLEB relocation; wasm-ld patches it to the
+                // function's runtime table slot. funcIdx is a hint — relocation
+                // resolution is symbol-driven.
+                uint fidx = funcIndex(rs);
+                cg.emitTableIndex(fidx, rs);
             }
             else
             {
@@ -2043,8 +2064,7 @@ private void emitBinop(ref WasmCG cg, int op, tym_t ty)
         case OPmul: return pickByKind(ty, OP_F32_MUL, OP_F64_MUL, OP_I64_MUL, OP_I32_MUL);
         case OPdiv:
             return pickByKind(ty, OP_F32_DIV, OP_F64_DIV,
-                isUns ? OP_I64_DIV_U
-                    : OP_I64_DIV_S,
+                isUns ? OP_I64_DIV_U : OP_I64_DIV_S,
                 isUns ? OP_I32_DIV_U : OP_I32_DIV_S);
         case OPmod:
             return pickByKind(ty, U, U,
