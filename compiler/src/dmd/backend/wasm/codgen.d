@@ -1313,7 +1313,18 @@ private bool genElem(ref WasmCG cg, elem* e)
                         param_t* pp = ppPerArg[i];
                         bool asSlice = false;
                         if (aty == TYullong || aty == TYllong)
+                        {
                             asSlice = isSliceElem(a) || paramIsSlice(pp);
+                            // Force packed i64 (no split) when the callee's
+                            // matching param is declared as a delegate — its
+                            // Tnext.Tty is a function type. paramIsSlice's
+                            // delegate filter already returns false, but the
+                            // isSliceElem branch can still fire when the
+                            // optimizer rebuilt the delegate as OPshl/OPor.
+                            if (asSlice && pp && pp.Ptype && pp.Ptype.Tnext
+                                && tyfunc(pp.Ptype.Tnext.Tty) != 0)
+                                asSlice = false;
+                        }
                         // Aggregate (struct/static-array) param is passed by pointer
                         // (i32) per buildFuncType. Emit the arg's address instead
                         // of its loaded value:
