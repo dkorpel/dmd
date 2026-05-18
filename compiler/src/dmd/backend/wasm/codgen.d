@@ -1458,14 +1458,21 @@ private bool genElem(ref WasmCG cg, elem* e)
             // e.E1 ? e.E2.E1 : e.E2.E2
             cg.genElem(e.E1);
             emitCondToI32(cg, e.E1); // i64 cond → i32 truthiness
-            const ubyte rty = wasmType(e.Ety);
+            const bool voidCond = tybasic(e.Ety) == TYvoid || tybasic(e.Ety) == TYnoreturn;
             cg.emit(OP_IF);
-            cg.emit(rty);
-            cg.genElem(e.E2.E1);
+            if (voidCond)
+                cg.emit(WASM_VOID_BLOCK); // void blocktype: discard any branch value
+            else
+                cg.emit(wasmType(e.Ety));
+            const bool thenPushed = cg.genElem(e.E2.E1);
+            if (voidCond && thenPushed)
+                cg.emit(OP_DROP);
             cg.emit(OP_ELSE);
-            cg.genElem(e.E2.E2);
+            const bool elsePushed = cg.genElem(e.E2.E2);
+            if (voidCond && elsePushed)
+                cg.emit(OP_DROP);
             cg.emit(OP_END);
-            return tybasic(e.Ety) != TYvoid;
+            return !voidCond;
         }
 
     case OPoror:
