@@ -1722,6 +1722,17 @@ private void genElemAddr(ref WasmCG cg, elem* e)
 
 // Emit argument list (OPparam chain or single elem)
 // In DMD IR, OPparam(E1, E2) is right-to-left: E2 is the leftmost argument.
+// True if `t` looks like a D delegate (TYllong wrapper with a function-typed
+// Tnext). Delegates share the TYllong basic type with slices on WASM32 but
+// must NOT be split into (len, ptr) at call sites — buildFuncType passes them
+// as a single packed i64 param.
+private bool isDelegateType(const(type)* t)
+{
+    if (!t || !t.Tnext)
+        return false;
+    return tyfunc(t.Tnext.Tty) != 0;
+}
+
 // WASM args are left-to-right on the stack, so emit E2 before E1.
 // Return true if a TYullong elem is a D dynamic array (slice).
 // On WASM32, TYdarray == TYullong (util_set32 keeps var.d default of TYullong).
@@ -1731,6 +1742,12 @@ private bool isSliceElem(const(elem)* e)
 {
     const tym_t ty = tybasic(e.Ety);
     if (ty != TYullong && ty != TYllong)
+        return false;
+    // Delegates also live in TYllong with a Tnext, but they're passed packed
+    // as a single i64, not split. Detect by Tnext being a function type.
+    if (e.ET && isDelegateType(e.ET))
+        return false;
+    if (e.Eoper == OPvar && e.Vsym && e.Vsym.Stype && isDelegateType(e.Vsym.Stype))
         return false;
     // Explicit element type with Tnext indicates a slice.
     if (e.ET && e.ET.Tnext)
@@ -1754,7 +1771,7 @@ private bool isSliceElem(const(elem)* e)
         {
             const(type)* ft = callee.Vsym.Stype;
             const(type)* rt = ft.Tnext; // return type
-            if (rt && tybasic(rt.Tty) == TYullong && rt.Tnext)
+            if (rt && tybasic(rt.Tty) == TYullong && rt.Tnext && !isDelegateType(rt))
                 return true;
         }
     }
@@ -1771,7 +1788,8 @@ private bool isSliceElem(const(elem)* e)
             if (addr.Eoper == OPvar && addr.Vsym && addr.Vsym.Stype)
             {
                 const(type)* sliceTy = addr.Vsym.Stype.Tnext;
-                if (sliceTy && tybasic(sliceTy.Tty) == TYullong && sliceTy.Tnext)
+                if (sliceTy && tybasic(sliceTy.Tty) == TYullong && sliceTy.Tnext
+                    && !isDelegateType(sliceTy))
                     return true;
             }
         }
@@ -1785,7 +1803,7 @@ private bool paramIsSlice(const(param_t)* p)
     if (!p || !p.Ptype)
         return false;
     const(type)* t = p.Ptype;
-    return tybasic(t.Tty) == TYullong && t.Tnext !is null;
+    return tybasic(t.Tty) == TYullong && t.Tnext !is null && !isDelegateType(t);
 }
 
 private bool paramIsAggregate(const(param_t)* p)
