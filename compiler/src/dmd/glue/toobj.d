@@ -199,6 +199,20 @@ void toObjFile(Dsymbol ds, bool multiobj)
 
         override void visit(FuncDeclaration fd)
         {
+            // First-class types: functions using `type_t` are CTFE-only, skip codegen
+            if (auto tf = fd.type ? fd.type.isTypeFunction() : null)
+            {
+                if (tf.next && tf.next.ty == Ttype)
+                    return;
+                if (tf.parameterList.parameters)
+                {
+                    foreach (p; *tf.parameterList.parameters)
+                    {
+                        if (p.type && p.type.ty == Ttype)
+                            return;
+                    }
+                }
+            }
             // in glue/package.d
             FuncDeclaration_toObjFile(fd, multiobj);
         }
@@ -460,6 +474,10 @@ void toObjFile(Dsymbol ds, bool multiobj)
                 .error(vd.loc, "%s `%s` had semantic errors when compiling", vd.kind, vd.toPrettyChars);
                 return;
             }
+
+            // First-class types: `type_t` variables exist only at compile-time
+            if (vd.type.ty == Ttype)
+                return;
 
             if (vd.aliasTuple)
             {

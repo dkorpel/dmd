@@ -4075,7 +4075,7 @@ private bool preFunctionParameters(Scope* sc, ArgumentList argumentList, ErrorSi
             // for static alias this: https://issues.dlang.org/show_bug.cgi?id=17684
             arg = resolveAliasThis(sc, arg);
 
-            if (arg.op == EXP.type)
+            if (arg.op == EXP.type && !global.params.firstClassTypes)
             {
                 if (eSink)
                 {
@@ -15378,8 +15378,10 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
             rewriteCNull(exp.e2, t2);
         }
 
-        // First-class types: ternary between two type values yields type_t
-        if (global.params.firstClassTypes && exp.e1.isTypeExp() && exp.e2.isTypeExp())
+        // First-class types: ternary between two `type_t` values yields `type_t`
+        if (global.params.firstClassTypes &&
+            (exp.e1.isTypeExp() || t1.ty == Ttype) &&
+            (exp.e2.isTypeExp() || t2.ty == Ttype))
         {
             exp.type = Type.ttype;
         }

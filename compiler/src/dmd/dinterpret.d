@@ -2272,7 +2272,8 @@ public:
             return;
         }
 
-        if ((e.var.storage_class & (STC.ref_ | STC.out_)) == 0 && e.type.baseElemOf().ty != Tstruct)
+        if ((e.var.storage_class & (STC.ref_ | STC.out_)) == 0 && e.type.baseElemOf().ty != Tstruct
+            && result.op != EXP.type)
         {
             /* Ultimately, STC.ref_|STC.out_ check should be enough to see the
              * necessity of type repainting. But currently front-end paints
@@ -4821,7 +4822,8 @@ public:
         }
         if (!exceptionOrCantInterpret(result))
         {
-            result = paintTypeOntoLiteral(pue, e.type, result);
+            if (result.op != EXP.type)
+                result = paintTypeOntoLiteral(pue, e.type, result);
             result.loc = e.loc;
         }
         else if (CTFEExp.isCantExp(result) && !global.gag)

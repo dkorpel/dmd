@@ -284,6 +284,14 @@ Expression implicitCastTo(Expression e, Scope* sc, Type t)
         return result;
     }
 
+    Expression visitType(TypeExp e)
+    {
+        // First-class types: a TypeExp is a value of `type_t`
+        if (global.params.firstClassTypes && t.ty == Ttype)
+            return e;
+        return visit(e);
+    }
+
     switch (e.op)
     {
         default              : return visit            (e);
@@ -292,6 +300,7 @@ Expression implicitCastTo(Expression e, Scope* sc, Type t)
         case EXP.function_   : return visitFunc        (e.isFuncExp());
         case EXP.arrayLiteral: return visitArrayLiteral(e.isArrayLiteralExp());
         case EXP.slice       : return visitSlice       (e.isSliceExp());
+        case EXP.type        : return visitType        (e.isTypeExp());
     }
 }
 
@@ -1520,9 +1529,18 @@ MATCH implicitConvTo(Expression e, Type t)
         return result;
     }
 
+    MATCH visitType(TypeExp e)
+    {
+        // First-class types: a TypeExp is a value of `type_t`
+        if (global.params.firstClassTypes && t.ty == Ttype)
+            return MATCH.exact;
+        return visit(e);
+    }
+
     switch (e.op)
     {
         default                   : return visit(e);
+        case EXP.type             : return visitType(e.isTypeExp());
         case EXP.add              : return visitAdd(e.isAddExp());
         case EXP.min              : return visitMin(e.isMinExp());
         case EXP.int64            : return visitInteger(e.isIntegerExp());
@@ -3434,8 +3452,10 @@ Type typeMerge(Scope* sc, EXP op, ref Expression pe1, ref Expression pe2)
         return Lret(towards);
     }
 
-    // First-class types: ternary between two TypeExp yields a type_t value
-    if (global.params.firstClassTypes && e1.isTypeExp() && e2.isTypeExp())
+    // First-class types: ternary between two `type_t` values yields a `type_t` value
+    if (global.params.firstClassTypes &&
+        (e1.isTypeExp() || e1.type.ty == Ttype) &&
+        (e2.isTypeExp() || e2.type.ty == Ttype))
     {
         pe1 = e1;
         pe2 = e2;
