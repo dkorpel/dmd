@@ -102,7 +102,7 @@ nothrow:
     /// Returns: index of allocated temp in `locals` array
     uint allocTemp(ubyte ty)
     {
-        const uint result = cast(uint)(locals.length - 1);
+        const uint result = cast(uint) locals.length;
         locals ~= WasmLocal(null, ty);
         return result;
     }
@@ -116,8 +116,9 @@ nothrow:
             if (l.sym == s)
                 return cast(uint) i;
 
+        const uint result = cast(uint) locals.length;
         locals ~= WasmLocal(s, s.ty().wasmType());
-        return cast(uint)(locals.length - 1);
+        return result;
     }
 
     /// Returns: true if symbol `s` lives in the shadow frame.
@@ -520,15 +521,17 @@ private void emitShadowEpilogue(ref WasmCG cg)
 
 /// Mask result of small integer operation, since WASM operations are at least 32-bit
 /// For a 16-bit or 8-bit type `ty`, generate code to truncate to that size
-private void maskSmallInt(ref WasmCG cg, tym_t ty) // TY
+private void maskSmallInt(ref WasmCG cg, tym_t ty)
 {
+    if (tyfloating(ty))
+        return;
     switch (tysize(ty))
     {
-    case 8:
+    case 1:
         cg.emitConst(OP_I32_CONST, 0xFF);
         cg.emit(OP_I32_AND);
         break;
-    case 16:
+    case 2:
         cg.emitConst(OP_I32_CONST, 0xFFFF);
         cg.emit(OP_I32_AND);
         break;
@@ -2686,20 +2689,12 @@ void wasm_codgen(Symbol* sfunc)
                 sp.hiIdx = sp.loIdx + 1; // ptr param (i32)
                 sp.i64Idx = uint.max;
                 splitParams ~= sp;
-                WasmLocal lo, hi;
-                lo.sym = null;
-                lo.ty = WASM_I32;
-                hi.sym = null;
-                hi.ty = WASM_I32;
-                cg.locals ~= lo;
-                cg.locals ~= hi;
+                cg.locals ~= WasmLocal(null, WASM_I32); // lo
+                cg.locals ~= WasmLocal(null, WASM_I32); // hi
             }
             else
             {
-                WasmLocal l;
-                l.sym = s;
-                l.ty = wasmType(s.ty());
-                cg.locals ~= l;
+                cg.locals ~= WasmLocal(s, s.ty().wasmType);
             }
         }
     }
