@@ -6833,6 +6833,32 @@ void aliasSemantic(AliasDeclaration ds, Scope* sc)
     if (!ds.originalType && ds.type)
         ds.originalType = ds.type.syntaxCopy();
 
+    // First-class types: `alias X = expr;` where expr yields a `type_t` value.
+    if (ds.aliasExp && !ds.type)
+    {
+        Expression e = ds.aliasExp.expressionSemantic(sc);
+        if (e.op == EXP.error)
+            return errorRet();
+        if (e.type is null || e.type.ty != Ttype)
+        {
+            error(ds.loc, "cannot alias expression `%s` of type `%s`, must be a `type_t` value",
+                e.toErrMsg(), e.type ? e.type.toChars() : "(null)");
+            return errorRet();
+        }
+        e = e.ctfeInterpret();
+        auto te = e.isTypeExp();
+        if (!te)
+        {
+            error(ds.loc, "alias initializer `%s` did not fold to a type at compile time",
+                ds.aliasExp.toErrMsg());
+            return errorRet();
+        }
+        ds.type = te.type;
+        ds.originalType = te.type;
+        ds.aliassym = null;
+        return normalRet();
+    }
+
     if (ds.aliassym)
     {
         auto fd = ds.aliassym.isFuncLiteralDeclaration();

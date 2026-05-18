@@ -5105,6 +5105,16 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
                     auto t = new AST.TypeIdentifier(loc, tokThis);
                     v = new AST.AliasDeclaration(loc, ident, t);
                 }
+                else if (compileEnv.firstClassTypes && hasTopLevelQuestion())
+                {
+                    // First-class types: `alias X = expr;` where expr is a ternary
+                    // yielding a `type_t` value.
+                    parseAttributes();
+                    if (udas)
+                        error("user-defined attributes not allowed for `alias` declarations");
+                    auto e = parseAssignExp();
+                    v = new AST.AliasDeclaration(loc, ident, e);
+                }
                 else
                 {
                     // type
@@ -7915,6 +7925,45 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
         t = peek(t);
         *pt = t;
         return true;
+    }
+
+    /*****************************************
+     * Scan ahead from the current token for a top-level `?` (ternary) before
+     * the next `;`, `,`, end-of-file, or `{`. Used by the first-class types
+     * preview to detect `alias X = a ? b : c;` style alias declarations.
+     */
+    private bool hasTopLevelQuestion()
+    {
+        int parens = 0;
+        for (Token* t = &token; ; t = peek(t))
+        {
+            switch (t.value)
+            {
+            case TOK.leftParenthesis:
+            case TOK.leftBracket:
+                parens++;
+                continue;
+            case TOK.rightParenthesis:
+            case TOK.rightBracket:
+                if (parens == 0)
+                    return false;
+                parens--;
+                continue;
+            case TOK.question:
+                if (parens == 0)
+                    return true;
+                continue;
+            case TOK.semicolon:
+            case TOK.comma:
+            case TOK.leftCurly:
+            case TOK.endOfFile:
+                if (parens == 0)
+                    return false;
+                continue;
+            default:
+                continue;
+            }
+        }
     }
 
     private bool isExpression(Token** pt)

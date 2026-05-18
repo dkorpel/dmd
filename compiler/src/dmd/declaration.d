@@ -334,6 +334,8 @@ extern (C++) final class AliasDeclaration : Declaration
     Dsymbol overnext;   // next in overload list
     Dsymbol _import;    // !=null if unresolved internal alias for selective import
 
+    Expression aliasExp; // alias ident = expr;  (first-class types preview)
+
     extern (D) this(Loc loc, Identifier ident, Type type) @safe
     {
         super(DSYM.aliasDeclaration, loc, ident);
@@ -351,6 +353,13 @@ extern (C++) final class AliasDeclaration : Declaration
         assert(s);
     }
 
+    extern (D) this(Loc loc, Identifier ident, Expression e) @safe
+    {
+        super(DSYM.aliasDeclaration, loc, ident);
+        assert(e);
+        this.aliasExp = e;
+    }
+
     static AliasDeclaration create(Loc loc, Identifier id, Type type) @safe
     {
         return new AliasDeclaration(loc, id, type);
@@ -360,7 +369,9 @@ extern (C++) final class AliasDeclaration : Declaration
     {
         //printf("AliasDeclaration::syntaxCopy()\n");
         assert(!s);
-        AliasDeclaration sa = type ? new AliasDeclaration(loc, ident, type.syntaxCopy()) : new AliasDeclaration(loc, ident, aliassym.syntaxCopy(null));
+        AliasDeclaration sa = type ? new AliasDeclaration(loc, ident, type.syntaxCopy())
+            : aliasExp ? new AliasDeclaration(loc, ident, aliasExp.syntaxCopy())
+            : new AliasDeclaration(loc, ident, aliassym.syntaxCopy(null));
         sa.addComment(comment);
         sa.storage_class = storage_class;
         return sa;

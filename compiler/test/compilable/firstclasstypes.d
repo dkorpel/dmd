@@ -37,3 +37,17 @@ static assert(identity(int).sizeof == 4);
 static assert(identity(T).sizeof == 4);
 static assert(pick(true,  int, long).sizeof == 4);
 static assert(pick(false, int, long).sizeof == 8);
+
+// Slice 3: `alias X = expr;` where expr is a ternary yielding `type_t`
+enum bool is64bit = true;
+alias size_t2 = is64bit ? ulong : uint;
+alias size_t3 = is64bit ? uint : ubyte;
+
+static assert(size_t2.sizeof == 8);
+static assert(size_t2.stringof == "ulong");
+static assert(size_t3.sizeof == 4);
+
+// alias RHS can reference a `type_t` variable
+alias A = true ? T : U;
+static assert(A.sizeof == 4);
+static assert(A.stringof == "int");

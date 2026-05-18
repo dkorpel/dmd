@@ -48,6 +48,7 @@ struct CompileEnv
     const(char)[] timestamp; /// __TIMESTAMP__
 
     bool previewIn;          /// `in` means `[ref] scope const`, accepts rvalues
+    bool firstClassTypes;    /// treat types as first-class values via `type_t`
     bool transitionIn;       /// `-transition=in` is active, `in` parameters are listed
     bool ddocOutput;         /// collect embedded documentation comments
     bool masm;               /// use MASM inline asm syntax

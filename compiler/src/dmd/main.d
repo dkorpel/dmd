@@ -204,6 +204,7 @@ private int tryMain(const(char)[][] argv, out Param params)
     global.errorSink.errorLimit = global.params.v.errorLimit;
 
     global.compileEnv.previewIn        = params.previewIn;
+    global.compileEnv.firstClassTypes  = params.firstClassTypes;
     global.compileEnv.transitionIn     = params.v.vin;
     global.compileEnv.ddocOutput       = params.ddoc.doOutput;
 
