@@ -1070,14 +1070,22 @@ private bool genElem(ref WasmCG cg, elem* e)
 
                     gatherArgs(e.E2);
 
-                    // Count fixed (non-variadic) params from the function type.
+                    // Count fixed (non-variadic) params from the function type
+                    // and collect them positionally for slice-split decisions.
                     int nFixed = 0;
+                    param_t*[] fixedParams;
                     for (param_t* p = calleeSym.Stype.Tparamtypes; p; p = p.Pnext)
+                    {
+                        fixedParams ~= p;
                         nFixed++;
+                    }
 
-                    // Emit fixed args to the WASM value stack.
-                    foreach (a; allArgs[0 .. nFixed])
-                        genOneArg(cg, a);
+                    // Emit fixed args to the WASM value stack. A fixed param
+                    // declared as a D slice splits the matching i64 arg into
+                    // (len, ptr). C variadic linkage has no param reversal, so
+                    // fixedParams aligns with allArgs by position directly.
+                    foreach (i, a; allArgs[0 .. nFixed])
+                        genOneArg(cg, a, paramIsSlice(fixedParams[i]));
 
                     // Compute variadic args layout and emit shadow-stack spill.
                     elem*[] varArgs = allArgs[nFixed .. $];
@@ -1171,9 +1179,9 @@ private bool genElem(ref WasmCG cg, elem* e)
                     // Register import type: (fixed_params..., i32 varargs_ptr) -> result.
                     {
                         ubyte[] aparams;
-                        foreach (a; allArgs[0 .. nFixed])
+                        foreach (i, a; allArgs[0 .. nFixed])
                         {
-                            if (isSliceElem(a))
+                            if (paramIsSlice(fixedParams[i]))
                             {
                                 aparams ~= WASM_I32;
                                 aparams ~= WASM_I32;
@@ -1281,29 +1289,74 @@ private bool genElem(ref WasmCG cg, elem* e)
                     // declParams right-to-left consuming callArgs from the end so
                     // any hidden leading args (frame/this/sret) land at index < 0
                     // and resolve to pp=null.
+                    //
+                    // Slice detection is callee-driven: paramIsSlice(declared param)
+                    // OR rtlSliceParamMask(callee name) for runtime support
+                    // functions that ship with no Tparamtypes. No per-elem shape
+                    // heuristics; the matching pp determines whether to split.
+                    const uint rtlMask = (declParams.length == 0)
+                        ? rtlSliceParamMask(calleeSym.Sident.ptr) : 0;
+                    bool argPosIsSlice(size_t srcPos, param_t* pp)
+                    {
+                        if (paramIsSlice(pp))
+                            return true;
+                        if (rtlMask && srcPos < 32 && ((rtlMask >> srcPos) & 1))
+                            return true;
+                        return false;
+                    }
+
                     param_t*[] ppPerArg;
+                    size_t[] srcPosPerArg; // position from callee POV (-1 for hidden leading)
                     ppPerArg.length = callArgs.length;
+                    srcPosPerArg.length = callArgs.length;
+                    foreach (ref s; srcPosPerArg) s = size_t.max;
                     {
                         ptrdiff_t ai = cast(ptrdiff_t) callArgs.length - 1;
                         ptrdiff_t pi = cast(ptrdiff_t) declParams.length - 1;
-                        while (ai >= 0 && pi >= 0)
+                        // For RTL (no declParams), match by position directly.
+                        if (declParams.length == 0)
                         {
-                            auto q = declParams[pi];
-                            if (paramIsSlice(q) && ai >= 1
-                                && tybasic(callArgs[ai].Ety) != TYullong
-                                && tybasic(callArgs[ai].Ety) != TYllong)
+                            ptrdiff_t srcPos = 0;
+                            while (ai >= 0)
                             {
-                                // Pre-split: (len, ptr) — both map to the slice pp.
-                                ppPerArg[ai] = q;
-                                ppPerArg[ai - 1] = q;
-                                ai -= 2;
+                                if (rtlMask && srcPos < 32 && ((rtlMask >> srcPos) & 1)
+                                    && ai >= 1
+                                    && tybasic(callArgs[cast(size_t) ai].Ety) != TYullong
+                                    && tybasic(callArgs[cast(size_t) ai].Ety) != TYllong)
+                                {
+                                    srcPosPerArg[ai] = srcPos;
+                                    srcPosPerArg[ai - 1] = srcPos;
+                                    ai -= 2;
+                                }
+                                else
+                                {
+                                    srcPosPerArg[ai] = srcPos;
+                                    ai -= 1;
+                                }
+                                srcPos += 1;
                             }
-                            else
+                        }
+                        else
+                        {
+                            while (ai >= 0 && pi >= 0)
                             {
-                                ppPerArg[ai] = q;
-                                ai -= 1;
+                                auto q = declParams[pi];
+                                if (paramIsSlice(q) && ai >= 1
+                                    && tybasic(callArgs[ai].Ety) != TYullong
+                                    && tybasic(callArgs[ai].Ety) != TYllong)
+                                {
+                                    // Pre-split: (len, ptr) — both map to the slice pp.
+                                    ppPerArg[ai] = q;
+                                    ppPerArg[ai - 1] = q;
+                                    ai -= 2;
+                                }
+                                else
+                                {
+                                    ppPerArg[ai] = q;
+                                    ai -= 1;
+                                }
+                                pi -= 1;
                             }
-                            pi -= 1;
                         }
                     }
                     ubyte[] aparams;
@@ -1313,18 +1366,7 @@ private bool genElem(ref WasmCG cg, elem* e)
                         param_t* pp = ppPerArg[i];
                         bool asSlice = false;
                         if (aty == TYullong || aty == TYllong)
-                        {
-                            asSlice = isSliceElem(a) || paramIsSlice(pp);
-                            // Force packed i64 (no split) when the callee's
-                            // matching param is declared as a delegate — its
-                            // Tnext.Tty is a function type. paramIsSlice's
-                            // delegate filter already returns false, but the
-                            // isSliceElem branch can still fire when the
-                            // optimizer rebuilt the delegate as OPshl/OPor.
-                            if (asSlice && pp && pp.Ptype && pp.Ptype.Tnext
-                                && tyfunc(pp.Ptype.Tnext.Tty) != 0)
-                                asSlice = false;
-                        }
+                            asSlice = argPosIsSlice(srcPosPerArg[i], pp);
                         // Aggregate (struct/static-array) param is passed by pointer
                         // (i32) per buildFuncType. Emit the arg's address instead
                         // of its loaded value:
@@ -1429,36 +1471,39 @@ private bool genElem(ref WasmCG cg, elem* e)
                 // loading from memory.
                 import dmd.backend.wasmobj : wmod_internFuncPtrType;
 
-                // Emit args first (e.E2). For OPucall, e.E2 is null and this is a no-op.
-                // Then the function pointer, then call_indirect.
-                genArgs(cg, e.E2);
-
-                // Derive the indirect-call type authoritatively from the call site
-                // (e.E2 for args, e.Ety for result). The symbol's Stype on a
-                // function-pointer local is often a plain int/void* and yields no
-                // function-type info — relying on it produced wrong (type 0) sigs.
+                // Gather args into a flat list in WASM call order (E2-first walk).
+                // Indirect calls have no callee Tparamtypes to consult, so the
+                // split decision and the signature both derive from arg shape:
+                // sliceShape() catches firmly slice-typed operands.
                 import dmd.backend.wasmobj : wmod_internType;
 
-                ubyte[] callParams;
-                void collectArgTypes(elem* p) nothrow
+                elem*[] indArgs;
+                void gatherInd(elem* p) nothrow
                 {
-                    if (!p)
-                        return;
+                    if (!p) return;
                     if (p.Eoper == OPparam)
                     {
-                        collectArgTypes(p.E2);
-                        collectArgTypes(p.E1);
+                        gatherInd(p.E2);
+                        gatherInd(p.E1);
                         return;
                     }
-                    if (isSliceElem(p)) // D slice splits into (len, ptr)
+                    indArgs ~= p;
+                }
+                gatherInd(e.E2);
+
+                ubyte[] callParams;
+                foreach (a; indArgs)
+                {
+                    const bool split = sliceShape(a);
+                    genOneArg(cg, a, split);
+                    if (split)
                     {
                         callParams ~= WASM_I32;
                         callParams ~= WASM_I32;
                     }
                     else
-                        callParams ~= wasmType(tybasic(p.Ety));
+                        callParams ~= wasmType(tybasic(a.Ety));
                 }
-                collectArgTypes(e.E2);
                 ubyte[] callResults;
                 {
                     const tym_t retTy0 = tybasic(e.Ety);
@@ -1795,73 +1840,6 @@ private bool isDelegateType(const(type)* t)
     return tyfunc(t.Tnext.Tty) != 0;
 }
 
-// WASM args are left-to-right on the stack, so emit E2 before E1.
-// Return true if a TYullong elem is a D dynamic array (slice).
-// On WASM32, TYdarray == TYullong (util_set32 keeps var.d default of TYullong).
-// D slices are packed as i64 (len32 | ptr32<<32) and must be split into two
-// i32 WASM params when passed as function arguments.
-private bool isSliceElem(const(elem)* e)
-{
-    const tym_t ty = tybasic(e.Ety);
-    if (ty != TYullong && ty != TYllong)
-        return false;
-    // Delegates also live in TYllong with a Tnext, but they're passed packed
-    // as a single i64, not split. Detect by Tnext being a function type.
-    if (e.ET && isDelegateType(e.ET))
-        return false;
-    if (e.Eoper == OPvar && e.Vsym && e.Vsym.Stype && isDelegateType(e.Vsym.Stype))
-        return false;
-    // Explicit element type with Tnext indicates a slice — but only when
-    // the wrapper type is TYullong (TYdarray on WASM32). A TYarray wrapper
-    // means a static array load and must not be split.
-    if (e.ET && e.ET.Tnext && tybasic(e.ET.Tty) == TYullong && !isDelegateType(e.ET))
-        return true;
-    // OPvar: a true slice symbol has Stype.Tty == TYullong (TYdarray on WASM32)
-    // with a Tnext element type. Static arrays use TYarray and must not match.
-    if (e.Eoper == OPvar && e.Vsym && e.Vsym.Stype
-        && tybasic(e.Vsym.Stype.Tty) == TYullong
-        && e.Vsym.Stype.Tnext
-        && !isDelegateType(e.Vsym.Stype))
-        return true;
-    // OPpair/OPrpair always construct a (len, ptr) D slice.
-    if (e.Eoper == OPpair || e.Eoper == OPrpair)
-        return true;
-    // OPcall/OPucall: look at the callee's declared return type for Tnext.
-    // The call elem's own Ety is TYullong without Tnext, but the callee
-    // symbol's Stype.Tnext carries the slice element type.
-    if (e.Eoper == OPcall || e.Eoper == OPucall)
-    {
-        const(elem)* callee = e.E1;
-        // Strip semantic OPind on function pointers.
-        if (callee && callee.Eoper == OPind && callee.E1)
-            callee = callee.E1;
-        if (callee && callee.Eoper == OPvar && callee.Vsym && callee.Vsym.Stype)
-        {
-            const(type)* ft = callee.Vsym.Stype;
-            const(type)* rt = ft.Tnext; // return type
-            if (rt && tybasic(rt.Tty) == TYullong && rt.Tnext && !isDelegateType(rt))
-                return true;
-        }
-    }
-    // OPind: dereferencing a pointer-to-slice. e.ET (the loaded type) is
-    // the most reliable signal — for a slice load it has Tnext (element)
-    // pointing to a basic data type. Plain ulong loads (res[0], etc.) have
-    // either no Tnext or a Tnext.Tty that isn't a basic scalar.
-    if (e.Eoper == OPind)
-    {
-        if (e.ET && e.ET.Tnext && tybasic(e.ET.Tty) == TYullong
-            && !isDelegateType(e.ET))
-        {
-            const tym_t elemTy = tybasic(e.ET.Tnext.Tty);
-            // Slice element should be a basic data type, not a wrapper struct
-            // or array (which would indicate a load of an aggregate field).
-            if (elemTy != TYstruct && elemTy != TYarray)
-                return true;
-        }
-    }
-    return false;
-}
-
 // True if a callee parameter type is a D slice (TYdarray == TYullong+Tnext on WASM32).
 private bool paramIsSlice(const(param_t)* p)
 {
@@ -1869,6 +1847,57 @@ private bool paramIsSlice(const(param_t)* p)
         return false;
     const(type)* t = p.Ptype;
     return tybasic(t.Tty) == TYullong && t.Tnext !is null && !isDelegateType(t);
+}
+
+// Slice-position bitmask (bit i = position i in source-declared order) for D
+// runtime support functions whose Symbol uses type_fake(TYnfunc) and has no
+// Tparamtypes. The direct-call site uses this table when paramIsSlice can't
+// answer (declParams empty) to decide whether to split an i64-shaped arg into
+// (len, ptr). All listed functions take a `string file` (slice) as their first
+// non-message parameter; the `_msg` variants prepend a `string msg`.
+private uint rtlSliceParamMask(const(char)* name)
+{
+    import core.stdc.string : strcmp;
+    if (!name) return 0;
+    static immutable struct Entry { string name; uint mask; }
+    static immutable Entry[] table = [
+        Entry("_d_assertp",                 0b1),
+        Entry("_d_unittestp",               0b1),
+        Entry("_d_arrayboundsp",            0b1),
+        Entry("_d_arraybounds_slicep",      0b1),
+        Entry("_d_arraybounds_indexp",      0b1),
+        Entry("_d_nullpointerp",            0b1),
+        Entry("_d_assert_msg",              0b11),
+        Entry("_d_unittest_msg",            0b11),
+    ];
+    foreach (ref e; table)
+        if (strcmp(name, e.name.ptr) == 0)
+            return e.mask;
+    return 0;
+}
+
+// Conservative slice signal for call_indirect, where the callee type is not
+// available — we can only inspect the arg elem. A function pointer's symbol
+// type doesn't carry param info, so the indirect-call signature is derived
+// purely from arg shape. Only firmly slice-shaped operands count: an OPpair
+// (which on WASM always packs a slice), or an OPvar / OPind / typed elem
+// whose carrier type is TYullong + Tnext and not a delegate.
+private bool sliceShape(const(elem)* e)
+{
+    const tym_t ty = tybasic(e.Ety);
+    if (ty != TYullong && ty != TYllong)
+        return false;
+    if (e.ET && tybasic(e.ET.Tty) == TYullong && e.ET.Tnext
+        && !isDelegateType(e.ET))
+        return true;
+    if (e.Eoper == OPvar && e.Vsym && e.Vsym.Stype
+        && tybasic(e.Vsym.Stype.Tty) == TYullong
+        && e.Vsym.Stype.Tnext
+        && !isDelegateType(e.Vsym.Stype))
+        return true;
+    if (e.Eoper == OPpair || e.Eoper == OPrpair)
+        return true;
+    return false;
 }
 
 private bool paramIsAggregate(const(param_t)* p)
@@ -1951,15 +1980,15 @@ private bool emitAggregateArgAsPointer(ref WasmCG cg, elem* a)
     return false;
 }
 
-// Emit a single function argument. D slices (TYdarray = TYullong on WASM32)
-// are split into two i32 params (lo=len, hi=ptr) to match the WASM32/LDC2 ABI.
-// `forceSlice` forces the split even when the elem itself isn't recognised as
-// a slice (e.g. an OPconst null passed where the callee expects char[]).
-private void genOneArg(ref WasmCG cg, elem* e, bool forceSlice = false)
+// Emit a single function argument. When `split` is true the value is treated
+// as a packed D slice (TYdarray on WASM32 = TYullong i64 with len in low 32 / ptr in
+// high 32) and decomposed into two i32 params (lo=len, hi=ptr) to match the
+// WASM32/LDC2 ABI. The decision to split is taken by the caller from the
+// callee's declared param types — there is no per-elem detection here.
+private void genOneArg(ref WasmCG cg, elem* e, bool split = false)
 {
     cg.genElem(e);
-    const bool isDynArray = forceSlice || isSliceElem(e);
-    if (isDynArray)
+    if (split)
     {
         uint tmp = cg.allocTemp(WASM_I64);
         cg.emit(OP_LOCAL_SET);
@@ -1970,27 +1999,6 @@ private void genOneArg(ref WasmCG cg, elem* e, bool forceSlice = false)
         cg.emitConst(OP_I64_CONST, 32);
         cg.emit(OP_I64_SHR_U);
         cg.emit(OP_I32_WRAP_I64); // hi = ptr (high 32 bits)
-    }
-}
-
-// Walk the OPparam tree to push args in the declared param order.
-// For D linkage (TYjfunc), globsym is built by reversing the source-order
-// params then prepending sthis/shidden, while the OPparam tree from e2ir is
-// a left-fold of source-order args with sthis/shidden appended at the tail
-// (root.E2). Visiting E2 first then E1 yields [this, line, file, args] — the
-// matching push order.
-private void genArgs(ref WasmCG cg, elem* e)
-{
-    if (!e)
-        return;
-    if (e.Eoper == OPparam)
-    {
-        genArgs(cg, e.E2);
-        genArgs(cg, e.E1);
-    }
-    else
-    {
-        genOneArg(cg, e);
     }
 }
 
