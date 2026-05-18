@@ -717,6 +717,33 @@ private bool genElem(ref WasmCG cg, elem* e)
                 // Coerce i32→i64 if needed (e.g. assigning integer to ulong local).
                 if (cg.locals[idx].ty == WASM_I64 && wasmType(e.E2.Ety) == WASM_I32)
                     cg.emit(OP_I64_EXTEND_I32_S);
+                // Bit-pun assignments arising from *cast(long*)&y and similar:
+                // optelem can collapse OPind(OPaddr(localf)) into the float value
+                // and leave the type-mismatched OPeq for the codegen to widen.
+                else if (cg.locals[idx].ty == WASM_I64 && wasmType(e.E2.Ety) == WASM_F32)
+                {
+                    cg.emit(OP_I32_REINTERPRET_F32);
+                    cg.emit(OP_I64_EXTEND_I32_U);
+                }
+                else if (cg.locals[idx].ty == WASM_I64 && wasmType(e.E2.Ety) == WASM_F64)
+                    cg.emit(OP_I64_REINTERPRET_F64);
+                else if (cg.locals[idx].ty == WASM_F32 && wasmType(e.E2.Ety) == WASM_I64)
+                {
+                    // i64 → low 32 bits → f32
+                    cg.emit(OP_I32_WRAP_I64);
+                    cg.emit(OP_F32_REINTERPRET_I32);
+                }
+                else if (cg.locals[idx].ty == WASM_F32 && wasmType(e.E2.Ety) == WASM_I32)
+                    cg.emit(OP_F32_REINTERPRET_I32);
+                else if (cg.locals[idx].ty == WASM_F64 && wasmType(e.E2.Ety) == WASM_I64)
+                    cg.emit(OP_F64_REINTERPRET_I64);
+                // Numeric narrowings the optimizer left for codegen.
+                else if (cg.locals[idx].ty == WASM_I32 && wasmType(e.E2.Ety) == WASM_F32)
+                    cg.emit(OP_I32_TRUNC_F32_S);
+                else if (cg.locals[idx].ty == WASM_I32 && wasmType(e.E2.Ety) == WASM_F64)
+                    cg.emit(OP_I32_TRUNC_F64_S);
+                else if (cg.locals[idx].ty == WASM_I32 && wasmType(e.E2.Ety) == WASM_I64)
+                    cg.emit(OP_I32_WRAP_I64);
 
                 // Mask if storing into a narrow-type local (ubyte, bool, short, etc.).
                 cg.maskSmallInt(e.E1.Ety);
