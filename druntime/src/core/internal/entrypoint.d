@@ -34,23 +34,24 @@ template _d_cmain()
             return _d_run_main(argc, argv, &__wasm_Dmain);
         }
 
+        // Avoid wrapping `main` in a lambda — the WASM backend has no closure
+        // support yet, so a nested call that captures `args` traps. Inline the
+        // dispatch into each static-if branch instead.
         pragma(mangle, "_Dmain")
         extern(C) int __wasm_Dmain(char[][] args)
         {
-            static if (is(typeof(main(cast(string[]) args))))
-                alias call = () => main(cast(string[]) args);
+            static if (is(typeof(main(cast(string[]) args)) == int))
+                return main(cast(string[]) args);
+            else static if (is(typeof(main(args)) == int))
+                return main(args);
+            else static if (is(typeof(main()) == int))
+                return main();
+            else static if (is(typeof(main(cast(string[]) args))))
+            { main(cast(string[]) args); return 0; }
             else static if (is(typeof(main(args))))
-                alias call = () => main(args);
+            { main(args); return 0; }
             else
-                alias call = () => main();
-
-            static if (is(typeof(call()) == int))
-                return call();
-            else
-            {
-                call();
-                return 0;
-            }
+            { main(); return 0; }
         }
     }
     else
