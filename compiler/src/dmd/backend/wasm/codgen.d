@@ -359,6 +359,21 @@ private void emitCoerce(ref WasmCG cg, ubyte from, ubyte to)
     if (from == to)
         return;
 
+    // F32 <-> I64 (bit-pun cases like *cast(long*)&y) need two ops; emit
+    // them inline before the single-op lookup below.
+    if (from == WASM_F32 && to == WASM_I64)
+    {
+        cg.emit(OP_I32_REINTERPRET_F32);
+        cg.emit(OP_I64_EXTEND_I32_U);
+        return;
+    }
+    if (from == WASM_I64 && to == WASM_F32)
+    {
+        cg.emit(OP_I32_WRAP_I64);
+        cg.emit(OP_F32_REINTERPRET_I32);
+        return;
+    }
+
     static ubyte coerceOp(ubyte from, ubyte to)
     {
         static int X(ubyte from, ubyte to) { return from << 8 | to; }
@@ -714,35 +729,37 @@ private bool genElem(ref WasmCG cg, elem* e)
                 const uint idx = cg.localFor(lhs);
                 cg.genElem(e.E2);
 
+                tym_t rhsTy = e.E2.Ety;
+
                 // Coerce i32→i64 if needed (e.g. assigning integer to ulong local).
-                if (cg.locals[idx].ty == WASM_I64 && wasmType(e.E2.Ety) == WASM_I32)
+                if (cg.locals[idx].ty == WASM_I64 && wasmType(rhsTy) == WASM_I32)
                     cg.emit(OP_I64_EXTEND_I32_S);
                 // Bit-pun assignments arising from *cast(long*)&y and similar:
                 // optelem can collapse OPind(OPaddr(localf)) into the float value
                 // and leave the type-mismatched OPeq for the codegen to widen.
-                else if (cg.locals[idx].ty == WASM_I64 && wasmType(e.E2.Ety) == WASM_F32)
+                else if (cg.locals[idx].ty == WASM_I64 && wasmType(rhsTy) == WASM_F32)
                 {
                     cg.emit(OP_I32_REINTERPRET_F32);
                     cg.emit(OP_I64_EXTEND_I32_U);
                 }
-                else if (cg.locals[idx].ty == WASM_I64 && wasmType(e.E2.Ety) == WASM_F64)
+                else if (cg.locals[idx].ty == WASM_I64 && wasmType(rhsTy) == WASM_F64)
                     cg.emit(OP_I64_REINTERPRET_F64);
-                else if (cg.locals[idx].ty == WASM_F32 && wasmType(e.E2.Ety) == WASM_I64)
+                else if (cg.locals[idx].ty == WASM_F32 && wasmType(rhsTy) == WASM_I64)
                 {
                     // i64 → low 32 bits → f32
                     cg.emit(OP_I32_WRAP_I64);
                     cg.emit(OP_F32_REINTERPRET_I32);
                 }
-                else if (cg.locals[idx].ty == WASM_F32 && wasmType(e.E2.Ety) == WASM_I32)
+                else if (cg.locals[idx].ty == WASM_F32 && wasmType(rhsTy) == WASM_I32)
                     cg.emit(OP_F32_REINTERPRET_I32);
-                else if (cg.locals[idx].ty == WASM_F64 && wasmType(e.E2.Ety) == WASM_I64)
+                else if (cg.locals[idx].ty == WASM_F64 && wasmType(rhsTy) == WASM_I64)
                     cg.emit(OP_F64_REINTERPRET_I64);
                 // Numeric narrowings the optimizer left for codegen.
-                else if (cg.locals[idx].ty == WASM_I32 && wasmType(e.E2.Ety) == WASM_F32)
+                else if (cg.locals[idx].ty == WASM_I32 && wasmType(rhsTy) == WASM_F32)
                     cg.emit(OP_I32_TRUNC_F32_S);
-                else if (cg.locals[idx].ty == WASM_I32 && wasmType(e.E2.Ety) == WASM_F64)
+                else if (cg.locals[idx].ty == WASM_I32 && wasmType(rhsTy) == WASM_F64)
                     cg.emit(OP_I32_TRUNC_F64_S);
-                else if (cg.locals[idx].ty == WASM_I32 && wasmType(e.E2.Ety) == WASM_I64)
+                else if (cg.locals[idx].ty == WASM_I32 && wasmType(rhsTy) == WASM_I64)
                     cg.emit(OP_I32_WRAP_I64);
 
                 // Mask if storing into a narrow-type local (ubyte, bool, short, etc.).
