@@ -1783,11 +1783,17 @@ private bool isSliceElem(const(elem)* e)
         return false;
     if (e.Eoper == OPvar && e.Vsym && e.Vsym.Stype && isDelegateType(e.Vsym.Stype))
         return false;
-    // Explicit element type with Tnext indicates a slice.
-    if (e.ET && e.ET.Tnext)
+    // Explicit element type with Tnext indicates a slice — but only when
+    // the wrapper type is TYullong (TYdarray on WASM32). A TYarray wrapper
+    // means a static array load and must not be split.
+    if (e.ET && e.ET.Tnext && tybasic(e.ET.Tty) == TYullong && !isDelegateType(e.ET))
         return true;
-    // OPvar: check symbol's declared type for Tnext (slice element type).
-    if (e.Eoper == OPvar && e.Vsym && e.Vsym.Stype && e.Vsym.Stype.Tnext)
+    // OPvar: a true slice symbol has Stype.Tty == TYullong (TYdarray on WASM32)
+    // with a Tnext element type. Static arrays use TYarray and must not match.
+    if (e.Eoper == OPvar && e.Vsym && e.Vsym.Stype
+        && tybasic(e.Vsym.Stype.Tty) == TYullong
+        && e.Vsym.Stype.Tnext
+        && !isDelegateType(e.Vsym.Stype))
         return true;
     // OPpair/OPrpair always construct a (len, ptr) D slice.
     if (e.Eoper == OPpair || e.Eoper == OPrpair)
@@ -1810,22 +1816,19 @@ private bool isSliceElem(const(elem)* e)
         }
     }
     // OPind: dereferencing a pointer-to-slice. e.ET (the loaded type) is
-    // the most reliable signal — for a slice load it has Tnext (element).
+    // the most reliable signal — for a slice load it has Tnext (element)
+    // pointing to a basic data type. Plain ulong loads (res[0], etc.) have
+    // either no Tnext or a Tnext.Tty that isn't a basic scalar.
     if (e.Eoper == OPind)
     {
-        if (e.ET && e.ET.Tnext && tybasic(e.ET.Tty) == TYullong)
-            return true;
-        if (e.E1)
+        if (e.ET && e.ET.Tnext && tybasic(e.ET.Tty) == TYullong
+            && !isDelegateType(e.ET))
         {
-            const(elem)* addr = e.E1;
-            // OPind(OPvar(p)) where p has type pointer-to-slice.
-            if (addr.Eoper == OPvar && addr.Vsym && addr.Vsym.Stype)
-            {
-                const(type)* sliceTy = addr.Vsym.Stype.Tnext;
-                if (sliceTy && tybasic(sliceTy.Tty) == TYullong && sliceTy.Tnext
-                    && !isDelegateType(sliceTy))
-                    return true;
-            }
+            const tym_t elemTy = tybasic(e.ET.Tnext.Tty);
+            // Slice element should be a basic data type, not a wrapper struct
+            // or array (which would indicate a load of an aggregate field).
+            if (elemTy != TYstruct && elemTy != TYarray)
+                return true;
         }
     }
     return false;
