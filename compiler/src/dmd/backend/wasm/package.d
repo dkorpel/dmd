@@ -103,6 +103,7 @@ enum : ubyte
     // i32 arithmetic
     OP_I32_CLZ = 0x67,
     OP_I32_CTZ = 0x68,
+    OP_I32_POPCNT = 0x69,
     OP_I32_ADD = 0x6A,
     OP_I32_SUB = 0x6B,
     OP_I32_MUL = 0x6C,
@@ -121,6 +122,7 @@ enum : ubyte
     // i64 arithmetic
     OP_I64_CLZ = 0x79,
     OP_I64_CTZ = 0x7A,
+    OP_I64_POPCNT = 0x7B,
     OP_I64_ADD = 0x7C,
     OP_I64_SUB = 0x7D,
     OP_I64_MUL = 0x7E,

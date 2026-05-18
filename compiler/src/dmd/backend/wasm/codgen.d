@@ -554,6 +554,68 @@ private void emitShadowEpilogue(ref WasmCG cg)
     cg.emitULEB(spIdx);
 }
 
+// Emit byte-swap for an i32 value on top of the wasm stack.
+// Result: 0xAABBCCDD → 0xDDCCBBAA
+private void emitBswap32(ref WasmCG cg)
+{
+    uint t = cg.allocTemp(WASM_I32);
+    cg.emitLocal(OP_LOCAL_TEE, t);                     // save v
+
+    cg.emitConst(OP_I32_CONST, 24);
+    cg.emit(OP_I32_SHR_U);                             // v >> 24
+
+    cg.emitLocal(OP_LOCAL_GET, t);
+    cg.emitConst(OP_I32_CONST, 8);
+    cg.emit(OP_I32_SHR_U);
+    cg.emitConst(OP_I32_CONST, 0x0000_FF00);
+    cg.emit(OP_I32_AND);                               // (v >> 8) & 0xFF00
+    cg.emit(OP_I32_OR);
+
+    cg.emitLocal(OP_LOCAL_GET, t);
+    cg.emitConst(OP_I32_CONST, 8);
+    cg.emit(OP_I32_SHL);
+    cg.emitConst(OP_I32_CONST, 0x00FF_0000);
+    cg.emit(OP_I32_AND);                               // (v << 8) & 0xFF0000
+    cg.emit(OP_I32_OR);
+
+    cg.emitLocal(OP_LOCAL_GET, t);
+    cg.emitConst(OP_I32_CONST, 24);
+    cg.emit(OP_I32_SHL);                               // v << 24
+    cg.emit(OP_I32_OR);
+}
+
+// Emit byte-swap for an i64 value on top of the wasm stack.
+// Strategy: split into lo/hi i32 halves, bswap each, then swap halves.
+private void emitBswap64(ref WasmCG cg)
+{
+    uint t = cg.allocTemp(WASM_I64);
+    uint lo = cg.allocTemp(WASM_I32);
+    uint hi = cg.allocTemp(WASM_I32);
+    cg.emitLocal(OP_LOCAL_TEE, t);
+
+    // lo = bswap32((uint)(v))
+    cg.emit(OP_I32_WRAP_I64);
+    emitBswap32(cg);
+    cg.emitLocal(OP_LOCAL_SET, lo);
+
+    // hi = bswap32((uint)(v >> 32))
+    cg.emitLocal(OP_LOCAL_GET, t);
+    cg.emitConst(OP_I64_CONST, 32);
+    cg.emit(OP_I64_SHR_U);
+    cg.emit(OP_I32_WRAP_I64);
+    emitBswap32(cg);
+    cg.emitLocal(OP_LOCAL_SET, hi);
+
+    // result = ((i64)lo << 32) | (i64)hi
+    cg.emitLocal(OP_LOCAL_GET, lo);
+    cg.emit(OP_I64_EXTEND_I32_U);
+    cg.emitConst(OP_I64_CONST, 32);
+    cg.emit(OP_I64_SHL);
+    cg.emitLocal(OP_LOCAL_GET, hi);
+    cg.emit(OP_I64_EXTEND_I32_U);
+    cg.emit(OP_I64_OR);
+}
+
 /// Mask result of small integer operation, since WASM operations are at least 32-bit
 /// For a 16-bit or 8-bit type `ty`, generate code to truncate to that size
 private void maskSmallInt(ref WasmCG cg, tym_t ty)
@@ -1600,7 +1662,7 @@ private bool genElem(ref WasmCG cg, elem* e)
         {
             // a || b  =>  if (a) 1 else (b != 0)
             cg.genElem(e.E1);
-            emitCondToI32(cg, e.E1); // i64 cond → i32 truthiness
+            emitCondToI32(cg, e.E1);
             cg.emit(OP_IF);
             cg.emit(WASM_I32);
             cg.emitConst(OP_I32_CONST, 1);
@@ -1795,6 +1857,56 @@ private bool genElem(ref WasmCG cg, elem* e)
             }
             emitMemoryFill(cg);
             cg.emitLocal(OP_LOCAL_GET, dstTmp);
+            return true;
+        }
+
+    case OPbsf:
+        {
+            // bit scan forward = count trailing zeros
+            const ty = tybasic(e.E1.Ety).wasmType;
+            cg.genElem(e.E1);
+            cg.emit(ty == WASM_I64 ? OP_I64_CTZ : OP_I32_CTZ);
+            return true;
+        }
+
+    case OPbsr:
+        {
+            // bit scan reverse = (width-1) - count leading zeros
+            const ty = tybasic(e.E1.Ety).wasmType;
+            if (ty == WASM_I64)
+            {
+                cg.emitConst(OP_I64_CONST, 63);
+                cg.genElem(e.E1);
+                cg.emit(OP_I64_CLZ);
+                cg.emit(OP_I64_SUB);
+            }
+            else
+            {
+                cg.emitConst(OP_I32_CONST, 31);
+                cg.genElem(e.E1);
+                cg.emit(OP_I32_CLZ);
+                cg.emit(OP_I32_SUB);
+            }
+            return true;
+        }
+
+    case OPpopcnt:
+        {
+            const ty = tybasic(e.E1.Ety).wasmType;
+            cg.genElem(e.E1);
+            cg.emit(ty == WASM_I64 ? OP_I64_POPCNT : OP_I32_POPCNT);
+            return true;
+        }
+
+    case OPbswap:
+        {
+            // No native WASM bswap; implement with shifts.
+            const ty = tybasic(e.E1.Ety).wasmType;
+            cg.genElem(e.E1);
+            if (ty == WASM_I64)
+                emitBswap64(cg);
+            else
+                emitBswap32(cg);
             return true;
         }
 
