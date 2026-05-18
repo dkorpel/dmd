@@ -51,3 +51,17 @@ static assert(size_t3.sizeof == 4);
 alias A = true ? T : U;
 static assert(A.sizeof == 4);
 static assert(A.stringof == "int");
+
+// Slice 4: functions touching `type_t` skip codegen, so their bodies are
+// only meaningful under CTFE. Define one that's never called from runtime
+// code and confirm it still folds inside static asserts. If codegen ran,
+// the object file would need a symbol for `firstIf`, which is fine to
+// compile but here we additionally verify it composes via nested calls.
+type_t firstIf(bool b, type_t a, type_t c) { return b ? a : c; }
+
+static assert(firstIf(true,  int, long).sizeof == 4);
+static assert(firstIf(false, int, long).sizeof == 8);
+
+// Nested calls fold via CTFE
+static assert(firstIf(true, firstIf(false, byte, short), int).sizeof == 2);
+static assert(firstIf(false, byte, firstIf(true, long, int)).stringof == "long");
