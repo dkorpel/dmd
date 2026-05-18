@@ -1,8 +1,83 @@
 # Slice ABI refactor: rip out i64 packing, treat slices like structs
 
 ## Status
-**Deferred.** Patching the heuristic detection is shorter today; this refactor is
-the right move once wasm64 is on the table or the heuristic keeps regressing.
+**Commit 2 landed** (Simplify sliceparams? — 323630d2a6): `isSliceElem` heuristic
+gone, replaced by callee-param-driven splitting + a small RTL prototype table.
+Commits 1 and 3 still **deferred** after a failed attempt — see "Failed attempt"
+below.
+
+## Failed attempt (2026-05-18): frontend RET.stack route
+Tried the smallest-seeming path to commit 1 — make the frontend route slice
+returns through its existing sret machinery by:
+
+1. `argtypes_wasm.d`: return `TypeTuple.empty` for `Tarray` (and `Tdelegate`),
+   so `retStyle()` reports `RET.stack`.
+2. `wasmobj.d::isAggregateType`: include `TYullong+Tnext` so `buildFuncType`
+   prepends an i32 sret param and drops the i64 result.
+
+`./run.d wasm` regressed 5 runnable tests (`test21429`, `traits_child`,
+`test22659`, `ice15030`, `test15862`). Minimal repro:
+
+```d
+int[] makeSlice() { static int[3] x = [1,2,3]; return x[]; }
+extern(C) int _start() { auto s = makeSlice(); /* read s.length */ }
+```
+
+Symptom: `s` is read but never written. `wasm-objdump -d` shows
+`call makeSlice; drop;` followed by `local.get 0 ; i32.wrap_i64` from an
+uninitialised i64 local. The call wrote to a fresh `_TMP0` shadow slot, not to
+`s`.
+
+Root cause: the frontend's slice-init lowering does **not** reach the
+`visitAssign` construct-RVO branch at [e2ir.d:2772](../../glue/e2ir.d#L2772).
+Debug printf inside that visitor showed, for `auto s = makeSlice()`:
+- `ae.op = 79` (construct) ✓
+- `e1.op = 14` (variable) ✓
+- `t1b.ty = 30` (Tarray) ✓
+- `e2.op = 96` (**int64**) ✗ — not a CallExp
+
+So `lastComma(ae.e2).isCallExp()` returned null; the call-RVO path was skipped.
+The IR for `_start` ended up containing `call makeSlice _TMP0` as a free-standing
+statement with no binding back to `s`. The frontend's lowering for Tarray
+initialization with a function call apparently splits init from the call —
+fine when Tarray returned i64 in regs (s = i64 result), broken when we route
+through sret without also teaching the lowering to use `&s` as ehidden.
+
+Two real paths forward:
+
+### Path A — fix the frontend lowering
+Make `ConstructExp(s, callReturningSlice)` reach the RVO path. Risk: changes
+to e2ir/dsymbolsem affect every target, not just WASM.
+
+### Path B — keep TYdarray=TYullong in middle-end, transform only at WASM emit (recommended; matches the original "option 1" above)
+Confine the sret transform to the WASM backend; the frontend keeps thinking
+slices return i64 in regs.
+
+Sketch:
+- `wasmobj.d::buildFuncType`: when `ret` is a slice (TYullong+Tnext, not
+  delegate), prepend i32 sret param, drop the i64 result. **Do NOT** change
+  `isAggregateType` (frontend stays unaware).
+- `codgen.d` function prologue: detect slice-returning function; reserve the
+  first WASM param (i32) as the sret pointer local; track its index on the
+  WasmCG.
+- `codgen.d` BC.retexp emission for slice returns: instead of leaving i64 on
+  stack to return, store it (as `(ptr<<32)|len` matching the existing pack
+  layout — `i64.store` writes len at +0, ptr at +4 LE) to `*sretPtr`, then
+  emit empty return.
+- `codgen.d` OPcall handling for slice-returning callees: allocate an 8-byte
+  scratch slot from the shadow stack; push slot addr as the leading arg;
+  after the call, emit `i64.load` from the slot so the i64 value continues
+  to flow through downstream IR unchanged.
+- Same treatment for delegates if going for LDC parity.
+
+Estimated size: 200–400 lines, all in codgen.d/wasmobj.d. The
+[runnable] wasm regression target (`./run.d wasm`, wasmtime-backed) is the
+validation loop — exercise it after every step.
+
+### What about commit 3 (slice locals as stack slots)
+Stays optional/secondary. Worth ~100 lines once commit 1 is in. The two
+register i64 locals plus split-on-load pattern works fine post-commit-1; no
+new bugs forced by it.
 
 ## Motivation
 Today on wasm32 the backend represents a D slice `T[]` as a single i64 register
