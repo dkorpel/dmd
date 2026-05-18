@@ -130,6 +130,19 @@ Options:
         environment["ARGS"] = "";
     }
 
+    // WASM regression target: compile+run fail_compilation/compilable/runnable
+    // tests as WebAssembly, no permutations (fast), tolerating a known-failure list.
+    bool wasmTarget = false;
+    bool[string] wasmKnownFailures;
+    if (args == ["wasm"])
+    {
+        wasmTarget = true;
+        environment["OS"] = "wasm";
+        environment["ARGS"] = "";
+        args = ["fail_compilation", "compilable", "runnable"];
+        wasmKnownFailures = loadWasmKnownFailures();
+    }
+
     // allow overwrites from the environment
     hostDMD = environment.get("HOST_DMD", "dmd");
     unitTestRunnerCommand = resultsDir.buildPath("unit_test_runner").exeName;
@@ -194,20 +207,64 @@ Options:
     if (targets.length > 0)
     {
         shared string[] failedTargets;
+        shared string[] unexpectedPasses; // wasm: tests on known-failure list that now pass
+        Tally[string] tallies; // keyed by category (e.g. "runnable"); guarded by `tallyMutex`
+        Object tallyMutex = new Object;
+        void bump(string name, string field)
+        {
+            const cat = name.findSplit("/")[0];
+            synchronized (tallyMutex)
+            {
+                auto p = cat in tallies;
+                if (!p) { tallies[cat] = Tally.init; p = cat in tallies; }
+                if (field == "passed") p.passed++;
+                else if (field == "failed") p.failed++;
+                else p.ignored++;
+            }
+        }
         foreach (target; parallel(targets, 1))
         {
             log("run: %-(%s %)", target.args);
             int status = spawnProcess(target.args, env, Config.none, scriptDir).wait;
+            const string name = target.filename
+                        ? target.normalizedTestName
+                        : "`unit` tests: " ~ (cast(string)unitTestRunnerCommand) ~ " " ~ join(target.args, " ");
+            const bool known = wasmTarget && target.filename && (name in wasmKnownFailures) !is null;
             if (status != 0)
             {
-                const string name = target.filename
-                            ? target.normalizedTestName
-                            : "`unit` tests: " ~ (cast(string)unitTestRunnerCommand) ~ " " ~ join(target.args, " ");
-
+                if (known)
+                {
+                    log("expected failure (wasm known): %s", name);
+                    bump(name, "ignored");
+                    continue;
+                }
                 writeln(">>> TARGET FAILED: ", name);
                 synchronized failedTargets ~= name;
+                bump(name, "failed");
+            }
+            else if (known)
+            {
+                writeln(">>> UNEXPECTED PASS (remove from wasm known-failures): ", name);
+                synchronized unexpectedPasses ~= name;
+                bump(name, "passed");
+            }
+            else
+            {
+                bump(name, "passed");
             }
         }
+        size_t totPassed, totFailed, totIgnored;
+        writeln("Results by category:");
+        foreach (cat; tallies.keys.dup.sort)
+        {
+            const t = tallies[cat];
+            writefln("  %-20s %d passed, %d failed, %d ignored",
+                cat, t.passed, t.failed, t.ignored);
+            totPassed += t.passed; totFailed += t.failed; totIgnored += t.ignored;
+        }
+        writefln("  %-20s %d passed, %d failed, %d ignored (total %d)",
+            "TOTAL", totPassed, totFailed, totIgnored,
+            totPassed + totFailed + totIgnored);
         if (failedTargets.length > 0)
         {
             // print overview of failed targets (for CIs)
@@ -215,9 +272,42 @@ Options:
             failedTargets.each!(l => writeln("- ",  l));
             return 1;
         }
+        if (unexpectedPasses.length > 0)
+        {
+            writeln("Tests passing that are listed in ", wasmKnownFailuresPath, ":");
+            unexpectedPasses.each!(l => writeln("- ", l));
+            writeln("Remove the above entries from the known-failures list.");
+            return 2;
+        }
     }
 
     return 0;
+}
+
+struct Tally { size_t passed, failed, ignored; }
+
+enum wasmKnownFailuresPath = "wasm_known_failures.txt";
+
+/// Load the list of tests expected to fail under the WASM target.
+/// Format: one normalized test path per line (e.g. `runnable/foo.d`).
+/// Lines starting with `#` and blank lines are ignored.
+bool[string] loadWasmKnownFailures()
+{
+    bool[string] set;
+    const path = testPath(wasmKnownFailuresPath);
+    if (!path.exists)
+    {
+        writefln("Note: %s not found - no known WASM failures loaded.", path);
+        return set;
+    }
+    foreach (line; File(path).byLineCopy)
+    {
+        auto s = line.strip;
+        if (s.empty || s.startsWith("#"))
+            continue;
+        set[s] = true;
+    }
+    return set;
 }
 
 /// Verify that the compiler has been built.
