@@ -306,6 +306,7 @@ immutable Msgtable[] msgtable =
     { "linkerDirective" },
     { "mangle" },
     { "msg" },
+    { "type_t" },
     { "startaddress" },
     { "crt_constructor" },
     { "crt_destructor" },

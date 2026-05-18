@@ -3434,6 +3434,14 @@ Type typeMerge(Scope* sc, EXP op, ref Expression pe1, ref Expression pe2)
         return Lret(towards);
     }
 
+    // First-class types: ternary between two TypeExp yields a type_t value
+    if (global.params.firstClassTypes && e1.isTypeExp() && e2.isTypeExp())
+    {
+        pe1 = e1;
+        pe2 = e2;
+        return Type.ttype;
+    }
+
     Type t1b = e1.type.toBasetype();
     Type t2b = e2.type.toBasetype();
 

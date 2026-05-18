@@ -1288,6 +1288,10 @@ void Type_init()
     Type.tnoreturn.deco = merge(Type.tnoreturn).deco;
     Type.basic[Tnoreturn] = Type.tnoreturn;
 
+    Type.ttype = new TypeTtype();
+    Type.ttype.deco = merge(Type.ttype).deco;
+    Type.basic[Ttype] = Type.ttype;
+
     Type.tvoid = Type.basic[Tvoid];
     Type.tint8 = Type.basic[Tint8];
     Type.tuns8 = Type.basic[Tuns8];
@@ -3040,6 +3044,7 @@ uinteger_t size(Type t, Loc loc)
         case Tenum:         return t.isTypeEnum().sym.getMemtype(loc).size(loc);
         case Tnull:         return t.tvoidptr.size(loc);
         case Tnoreturn:     return 0;
+        case Ttype:         return 0; // first-class type singleton has no runtime size
     }
 }
 
@@ -5699,6 +5704,11 @@ void resolve(Type mt, Loc loc, Scope* sc, out Expression pe, out Type pt, out Ds
             error(loc, "variable `__ctfe` cannot be read at compile time");
             return returnError();
         }
+        if (mt.ident == Id.type_t && global.params.firstClassTypes)
+        {
+            pt = Type.ttype;
+            return;
+        }
         if (mt.ident == Id.builtin_va_list) // gcc has __builtin_va_xxxx for stdarg.h
         {
             /* Since we don't support __builtin_va_start, -arg, -end, we don't
@@ -7491,6 +7501,27 @@ Expression dotExp(Type mt, Scope* sc, Expression e, Identifier ident, DotExpFlag
         return e;
     }
 
+    Expression visitTtype(TypeTtype mt)
+    {
+        // First-class types: try to constant-fold `e` to a TypeExp,
+        // then forward the property to the wrapped Type.
+        if (e.op != EXP.type)
+        {
+            Expression efold = e.ctfeInterpret();
+            if (auto te = efold.isTypeExp())
+                e = te;
+            else
+            {
+                error(e.loc, "expression `%s` of type `type_t` must be a compile-time constant", e.toChars());
+                return ErrorExp.get();
+            }
+        }
+        auto te = e.isTypeExp();
+        Type wrapped = te.type;
+        // Delegate property lookups (.sizeof / .stringof / .mangleof / .alignof) to the wrapped type
+        return wrapped.getProperty(sc, e.loc, ident, 0);
+    }
+
     switch (mt.ty)
     {
         case Tvector:    return visitVector   (mt.isTypeVector());
@@ -7503,6 +7534,7 @@ Expression dotExp(Type mt, Scope* sc, Expression e, Identifier ident, DotExpFlag
         case Treference: return visitReference(mt.isTypeReference());
         case Tdelegate:  return visitDelegate (mt.isTypeDelegate());
         case Tclass:     return visitClass    (mt.isTypeClass());
+        case Ttype:      return visitTtype    (mt.isTypeTtype());
 
         default:         return mt.isTypeBasic()
                                 ? visitBasic(cast(TypeBasic)mt)

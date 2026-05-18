@@ -465,6 +465,7 @@ extern (C++) abstract class Type : ASTNode
     extern (C++) __gshared Type terror;      // for error recovery
     extern (C++) __gshared Type tnull;       // for null type
     extern (C++) __gshared Type tnoreturn;   // for bottom type typeof(*null)
+    extern (C++) __gshared Type ttype;       // first-class type-of-types (preview=firstClassTypes)
 
     extern (C++) __gshared Type tsize_t;     // matches size_t alias
     extern (C++) __gshared Type tptrdiff_t;  // matches ptrdiff_t alias
@@ -519,6 +520,7 @@ extern (C++) abstract class Type : ASTNode
             sizeTy[Tmixin] = __traits(classInstanceSize, TypeMixin);
             sizeTy[Tnoreturn] = __traits(classInstanceSize, TypeNoreturn);
             sizeTy[Ttag] = __traits(classInstanceSize, TypeTag);
+            sizeTy[Ttype] = __traits(classInstanceSize, TypeTtype);
             return sizeTy;
         }();
 
@@ -799,6 +801,7 @@ extern (C++) abstract class Type : ASTNode
         inout(TypeMixin)      isTypeMixin()      { return ty == Tmixin     ? cast(typeof(return))this : null; }
         inout(TypeTraits)     isTypeTraits()     { return ty == Ttraits    ? cast(typeof(return))this : null; }
         inout(TypeNoreturn)   isTypeNoreturn()   { return ty == Tnoreturn  ? cast(typeof(return))this : null; }
+        inout(TypeTtype)      isTypeTtype()      { return ty == Ttype      ? cast(typeof(return))this : null; }
         inout(TypeTag)        isTypeTag()        { return ty == Ttag       ? cast(typeof(return))this : null; }
 
         extern (D) bool isStaticOrDynamicArray() const { return ty == Tarray || ty == Tsarray; }
@@ -2121,6 +2124,34 @@ extern (C++) final class TypeNoreturn : Type
 }
 
 /***********************************************************
+ * The type of first-class type values.
+ * A `type_t` expression carries a wrapped Type;
+ * `Type.ttype` is the singleton "type-of-types".
+ */
+extern (C++) final class TypeTtype : Type
+{
+    extern (D) this() @safe
+    {
+        super(Ttype);
+    }
+
+    override const(char)* kind() const
+    {
+        return "type_t";
+    }
+
+    override TypeTtype syntaxCopy()
+    {
+        return this;
+    }
+
+    override void accept(Visitor v)
+    {
+        v.visit(this);
+    }
+}
+
+/***********************************************************
  * Unlike D, C can declare/define struct/union/enum tag names
  * inside Declarators, instead of separately as in D.
  * The order these appear in the symbol table must be in lexical
@@ -2866,6 +2897,7 @@ mixin template VisitType(Result)
             case TY.Tmixin:     mixin(visitTYCase("Mixin"));
             case TY.Tnoreturn:  mixin(visitTYCase("Noreturn"));
             case TY.Ttag:       mixin(visitTYCase("Tag"));
+            case TY.Ttype:      mixin(visitTYCase("Ttype"));
             case TY.Tnone:      assert(0);
         }
     }

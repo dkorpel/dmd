@@ -232,6 +232,10 @@ ulong getTypePointerBitmap(Loc loc, Type t, ref Array!(ulong) data, ErrorSink eS
         {
         }
 
+        void visitTtype(TypeTtype t)
+        {
+        }
+
         void visitStruct(TypeStruct t)
         {
             ulong structoff = offset;

@@ -1114,6 +1114,8 @@ dmd -cov -unittest myprog.d
             "https://dlang.org/spec/attribute.html#system-variables"),
         Feature("fastdfa", "useFastDFA",
             "Fast dataflow analysis engine, experimental"),
+        Feature("firstClassTypes", "firstClassTypes",
+            "treat types as first-class values via type_t"),
     ];
 }
 

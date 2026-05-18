@@ -281,6 +281,11 @@ void mangleType(Type t, ubyte modMask, ref OutBuffer buf, ref Backref backref)
             buf.writestring("Nn");
         }
 
+        void visitTypeTtype(TypeTtype t)
+        {
+            buf.writestring("Nt");
+        }
+
         if (modMask != t.mod)
         {
             MODtoDecoBuffer(buf, t.mod);
@@ -307,6 +312,7 @@ void mangleType(Type t, ubyte modMask, ref OutBuffer buf, ref Backref backref)
             case Tnull:      visitTypeNull      (t.isTypeNull());       break;
             case Tvector:    visitTypeVector    (t.isTypeVector());     break;
             case Tnoreturn:  visitTypeNoreturn  (t.isTypeNoreturn);     break;
+            case Ttype:      visitTypeTtype     (t.isTypeTtype);        break;
 
             case Terror:
                 break;      // ignore errors

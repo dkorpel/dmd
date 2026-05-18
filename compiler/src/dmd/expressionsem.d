@@ -15378,7 +15378,12 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
             rewriteCNull(exp.e2, t2);
         }
 
-        if (t1 == t2)
+        // First-class types: ternary between two type values yields type_t
+        if (global.params.firstClassTypes && exp.e1.isTypeExp() && exp.e2.isTypeExp())
+        {
+            exp.type = Type.ttype;
+        }
+        else if (t1 == t2)
         {
             exp.type = t1;
         }

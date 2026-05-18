@@ -4555,6 +4555,11 @@ private void typeToBufferx(Type t, ref OutBuffer buf, ref HdrGenState hgs)
         buf.put("noreturn");
     }
 
+    void visitTtype(TypeTtype t)
+    {
+        buf.put("type_t");
+    }
+
     if (hgs.importcHdr && !hgs.inCAlias && !hgs.inFuncReturn && t.mcache && t.mcache.typedefIdent)
     {
         buf.put(t.mcache.typedefIdent.toString());
@@ -4590,6 +4595,7 @@ private void typeToBufferx(Type t, ref OutBuffer buf, ref HdrGenState hgs)
         case Tmixin:     return visitMixin(cast(TypeMixin)t);
         case Tnoreturn:  return visitNoreturn(cast(TypeNoreturn)t);
         case Ttag:       return visitTag(cast(TypeTag)t);
+        case Ttype:      return visitTtype(cast(TypeTtype)t);
     }
 }
 
