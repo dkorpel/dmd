@@ -380,7 +380,6 @@ runnable/test21723.sh
 runnable/testrightthis.d
 runnable/test22930.c
 runnable/test22342.c
-runnable/functype.d
 runnable/testmod1.d
 runnable/link12010.d
 runnable/testaa3.d
@@ -399,7 +398,6 @@ runnable/test23011.c
 runnable/sieve.d
 runnable/bitfieldsposix64.c
 runnable/test9495.d
-runnable/test18322.d
 runnable/bcraii2.d
 runnable/test16140.d
 runnable/test9287.sh
@@ -488,7 +486,6 @@ runnable/staticaa.d
 runnable/test23337.d
 runnable/test19393.d
 runnable/test22585.c
-runnable/test24371.d
 runnable/test19734.d
 runnable/foreach3.d
 runnable/ufcs.d
