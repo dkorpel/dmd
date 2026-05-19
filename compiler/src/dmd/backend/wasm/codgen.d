@@ -454,41 +454,6 @@ private bool isStructByRefParam(Symbol* s) nothrow
     return tb == TYstruct || tb == TYarray;
 }
 
-// Walk the IR tree and pre-register any external function calls as imports.
-// Must run before code generation so that import indices are stable across
-// the whole module (call_indirect type indices are encoded as fixed-width
-// LEBs, so they cannot grow after the fact).
-void preRegisterExternals(elem* e)
-{
-    if (!e)
-        return;
-    const op = e.Eoper;
-    if (OTleaf(op))
-        return;
-    if (op == OPcall || op == OPucall)
-    {
-        if (e.E1 && e.E1.Eoper == OPvar)
-        {
-            Symbol* s = e.E1.Vsym;
-            if (s && s.Sclass != SC.auto_ && s.Sclass != SC.parameter &&
-                s.Sclass != SC.fastpar)
-                funcIndex(s); // side-effect: registers as import if not defined
-        }
-        if (e.E1)
-            preRegisterExternals(e.E1);
-        if (e.E2)
-            preRegisterExternals(e.E2);
-        return;
-    }
-    if (OTunary(op))
-    {
-        preRegisterExternals(e.E1);
-        return;
-    }
-    preRegisterExternals(e.E1);
-    preRegisterExternals(e.E2);
-}
-
 private void scanShadow(elem* e, ref WasmCG cg)
 {
     if (!e)
@@ -2319,7 +2284,7 @@ private void emitRelop(ref WasmCG cg, int op, tym_t ty)
 /// Function index lookup
 ///
 /// Returns: index of `sfunc`
-private uint funcIndex(Symbol* sfunc)
+uint funcIndex(Symbol* sfunc)
 {
     import dmd.backend.wasmobj : wasmFuncBodies, wmod_funcs, wmod_numImports;
 
