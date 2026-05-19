@@ -13,10 +13,6 @@
  *   using br_table for switches; truly irreducible CFG falls back to a
  *   block-index dispatch loop (Relooper / Stackifier not yet implemented —
  *   those blocks emit unreachable for now).
- *
- * Copyright:   Copyright (C) 1999-2026 by The D Language Foundation, All Rights Reserved
- * License:     $(LINK2 https://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
- * Source:      $(LINK2 https://github.com/dlang/dmd/blob/master/compiler/src/dmd/backend/wasm/codgen.d, _wasm/codgen.d)
  */
 
 module dmd.backend.wasm.codgen;
@@ -3075,6 +3071,53 @@ void wasm_codgen(Symbol* sfunc, bool relocatable)
     {
         cg.hasShadowFrame = true;
         emitShadowPrologue(cg);
+
+        // Spill address-taken parameters from their WASM locals into their
+        // shadow-frame slots. Without this, taking the address of a param
+        // (e.g. passing a slice arg by ref to another function) yields a
+        // valid address but the memory at that address is uninitialized.
+        foreach (ref const ShadowEntry se; cg.shadowEntries)
+        {
+            const(Symbol)* s = se.sym;
+            if (s.Sclass != SC.parameter && s.Sclass != SC.fastpar &&
+                s.Sclass != SC.regpar && s.Sclass != SC.shadowreg)
+                continue;
+            const tym_t pty = tybasic(s.ty());
+            if (pty == TYstruct || pty == TYarray)
+                continue; // aggregate params are already pointers
+            // Slice param: store the reconstructed i64 value.
+            if (pty == TYullong && s.Stype && s.Stype.Tnext)
+            {
+                uint i64Idx = uint.max;
+                foreach (ref const sp; splitParams)
+                    if (sp.sym is s) { i64Idx = sp.i64Idx; break; }
+                if (i64Idx == uint.max)
+                    continue;
+                cg.emitLocal(OP_LOCAL_GET, cg.shadowBaseLocal);
+                if (se.offset != 0)
+                {
+                    cg.emitConst(OP_I32_CONST, cast(int) se.offset);
+                    cg.emit(OP_I32_ADD);
+                }
+                cg.emitLocal(OP_LOCAL_GET, i64Idx);
+                cg.emitStore(TYullong);
+                continue;
+            }
+            // Scalar param: find its WASM local index and store.
+            uint localIdx = uint.max;
+            foreach (i, ref const l; cg.locals)
+                if (l.sym is s) { localIdx = cast(uint) i; break; }
+            if (localIdx == uint.max)
+                continue;
+            cg.emitLocal(OP_LOCAL_GET, cg.shadowBaseLocal);
+            if (se.offset != 0)
+            {
+                cg.emitConst(OP_I32_CONST, cast(int) se.offset);
+                cg.emit(OP_I32_ADD);
+            }
+            cg.emitLocal(OP_LOCAL_GET, localIdx);
+            cg.emitStore(s.ty());
+        }
     }
 
     // Generate code from the block CFG
