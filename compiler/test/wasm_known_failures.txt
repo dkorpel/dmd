@@ -140,7 +140,6 @@ runnable/test10942.d
 runnable/test14901.d
 runnable/test40.d
 runnable/wc.d
-runnable/test17258.d
 runnable/linktypeinfo.d
 runnable/pi.d
 runnable/test7595.d
@@ -219,7 +218,6 @@ runnable/b20890.d
 runnable/test4.d
 runnable/traits_getPointerBitmap.d
 runnable/auto1.d
-runnable/test19822.d
 runnable/gdb15729.sh
 runnable/testbounds_safeonly.d
 runnable/link11931.d
@@ -232,7 +230,6 @@ runnable/exe1.c
 runnable/link14814.d
 runnable/importc-test1.sh
 runnable/link13400.d
-runnable/testscope2.d
 runnable/test22071.c
 runnable/cstuff3.i
 runnable/sctor.d
@@ -264,7 +261,6 @@ runnable/test5.d
 runnable/foreach2.d
 runnable/stress.d
 runnable/dbitfieldsposix64.d
-runnable/b16360.d
 runnable/ctorpowtests.d
 runnable/test18076.sh
 runnable/test24139.d
@@ -273,7 +269,6 @@ runnable/test7453.d
 runnable/nullderefcheck_safeonly.d
 runnable/cstuff4.c
 runnable/test13504.d
-runnable/aliasassign.d
 runnable/test23181.d
 runnable/link9571.d
 runnable/test14613.d
@@ -430,7 +425,6 @@ runnable/noreturn1.d
 runnable/aliasthis.d
 runnable/mangle.d
 runnable/b20470.d
-runnable/fix22624.d
 runnable/test19317.d
 runnable/nested.d
 runnable/testcomplexinit.c
@@ -448,7 +442,6 @@ runnable/testassert_release.d
 runnable/test19251.d
 runnable/test22070_2.c
 runnable/testabi.d
-runnable/b17073.d
 runnable/test41.d
 runnable/link2500.d
 runnable/test7452.d
@@ -481,7 +474,6 @@ runnable/unique_typeinfo_names.d
 runnable/test18296.d
 runnable/test15568.d
 runnable/template6.d
-runnable/test48.d
 runnable/staticaa.d
 runnable/test23337.d
 runnable/test19393.d

@@ -383,18 +383,6 @@ void toObjFile(Dsymbol ds, bool multiobj)
                 return;
             }
 
-            // WASM: visit members and emit TypeInfo (now supported), but skip static
-            // initializer — WASM linear memory is zero-initialized so no init data needed.
-            import dmd.target : target;
-            if (target.isWasm)
-            {
-                if (sd.members)
-                    sd.members.foreachDsymbol( (s) { s.accept(this); } );
-                if (global.params.useTypeInfo && Type.dtypeinfo)
-                    TypeInfo_toObjFile(null, sd.loc, sd.type);
-                return;
-            }
-
             if (multiobj && !sd.hasStaticCtorOrDtor())
             {
                 obj_append(sd);
