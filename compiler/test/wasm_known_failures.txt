@@ -69,7 +69,6 @@ runnable/test22500.c
 runnable/class_opCmp.d
 runnable/testdstress.d
 runnable/traits_initSymbol.d
-runnable/test22163.d
 runnable/fix22115.d
 runnable/testaa2.d
 runnable/test13117b.d
@@ -115,7 +114,6 @@ runnable/test_dip1006.d
 runnable/test7494.d
 runnable/test23148.sh
 runnable/test39.sh
-runnable/test18916.d
 runnable/test23058.c
 runnable/test15779.d
 runnable/test20831.c
@@ -131,10 +129,8 @@ runnable/test21301.d
 runnable/test_dip1006b.d
 runnable/test16.d
 runnable/test10386.sh
-runnable/test19672.d
 runnable/test3.d
 runnable/test23045.c
-runnable/test_real_array_param.d
 runnable/fix22918.c
 runnable/testassign.d
 runnable/a21.d
@@ -338,7 +334,6 @@ runnable/initializer.c
 runnable/test13117.d
 runnable/s2ir.d
 runnable/test20036.d
-runnable/bug16146.d
 runnable/ice21696.d
 runnable/structinit.c
 runnable/test18337.d
