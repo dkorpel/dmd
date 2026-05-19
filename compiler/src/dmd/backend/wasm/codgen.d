@@ -1862,16 +1862,22 @@ private bool genElem(ref WasmCG cg, elem* e)
 
     case OPbsf:
         {
-            // bit scan forward = count trailing zeros
+            // bit scan forward = count trailing zeros; result is always i32
             const ty = tybasic(e.E1.Ety).wasmType;
             cg.genElem(e.E1);
-            cg.emit(ty == WASM_I64 ? OP_I64_CTZ : OP_I32_CTZ);
+            if (ty == WASM_I64)
+            {
+                cg.emit(OP_I64_CTZ);
+                cg.emit(OP_I32_WRAP_I64);
+            }
+            else
+                cg.emit(OP_I32_CTZ);
             return true;
         }
 
     case OPbsr:
         {
-            // bit scan reverse = (width-1) - count leading zeros
+            // bit scan reverse = (width-1) - clz; result is always i32
             const ty = tybasic(e.E1.Ety).wasmType;
             if (ty == WASM_I64)
             {
@@ -1879,6 +1885,7 @@ private bool genElem(ref WasmCG cg, elem* e)
                 cg.genElem(e.E1);
                 cg.emit(OP_I64_CLZ);
                 cg.emit(OP_I64_SUB);
+                cg.emit(OP_I32_WRAP_I64);
             }
             else
             {
@@ -1892,6 +1899,7 @@ private bool genElem(ref WasmCG cg, elem* e)
 
     case OPpopcnt:
         {
+            // result matches input width (int for uint, long for ulong)
             const ty = tybasic(e.E1.Ety).wasmType;
             cg.genElem(e.E1);
             cg.emit(ty == WASM_I64 ? OP_I64_POPCNT : OP_I32_POPCNT);
