@@ -444,6 +444,18 @@ private bool isLocalSym(Symbol* s)
     return !isDataSym(s.Sfl) && s.Sfl != FL.func;
 }
 
+// True if `s` is a struct/array parameter passed by reference (i32 pointer in a WASM local).
+// Such params are sometimes shadow-registered when their address is taken, but the shadow
+// slot is never filled — the WASM local itself IS the pointer to the struct.
+private bool isStructByRefParam(Symbol* s) nothrow
+{
+    if (s.Sclass != SC.parameter && s.Sclass != SC.fastpar &&
+        s.Sclass != SC.regpar && s.Sclass != SC.shadowreg)
+        return false;
+    const tym_t tb = tybasic(s.ty());
+    return tb == TYstruct || tb == TYarray;
+}
+
 // Walk the IR tree and pre-register any external function calls as imports.
 // Must run before code generation so that import indices are stable across
 // the whole module (call_indirect type indices are encoded as fixed-width
@@ -694,6 +706,26 @@ private bool genElem(ref WasmCG cg, elem* e)
             // Shadow-frame locals: load from linear memory.
             if (cg.inShadow(s))
             {
+                // Struct/array params are passed by reference (i32 pointer in a WASM
+                // local). The shadow slot is never initialized; use the local instead.
+                if (isStructByRefParam(s))
+                {
+                    const uint pidx = cg.localFor(s);
+                    cg.emitLocal(OP_LOCAL_GET, pidx); // push pointer
+                    const tym_t sTy = tybasic(e.Ety);
+                    if (sTy != TYstruct && sTy != TYarray)
+                    {
+                        // Accessing a primitive field: load through the pointer
+                        if (e.Voffset != 0)
+                        {
+                            cg.emitConst(OP_I32_CONST, cast(int) e.Voffset);
+                            cg.emit(OP_I32_ADD);
+                        }
+                        cg.emitLoad(e.Ety);
+                    }
+                    // For TYstruct/TYarray: caller wants the pointer itself (as address)
+                    return true;
+                }
                 cg.emitShadowAddr(s);
                 if (e.Voffset != 0)
                 {
@@ -705,6 +737,23 @@ private bool genElem(ref WasmCG cg, elem* e)
             }
             const uint idx = cg.localFor(s);
             cg.emitLocal(OP_LOCAL_GET, idx);
+            // Struct/array params: WASM local holds a pointer to the struct in the
+            // caller's memory. For primitive field access, load through the pointer.
+            if (isStructByRefParam(s))
+            {
+                const tym_t sTy = tybasic(e.Ety);
+                if (sTy != TYstruct && sTy != TYarray)
+                {
+                    if (e.Voffset != 0)
+                    {
+                        cg.emitConst(OP_I32_CONST, cast(int) e.Voffset);
+                        cg.emit(OP_I32_ADD);
+                    }
+                    cg.emitLoad(e.Ety);
+                }
+                // For TYstruct/TYarray: pointer is what the caller wants
+                return true;
+            }
             // For i64 locals (packed structs like D slices): field access via Voffset.
             // D slice layout: {size_t len (offset 0), T* ptr (offset 4)} packed as i64.
             //   Voffset=0 → low 32 bits (len)  → i32.wrap_i64
@@ -1945,6 +1994,13 @@ private void genElemAddr(ref WasmCG cg, elem* e)
             // Shadow-frame variable: emit its address.
             if (cg.inShadow(s))
             {
+                // Struct/array params are by-reference: the WASM local IS the pointer.
+                if (isStructByRefParam(s))
+                {
+                    const uint pidx = cg.localFor(s);
+                    cg.emitLocal(OP_LOCAL_GET, pidx);
+                    return;
+                }
                 cg.emitShadowAddr(s);
                 return;
             }
@@ -2097,6 +2153,18 @@ private bool emitAggregateArgAsPointer(ref WasmCG cg, elem* a)
         Symbol* vs = a.Vsym;
         if (cg.inShadow(vs))
         {
+            // Struct/array params: WASM local IS the pointer to the struct.
+            if (isStructByRefParam(vs))
+            {
+                const uint pidx = cg.localFor(vs);
+                cg.emitLocal(OP_LOCAL_GET, pidx);
+                if (a.Voffset != 0)
+                {
+                    cg.emitConst(OP_I32_CONST, cast(int) a.Voffset);
+                    cg.emit(OP_I32_ADD);
+                }
+                return true;
+            }
             cg.emitShadowAddr(vs);
             if (a.Voffset != 0)
             {
