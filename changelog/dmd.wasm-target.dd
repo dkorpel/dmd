@@ -2,8 +2,9 @@ WebAssembly target support added to DMD
 
 DMD now recognizes WebAssembly as a compilation target via the `-mwasm32` and `-os=wasm` flags.
 This can be used to run D code in web browsers, or in local sandbox environments such as `wasmtime`.
+See also: https://github.com/jcbhmr/awesome-webassembly-runtimes
 
-With wasmtime installed, and added to PATH (or set in the `WASMTIME` environment variable), try:
+With wasm-ld and wasmtime installed, and added to PATH (or set in the `WASMTIME` environment variable), try:
 
 ```D
 import core.stdc.stdio;
@@ -36,6 +37,8 @@ $(UL
 )
 
 The .wasm should be binary compatible with ldc2.
+
+To specify the module of exported symbols, use the `wasmImportModule` attribute:
 
 ```D
 import core.attribute : wasmImportModule;
