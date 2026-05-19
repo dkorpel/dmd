@@ -590,28 +590,28 @@ private void emitShadowEpilogue(ref WasmCG cg)
 private void emitBswap32(ref WasmCG cg)
 {
     uint t = cg.allocTemp(WASM_I32);
-    cg.emitLocal(OP_LOCAL_TEE, t);                     // save v
+    cg.emitLocal(OP_LOCAL_TEE, t); // save v
 
     cg.emitConst(OP_I32_CONST, 24);
-    cg.emit(OP_I32_SHR_U);                             // v >> 24
+    cg.emit(OP_I32_SHR_U); // v >> 24
 
     cg.emitLocal(OP_LOCAL_GET, t);
     cg.emitConst(OP_I32_CONST, 8);
     cg.emit(OP_I32_SHR_U);
     cg.emitConst(OP_I32_CONST, 0x0000_FF00);
-    cg.emit(OP_I32_AND);                               // (v >> 8) & 0xFF00
+    cg.emit(OP_I32_AND); // (v >> 8) & 0xFF00
     cg.emit(OP_I32_OR);
 
     cg.emitLocal(OP_LOCAL_GET, t);
     cg.emitConst(OP_I32_CONST, 8);
     cg.emit(OP_I32_SHL);
     cg.emitConst(OP_I32_CONST, 0x00FF_0000);
-    cg.emit(OP_I32_AND);                               // (v << 8) & 0xFF0000
+    cg.emit(OP_I32_AND); // (v << 8) & 0xFF0000
     cg.emit(OP_I32_OR);
 
     cg.emitLocal(OP_LOCAL_GET, t);
     cg.emitConst(OP_I32_CONST, 24);
-    cg.emit(OP_I32_SHL);                               // v << 24
+    cg.emit(OP_I32_SHL); // v << 24
     cg.emit(OP_I32_OR);
 }
 
@@ -1460,7 +1460,8 @@ private bool genElem(ref WasmCG cg, elem* e)
                     size_t[] srcPosPerArg; // position from callee POV (-1 for hidden leading)
                     ppPerArg.length = callArgs.length;
                     srcPosPerArg.length = callArgs.length;
-                    foreach (ref s; srcPosPerArg) s = size_t.max;
+                    foreach (ref s; srcPosPerArg)
+                        s = size_t.max;
                     {
                         ptrdiff_t ai = cast(ptrdiff_t) callArgs.length - 1;
                         ptrdiff_t pi = cast(ptrdiff_t) declParams.length - 1;
@@ -1545,7 +1546,7 @@ private bool genElem(ref WasmCG cg, elem* e)
                             a.E1.E1 && a.E1.E1.Eoper == OPvar && a.E1.E1.Vsym &&
                             a.E1.E1.Vsym.Stype && a.E1.E1.Vsym.Stype.Tnext &&
                             (tybasic(a.E1.E1.Vsym.Stype.Tnext.Tty) == TYstruct ||
-                             tybasic(a.E1.E1.Vsym.Stype.Tnext.Tty) == TYarray))
+                                tybasic(a.E1.E1.Vsym.Stype.Tnext.Tty) == TYarray))
                         {
                             cg.genElem(a.E1);
                             aparams ~= WASM_I32;
@@ -1560,7 +1561,7 @@ private bool genElem(ref WasmCG cg, elem* e)
                             a.E1.E1 && a.E1.E1.Eoper == OPvar && a.E1.E1.Vsym &&
                             a.E1.E1.Vsym.Stype &&
                             (tybasic(a.E1.E1.Vsym.Stype.Tty) == TYstruct ||
-                             tybasic(a.E1.E1.Vsym.Stype.Tty) == TYarray) &&
+                                tybasic(a.E1.E1.Vsym.Stype.Tty) == TYarray) &&
                             (tybasic(a.Ety) == TYllong || tybasic(a.Ety) == TYullong))
                         {
                             cg.genElem(a.E1);
@@ -1586,7 +1587,11 @@ private bool genElem(ref WasmCG cg, elem* e)
                                 // Only coerce within the integer domain. Crossing
                                 // into float would misinterpret pointer-like ints
                                 // as numeric values.
-                                bool intDomain(ubyte t) { return t == WASM_I32 || t == WASM_I64; }
+                                bool intDomain(ubyte t)
+                                {
+                                    return t == WASM_I32 || t == WASM_I64;
+                                }
+
                                 if (declTy != pushedTy && intDomain(declTy) && intDomain(pushedTy))
                                 {
                                     emitCoerce(cg, pushedTy, declTy);
@@ -1625,7 +1630,8 @@ private bool genElem(ref WasmCG cg, elem* e)
                 elem*[] indArgs;
                 void gatherInd(elem* p) nothrow
                 {
-                    if (!p) return;
+                    if (!p)
+                        return;
                     if (p.Eoper == OPparam)
                     {
                         gatherInd(p.E2);
@@ -1634,6 +1640,7 @@ private bool genElem(ref WasmCG cg, elem* e)
                     }
                     indArgs ~= p;
                 }
+
                 gatherInd(e.E2);
 
                 ubyte[] callParams;
@@ -2068,17 +2075,24 @@ private bool paramIsSlice(const(param_t)* p)
 private uint rtlSliceParamMask(const(char)* name)
 {
     import core.stdc.string : strcmp;
-    if (!name) return 0;
-    static immutable struct Entry { string name; uint mask; }
+
+    if (!name)
+        return 0;
+    static immutable struct Entry
+    {
+        string name;
+        uint mask;
+    }
+
     static immutable Entry[] table = [
-        Entry("_d_assertp",                 0b1),
-        Entry("_d_unittestp",               0b1),
-        Entry("_d_arrayboundsp",            0b1),
-        Entry("_d_arraybounds_slicep",      0b1),
-        Entry("_d_arraybounds_indexp",      0b1),
-        Entry("_d_nullpointerp",            0b1),
-        Entry("_d_assert_msg",              0b11),
-        Entry("_d_unittest_msg",            0b11),
+        Entry("_d_assertp", 0b1),
+        Entry("_d_unittestp", 0b1),
+        Entry("_d_arrayboundsp", 0b1),
+        Entry("_d_arraybounds_slicep", 0b1),
+        Entry("_d_arraybounds_indexp", 0b1),
+        Entry("_d_nullpointerp", 0b1),
+        Entry("_d_assert_msg", 0b11),
+        Entry("_d_unittest_msg", 0b11),
     ];
     foreach (ref e; table)
         if (strcmp(name, e.name.ptr) == 0)
@@ -3090,7 +3104,11 @@ void wasm_codgen(Symbol* sfunc, bool relocatable)
             {
                 uint i64Idx = uint.max;
                 foreach (ref const sp; splitParams)
-                    if (sp.sym is s) { i64Idx = sp.i64Idx; break; }
+                    if (sp.sym is s)
+                    {
+                        i64Idx = sp.i64Idx;
+                        break;
+                    }
                 if (i64Idx == uint.max)
                     continue;
                 cg.emitLocal(OP_LOCAL_GET, cg.shadowBaseLocal);
@@ -3106,7 +3124,11 @@ void wasm_codgen(Symbol* sfunc, bool relocatable)
             // Scalar param: find its WASM local index and store.
             uint localIdx = uint.max;
             foreach (i, ref const l; cg.locals)
-                if (l.sym is s) { localIdx = cast(uint) i; break; }
+                if (l.sym is s)
+                {
+                    localIdx = cast(uint) i;
+                    break;
+                }
             if (localIdx == uint.max)
                 continue;
             cg.emitLocal(OP_LOCAL_GET, cg.shadowBaseLocal);
