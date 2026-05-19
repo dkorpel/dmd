@@ -37,39 +37,61 @@ import dmd.common.outbuffer;
 
 nothrow:
 
-/// Returns: WASM value type for a backend type `ty`
+/// Returns: WASM type for backend `ty`
 ubyte wasmType(tym_t ty)
 {
     switch (tybasic(ty))
     {
+    case TYbool:
+    case TYchar:
+    case TYschar:
+    case TYuchar:
+    case TYchar8:
+    case TYchar16:
+    case TYshort:
+    case TYwchar_t:
+    case TYushort:
+    case TYenum:
+    case TYint:
+    case TYuint:
+    case TYlong:
+    case TYulong:
+    case TYdchar:
+        return WASM_I32;
+
+    case TYnptr:
+    case TYptr:
+    case TYnullptr:
+    case TYref:
+    case TYnref:
+    case TYsptr:
+    case TYcptr:
+    case TYf16ptr:
+    case TYfptr:
+    case TYhptr:
+    case TYvptr:
+    case TYfgPtr:
+        return WASM_I32; // I64 for 64-bit
+
     case TYllong:
     case TYullong:
     case TYcent:
     case TYucent:
         return WASM_I64;
+
     case TYfloat:
     case TYifloat:
         return WASM_F32;
+
     case TYdouble:
     case TYdouble_alias:
     case TYidouble:
     case TYreal:
     case TYireal:
         return WASM_F64;
-    case TYint:
-    case TYuint:
-    case TYshort:
-    case TYushort:
-    case TYchar:
-    case TYuchar:
-    case TYschar:
-    case TYwchar_t:
-    case TYbool:
-    case TYenum:
-        return WASM_I32; // int, pointer, bool, etc.
 
     default:
-        return WASM_I32; // int, pointer, bool, etc.
+        return WASM_I32; // aggregate / unknown: pass by pointer
     }
 }
 
@@ -77,7 +99,8 @@ ubyte wasmType(tym_t ty)
 private struct ShadowEntry
 {
     Symbol* sym;
-    uint offset;
+
+    uint offset; // TODO: use Symbol.Soffset for this
 }
 
 /// Per-function code-generation state
@@ -86,6 +109,7 @@ struct WasmCG
     OutBuffer code; /// bytecode being emitted
     WasmLocal[] locals; /// local variable table (params first)
     uint numParams; /// number of parameters (= first numParams locals)
+    bool relocatable; /// generate relocatable
     WasmFuncBody.CodeReloc[] codeRelocs; /// relocations for direct function calls
     WasmFuncBody.DataAddrReloc[] dataAddrRelocs; /// R_WASM_MEMORY_ADDR_LEB relocations
 
@@ -159,6 +183,7 @@ nothrow:
                 al = ta;
         }
         const uint off = (shadowFrameSize + al - 1) & ~(al - 1);
+        s.Soffset = off;
         ShadowEntry se;
         se.sym = s;
         se.offset = off;
@@ -209,8 +234,6 @@ nothrow:
     // section is already at its final address in that case.
     void emitDataAddr(Symbol* sym, uint addend)
     {
-        import dmd.backend.wasmobj : wasm_relocatable;
-
         emit(OP_I32_CONST);
         const uint addr = cast(uint)(sym.Soffset + addend);
         // Only relocate symbols in the INITIALIZED data section (FL.data, FL.csdata,
@@ -220,7 +243,7 @@ nothrow:
         // Only relocate symbols in the INITIALIZED data section.
         // BSS (FL.udata) and TLS (FL.tlsdata) have offsets beyond the active
         // data segment and don't map to valid WASM_SYMTAB_DATA entries in it.
-        const bool canRelocate = wasm_relocatable && sym.Sident.ptr != null &&
+        const bool canRelocate = relocatable && sym.Sident.ptr != null &&
             sym.Sfl != FL.udata && sym.Sfl != FL.tlsdata;
         if (canRelocate)
         {
@@ -252,9 +275,8 @@ nothrow:
     // Used for taking the address of a function (function pointer).
     void emitTableIndex(uint fidx, Symbol* sym)
     {
-        import dmd.backend.wasmobj : wasm_relocatable;
         emit(OP_I32_CONST);
-        if (wasm_relocatable)
+        if (relocatable)
         {
             codeRelocs ~= WasmFuncBody.CodeReloc(cast(uint) code.length,
                 R_WASM_TABLE_INDEX_SLEB, fidx, 0, sym);
@@ -275,9 +297,9 @@ nothrow:
     // (type indices are stable for single-file linking via reorderImportTypesFirst).
     void emitCallIndirectType(uint typeIdx)
     {
-        import dmd.backend.wasmobj : wmod_findFuncForType, wmod_funcs, wasm_relocatable;
+        import dmd.backend.wasmobj : wmod_findFuncForType, wmod_funcs;
 
-        if (wasm_relocatable)
+        if (relocatable)
         {
             uint fidx = wmod_findFuncForType(typeIdx);
             if (fidx != uint.max)
@@ -534,15 +556,16 @@ private void emitShadowPrologue(ref WasmCG cg)
     uint spIdx = wmod_getOrCreateStackPtrGlobal();
 
     // Round frame size up to 16
-    uint fsz = (cg.shadowFrameSize + 15) & ~15u;
 
     // Allocate a new local to hold the shadow base address
     cg.shadowBaseLocal = cg.allocTemp(WASM_I32);
 
+    const uint fsz = (cg.shadowFrameSize + 15) & ~15u;
+
     // Emit: shadow_base = __stack_pointer - frame_size; __stack_pointer = shadow_base
     cg.emit(OP_GLOBAL_GET);
     cg.emitULEB(spIdx);
-    cg.emitConst(OP_I32_CONST, cast(int) fsz);
+    cg.emitConst(OP_I32_CONST, fsz);
     cg.emit(OP_I32_SUB);
     cg.emit(OP_LOCAL_TEE);
     cg.emitULEB(cg.shadowBaseLocal);
@@ -1597,12 +1620,6 @@ private bool genElem(ref WasmCG cg, elem* e)
             }
             else
             {
-                // Indirect call through a function pointer (call_indirect).
-                // D IR: OPucall(OPind(OPvar(fptr)), args) — the OPind dereferences the
-                // pointer-to-function; in WASM we use the table index directly without
-                // loading from memory.
-                import dmd.backend.wasmobj : wmod_internFuncPtrType;
-
                 // Gather args into a flat list in WASM call order (E2-first walk).
                 // Indirect calls have no callee Tparamtypes to consult, so the
                 // split decision and the signature both derive from arg shape:
@@ -2942,7 +2959,7 @@ private void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
 }
 
 /// Main entry point generating code for a function - called from dout.d
-void wasm_codgen(Symbol* sfunc)
+void wasm_codgen(Symbol* sfunc, bool relocatable)
 {
     import dmd.backend.wasmobj : wasmFuncBodies, WasmFuncBody;
 
@@ -2958,6 +2975,7 @@ void wasm_codgen(Symbol* sfunc)
         return;
 
     WasmCG cg;
+    cg.relocatable = relocatable;
 
     // Register parameters. D slices (TYdarray = TYullong+Tnext on WASM32) are split
     // into two i32 WASM params (len, ptr) by buildFuncType/toArgTypes_wasm.

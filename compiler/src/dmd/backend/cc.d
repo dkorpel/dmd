@@ -726,6 +726,9 @@ struct Symbol
      */
     char[1] Sident;
 
+    import core.stdc.string : strlen;
+    const(char)[] identifier() @trusted const { return Sident.ptr[0 .. strlen(Sident.ptr)]; }
+
     int needThis()              // !=0 if symbol needs a 'this' pointer
     { return Symbol_needThis(this); }
 
