@@ -655,6 +655,8 @@ struct Symbol
      */
     char[1] Sident;
 
+    import core.stdc.string : strlen;
+    const(char)[] identifier() @trusted const { return Sident.ptr[0 .. strlen(Sident.ptr)]; }
 }
 
 void symbol_debug(const Symbol* s)
