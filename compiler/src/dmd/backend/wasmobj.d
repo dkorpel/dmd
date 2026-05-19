@@ -24,7 +24,7 @@ import dmd.backend.el;
 import dmd.backend.obj;
 import dmd.backend.ty;
 import dmd.backend.type;
-import dmd.backend.wasm.codgen : wasmType;
+import dmd.backend.wasm.codgen : wasmType, funcIndex;
 
 import dmd.backend.wasm;
 import dmd.common.outbuffer;
@@ -1224,6 +1224,44 @@ void WasmObj_term(const(char)[] objfilename)
     wmod = null;
 }
 
+import dmd.backend.el;
+import dmd.backend.oper;
+
+// Walk the IR tree and pre-register any external function calls as imports.
+// Must run before code generation so that import indices are stable across
+// the whole module (call_indirect type indices are encoded as fixed-width
+// LEBs, so they cannot grow after the fact).
+void preRegisterExternals(elem* e)
+{
+    if (!e)
+        return;
+    const op = e.Eoper;
+    if (OTleaf(op))
+        return;
+    if (op == OPcall || op == OPucall)
+    {
+        if (e.E1 && e.E1.Eoper == OPvar)
+        {
+            Symbol* s = e.E1.Vsym;
+            if (s && s.Sclass != SC.auto_ && s.Sclass != SC.parameter &&
+                s.Sclass != SC.fastpar)
+                funcIndex(s); // side-effect: registers as import if not defined
+        }
+        if (e.E1)
+            preRegisterExternals(e.E1);
+        if (e.E2)
+            preRegisterExternals(e.E2);
+        return;
+    }
+    if (OTunary(op))
+    {
+        preRegisterExternals(e.E1);
+        return;
+    }
+    preRegisterExternals(e.E1);
+    preRegisterExternals(e.E2);
+}
+
 void WasmObj_term2(const(char)[] objfilename, ref WasmModule wmod, ref OutBuffer out_)
 {
     // WASM magic + version
@@ -1234,7 +1272,7 @@ void WasmObj_term2(const(char)[] objfilename, ref WasmModule wmod, ref OutBuffer
     //   This ensures import indices are stable before any bytecode is emitted.
     // Phase 2: generate bytecode for all functions.
     {
-        import dmd.backend.wasm.codgen : wasm_codgen, preRegisterExternals;
+        import dmd.backend.wasm.codgen : wasm_codgen;
 
         // Phase 1: collect all external function references across all functions.
         foreach (ref WasmFuncBody fb; wasmFuncBodies)
