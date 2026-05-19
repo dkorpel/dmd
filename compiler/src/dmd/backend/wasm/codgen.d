@@ -91,14 +91,6 @@ ubyte wasmType(tym_t ty)
     }
 }
 
-// Shadow frame entry: maps a symbol to its byte offset in the shadow frame.
-private struct ShadowEntry
-{
-    Symbol* sym;
-
-    uint offset; // TODO: use Symbol.Soffset for this
-}
-
 /// Per-function code-generation state
 struct WasmCG
 {
@@ -113,7 +105,7 @@ struct WasmCG
     bool hasShadowFrame;
     uint shadowBaseLocal; /// WASM local index holding the shadow frame base address
     uint shadowFrameSize; /// total size in bytes of shadow frame
-    ShadowEntry[] shadowEntries; /// per-symbol shadow frame offsets
+    Symbol*[] shadowEntries; /// per-symbol shadow frame offsets
 
 nothrow:
 
@@ -144,19 +136,10 @@ nothrow:
     /// Returns: true if symbol `s` lives in the shadow frame.
     bool inShadow(Symbol* s) const
     {
-        foreach (ref const ShadowEntry e; shadowEntries)
-            if (e.sym == s)
+        foreach (e; shadowEntries)
+            if (e == s)
                 return true;
         return false;
-    }
-
-    /// Returns: byte offset of `s` in the shadow frame (assumes inShadow).
-    uint shadowOffset(Symbol* s) const
-    {
-        foreach (ref const ShadowEntry e; shadowEntries)
-            if (e.sym == s)
-                return e.offset;
-        return 0;
     }
 
     /// Register a symbol in the shadow frame (idempotent).
@@ -180,10 +163,7 @@ nothrow:
         }
         const uint off = (shadowFrameSize + al - 1) & ~(al - 1);
         s.Soffset = off;
-        ShadowEntry se;
-        se.sym = s;
-        se.offset = off;
-        shadowEntries ~= se;
+        shadowEntries ~= s;
         shadowFrameSize = off + sz;
     }
 
@@ -535,10 +515,9 @@ private void scanShadow(elem* e, ref WasmCG cg)
 private void emitShadowAddr(ref WasmCG cg, Symbol* s)
 {
     cg.emitLocal(OP_LOCAL_GET, cg.shadowBaseLocal);
-    uint off = cg.shadowOffset(s);
-    if (off != 0)
+    if (s.Soffset != 0)
     {
-        cg.emitConst(OP_I32_CONST, cast(int) off);
+        cg.emitConst(OP_I32_CONST, cast(int) s.Soffset);
         cg.emit(OP_I32_ADD);
     }
 }
@@ -3090,9 +3069,8 @@ void wasm_codgen(Symbol* sfunc, bool relocatable)
         // shadow-frame slots. Without this, taking the address of a param
         // (e.g. passing a slice arg by ref to another function) yields a
         // valid address but the memory at that address is uninitialized.
-        foreach (ref const ShadowEntry se; cg.shadowEntries)
+        foreach (s; cg.shadowEntries)
         {
-            const(Symbol)* s = se.sym;
             if (s.Sclass != SC.parameter && s.Sclass != SC.fastpar &&
                 s.Sclass != SC.regpar && s.Sclass != SC.shadowreg)
                 continue;
@@ -3112,9 +3090,9 @@ void wasm_codgen(Symbol* sfunc, bool relocatable)
                 if (i64Idx == uint.max)
                     continue;
                 cg.emitLocal(OP_LOCAL_GET, cg.shadowBaseLocal);
-                if (se.offset != 0)
+                if (s.Soffset != 0)
                 {
-                    cg.emitConst(OP_I32_CONST, cast(int) se.offset);
+                    cg.emitConst(OP_I32_CONST, cast(int) s.Soffset);
                     cg.emit(OP_I32_ADD);
                 }
                 cg.emitLocal(OP_LOCAL_GET, i64Idx);
@@ -3132,9 +3110,9 @@ void wasm_codgen(Symbol* sfunc, bool relocatable)
             if (localIdx == uint.max)
                 continue;
             cg.emitLocal(OP_LOCAL_GET, cg.shadowBaseLocal);
-            if (se.offset != 0)
+            if (s.Soffset != 0)
             {
-                cg.emitConst(OP_I32_CONST, cast(int) se.offset);
+                cg.emitConst(OP_I32_CONST, cast(int) s.Soffset);
                 cg.emit(OP_I32_ADD);
             }
             cg.emitLocal(OP_LOCAL_GET, localIdx);
