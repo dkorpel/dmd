@@ -950,7 +950,7 @@ Classsym* fake_classsym(Identifier id)
 private void registerWasmImportModule(FuncDeclaration fd, const(char)[] mangledName)
 {
     import dmd.attrib : foreachUdaNoSemantic, isCoreUda;
-    import dmd.backend.wasmobj : WasmObj_registerImportModule;
+    import dmd.backend.wasm.obj : WasmObj_registerImportModule;
 
     foreachUdaNoSemantic(fd, (Expression e) {
         auto lit = e.isStructLiteralExp();

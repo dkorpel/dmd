@@ -29,8 +29,9 @@ import dmd.backend.oper;
 import dmd.backend.ty;
 import dmd.backend.type;
 import dmd.backend.var : globsym;
-import dmd.backend.wasm;
-import dmd.backend.wasmobj : WasmFuncBody, wasmFuncBodies, WasmLocal, wmod_internType, wmod_getOrCreateStackPtrGlobal;
+import dmd.backend.wasm.enums;
+import dmd.backend.wasm.util : writeuLEB128_5;
+import dmd.backend.wasm.obj : WasmFuncBody, wasmFuncBodies, WasmLocal, wmod_internType, wmod_getOrCreateStackPtrGlobal;
 
 import dmd.common.outbuffer;
 
@@ -292,7 +293,7 @@ nothrow:
     // (type indices are stable for single-file linking via reorderImportTypesFirst).
     void emitCallIndirectType(uint typeIdx)
     {
-        import dmd.backend.wasmobj : wmod_findFuncForType, wmod_funcs;
+        import dmd.backend.wasm.obj : wmod_findFuncForType, wmod_funcs;
 
         if (relocatable)
         {
@@ -526,7 +527,7 @@ private void emitShadowAddr(ref WasmCG cg, Symbol* s)
 // Creates the shadow base local, gets __stack_pointer, subtracts frame size, stores back.
 private void emitShadowPrologue(ref WasmCG cg)
 {
-    import dmd.backend.wasmobj : wmod_getOrCreateStackPtrGlobal;
+    import dmd.backend.wasm.obj : wmod_getOrCreateStackPtrGlobal;
 
     uint spIdx = wmod_getOrCreateStackPtrGlobal();
 
@@ -1821,7 +1822,7 @@ private void emitRelop(ref WasmCG cg, int op, tym_t ty)
 /// Returns: index of `sfunc`
 uint funcIndex(Symbol* sfunc)
 {
-    import dmd.backend.wasmobj : wasmFuncBodies, wmod_funcs, wmod_numImports;
+    import dmd.backend.wasm.obj : wasmFuncBodies, wmod_funcs, wmod_numImports;
 
     // Imports come first in wmod.funcs; defined functions come after.
     // Check imports (registered via WasmObj_external).
@@ -1838,7 +1839,7 @@ uint funcIndex(Symbol* sfunc)
             return nimports + cast(uint) i;
 
     // External symbol not yet registered — register as import now.
-    import dmd.backend.wasmobj : WasmObj_external;
+    import dmd.backend.wasm.obj : WasmObj_external;
 
     if (sfunc && sfunc.Stype)
     {
@@ -2446,7 +2447,7 @@ private void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
 /// Main entry point generating code for a function - called from dout.d
 void wasm_codgen(Symbol* sfunc, bool relocatable)
 {
-    import dmd.backend.wasmobj : wasmFuncBodies, WasmFuncBody;
+    import dmd.backend.wasm.obj : wasmFuncBodies, WasmFuncBody;
 
     // Find this function's entry in wasmFuncBodies
     WasmFuncBody* fb = null;

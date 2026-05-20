@@ -39,7 +39,7 @@ else
 import dmd.backend.mscoffobj;
 import dmd.backend.elfobj;
 import dmd.backend.machobj;
-import dmd.backend.wasmobj;
+import dmd.backend.wasm.obj;
 
 /******************************************************************/
 
