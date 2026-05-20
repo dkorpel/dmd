@@ -1976,39 +1976,39 @@ uint funcIndex(Symbol* sfunc)
 // Ensure a condition value on the WASM stack is an i32 suitable for br_if.
 private void emitCondToI32(ref WasmCG cg, elem* condElem, bool invert = false)
 {
-    if (!condElem)
+    assert(condElem);
+
+    switch (condElem.wasmType)
     {
-        if (invert)
-            cg.emit(OP_I32_EQZ);
-        return;
-    }
-    const ty = tybasic(condElem.Ety).wasmType;
-    if (ty == WASM_I64)
-    {
+    case WASM_I64:
         cg.emit(OP_I64_EQZ); // i64 → i32: 1 if zero, 0 if nonzero
 
         if (!invert)
             cg.emit(OP_I32_EQZ); // invert again, `cast(bool) i = !!i`
-    }
-    else if (ty == WASM_F32)
-    {
+        return;
+
+    case WASM_F32:
         // f32 truthiness: nonzero (NaN is truthy under WASM's NE semantics).
         cg.emit(OP_F32_CONST);
         float fz = 0.0f;
         cg.code.write(&fz, 4);
         cg.emit(invert ? OP_F32_EQ : OP_F32_NE);
-    }
-    else if (ty == WASM_F64)
-    {
+        return;
+
+    case WASM_F64:
         cg.emit(OP_F64_CONST);
         double dz = 0.0;
         cg.code.write(&dz, 8);
         cg.emit(invert ? OP_F64_EQ : OP_F64_NE);
-    }
-    else if (ty == WASM_I32)
-    {
+        return;
+
+    case WASM_I32:
         cg.emitConst(OP_I32_CONST, 0);
         cg.emit(invert ? OP_I32_EQ : OP_I32_NE);
+        return;
+
+    default:
+        assert(0);
     }
 }
 
@@ -2284,9 +2284,11 @@ private void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
             // br_table is only valid for i32 indices and dense ranges.
             // Use if-else chain when: values are i64, or the range is too
             // sparse (table would exceed 1024 entries).
+            enum maxJumpTableSize = 1024;
+
             const bool is64bit = (b.Belem && (tybasic(b.Belem.Ety) == TYllong || tybasic(b.Belem.Ety) == TYullong));
             const ulong tableLen64 = cast(ulong)(vmax - vmin) + 1;
-            const bool useBrTable = !is64bit && tableLen64 <= 1024 &&
+            const bool useBrTable = !is64bit && tableLen64 <= maxJumpTableSize &&
                 tableLen64 <= b.Bswitch.length * 4UL + 4;
 
             if (!useBrTable)
