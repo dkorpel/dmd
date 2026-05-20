@@ -504,7 +504,7 @@ private bool emitImportSection(ref OutBuffer out_, ref WasmModule wmod)
     {
         appendName(*s, f.importModule);
         appendName(*s, f.importName);
-        s.writeByte(WASM_EXPORT_FUNC); // import kind: function
+        s.writeByte(WASM_EXPORT.FUNC); // import kind: function
         s.writeuLEB128(f.typeIdx);
     }
     if (wmod.importFuncTable)
@@ -646,7 +646,7 @@ private bool emitExportSection(ref OutBuffer out_, ref WasmModule wmod)
     // Always export memory (index 0)
     {
         appendName(*s, "memory");
-        s.writeByte(WASM_EXPORT_MEM);
+        s.writeByte(WASM_EXPORT.MEM);
         s.writeuLEB128(0); // memory index 0
     }
     foreach (size_t i, ref const WasmFunc f; wmod.funcs)
@@ -654,7 +654,7 @@ private bool emitExportSection(ref OutBuffer out_, ref WasmModule wmod)
         if (!f.exported)
             continue;
         appendName(*s, funcName(f));
-        s.writeByte(WASM_EXPORT_FUNC);
+        s.writeByte(WASM_EXPORT.FUNC);
         s.writeuLEB128(cast(uint) i);
     }
     writeSection(out_, WasmSection.export_, s);
