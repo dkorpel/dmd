@@ -183,13 +183,18 @@ enum : ubyte
 }
 
 /// Value type bytes
-enum : ubyte
+enum WASM_TYPE : ubyte
 {
-    WASM_I32 = 0x7F,
-    WASM_I64 = 0x7E,
-    WASM_F32 = 0x7D,
-    WASM_F64 = 0x7C,
+    I32 = 0x7F,
+    I64 = 0x7E,
+    F32 = 0x7D,
+    F64 = 0x7C,
 }
+
+enum WASM_I32 = WASM_TYPE.I32;
+enum WASM_I64 = WASM_TYPE.I64;
+enum WASM_F32 = WASM_TYPE.F32;
+enum WASM_F64 = WASM_TYPE.F64;
 
 /// Block type for void blocks
 enum ubyte WASM_VOID_BLOCK = 0x40;
@@ -212,12 +217,12 @@ enum WasmSection : ubyte
 }
 
 // Export kinds
-enum : ubyte
+enum WASM_EXPORT : ubyte
 {
-    WASM_EXPORT_FUNC = 0x00,
-    WASM_EXPORT_TABLE = 0x01,
-    WASM_EXPORT_MEM = 0x02,
-    WASM_EXPORT_GLOBAL = 0x03,
+    FUNC = 0x00,
+    TABLE = 0x01,
+    MEM = 0x02,
+    GLOBAL = 0x03,
 }
 
 // WASM relocation types (WebAssembly tool conventions / linking metadata)
