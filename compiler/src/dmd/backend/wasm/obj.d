@@ -10,10 +10,10 @@
  *
  * Copyright:   Copyright (C) 1999-2026 by The D Language Foundation, All Rights Reserved
  * License:     $(LINK2 https://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
- * Source:      $(LINK2 https://github.com/dlang/dmd/blob/master/compiler/src/dmd/backend/wasmobj.d, _wasmobj.d)
+ * Source:      $(LINK2 https://github.com/dlang/dmd/blob/master/compiler/src/dmd/backend/wasm/obj.d, _obj.d)
  */
 
-module dmd.backend.wasmobj;
+module dmd.backend.wasm.obj;
 
 import core.stdc.string : strlen;
 
@@ -25,8 +25,8 @@ import dmd.backend.obj;
 import dmd.backend.ty;
 import dmd.backend.type;
 import dmd.backend.wasm.codgen : wasmType, funcIndex;
-
-import dmd.backend.wasm;
+import dmd.backend.wasm.enums;
+import dmd.backend.wasm.util : ulebSize, writeuLEB128_5;
 import dmd.common.outbuffer;
 
 // Segment indices used by the backend (must match dmd/backend/cdef.d Segments enum values like DATA and UDATA)
@@ -59,19 +59,6 @@ private void appendName(ref OutBuffer buf, const(char)[] name)
 {
     buf.writeuLEB128(cast(uint) name.length);
     buf.write(name.ptr[0 .. name.length]);
-}
-
-/// Returns: number of bytes needed for ULEB128 encoding of v
-private uint ulebSize(uint v)
-{
-    uint n = 0;
-    do
-    {
-        n++;
-        v >>= 7;
-    }
-    while (v);
-    return n;
 }
 
 // Name of a WasmFunc as it appears in the wasm symbol table.
