@@ -16,7 +16,7 @@ void writeuLEB128_5(ref OutBuffer buf, uint v) nothrow @safe
     buf.writeByte(cast(ubyte)((v >> 28) & 0x0F)); // MSB=0 to terminate
 }
 
-/// WASM instruction opcodes (subset used by the codegen)
+/// WASM instruction opcodes
 enum : ubyte
 {
     // Control
@@ -196,11 +196,11 @@ enum WASM_I64 = WASM_TYPE.I64;
 enum WASM_F32 = WASM_TYPE.F32;
 enum WASM_F64 = WASM_TYPE.F64;
 
-/// Block type for void blocks
+//// Block type for void blocks
 enum ubyte WASM_VOID_BLOCK = 0x40;
 
-// Section IDs
-enum WasmSection : ubyte
+/// Section IDs
+enum WASM_SECTION : ubyte
 {
     custom = 0,
     type_ = 1,
@@ -216,7 +216,7 @@ enum WasmSection : ubyte
     data = 11,
 }
 
-// Export kinds
+/// Export kinds
 enum WASM_EXPORT : ubyte
 {
     FUNC = 0x00,
@@ -225,7 +225,7 @@ enum WASM_EXPORT : ubyte
     GLOBAL = 0x03,
 }
 
-// WASM relocation types (WebAssembly tool conventions / linking metadata)
+/// WASM relocation types (WebAssembly tool conventions / linking metadata)
 enum R_WASM : ubyte
 {
     FUNCTION_INDEX_LEB = 0, // function index in call (5-byte padded ULEB)
@@ -238,7 +238,7 @@ enum R_WASM : ubyte
     GLOBAL_INDEX_LEB = 7,
 }
 
-// "linking" custom section subsection IDs (version 2)
+/// "linking" custom section subsection IDs (version 2)
 enum WASM_LINKING : ubyte
 {
     SEGMENT_INFO = 5,
@@ -247,7 +247,7 @@ enum WASM_LINKING : ubyte
     SYMBOL_TABLE = 8,
 }
 
-// Symbol table entry kinds
+/// Symbol table entry kinds
 enum WASM_SYMTAB : ubyte
 {
     FUNCTION = 0,
@@ -258,7 +258,7 @@ enum WASM_SYMTAB : ubyte
     TABLE = 5,
 }
 
-// Symbol table flags
+/// Symbol table flags
 enum WASM_SYM : uint
 {
     BINDING_WEAK = 0x01,
