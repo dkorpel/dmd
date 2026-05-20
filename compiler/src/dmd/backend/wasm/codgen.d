@@ -27,7 +27,7 @@ import dmd.backend.ty;
 import dmd.backend.type;
 import dmd.backend.var : globsym;
 import dmd.backend.wasm;
-import dmd.backend.wasmobj : WasmFuncBody, wasmFuncBodies, WasmLocal;
+import dmd.backend.wasmobj : WasmFuncBody, wasmFuncBodies, WasmLocal, wmod_internType, wmod_getOrCreateStackPtrGlobal;
 
 import dmd.common.outbuffer;
 
@@ -89,6 +89,12 @@ ubyte wasmType(tym_t ty)
     default:
         return WASM_I32; // aggregate / unknown: pass by pointer
     }
+}
+
+/// Duplicated: also in dvarstats.d
+bool isParameter(Symbol* s)
+{
+    return s.Sclass == SC.parameter || s.Sclass == SC.regpar || s.Sclass == SC.fastpar || s.Sclass == SC.shadowreg;
 }
 
 /// Per-function code-generation state
@@ -438,8 +444,7 @@ private bool isLocalSym(Symbol* s)
 // slot is never filled — the WASM local itself IS the pointer to the struct.
 private bool isStructByRefParam(Symbol* s) nothrow
 {
-    if (s.Sclass != SC.parameter && s.Sclass != SC.fastpar &&
-        s.Sclass != SC.regpar && s.Sclass != SC.shadowreg)
+    if (s.isParameter)
         return false;
     const tym_t tb = tybasic(s.ty());
     return tb == TYstruct || tb == TYarray;
@@ -507,8 +512,6 @@ private void emitShadowPrologue(ref WasmCG cg)
 // Emit shadow stack frame epilogue (restore __stack_pointer).
 private void emitShadowEpilogue(ref WasmCG cg)
 {
-    import dmd.backend.wasmobj : wmod_getOrCreateStackPtrGlobal;
-
     uint spIdx = wmod_getOrCreateStackPtrGlobal();
     uint fsz = (cg.shadowFrameSize + 15) & ~15u;
 
@@ -603,7 +606,324 @@ private void maskSmallInt(ref WasmCG cg, tym_t ty)
     }
 }
 
+private void genVarArgs(ref WasmCG cg, elem*[] varArgs, ref uint spLocal, ref uint vaFrameSize)
+{
+    vaFrameSize = 0;
+
+    if (varArgs.length == 0)
+    {
+        // No variadic args: pass null pointer per LDC2 convention.
+        cg.emitConst(OP_I32_CONST, 0);
+        return;
+    }
+
+    struct VaSlot
+    {
+        elem* e;
+        uint off;
+        ubyte storeOp;
+        uint alignLog2;
+        bool promoteF32;
+    }
+
+    VaSlot[] slots;
+    uint offset = 0;
+    foreach (va; varArgs)
+    {
+        ubyte storeOp;
+        uint sz, al;
+        bool promF32 = false;
+        switch (tybasic(va.Ety).wasmType)
+        {
+        case WASM_I64:
+            storeOp = OP_I64_STORE;
+            sz = 8;
+            al = 3;
+            break;
+        case WASM_F64:
+            storeOp = OP_F64_STORE;
+            sz = 8;
+            al = 3;
+            break;
+        case WASM_F32:
+            // C promotes float to double in varargs
+            storeOp = OP_F64_STORE;
+            sz = 8;
+            al = 3;
+            promF32 = true;
+            break;
+        case WASM_I32:
+            storeOp = OP_I32_STORE;
+            sz = 4;
+            al = 2;
+            break;
+        default:
+            assert(0);
+        }
+        uint byteAlign = 1u << al;
+        offset = (offset + byteAlign - 1) & ~(byteAlign - 1);
+        slots ~= VaSlot(va, offset, storeOp, al, promF32);
+        offset += sz;
+    }
+    vaFrameSize = (offset + 15) & ~15;
+
+    // Allocate shadow stack frame for varargs.
+    uint spIdx = wmod_getOrCreateStackPtrGlobal();
+    spLocal = cg.allocTemp(WASM_I32);
+    cg.emit(OP_GLOBAL_GET);
+    cg.emitULEB(spIdx);
+    cg.emitConst(OP_I32_CONST, cast(int) vaFrameSize);
+    cg.emit(OP_I32_SUB);
+    cg.emit(OP_LOCAL_TEE);
+    cg.emitULEB(spLocal);
+    cg.emit(OP_GLOBAL_SET);
+    cg.emitULEB(spIdx);
+
+    // Store each variadic arg into the frame.
+    foreach (ref sl; slots)
+    {
+        cg.emitLocal(OP_LOCAL_GET, spLocal); // addr
+        cg.genElem(sl.e); // value
+        if (sl.promoteF32)
+            cg.emit(OP_F64_PROMOTE_F32);
+        cg.emit(sl.storeOp);
+        cg.emitMemArg(sl.alignLog2, sl.off);
+    }
+
+    // Push varargs pointer as the last parameter.
+    cg.emitLocal(OP_LOCAL_GET, spLocal);
+}
+
+// Non-variadic direct call.
+// Gather args in WASM call order. For D linkage (TYjfunc),
+// the function signature's globsym is built by reversing
+// the source params then prepending sthis/shidden, so the
+// declared param order is [this, shidden, line, file, args]
+// (reversed src + leading hidden). The caller-side OPparam
+// tree is built as left-fold of source-order args with
+// ethis (and ehidden) appended last: OPparam(.. (args,file) .. line), this).
+// Visiting E2 first then E1 walks this tree to produce the
+// matching order: [this, line, file, args].
+elem*[] gatherCallArgs(elem* p)
+{
+    elem*[] callArgs;
+    void gather(elem* p) nothrow
+    {
+        if (!p)
+            return;
+        if (p.Eoper == OPparam)
+        {
+            gather(p.E2);
+            gather(p.E1);
+            return;
+        }
+        callArgs ~= p;
+    }
+    gather(p);
+    return callArgs;
+}
+
 // Expression code generation
+private bool genCall(ref WasmCG cg, elem* e)
+{
+    // case OPcall:
+    // case OPucall:
+
+    // E1 is the function.
+    // Direct call: E1 is OPvar of a function symbol.
+    if (e.E1.Eoper == OPvar && e.E1.Vsym && e.E1.Vsym.Sclass != SC.auto_ &&
+        e.E1.Vsym.Sclass != SC.parameter && e.E1.Vsym.Sclass != SC.fastpar)
+    {
+        Symbol* calleeSym = e.E1.Vsym;
+        uint fidx = funcIndex(calleeSym);
+
+        // C variadic requires at least one fixed parameter (e.g. `printf(fmt, ...)`).
+        // Bare TYnfunc/TYjfunc types set TF.prototype with no Tparamtypes — those are
+        // unprototyped declarations (typical of runtime/RTL symbols built via type_fake),
+        // not real variadics, and must not enter the spill-to-shadow path.
+        const bool isCVariadic = calleeSym.Stype !is null &&
+            calleeSym.Stype.Tparamtypes !is null &&
+            variadic(calleeSym.Stype);
+
+        if (isCVariadic)
+        {
+            // C variadic ABI (matches LDC2/wasi-libc): variadic args are spilled
+            // to a shadow stack frame; a pointer to that frame is passed as the
+            // last i32 parameter after all fixed args.  When there are no variadic
+            // args the pointer is null (i32.const 0).
+            //
+            // C default promotions apply inside `...`:
+            //   float  → double (f64)
+            //   char/short → int (i32)
+
+            // Collect all args left-to-right (E2-first in OPparam tree).
+            elem*[] allArgs = gatherCallArgs(e.E2);
+
+            // Count fixed (non-variadic) params from the function type
+            // and collect them positionally for slice-split decisions.
+            int nFixed = 0;
+            param_t*[] fixedParams;
+            for (param_t* p = calleeSym.Stype.Tparamtypes; p; p = p.Pnext)
+            {
+                fixedParams ~= p;
+                nFixed++;
+            }
+
+            // Emit fixed args to the WASM value stack. A fixed param
+            // declared as a D slice splits the matching i64 arg into
+            // (len, ptr). C variadic linkage has no param reversal, so
+            // fixedParams aligns with allArgs by position directly.
+            foreach (a; allArgs[0 .. nFixed])
+                cg.genElem(a);
+
+            // Compute variadic args layout and emit shadow-stack spill.
+            elem*[] varArgs = allArgs[nFixed .. $];
+
+            uint spLocal;
+            uint vaFrameSize;
+            cg.genVarArgs(varArgs, spLocal, vaFrameSize);
+
+            cg.emitCall(fidx, calleeSym);
+
+            // Restore __stack_pointer after the call.
+            if (varArgs.length)
+            {
+                uint spIdx = wmod_getOrCreateStackPtrGlobal();
+                cg.emitLocal(OP_LOCAL_GET, spLocal);
+                cg.emitConst(OP_I32_CONST, cast(int) vaFrameSize);
+                cg.emit(OP_I32_ADD);
+                cg.emit(OP_GLOBAL_SET);
+                cg.emitULEB(spIdx);
+            }
+
+            if (calleeSym.Sflags & SFLexit)
+                cg.emit(OP_UNREACHABLE);
+        }
+        else
+        {
+            auto callArgs = gatherCallArgs(e.E2);
+
+            // Slice handling: the WASM callee ABI splits each D slice
+            // parameter into two i32s (len, ptr). At IR level, many
+            // callers pre-split slice args into separate (OPconst
+            // length, OPrelconst ptr) entries — those flow through
+            // as plain i32 args. Other callers pass a packed i64
+            // slice value (OPpair, OPvar of a slice local, OPind of
+            // slice address, OPcall returning a slice). For the
+            // latter we must split on the value stack: pop i64,
+            // push wrap(lo) and shr(hi).
+            //
+            // Param alignment: Tparamtypes is in source-declaration
+            // order. D linkage (TYjfunc) reverses params in globsym,
+            // so callArgs (gathered to match the callee's WASM ABI
+            // order) is reversed relative to source declaration. We
+            // reverse Tparamtypes into a flat array to align by
+            // position, then prepend nulls for any hidden leading
+            // args (this/shidden) when callArgs has more entries
+            // than declared params.
+            param_t*[] declParams;
+
+            auto paramTypes = (calleeSym.Stype !is null) ? calleeSym.Stype.Tparamtypes : null;
+            for (param_t* q = paramTypes; q; q = q.Pnext)
+                declParams ~= q;
+
+            ubyte[] aparams;
+            foreach (i, a; callArgs)
+            {
+                const tym_t aty = tybasic(a.Ety);
+                cg.genElem(a);
+
+                /+
+                // Coerce pushed type to the callee's declared param
+                // type when they differ (e.g. i32 ptr sign-extended
+                // to i64 by an OPs32_64 cast, but callee declared
+                // the param as a plain i32 pointer).
+                ubyte pushedTy = wasmType(aty);
+                if (pp && pp.Ptype && !paramIsSlice(pp))
+                {
+                    ubyte declTy = wasmType(pp.Ptype.Tty);
+                    // Only coerce within the integer domain. Crossing
+                    // into float would misinterpret pointer-like ints
+                    // as numeric values.
+                    bool intDomain(ubyte t)
+                    {
+                        return t == WASM_I32 || t == WASM_I64;
+                    }
+
+                    if (declTy != pushedTy && intDomain(declTy) && intDomain(pushedTy))
+                    {
+                        emitCoerce(cg, pushedTy, declTy);
+                        pushedTy = declTy;
+                    }
+                }
+                +/
+            }
+
+            cg.emitCall(fidx, calleeSym);
+            // Noreturn (SFLexit) functions leave the stack empty. Emit unreachable
+            // so WASM's type checker accepts any type expectations after the call.
+            if (calleeSym.Sflags & SFLexit)
+                cg.emit(OP_UNREACHABLE);
+        }
+    }
+    else
+    {
+        elem*[] indArgs = gatherCallArgs(e.E2);
+
+        ubyte[] callParams;
+        foreach (a; indArgs)
+        {
+            cg.genElem(a);
+            callParams ~= wasmType(tybasic(a.Ety));
+        }
+        ubyte[] callResults;
+        {
+            const tym_t retTy0 = tybasic(e.Ety);
+            if (retTy0 != TYvoid && retTy0 != TYnoreturn)
+                callResults ~= wasmType(retTy0);
+        }
+        uint typeIdx = wmod_internType(callParams, callResults);
+
+        elem* fexpr = e.E1;
+        Symbol* fpSym = null;
+        if (fexpr.Eoper == OPind && fexpr.E1 && fexpr.E1.Eoper == OPvar)
+        {
+            // OPind(OPvar(fptr)) — fptr holds a table index.
+            fpSym = fexpr.E1.Vsym;
+            if (fpSym && isLocalSym(fpSym) && !cg.inShadow(fpSym))
+            {
+                const uint idx = cg.localFor(fpSym);
+                cg.emitLocal(OP_LOCAL_GET, idx);
+            }
+            else
+            {
+                cg.genElem(fexpr.E1);
+            }
+        }
+        else
+        {
+            // Virtual dispatch / general function pointer.
+            elem* fn = (fexpr.Eoper == OPind) ? fexpr.E1 : fexpr;
+            cg.genElem(fn);
+        }
+        cg.emit(OP_CALL_INDIRECT);
+        cg.emitCallIndirectType(typeIdx);
+        cg.emitULEB(0); // table index 0
+    }
+    // Whether the call left a value on the WASM stack depends on the
+    // callee's WASM signature, not e.Ety. For direct calls to a function
+    // defined in this module, e.Ety can disagree with the function's
+    // actual return type (e.g. a void member call appearing in an
+    // OPcomma chain): trust the callee's Stype.Tnext.
+    const retTy = tybasic(e.Ety);
+    bool pushedValue = retTy != TYvoid && retTy != TYnoreturn;
+    if (e.E1.Eoper == OPvar && e.E1.Vsym && e.E1.Vsym.Stype && e.E1.Vsym.Stype.Tnext)
+    {
+        const tym_t calleeRet = tybasic(e.E1.Vsym.Stype.Tnext.Tty);
+        pushedValue = calleeRet != TYvoid && calleeRet != TYnoreturn;
+    }
+    return pushedValue;
+}
 
 /// Returns: true if the expression has a result on the stack after genElem
 private bool genElem(ref WasmCG cg, elem* e)
@@ -640,9 +960,10 @@ private bool genElem(ref WasmCG cg, elem* e)
                 cg.code.write(&d, 8);
                 break;
             case WASM_I32:
-            default: // TODO: assert for unknown types instead of assuming default
                 cg.emitConst(OP_I32_CONST, cast(int) e.Vlong);
                 break;
+            default:
+                assert(0);
             }
             return true;
         }
@@ -873,7 +1194,6 @@ private bool genElem(ref WasmCG cg, elem* e)
             return true;
         }
 
-        // ---- Compound assignment operators ------------------------------------
     case OPaddass:
     case OPminass:
     case OPmulass:
@@ -1105,540 +1425,6 @@ private bool genElem(ref WasmCG cg, elem* e)
         if (cg.genElem(e.E1))
             cg.emit(OP_DROP); // discard left-hand result
         return cg.genElem(e.E2);
-
-    case OPcall:
-    case OPucall:
-        {
-            // E1 is the function.
-            // Direct call: E1 is OPvar of a function symbol.
-            if (e.E1.Eoper == OPvar && e.E1.Vsym && e.E1.Vsym.Sclass != SC.auto_ &&
-                e.E1.Vsym.Sclass != SC.parameter && e.E1.Vsym.Sclass != SC.fastpar)
-            {
-                import dmd.backend.type : variadic;
-                import dmd.backend.cc : param_t;
-                import dmd.backend.wasmobj : wmod_fixImportType, wmod_getOrCreateStackPtrGlobal;
-
-                Symbol* calleeSym = e.E1.Vsym;
-                uint fidx = funcIndex(calleeSym);
-                // C variadic requires at least one fixed parameter (e.g. `printf(fmt, ...)`).
-                // Bare TYnfunc/TYjfunc types set TF.prototype with no Tparamtypes — those are
-                // unprototyped declarations (typical of runtime/RTL symbols built via type_fake),
-                // not real variadics, and must not enter the spill-to-shadow path.
-                const bool isCVariadic = calleeSym.Stype !is null &&
-                    calleeSym.Stype.Tparamtypes !is null &&
-                    variadic(calleeSym.Stype);
-
-                if (isCVariadic)
-                {
-                    // C variadic ABI (matches LDC2/wasi-libc): variadic args are spilled
-                    // to a shadow stack frame; a pointer to that frame is passed as the
-                    // last i32 parameter after all fixed args.  When there are no variadic
-                    // args the pointer is null (i32.const 0).
-                    //
-                    // C default promotions apply inside `...`:
-                    //   float  → double (f64)
-                    //   char/short → int (i32)
-
-                    // Collect all args left-to-right (E2-first in OPparam tree).
-                    elem*[] allArgs;
-                    void gatherArgs(elem* p) nothrow
-                    {
-                        if (!p)
-                            return;
-                        if (p.Eoper == OPparam)
-                        {
-                            gatherArgs(p.E2);
-                            gatherArgs(p.E1);
-                        }
-                        else
-                            allArgs ~= p;
-                    }
-
-                    gatherArgs(e.E2);
-
-                    // Count fixed (non-variadic) params from the function type
-                    // and collect them positionally for slice-split decisions.
-                    int nFixed = 0;
-                    param_t*[] fixedParams;
-                    for (param_t* p = calleeSym.Stype.Tparamtypes; p; p = p.Pnext)
-                    {
-                        fixedParams ~= p;
-                        nFixed++;
-                    }
-
-                    // Emit fixed args to the WASM value stack. A fixed param
-                    // declared as a D slice splits the matching i64 arg into
-                    // (len, ptr). C variadic linkage has no param reversal, so
-                    // fixedParams aligns with allArgs by position directly.
-                    foreach (i, a; allArgs[0 .. nFixed])
-                        genOneArg(cg, a, paramIsSlice(fixedParams[i]));
-
-                    // Compute variadic args layout and emit shadow-stack spill.
-                    elem*[] varArgs = allArgs[nFixed .. $];
-                    uint spLocal = uint.max;
-                    uint vaFrameSize = 0;
-
-                    if (varArgs.length > 0)
-                    {
-                        struct VaSlot
-                        {
-                            elem* e;
-                            uint off;
-                            ubyte storeOp;
-                            uint alignLog2;
-                            bool promoteF32;
-                        }
-
-                        VaSlot[] slots;
-                        uint offset = 0;
-                        foreach (va; varArgs)
-                        {
-                            ubyte storeOp;
-                            uint sz, al;
-                            bool promF32 = false;
-                            switch (tybasic(va.Ety).wasmType)
-                            {
-                            case WASM_I64:
-                                storeOp = OP_I64_STORE;
-                                sz = 8;
-                                al = 3;
-                                break;
-                            case WASM_F64:
-                                storeOp = OP_F64_STORE;
-                                sz = 8;
-                                al = 3;
-                                break;
-                            case WASM_F32:
-                                // C promotes float to double in varargs
-                                storeOp = OP_F64_STORE;
-                                sz = 8;
-                                al = 3;
-                                promF32 = true;
-                                break;
-                            case WASM_I32:
-                                storeOp = OP_I32_STORE;
-                                sz = 4;
-                                al = 2;
-                                break;
-                            default:
-                                assert(0);
-                            }
-                            uint byteAlign = 1u << al;
-                            offset = (offset + byteAlign - 1) & ~(byteAlign - 1);
-                            slots ~= VaSlot(va, offset, storeOp, al, promF32);
-                            offset += sz;
-                        }
-                        vaFrameSize = (offset + 15) & ~15;
-
-                        // Allocate shadow stack frame for varargs.
-                        uint spIdx = wmod_getOrCreateStackPtrGlobal();
-                        spLocal = cg.allocTemp(WASM_I32);
-                        cg.emit(OP_GLOBAL_GET);
-                        cg.emitULEB(spIdx);
-                        cg.emitConst(OP_I32_CONST, cast(int) vaFrameSize);
-                        cg.emit(OP_I32_SUB);
-                        cg.emit(OP_LOCAL_TEE);
-                        cg.emitULEB(spLocal);
-                        cg.emit(OP_GLOBAL_SET);
-                        cg.emitULEB(spIdx);
-
-                        // Store each variadic arg into the frame.
-                        foreach (ref sl; slots)
-                        {
-                            cg.emitLocal(OP_LOCAL_GET, spLocal); // addr
-                            cg.genElem(sl.e); // value
-                            if (sl.promoteF32)
-                                cg.emit(OP_F64_PROMOTE_F32);
-                            cg.emit(sl.storeOp);
-                            cg.emitMemArg(sl.alignLog2, sl.off);
-                        }
-
-                        // Push varargs pointer as the last parameter.
-                        cg.emitLocal(OP_LOCAL_GET, spLocal);
-                    }
-                    else
-                    {
-                        // No variadic args: pass null pointer per LDC2 convention.
-                        cg.emitConst(OP_I32_CONST, 0);
-                    }
-
-                    // Register import type: (fixed_params..., i32 varargs_ptr) -> result.
-                    {
-                        ubyte[] aparams;
-                        foreach (i, a; allArgs[0 .. nFixed])
-                        {
-                            if (paramIsSlice(fixedParams[i]))
-                            {
-                                aparams ~= WASM_I32;
-                                aparams ~= WASM_I32;
-                            }
-                            else
-                                aparams ~= tybasic(a.Ety).wasmType;
-                        }
-                        aparams ~= WASM_I32; // varargs ptr
-                        const tym_t retTy2 = tybasic(e.Ety);
-                        ubyte[] aresults;
-                        if (retTy2 != TYvoid && retTy2 != TYnoreturn)
-                            aresults ~= wasmType(retTy2);
-                        wmod_fixImportType(fidx, aparams, aresults);
-                    }
-
-                    cg.emitCall(fidx, calleeSym);
-
-                    // Restore __stack_pointer after the call.
-                    if (spLocal != uint.max)
-                    {
-                        uint spIdx = wmod_getOrCreateStackPtrGlobal();
-                        cg.emitLocal(OP_LOCAL_GET, spLocal);
-                        cg.emitConst(OP_I32_CONST, cast(int) vaFrameSize);
-                        cg.emit(OP_I32_ADD);
-                        cg.emit(OP_GLOBAL_SET);
-                        cg.emitULEB(spIdx);
-                    }
-
-                    if (calleeSym.Sflags & SFLexit)
-                        cg.emit(OP_UNREACHABLE);
-                }
-                else
-                {
-                    // Non-variadic direct call.
-                    // Gather args in WASM call order. For D linkage (TYjfunc),
-                    // the function signature's globsym is built by reversing
-                    // the source params then prepending sthis/shidden, so the
-                    // declared param order is [this, shidden, line, file, args]
-                    // (reversed src + leading hidden). The caller-side OPparam
-                    // tree is built as left-fold of source-order args with
-                    // ethis (and ehidden) appended last: OPparam(.. (args,file) .. line), this).
-                    // Visiting E2 first then E1 walks this tree to produce the
-                    // matching order: [this, line, file, args].
-                    elem*[] callArgs;
-                    void gatherCallArgs(elem* p) nothrow
-                    {
-                        if (!p)
-                            return;
-                        if (p.Eoper == OPparam)
-                        {
-                            gatherCallArgs(p.E2);
-                            gatherCallArgs(p.E1);
-                            return;
-                        }
-                        callArgs ~= p;
-                    }
-
-                    gatherCallArgs(e.E2);
-
-                    // Slice handling: the WASM callee ABI splits each D slice
-                    // parameter into two i32s (len, ptr). At IR level, many
-                    // callers pre-split slice args into separate (OPconst
-                    // length, OPrelconst ptr) entries — those flow through
-                    // as plain i32 args. Other callers pass a packed i64
-                    // slice value (OPpair, OPvar of a slice local, OPind of
-                    // slice address, OPcall returning a slice). For the
-                    // latter we must split on the value stack: pop i64,
-                    // push wrap(lo) and shr(hi).
-                    //
-                    // Split only when the arg width is i64 (TYullong/TYllong)
-                    // AND there's evidence the value is a slice — either the
-                    // elem itself looks like a slice, or the matching callee
-                    // parameter is declared as a slice.
-                    //
-                    // Param alignment: Tparamtypes is in source-declaration
-                    // order. D linkage (TYjfunc) reverses params in globsym,
-                    // so callArgs (gathered to match the callee's WASM ABI
-                    // order) is reversed relative to source declaration. We
-                    // reverse Tparamtypes into a flat array to align by
-                    // position, then prepend nulls for any hidden leading
-                    // args (this/shidden) when callArgs has more entries
-                    // than declared params.
-                    param_t*[] declParams;
-                    for (param_t* q = (calleeSym.Stype !is null) ? calleeSym.Stype.Tparamtypes
-                        : null; q; q = q.Pnext)
-                        declParams ~= q;
-                    // Only D-linkage (TYjfunc) reverses params in globsym; the
-                    // gathered callArgs walk matches that reversed order. For
-                    // extern(C) (TYnfunc) and other C-style linkages, declParams
-                    // is already in source order — same as callArgs.
-                    const calleeTy = (calleeSym.Stype !is null)
-                        ? tybasic(calleeSym.Stype.Tty) : TYnfunc;
-                    if (calleeTy == TYjfunc)
-                    {
-                        foreach (k; 0 .. declParams.length / 2)
-                        {
-                            auto t = declParams[k];
-                            declParams[k] = declParams[declParams.length - 1 - k];
-                            declParams[declParams.length - 1 - k] = t;
-                        }
-                    }
-                    // Align each callArg to its matching declared param. Slice
-                    // params may appear in callArgs either as a single i64 packed
-                    // value or as two pre-split i32 entries (len, ptr) — walk
-                    // declParams right-to-left consuming callArgs from the end so
-                    // any hidden leading args (frame/this/sret) land at index < 0
-                    // and resolve to pp=null.
-                    //
-                    // Slice detection is callee-driven: paramIsSlice(declared param)
-                    // OR rtlSliceParamMask(callee name) for runtime support
-                    // functions that ship with no Tparamtypes. No per-elem shape
-                    // heuristics; the matching pp determines whether to split.
-                    const uint rtlMask = (declParams.length == 0)
-                        ? rtlSliceParamMask(calleeSym.Sident.ptr) : 0;
-                    bool argPosIsSlice(size_t srcPos, param_t* pp)
-                    {
-                        if (paramIsSlice(pp))
-                            return true;
-                        if (rtlMask && srcPos < 32 && ((rtlMask >> srcPos) & 1))
-                            return true;
-                        return false;
-                    }
-
-                    param_t*[] ppPerArg;
-                    size_t[] srcPosPerArg; // position from callee POV (-1 for hidden leading)
-                    ppPerArg.length = callArgs.length;
-                    srcPosPerArg.length = callArgs.length;
-                    foreach (ref s; srcPosPerArg)
-                        s = size_t.max;
-                    {
-                        ptrdiff_t ai = cast(ptrdiff_t) callArgs.length - 1;
-                        ptrdiff_t pi = cast(ptrdiff_t) declParams.length - 1;
-                        // For RTL (no declParams), match by position directly.
-                        if (declParams.length == 0)
-                        {
-                            ptrdiff_t srcPos = 0;
-                            while (ai >= 0)
-                            {
-                                if (rtlMask && srcPos < 32 && ((rtlMask >> srcPos) & 1)
-                                    && ai >= 1
-                                    && tybasic(callArgs[cast(size_t) ai].Ety) != TYullong
-                                    && tybasic(callArgs[cast(size_t) ai].Ety) != TYllong)
-                                {
-                                    srcPosPerArg[ai] = srcPos;
-                                    srcPosPerArg[ai - 1] = srcPos;
-                                    ai -= 2;
-                                }
-                                else
-                                {
-                                    srcPosPerArg[ai] = srcPos;
-                                    ai -= 1;
-                                }
-                                srcPos += 1;
-                            }
-                        }
-                        else
-                        {
-                            while (ai >= 0 && pi >= 0)
-                            {
-                                auto q = declParams[pi];
-                                if (paramIsSlice(q) && ai >= 1
-                                    && tybasic(callArgs[ai].Ety) != TYullong
-                                    && tybasic(callArgs[ai].Ety) != TYllong)
-                                {
-                                    // Pre-split: (len, ptr) — both map to the slice pp.
-                                    ppPerArg[ai] = q;
-                                    ppPerArg[ai - 1] = q;
-                                    ai -= 2;
-                                }
-                                else
-                                {
-                                    ppPerArg[ai] = q;
-                                    ai -= 1;
-                                }
-                                pi -= 1;
-                            }
-                        }
-                    }
-                    ubyte[] aparams;
-                    foreach (i, a; callArgs)
-                    {
-                        const tym_t aty = tybasic(a.Ety);
-                        param_t* pp = ppPerArg[i];
-                        bool asSlice = false;
-                        if (aty == TYullong || aty == TYllong)
-                            asSlice = argPosIsSlice(srcPosPerArg[i], pp);
-                        // Aggregate (struct/static-array) param is passed by pointer
-                        // (i32) per buildFuncType. Emit the arg's address instead
-                        // of its loaded value:
-                        //   OPind(addr) → addr
-                        //   OPvar(shadow-frame sym) → shadow address + Voffset
-                        //   OPvar(data sym) → data address + Voffset
-                        // Otherwise the callee would receive a loaded i64/i32
-                        // struct value where its WASM signature expects an i32
-                        // pointer.
-                        if (paramIsAggregate(pp) && emitAggregateArgAsPointer(cg, a))
-                        {
-                            aparams ~= WASM_I32;
-                            continue;
-                        }
-                        // Independent of pp matching: when the arg expression
-                        // is OPind of an OPcall that returns a struct via sret,
-                        // the call leaves the sret address on the stack — load
-                        // would consume it and produce a struct value instead
-                        // of the pointer the callee expects. Treat as pointer.
-                        // (pp may be misclassified when the callee's slice
-                        // params get pre-split in callArgs and confuse the
-                        // leading-hidden count.)
-                        if (a.Eoper == OPind && a.E1 &&
-                            (a.E1.Eoper == OPcall || a.E1.Eoper == OPucall) &&
-                            a.E1.E1 && a.E1.E1.Eoper == OPvar && a.E1.E1.Vsym &&
-                            a.E1.E1.Vsym.Stype && a.E1.E1.Vsym.Stype.Tnext &&
-                            (tybasic(a.E1.E1.Vsym.Stype.Tnext.Tty) == TYstruct ||
-                                tybasic(a.E1.E1.Vsym.Stype.Tnext.Tty) == TYarray))
-                        {
-                            cg.genElem(a.E1);
-                            aparams ~= WASM_I32;
-                            continue;
-                        }
-                        // Also detect OPind(OPadd(OPvar(struct-typed local), const))
-                        // with i64 result type — a "load struct value from a
-                        // pointer into an aggregate", which arises when an arg
-                        // expression dereferences a struct field of an enclosing
-                        // aggregate (param-ptr or shadow-frame). Pass the address.
-                        if (a.Eoper == OPind && a.E1 && a.E1.Eoper == OPadd &&
-                            a.E1.E1 && a.E1.E1.Eoper == OPvar && a.E1.E1.Vsym &&
-                            a.E1.E1.Vsym.Stype &&
-                            (tybasic(a.E1.E1.Vsym.Stype.Tty) == TYstruct ||
-                                tybasic(a.E1.E1.Vsym.Stype.Tty) == TYarray) &&
-                            (tybasic(a.Ety) == TYllong || tybasic(a.Ety) == TYullong))
-                        {
-                            cg.genElem(a.E1);
-                            aparams ~= WASM_I32;
-                            continue;
-                        }
-                        genOneArg(cg, a, asSlice);
-                        if (asSlice)
-                        {
-                            aparams ~= WASM_I32;
-                            aparams ~= WASM_I32;
-                        }
-                        else
-                        {
-                            // Coerce pushed type to the callee's declared param
-                            // type when they differ (e.g. i32 ptr sign-extended
-                            // to i64 by an OPs32_64 cast, but callee declared
-                            // the param as a plain i32 pointer).
-                            ubyte pushedTy = wasmType(aty);
-                            if (pp && pp.Ptype && !paramIsSlice(pp))
-                            {
-                                ubyte declTy = wasmType(pp.Ptype.Tty);
-                                // Only coerce within the integer domain. Crossing
-                                // into float would misinterpret pointer-like ints
-                                // as numeric values.
-                                bool intDomain(ubyte t)
-                                {
-                                    return t == WASM_I32 || t == WASM_I64;
-                                }
-
-                                if (declTy != pushedTy && intDomain(declTy) && intDomain(pushedTy))
-                                {
-                                    emitCoerce(cg, pushedTy, declTy);
-                                    pushedTy = declTy;
-                                }
-                            }
-                            aparams ~= pushedTy;
-                        }
-                    }
-
-                    // Runtime symbols (memcmp, __assert, etc.) are registered with a
-                    // generic empty type because rtlsym.d uses type_fake(TYnfunc). Fix
-                    // the import type from the actual call-site argument/return types.
-                    {
-                        const tym_t retTy2 = tybasic(e.Ety);
-                        ubyte[] aresults;
-                        if (retTy2 != TYvoid && retTy2 != TYnoreturn)
-                            aresults ~= wasmType(retTy2);
-                        wmod_fixImportType(fidx, aparams, aresults);
-                    }
-                    cg.emitCall(fidx, calleeSym);
-                    // Noreturn (SFLexit) functions leave the stack empty. Emit unreachable
-                    // so WASM's type checker accepts any type expectations after the call.
-                    if (calleeSym.Sflags & SFLexit)
-                        cg.emit(OP_UNREACHABLE);
-                }
-            }
-            else
-            {
-                // Gather args into a flat list in WASM call order (E2-first walk).
-                // Indirect calls have no callee Tparamtypes to consult, so the
-                // split decision and the signature both derive from arg shape:
-                // sliceShape() catches firmly slice-typed operands.
-                import dmd.backend.wasmobj : wmod_internType;
-
-                elem*[] indArgs;
-                void gatherInd(elem* p) nothrow
-                {
-                    if (!p)
-                        return;
-                    if (p.Eoper == OPparam)
-                    {
-                        gatherInd(p.E2);
-                        gatherInd(p.E1);
-                        return;
-                    }
-                    indArgs ~= p;
-                }
-
-                gatherInd(e.E2);
-
-                ubyte[] callParams;
-                foreach (a; indArgs)
-                {
-                    const bool split = sliceShape(a);
-                    genOneArg(cg, a, split);
-                    if (split)
-                    {
-                        callParams ~= WASM_I32;
-                        callParams ~= WASM_I32;
-                    }
-                    else
-                        callParams ~= wasmType(tybasic(a.Ety));
-                }
-                ubyte[] callResults;
-                {
-                    const tym_t retTy0 = tybasic(e.Ety);
-                    if (retTy0 != TYvoid && retTy0 != TYnoreturn)
-                        callResults ~= wasmType(retTy0);
-                }
-                uint typeIdx = wmod_internType(callParams, callResults);
-
-                elem* fexpr = e.E1;
-                Symbol* fpSym = null;
-                if (fexpr.Eoper == OPind && fexpr.E1 && fexpr.E1.Eoper == OPvar)
-                {
-                    // OPind(OPvar(fptr)) — fptr holds a table index.
-                    fpSym = fexpr.E1.Vsym;
-                    if (fpSym && isLocalSym(fpSym) && !cg.inShadow(fpSym))
-                    {
-                        const uint idx = cg.localFor(fpSym);
-                        cg.emitLocal(OP_LOCAL_GET, idx);
-                    }
-                    else
-                    {
-                        cg.genElem(fexpr.E1);
-                    }
-                }
-                else
-                {
-                    // Virtual dispatch / general function pointer.
-                    elem* fn = (fexpr.Eoper == OPind) ? fexpr.E1 : fexpr;
-                    cg.genElem(fn);
-                }
-                cg.emit(OP_CALL_INDIRECT);
-                cg.emitCallIndirectType(typeIdx);
-                cg.emitULEB(0); // table index 0
-            }
-            // Whether the call left a value on the WASM stack depends on the
-            // callee's WASM signature, not e.Ety. For direct calls to a function
-            // defined in this module, e.Ety can disagree with the function's
-            // actual return type (e.g. a void member call appearing in an
-            // OPcomma chain): trust the callee's Stype.Tnext.
-            const retTy = tybasic(e.Ety);
-            bool pushedValue = retTy != TYvoid && retTy != TYnoreturn;
-            if (e.E1.Eoper == OPvar && e.E1.Vsym && e.E1.Vsym.Stype && e.E1.Vsym.Stype.Tnext)
-            {
-                const tym_t calleeRet = tybasic(e.E1.Vsym.Stype.Tnext.Tty);
-                pushedValue = calleeRet != TYvoid && calleeRet != TYnoreturn;
-            }
-            return pushedValue;
-        }
 
     case OPcond:
         {
@@ -2001,40 +1787,6 @@ private bool paramIsSlice(const(param_t)* p)
     return tybasic(t.Tty) == TYullong && t.Tnext !is null && !isDelegateType(t);
 }
 
-// Slice-position bitmask (bit i = position i in source-declared order) for D
-// runtime support functions whose Symbol uses type_fake(TYnfunc) and has no
-// Tparamtypes. The direct-call site uses this table when paramIsSlice can't
-// answer (declParams empty) to decide whether to split an i64-shaped arg into
-// (len, ptr). All listed functions take a `string file` (slice) as their first
-// non-message parameter; the `_msg` variants prepend a `string msg`.
-private uint rtlSliceParamMask(const(char)* name)
-{
-    import core.stdc.string : strcmp;
-
-    if (!name)
-        return 0;
-    static immutable struct Entry
-    {
-        string name;
-        uint mask;
-    }
-
-    static immutable Entry[] table = [
-        Entry("_d_assertp", 0b1),
-        Entry("_d_unittestp", 0b1),
-        Entry("_d_arrayboundsp", 0b1),
-        Entry("_d_arraybounds_slicep", 0b1),
-        Entry("_d_arraybounds_indexp", 0b1),
-        Entry("_d_nullpointerp", 0b1),
-        Entry("_d_assert_msg", 0b11),
-        Entry("_d_unittest_msg", 0b11),
-    ];
-    foreach (ref e; table)
-        if (strcmp(name, e.name.ptr) == 0)
-            return e.mask;
-    return 0;
-}
-
 // Conservative slice signal for call_indirect, where the callee type is not
 // available — we can only inspect the arg elem. A function pointer's symbol
 // type doesn't carry param info, so the indirect-call signature is derived
@@ -2149,28 +1901,6 @@ private bool emitAggregateArgAsPointer(ref WasmCG cg, elem* a)
         return true;
     }
     return false;
-}
-
-// Emit a single function argument. When `split` is true the value is treated
-// as a packed D slice (TYdarray on WASM32 = TYullong i64 with len in low 32 / ptr in
-// high 32) and decomposed into two i32 params (lo=len, hi=ptr) to match the
-// WASM32/LDC2 ABI. The decision to split is taken by the caller from the
-// callee's declared param types — there is no per-elem detection here.
-private void genOneArg(ref WasmCG cg, elem* e, bool split = false)
-{
-    cg.genElem(e);
-    if (split)
-    {
-        uint tmp = cg.allocTemp(WASM_I64);
-        cg.emit(OP_LOCAL_SET);
-        cg.emitULEB(tmp);
-        cg.emitLocal(OP_LOCAL_GET, tmp);
-        cg.emit(OP_I32_WRAP_I64); // lo = len (low 32 bits)
-        cg.emitLocal(OP_LOCAL_GET, tmp);
-        cg.emitConst(OP_I64_CONST, 32);
-        cg.emit(OP_I64_SHR_U);
-        cg.emit(OP_I32_WRAP_I64); // hi = ptr (high 32 bits)
-    }
 }
 
 // Pick the WASM opcode variant matching the IR operand's numeric kind.
@@ -2938,26 +2668,10 @@ void wasm_codgen(Symbol* sfunc, bool relocatable)
 
     foreach (s; globsym[])
     {
-        if (s.Sclass == SC.parameter || s.Sclass == SC.fastpar ||
-            s.Sclass == SC.regpar || s.Sclass == SC.shadowreg)
+        if (s.isParameter)
         {
             // D slice: TYdarray == TYullong on WASM32; identified by s.Stype.Tnext.
-            const tym_t pty = tybasic(s.ty());
-            if (pty == TYullong && s.Stype && s.Stype.Tnext)
-            {
-                SplitParam sp;
-                sp.sym = s;
-                sp.loIdx = cast(uint) cg.locals.length; // len param (i32)
-                sp.hiIdx = sp.loIdx + 1; // ptr param (i32)
-                sp.i64Idx = uint.max;
-                splitParams ~= sp;
-                cg.locals ~= WasmLocal(null, WASM_I32); // lo
-                cg.locals ~= WasmLocal(null, WASM_I32); // hi
-            }
-            else
-            {
-                cg.locals ~= WasmLocal(s, s.ty().wasmType);
-            }
+            cg.locals ~= WasmLocal(s, s.ty().wasmType);
         }
     }
     cg.numParams = cast(uint) cg.locals.length;
@@ -2970,19 +2684,6 @@ void wasm_codgen(Symbol* sfunc, bool relocatable)
         i64l.sym = sp.sym;
         i64l.ty = WASM_I64;
         cg.locals ~= i64l;
-    }
-    foreach (ref sp; splitParams)
-    {
-        // i64 = (ptr << 32) | len  (D slice layout: lo32=len, hi32=ptr)
-        cg.emitLocal(OP_LOCAL_GET, sp.hiIdx); // ptr
-        cg.emit(OP_I64_EXTEND_I32_U);
-        cg.emitConst(OP_I64_CONST, 32);
-        cg.emit(OP_I64_SHL);
-        cg.emitLocal(OP_LOCAL_GET, sp.loIdx); // len
-        cg.emit(OP_I64_EXTEND_I32_U);
-        cg.emit(OP_I64_OR);
-        cg.emit(OP_LOCAL_SET);
-        cg.emitULEB(sp.i64Idx);
     }
 
     // Then non-parameter locals. Aggregates (structs/arrays) can't live in
@@ -3020,60 +2721,6 @@ void wasm_codgen(Symbol* sfunc, bool relocatable)
     {
         cg.hasShadowFrame = true;
         emitShadowPrologue(cg);
-
-        // Spill address-taken parameters from their WASM locals into their
-        // shadow-frame slots. Without this, taking the address of a param
-        // (e.g. passing a slice arg by ref to another function) yields a
-        // valid address but the memory at that address is uninitialized.
-        foreach (s; cg.shadowEntries)
-        {
-            if (s.Sclass != SC.parameter && s.Sclass != SC.fastpar &&
-                s.Sclass != SC.regpar && s.Sclass != SC.shadowreg)
-                continue;
-            const tym_t pty = tybasic(s.ty());
-            if (pty == TYstruct || pty == TYarray)
-                continue; // aggregate params are already pointers
-            // Slice param: store the reconstructed i64 value.
-            if (pty == TYullong && s.Stype && s.Stype.Tnext)
-            {
-                uint i64Idx = uint.max;
-                foreach (ref const sp; splitParams)
-                    if (sp.sym is s)
-                    {
-                        i64Idx = sp.i64Idx;
-                        break;
-                    }
-                if (i64Idx == uint.max)
-                    continue;
-                cg.emitLocal(OP_LOCAL_GET, cg.shadowBaseLocal);
-                if (s.Soffset != 0)
-                {
-                    cg.emitConst(OP_I32_CONST, cast(int) s.Soffset);
-                    cg.emit(OP_I32_ADD);
-                }
-                cg.emitLocal(OP_LOCAL_GET, i64Idx);
-                cg.emitStore(TYullong);
-                continue;
-            }
-            // Scalar param: find its WASM local index and store.
-            uint localIdx = uint.max;
-            foreach (i, ref const l; cg.locals)
-                if (l.sym is s)
-                {
-                    localIdx = cast(uint) i;
-                    break;
-                }
-            if (localIdx == uint.max)
-                continue;
-            cg.emitLocal(OP_LOCAL_GET, cg.shadowBaseLocal);
-            if (s.Soffset != 0)
-            {
-                cg.emitConst(OP_I32_CONST, cast(int) s.Soffset);
-                cg.emit(OP_I32_ADD);
-            }
-            cg.emitLocal(OP_LOCAL_GET, localIdx);
-            cg.emitStore(s.ty());
-        }
     }
 
     // Generate code from the block CFG
@@ -3099,4 +2746,41 @@ void wasm_codgen(Symbol* sfunc, bool relocatable)
     fb.dataAddrRelocs = cg.dataAddrRelocs;
     fb.code.reset();
     fb.code.write(cg.code.peekSlice());
+}
+
+void spillParamsToShadow(ref WasmCG cg)
+{
+    // Spill address-taken parameters from their WASM locals into their
+    // shadow-frame slots. Without this, taking the address of a param
+    // (e.g. passing a slice arg by ref to another function) yields a
+    // valid address but the memory at that address is uninitialized.
+    foreach (s; cg.shadowEntries)
+    {
+        if (!s.isParameter)
+            continue;
+
+        const tym_t pty = tybasic(s.ty());
+
+        if (pty == TYstruct || pty == TYarray)
+            continue; // aggregate params are already pointers
+
+        // Scalar param: find its WASM local index and store.
+        uint localIdx = uint.max;
+        foreach (i, ref const l; cg.locals)
+            if (l.sym is s)
+            {
+                localIdx = cast(uint) i;
+                break;
+            }
+        if (localIdx == uint.max)
+            continue;
+        cg.emitLocal(OP_LOCAL_GET, cg.shadowBaseLocal);
+        if (s.Soffset != 0)
+        {
+            cg.emitConst(OP_I32_CONST, cast(int) s.Soffset);
+            cg.emit(OP_I32_ADD);
+        }
+        cg.emitLocal(OP_LOCAL_GET, localIdx);
+        cg.emitStore(s.ty());
+    }
 }
