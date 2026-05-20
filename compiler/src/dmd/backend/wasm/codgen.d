@@ -147,20 +147,11 @@ nothrow:
     {
         if (inShadow(s))
             return;
-        // Compute size and alignment for the type.
-        uint sz = 4;
-        uint al = 4;
-        if (s.Stype)
-        {
-            import dmd.backend.type : type_size, type_alignsize;
 
-            const targ_size_t ts = type_size(s.Stype);
-            if (ts != targ_size_t.max && ts > 0)
-                sz = cast(uint) ts;
-            const uint ta = type_alignsize(s.Stype);
-            if (ta > 0 && ta <= 16)
-                al = ta;
-        }
+        assert(s.Stype);
+        import dmd.backend.type : type_size, type_alignsize;
+        const uint sz = cast(uint) type_size(s.Stype);
+        const uint al = type_alignsize(s.Stype);
         const uint off = (shadowFrameSize + al - 1) & ~(al - 1);
         s.Soffset = off;
         shadowEntries ~= s;
