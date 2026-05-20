@@ -544,68 +544,6 @@ private void emitShadowEpilogue(ref WasmCG cg)
     cg.emitULEB(spIdx);
 }
 
-// Emit byte-swap for an i32 value on top of the wasm stack.
-// Result: 0xAABBCCDD → 0xDDCCBBAA
-private void emitBswap32(ref WasmCG cg)
-{
-    uint t = cg.allocTemp(WASM_I32);
-    cg.emitLocal(OP_LOCAL_TEE, t); // save v
-
-    cg.emitConst(OP_I32_CONST, 24);
-    cg.emit(OP_I32_SHR_U); // v >> 24
-
-    cg.emitLocal(OP_LOCAL_GET, t);
-    cg.emitConst(OP_I32_CONST, 8);
-    cg.emit(OP_I32_SHR_U);
-    cg.emitConst(OP_I32_CONST, 0x0000_FF00);
-    cg.emit(OP_I32_AND); // (v >> 8) & 0xFF00
-    cg.emit(OP_I32_OR);
-
-    cg.emitLocal(OP_LOCAL_GET, t);
-    cg.emitConst(OP_I32_CONST, 8);
-    cg.emit(OP_I32_SHL);
-    cg.emitConst(OP_I32_CONST, 0x00FF_0000);
-    cg.emit(OP_I32_AND); // (v << 8) & 0xFF0000
-    cg.emit(OP_I32_OR);
-
-    cg.emitLocal(OP_LOCAL_GET, t);
-    cg.emitConst(OP_I32_CONST, 24);
-    cg.emit(OP_I32_SHL); // v << 24
-    cg.emit(OP_I32_OR);
-}
-
-// Emit byte-swap for an i64 value on top of the wasm stack.
-// Strategy: split into lo/hi i32 halves, bswap each, then swap halves.
-private void emitBswap64(ref WasmCG cg)
-{
-    uint t = cg.allocTemp(WASM_I64);
-    uint lo = cg.allocTemp(WASM_I32);
-    uint hi = cg.allocTemp(WASM_I32);
-    cg.emitLocal(OP_LOCAL_TEE, t);
-
-    // lo = bswap32((uint)(v))
-    cg.emit(OP_I32_WRAP_I64);
-    emitBswap32(cg);
-    cg.emitLocal(OP_LOCAL_SET, lo);
-
-    // hi = bswap32((uint)(v >> 32))
-    cg.emitLocal(OP_LOCAL_GET, t);
-    cg.emitConst(OP_I64_CONST, 32);
-    cg.emit(OP_I64_SHR_U);
-    cg.emit(OP_I32_WRAP_I64);
-    emitBswap32(cg);
-    cg.emitLocal(OP_LOCAL_SET, hi);
-
-    // result = ((i64)lo << 32) | (i64)hi
-    cg.emitLocal(OP_LOCAL_GET, lo);
-    cg.emit(OP_I64_EXTEND_I32_U);
-    cg.emitConst(OP_I64_CONST, 32);
-    cg.emit(OP_I64_SHL);
-    cg.emitLocal(OP_LOCAL_GET, hi);
-    cg.emit(OP_I64_EXTEND_I32_U);
-    cg.emit(OP_I64_OR);
-}
-
 /// Mask result of small integer operation, since WASM operations are at least 32-bit
 /// For a 16-bit or 8-bit type `ty`, generate code to truncate to that size
 private void maskSmallInt(ref WasmCG cg, tym_t ty)
@@ -929,6 +867,13 @@ private bool genCall(ref WasmCG cg, elem* e)
 }
 
 /// Returns: true if the expression has a result on the stack after genElem
+private bool genElem(ref WasmCG cg, elem* e, WASM_TYPE type)
+{
+    const result = cg.genElem(e);
+    emitCoerce(cg, wasmType(e.Ety), wasmType(e.Ety));
+    return result;
+}
+
 private bool genElem(ref WasmCG cg, elem* e)
 {
     if (!e)
@@ -999,6 +944,7 @@ private bool genElem(ref WasmCG cg, elem* e)
 
             const uint idx = cg.localFor(s);
             cg.emitLocal(OP_LOCAL_GET, idx);
+
             // Struct/array params: WASM local holds a pointer to the struct in the
             // caller's memory. For primitive field access, load through the pointer.
             if (isStructByRefParam(s))
@@ -1197,8 +1143,7 @@ private bool genElem(ref WasmCG cg, elem* e)
                     cg.emitDataAddr(s, addend);
                     cg.emitDataAddr(s, addend);
                     cg.emitLoad(e.E1.Ety);
-                    cg.genElem(e.E2);
-                    emitCoerce(cg, wasmType(e.E2.Ety), wasmType(e.Ety));
+                    cg.genElem(e.E2, wasmType(e.Ety));
                     cg.emitBinop(compoundToBinop(op), e.Ety);
                     cg.emitStore(e.E1.Ety);
                     cg.emitDataAddr(s, addend);
@@ -1210,8 +1155,7 @@ private bool genElem(ref WasmCG cg, elem* e)
                 {
                     cg.emitShadowAddr(s);
                     cg.emitLoad(e.E1.Ety);
-                    cg.genElem(e.E2);
-                    emitCoerce(cg, wasmType(e.E2.Ety), wasmType(e.Ety));
+                    cg.genElem(e.E2, wasmType(e.Ety));
                     cg.emitBinop(compoundToBinop(op), e.Ety);
                     // Stash result, then push [addr, value] in store order.
                     uint valTmp2 = cg.allocTemp(wasmType(e.Ety));
@@ -1226,8 +1170,7 @@ private bool genElem(ref WasmCG cg, elem* e)
                 }
                 const uint idx = cg.localFor(s);
                 cg.emitLocal(OP_LOCAL_GET, idx);
-                cg.genElem(e.E2);
-                emitCoerce(cg, wasmType(e.E2.Ety), wasmType(e.Ety));
+                cg.genElem(e.E2, wasmType(e.Ety));
                 cg.emitBinop(compoundToBinop(op), e.Ety);
                 // Mask for narrow types (ubyte, ushort, etc.) to preserve wrapping.
                 cg.maskSmallInt(e.E1.Ety);
@@ -1246,8 +1189,7 @@ private bool genElem(ref WasmCG cg, elem* e)
                 cg.emit(OP_LOCAL_TEE);
                 cg.emitULEB(tmp);
                 cg.emitLoad(e.E1.Ety);
-                cg.genElem(e.E2);
-                emitCoerce(cg, wasmType(e.E2.Ety), wasmType(e.Ety));
+                cg.genElem(e.E2, wasmType(e.Ety));
                 cg.emitBinop(compoundToBinop(op), e.Ety);
                 // Now: result on stack. Store then reload.
                 // We need addr again: local.get tmp; swap; store; local.get tmp; load
@@ -1278,10 +1220,8 @@ private bool genElem(ref WasmCG cg, elem* e)
     case OPashr:
         {
             const rty = wasmType(e.Ety);
-            cg.genElem(e.E1);
-            emitCoerce(cg, wasmType(e.E1.Ety), rty);
-            cg.genElem(e.E2);
-            emitCoerce(cg, wasmType(e.E2.Ety), rty);
+            cg.genElem(e.E1, rty);
+            cg.genElem(e.E2, rty);
             cg.emitBinop(op, e.Ety);
             return true;
         }
@@ -1293,8 +1233,7 @@ private bool genElem(ref WasmCG cg, elem* e)
     case OPgt:
     case OPge:
         cg.genElem(e.E1);
-        cg.genElem(e.E2);
-        emitCoerce(cg, wasmType(e.E2.Ety), wasmType(e.E1.Ety));
+        cg.genElem(e.E2, wasmType(e.E1.Ety));
         emitRelop(cg, op, e.E1.Ety);
         return true;
 
@@ -1572,15 +1511,12 @@ private bool genElem(ref WasmCG cg, elem* e)
             cg.emitULEB(dstTmp); // stack: dst
             if (e.E2 && e.E2.Eoper == OPparam)
             {
-                cg.genElem(e.E2.E2); // src
-                emitCoerce(cg, wasmType(e.E2.E2.Ety), WASM_I32);
-                cg.genElem(e.E2.E1); // count
-                emitCoerce(cg, wasmType(e.E2.E1.Ety), WASM_I32);
+                cg.genElem(e.E2.E2, WASM_I32); // src
+                cg.genElem(e.E2.E1, WASM_I32); // count
             }
             else if (e.E2)
             {
-                cg.genElem(e.E2); // src
-                emitCoerce(cg, wasmType(e.E2.Ety), WASM_I32);
+                cg.genElem(e.E2, WASM_I32); // src
                 cg.emitConst(OP_I32_CONST, 0); // count = 0
             }
             else
@@ -1602,10 +1538,8 @@ private bool genElem(ref WasmCG cg, elem* e)
             cg.emitULEB(dstTmp); // stack: dst
             if (e.E2 && e.E2.Eoper == OPparam)
             {
-                cg.genElem(e.E2.E2); // val
-                emitCoerce(cg, wasmType(e.E2.E2.Ety), WASM_I32);
-                cg.genElem(e.E2.E1); // count
-                emitCoerce(cg, wasmType(e.E2.E1.Ety), WASM_I32);
+                cg.genElem(e.E2.E2, WASM_I32); // val
+                cg.genElem(e.E2.E1, WASM_I32); // count
             }
             else
             {
@@ -1681,7 +1615,72 @@ private bool genElem(ref WasmCG cg, elem* e)
     }
 }
 
-// Get the address of an lvalue expression (OPind → its pointer; OPvar in shadow → shadow addr; else genElem).
+// Emit byte-swap for an i32 value on top of the wasm stack.
+// Result: 0xAABBCCDD → 0xDDCCBBAA
+private void emitBswap32(ref WasmCG cg)
+{
+    uint t = cg.allocTemp(WASM_I32);
+    cg.emitLocal(OP_LOCAL_TEE, t); // save v
+
+    cg.emitConst(OP_I32_CONST, 24);
+    cg.emit(OP_I32_SHR_U); // v >> 24
+
+    cg.emitLocal(OP_LOCAL_GET, t);
+    cg.emitConst(OP_I32_CONST, 8);
+    cg.emit(OP_I32_SHR_U);
+    cg.emitConst(OP_I32_CONST, 0x0000_FF00);
+    cg.emit(OP_I32_AND); // (v >> 8) & 0xFF00
+    cg.emit(OP_I32_OR);
+
+    cg.emitLocal(OP_LOCAL_GET, t);
+    cg.emitConst(OP_I32_CONST, 8);
+    cg.emit(OP_I32_SHL);
+    cg.emitConst(OP_I32_CONST, 0x00FF_0000);
+    cg.emit(OP_I32_AND); // (v << 8) & 0xFF0000
+    cg.emit(OP_I32_OR);
+
+    cg.emitLocal(OP_LOCAL_GET, t);
+    cg.emitConst(OP_I32_CONST, 24);
+    cg.emit(OP_I32_SHL); // v << 24
+    cg.emit(OP_I32_OR);
+}
+
+// Emit byte-swap for an i64 value on top of the wasm stack.
+// Strategy: split into lo/hi i32 halves, bswap each, then swap halves.
+private void emitBswap64(ref WasmCG cg)
+{
+    uint t = cg.allocTemp(WASM_I64);
+    uint lo = cg.allocTemp(WASM_I32);
+    uint hi = cg.allocTemp(WASM_I32);
+    cg.emitLocal(OP_LOCAL_TEE, t);
+
+    // lo = bswap32((uint)(v))
+    cg.emit(OP_I32_WRAP_I64);
+    emitBswap32(cg);
+    cg.emitLocal(OP_LOCAL_SET, lo);
+
+    // hi = bswap32((uint)(v >> 32))
+    cg.emitLocal(OP_LOCAL_GET, t);
+    cg.emitConst(OP_I64_CONST, 32);
+    cg.emit(OP_I64_SHR_U);
+    cg.emit(OP_I32_WRAP_I64);
+    emitBswap32(cg);
+    cg.emitLocal(OP_LOCAL_SET, hi);
+
+    // result = ((i64)lo << 32) | (i64)hi
+    cg.emitLocal(OP_LOCAL_GET, lo);
+    cg.emit(OP_I64_EXTEND_I32_U);
+    cg.emitConst(OP_I64_CONST, 32);
+    cg.emit(OP_I64_SHL);
+    cg.emitLocal(OP_LOCAL_GET, hi);
+    cg.emit(OP_I64_EXTEND_I32_U);
+    cg.emit(OP_I64_OR);
+}
+
+// Get the address of an lvalue expression
+// OPind → its pointer;
+// OPvar in shadow → shadow addr;
+// else genElem
 private void genElemAddr(ref WasmCG cg, elem* e)
 {
     if (!e)

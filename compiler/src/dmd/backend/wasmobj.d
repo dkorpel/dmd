@@ -458,10 +458,6 @@ private WasmFuncType buildFuncType(type* t, Symbol* sfunc)
     return ft;
 }
 
-// ---------------------------------------------------------------------------
-// Section writers
-// ---------------------------------------------------------------------------
-
 private void writeSection(ref OutBuffer out_, WASM_SECTION id, OutBuffer* payload)
 {
     out_.writeByte(cast(ubyte) id);
