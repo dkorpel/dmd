@@ -33,6 +33,12 @@ import dmd.common.outbuffer;
 
 nothrow:
 
+/// Returns: WASM type for element `e`
+WASM_TYPE wasmType(elem* e)
+{
+    return wasmType(tybasic(e.Ety));
+}
+
 /// Returns: WASM type for backend `ty`
 WASM_TYPE wasmType(tym_t ty)
 {
@@ -895,7 +901,7 @@ private bool genElem(ref WasmCG cg, elem* e)
     {
     case OPconst:
         {
-            switch (tybasic(e.Ety).wasmType)
+            switch (e.wasmType)
             {
             case WASM_I64:
                 cg.emitConst(OP_I64_CONST, e.Vllong);
@@ -1238,7 +1244,7 @@ private bool genElem(ref WasmCG cg, elem* e)
         return true;
 
     case OPneg:
-        switch (tybasic(e.Ety).wasmType)
+        switch (e.wasmType)
         {
         case WASM_F32: return unaryOp(OP_F32_NEG);
         case WASM_F64: return unaryOp(OP_F64_NEG);
@@ -1264,7 +1270,7 @@ private bool genElem(ref WasmCG cg, elem* e)
 
     case OPcom:
         // ~x = x ^ 0xFFFFFFFF
-        switch (tybasic(e.Ety).wasmType)
+        switch (e.wasmType)
         {
         case WASM_I64:
             cg.genElem(e.E1);
@@ -1426,41 +1432,6 @@ private bool genElem(ref WasmCG cg, elem* e)
         cg.emitConst(OP_I32_CONST, cast(int) e.Vlong);
         return true;
 
-    case OPpostinc:
-    case OPpostdec:
-        {
-            if (e.E1.Eoper == OPvar)
-            {
-                const uint idx = cg.localFor(e.E1.Vsym);
-                cg.emitLocal(OP_LOCAL_GET, idx); // old value (result)
-                cg.emitLocal(OP_LOCAL_GET, idx);
-                cg.genElem(e.E2);
-                cg.emitBinop(op == OPpostinc ? OPadd : OPmin, e.Ety);
-                cg.emit(OP_LOCAL_SET);
-                cg.emitULEB(idx);
-                return true;
-            }
-            cg.genElem(e.E1);
-            return true;
-        }
-
-    case OPpreinc:
-    case OPpredec:
-        {
-            if (e.E1.Eoper == OPvar)
-            {
-                const uint idx = cg.localFor(e.E1.Vsym);
-                cg.emitLocal(OP_LOCAL_GET, idx);
-                cg.genElem(e.E2);
-                cg.emitBinop(op == OPpreinc ? OPadd : OPmin, e.Ety);
-                cg.emit(OP_LOCAL_TEE);
-                cg.emitULEB(idx);
-                return true;
-            }
-            cg.genElem(e.E1);
-            return true;
-        }
-
     case OPpair:
     case OPrpair:
         assert(0);
@@ -1551,56 +1522,56 @@ private bool genElem(ref WasmCG cg, elem* e)
             return true;
         }
 
+    // bit scan forward = count trailing zeros; result is always i32
     case OPbsf:
+        switch (e.wasmType)
         {
-            // bit scan forward = count trailing zeros; result is always i32
-            const ty = tybasic(e.E1.Ety).wasmType;
-            cg.genElem(e.E1);
-            if (ty == WASM_I64)
-            {
+            case WASM_I64:
+                cg.genElem(e.E1);
                 cg.emit(OP_I64_CTZ);
                 cg.emit(OP_I32_WRAP_I64);
-            }
-            else
+                return true;
+            case WASM_I32:
+                cg.genElem(e.E1);
                 cg.emit(OP_I32_CTZ);
-            return true;
+                return true;
+            default:
+                assert(0);
         }
 
     case OPbsr:
+        switch (e.wasmType)
         {
-            // bit scan reverse = (width-1) - clz; result is always i32
-            const ty = tybasic(e.E1.Ety).wasmType;
-            if (ty == WASM_I64)
-            {
+            case WASM_I64:
                 cg.emitConst(OP_I64_CONST, 63);
                 cg.genElem(e.E1);
                 cg.emit(OP_I64_CLZ);
                 cg.emit(OP_I64_SUB);
                 cg.emit(OP_I32_WRAP_I64);
-            }
-            else
-            {
+                return true;
+            case WASM_I32:
                 cg.emitConst(OP_I32_CONST, 31);
                 cg.genElem(e.E1);
                 cg.emit(OP_I32_CLZ);
                 cg.emit(OP_I32_SUB);
-            }
-            return true;
+                return true;
+            default:
+                assert(0);
         }
 
     case OPpopcnt:
         {
-            // result matches input width (int for uint, long for ulong)
-            const ty = tybasic(e.E1.Ety).wasmType;
             cg.genElem(e.E1);
+            const ty = e.wasmType;
             cg.emit(ty == WASM_I64 ? OP_I64_POPCNT : OP_I32_POPCNT);
+            // result matches input width (int for uint, long for ulong)
             return true;
         }
 
     case OPbswap:
         {
             // No native WASM bswap; implement with shifts.
-            const ty = tybasic(e.E1.Ety).wasmType;
+            const ty = e.wasmType;
             cg.genElem(e.E1);
             if (ty == WASM_I64)
                 emitBswap64(cg);
@@ -1611,6 +1582,8 @@ private bool genElem(ref WasmCG cg, elem* e)
 
     default:
         cg.emit(OP_UNREACHABLE);
+        elem_print(e);
+        assert(0);
         return tybasic(e.Ety) != TYvoid;
     }
 }
