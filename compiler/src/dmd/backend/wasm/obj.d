@@ -154,11 +154,11 @@ private void writeCustomSection(ref OutBuffer out_, const(char)[] name, OutBuffe
     out_.write(payload.peekSlice());
 }
 
-// WASM function type: params and result
+/// WASM function type
 struct WasmFuncType
 {
-    ubyte[] params; // value types of parameters
-    ubyte[] results; // value types of return values (0 or 1 for MVP)
+    WASM_TYPE[] params; // value types of parameters
+    WASM_TYPE[] results; // value types of return values (usually 0 or 1 unless the 'multiple values' extension is implemented)
 }
 
 // Recorded function definition
@@ -376,10 +376,12 @@ void WasmObj_registerImportModule(const(char)[] mangledName, const(char)[] modul
 
 // Returns true if the backend type is an aggregate (struct/array) that must be
 // returned via a hidden pointer parameter in the WASM calling convention.
-private bool isAggregateType(type* t)
+private bool returnByPtr(type* t)
 {
-    if (!t)
-        return false;
+    assert(t);
+    if (t.Tty == TYdarray || t.Tty == TYdelegate)
+        return true;
+
     switch (tybasic(t.Tty))
     {
     case TYstruct:
@@ -398,7 +400,7 @@ private WasmFuncType buildFuncType(type* t, Symbol* sfunc)
 
     // Check for aggregate return: requires a hidden pointer as the first parameter.
     type* ret = t.Tnext;
-    const bool hiddenPtr = isAggregateType(ret);
+    const bool hiddenPtr = returnByPtr(ret);
     if (hiddenPtr)
         ft.params ~= WASM_I32; // hidden return pointer (first param)
 
@@ -415,20 +417,23 @@ private WasmFuncType buildFuncType(type* t, Symbol* sfunc)
 
     for (param_t* p = t.Tparamtypes; p; p = p.Pnext)
     {
-        if (p.Ptype && tybasic(p.Ptype.Tty) != TYvoid)
+        if (!p.Ptype)
+            continue;
+
+        if (tybasic(p.Ptype.Tty) == TYvoid)
+            continue;
+
+        const tym_t pty = tybasic(p.Ptype.Tty);
+        // TYdarray (D slice) == TYullong on WASM32; Tnext holds the element type.
+        // Split into two i32 WASM params: (size_t len, T* ptr).
+        if (p.Ptype.Tty == TYdarray || p.Ptype.Tty == TYdelegate) //
         {
-            const tym_t pty = tybasic(p.Ptype.Tty);
-            // TYdarray (D slice) == TYullong on WASM32; Tnext holds the element type.
-            // Split into two i32 WASM params: (size_t len, T* ptr).
-            if (pty == TYullong && p.Ptype.Tnext)
-            {
-                ft.params ~= WASM_I32;
-                ft.params ~= WASM_I32;
-            }
-            else
-            {
-                ft.params ~= wasmType(pty);
-            }
+            ft.params ~= WASM_I32;
+            ft.params ~= WASM_I32;
+        }
+        else
+        {
+            ft.params ~= wasmType(pty);
         }
     }
 
@@ -484,7 +489,7 @@ private bool emitTypeSection(ref OutBuffer out_, ref WasmModule wmod)
 /// Returns: true if section was actually written
 private bool emitImportSection(ref OutBuffer out_, ref WasmModule wmod)
 {
-    uint count = wmod.numImports + (wmod.importFuncTable ? 1 : 0);
+    const count = wmod.numImports + (wmod.importFuncTable ? 1 : 0);
     if (!count)
         return false;
     OutBuffer* s = &wmod.scratch;
@@ -514,7 +519,7 @@ private bool emitImportSection(ref OutBuffer out_, ref WasmModule wmod)
 /// Returns: true if section was actually written
 private bool emitFunctionSection(ref OutBuffer out_, ref WasmModule wmod)
 {
-    uint defined = cast(uint)(wmod.funcs.length - wmod.numImports);
+    const defined = cast(uint)(wmod.funcs.length - wmod.numImports);
     if (!defined)
         return false;
     OutBuffer* s = &wmod.scratch;
@@ -532,7 +537,7 @@ private bool emitTableSection(ref OutBuffer out_, ref WasmModule wmod)
 {
     if (wmod.importFuncTable)
         return false; // table is imported, not defined here
-    uint defined = cast(uint)(wmod.funcs.length - wmod.numImports);
+    const defined = cast(uint)(wmod.funcs.length - wmod.numImports);
     if (!defined)
         return false;
     OutBuffer* s = &wmod.scratch;
@@ -1758,14 +1763,10 @@ Symbol* wmod_funcs(size_t i)
 
 // Intern a WASM function type given explicit param and result byte arrays.
 // Used by codgen.d to compute typeIdx for virtual call_indirect.
-uint wmod_internType(ubyte[] params, ubyte[] results)
+uint wmod_internType(WASM_TYPE[] params, WASM_TYPE[] results)
 {
     assert(wmod);
-
-    WasmFuncType ft;
-    ft.params = params;
-    ft.results = results;
-    return wmod.internType(ft);
+    return wmod.internType(WasmFuncType(params, results));
 }
 
 // Find the function index of a named function whose WASM type matches typeIdx.
@@ -1817,7 +1818,7 @@ void wmod_recordDataAddrReloc(uint codeOffset, Symbol* sym, uint addend)
 // Returns the combined function index (numImports + body position).
 // After calling, the caller must write code into wasmFuncBodies[$-1].code.
 uint wmod_addDefinedFunc(string name, WasmLocal[] locals, uint numParams,
-    ubyte[] params, ubyte[] results)
+    WASM_TYPE[] params, WASM_TYPE[] results)
 {
     WasmFuncType ft;
     ft.params = params.dup;
