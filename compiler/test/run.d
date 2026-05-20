@@ -86,7 +86,7 @@ int main(string[] args)
 int tryMain(string[] args)
 {
     bool runUnitTests, dumpEnvironment;
-    int jobs = 2 * totalCPUs;
+    int jobs = 4; // 2 * totalCPUs;
     auto res = getopt(args,
         std.getopt.config.passThrough,
         "j|jobs", "Specifies the number of jobs (commands) to run simultaneously (default: %d)".format(jobs), &jobs,
