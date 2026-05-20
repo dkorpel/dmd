@@ -214,14 +214,14 @@ struct WasmFuncBody
     struct CodeReloc
     {
         uint offset; // byte offset within code buffer (before the 5-byte ULEB)
-        ubyte type; // R_WASM_FUNCTION_INDEX_LEB, R_WASM_TYPE_INDEX_LEB, etc.
+        ubyte type; // R_WASM.FUNCTION_INDEX_LEB, R_WASM.TYPE_INDEX_LEB, etc.
         uint symIdx; // funcIdx snapshot at emit time (resolved via funcToSymIdx, or via sym at term time)
-        uint addend; // for R_WASM_MEMORY_ADDR_LEB: offset within the segment
+        uint addend; // for R_WASM.MEMORY_ADDR_LEB: offset within the segment
         Symbol* sym; // preferred: Symbol* whose current funcIdx is looked up at term time
         // (decouples from wmod.funcs reordering during late codegen)
     }
 
-    // Data-address code relocations: R_WASM_MEMORY_ADDR_LEB entries.
+    // Data-address code relocations: R_WASM.MEMORY_ADDR_LEB entries.
     // sym is the D Symbol whose data segment is referenced; addend is the
     // byte offset from sym.Soffset (usually e.Voffset).
     struct DataAddrReloc
@@ -557,7 +557,7 @@ private bool emitTableSection(ref OutBuffer out_, ref WasmModule wmod)
 }
 
 // Emit an element section populating table[0] with all defined function indices.
-// Uses 5-byte padded ULEB128 for each function index to support R_WASM_FUNCTION_INDEX_LEB
+// Uses 5-byte padded ULEB128 for each function index to support R_WASM.FUNCTION_INDEX_LEB
 // relocations (stored in the "reloc.ELEM" section so wasm-ld can patch them).
 // After writing, elemFuncRelocOffsets contains the reloc payload offsets of each entry.
 private bool emitElementSection(ref OutBuffer out_, ref WasmModule wmod)
@@ -783,41 +783,41 @@ private bool emitLinkingSection(ref OutBuffer out_, ref WasmModule wmod)
         if (isShadowedFunc(i))
             continue; // canonical twin owns the symbol-table entry
 
-        symtab.writeByte(WASM_SYMTAB_FUNCTION);
+        symtab.writeByte(WASM_SYMTAB.FUNCTION);
 
         // For UNDEFINED (import) symbols the name comes from the import
         // section; do NOT include a name field in the symbol table entry.
         // For defined symbols, provide an explicit name. Use global binding
-        // (no WASM_SYM_BINDING_LOCAL) so wasm-ld accepts these symbols as
-        // targets for R_WASM_TYPE_INDEX_LEB relocations.
+        // (no WASM_SYM.BINDING_LOCAL) so wasm-ld accepts these symbols as
+        // targets for R_WASM.TYPE_INDEX_LEB relocations.
         uint flags;
         if (f.isImport)
         {
-            flags = WASM_SYM_UNDEFINED;
+            flags = WASM_SYM.UNDEFINED;
         }
         else
         {
-            flags = WASM_SYM_EXPLICIT_NAME;
+            flags = WASM_SYM.EXPLICIT_NAME;
             if (f.exported)
-                flags |= WASM_SYM_EXPORTED;
+                flags |= WASM_SYM.EXPORTED;
             // Defined non-exported functions: global binding by default
-            // (omit WASM_SYM_BINDING_LOCAL so wasm-ld can use them for type relocs)
+            // (omit WASM_SYM.BINDING_LOCAL so wasm-ld can use them for type relocs)
         }
 
         symtab.writeuLEB128(flags);
         symtab.writeuLEB128(cast(uint) i); // function index
-        if (flags & WASM_SYM_EXPLICIT_NAME)
+        if (flags & WASM_SYM.EXPLICIT_NAME)
             appendName(symtab, name); // only for defined symbols
     }
 
-    // Add WASM_SYMTAB_DATA entries for all globally-referenced data symbols.
-    // These are needed so R_WASM_MEMORY_ADDR_LEB relocations in reloc.CODE can
+    // Add WASM_SYMTAB.DATA entries for all globally-referenced data symbols.
+    // These are needed so R_WASM.MEMORY_ADDR_LEB relocations in reloc.CODE can
     // reference them by symbol index for wasm-ld to patch after data relocation.
     foreach (Symbol* sym; datasymsForLinking)
     {
-        symtab.writeByte(WASM_SYMTAB_DATA);
+        symtab.writeByte(WASM_SYMTAB.DATA);
         // Use local binding so same-named temporaries in different objects don't conflict.
-        symtab.writeuLEB128(WASM_SYM_BINDING_LOCAL | WASM_SYM_EXPLICIT_NAME);
+        symtab.writeuLEB128(WASM_SYM.BINDING_LOCAL | WASM_SYM.EXPLICIT_NAME);
         appendName(symtab, sym.identifier);
         // Data symbol payload: segment index (0), offset in segment, size.
         // sym.Soffset is the linear memory address (including the null-pointer slot
@@ -845,20 +845,20 @@ private bool emitLinkingSection(ref OutBuffer out_, ref WasmModule wmod)
     {
         // Defined table: table index 0, weak binding so wasm-ld can merge it
         // with __indirect_function_table provided by other inputs.
-        symtab.writeByte(WASM_SYMTAB_TABLE);
-        symtab.writeuLEB128(WASM_SYM_BINDING_WEAK | WASM_SYM_EXPLICIT_NAME);
+        symtab.writeByte(WASM_SYMTAB.TABLE);
+        symtab.writeuLEB128(WASM_SYM.BINDING_WEAK | WASM_SYM.EXPLICIT_NAME);
         symtab.writeuLEB128(0); // table index 0
         appendName(symtab, "__indirect_function_table");
     }
     else if (hasImportedTable)
     {
         // Imported table: table index 0, undefined.
-        symtab.writeByte(WASM_SYMTAB_TABLE);
-        symtab.writeuLEB128(WASM_SYM_UNDEFINED);
+        symtab.writeByte(WASM_SYMTAB.TABLE);
+        symtab.writeuLEB128(WASM_SYM.UNDEFINED);
         symtab.writeuLEB128(0); // table index 0
     }
 
-    body_.writeByte(WASM_LINKING_SYMBOL_TABLE);
+    body_.writeByte(WASM_LINKING.SYMBOL_TABLE);
     body_.writeuLEB128(cast(uint) symtab.length());
     body_.write(symtab.peekSlice());
 
@@ -866,7 +866,7 @@ private bool emitLinkingSection(ref OutBuffer out_, ref WasmModule wmod)
     return true;
 }
 
-/// Emit "reloc.DATA" custom section with R_WASM_TABLE_INDEX_I32 entries for
+/// Emit "reloc.DATA" custom section with R_WASM.TABLE_INDEX_I32 entries for
 /// function-table-index (function pointer) writes in the data section.
 /// wasm-ld patches these with the correct table indices after linking.
 /// dataSectionIdx: the 0-based section index of the data section in the module.
@@ -922,7 +922,7 @@ private bool emitRelocDataSection(ref OutBuffer out_, ref WasmModule wmod, uint 
         if (sym == uint.max)
             continue;
 
-        payload.writeByte(R_WASM_TABLE_INDEX_I32);
+        payload.writeByte(R_WASM.TABLE_INDEX_I32);
         payload.writeuLEB128(dataSectionPrefix + rel.dataByteOffset);
         payload.writeuLEB128(sym);
     }
@@ -931,7 +931,7 @@ private bool emitRelocDataSection(ref OutBuffer out_, ref WasmModule wmod, uint 
     return true;
 }
 
-// Emit "reloc.ELEM" custom section with R_WASM_FUNCTION_INDEX_LEB entries for
+// Emit "reloc.ELEM" custom section with R_WASM.FUNCTION_INDEX_LEB entries for
 // each function index in the element section so wasm-ld can patch them when
 // the element is merged with other objects (function indices may change).
 private bool emitRelocElemSection(ref OutBuffer out_, ref WasmModule wmod, uint elemSectionIdx)
@@ -962,7 +962,7 @@ private bool emitRelocElemSection(ref OutBuffer out_, ref WasmModule wmod, uint 
         uint sym = funcIdx < funcToSymIdx.length ? funcToSymIdx[funcIdx] : uint.max;
         if (sym == uint.max)
             continue;
-        payload.writeByte(R_WASM_FUNCTION_INDEX_LEB);
+        payload.writeByte(R_WASM.FUNCTION_INDEX_LEB);
         payload.writeuLEB128(payloadOff);
         payload.writeuLEB128(sym);
     }
@@ -1055,10 +1055,10 @@ private bool emitRelocCodeSection(ref OutBuffer out_, ref WasmModule wmod, uint 
     {
         foreach (ref const WasmFuncBody.CodeReloc r; fb.codeRelocs)
         {
-            // R_WASM_TYPE_INDEX_LEB encodes a type-section index directly,
+            // R_WASM.TYPE_INDEX_LEB encodes a type-section index directly,
             // not a symbol-table index. Always valid (typeIdx already chosen).
             uint fi = currentFuncIdx(r);
-            if (r.type == R_WASM_TYPE_INDEX_LEB ||
+            if (r.type == R_WASM.TYPE_INDEX_LEB ||
                 (fi < funcToSymIdx.length && funcToSymIdx[fi] != uint.max))
                 totalRelocs++;
         }
@@ -1088,7 +1088,7 @@ private bool emitRelocCodeSection(ref OutBuffer out_, ref WasmModule wmod, uint 
         {
             uint idx;
             uint fi = currentFuncIdx(r);
-            if (r.type == R_WASM_TYPE_INDEX_LEB)
+            if (r.type == R_WASM.TYPE_INDEX_LEB)
             {
                 // Type relocs reference the type section directly; r.symIdx
                 // holds the funcIdx whose type we want to import-merge against.
@@ -1115,7 +1115,7 @@ private bool emitRelocCodeSection(ref OutBuffer out_, ref WasmModule wmod, uint 
                 continue;
             // addend = offset relative to the symbol's base (usually 0 or Voffset)
             allRelocs ~= AnyReloc(fb.codePayloadStart + r.offset,
-                R_WASM_MEMORY_ADDR_LEB, sym, r.addend);
+                R_WASM.MEMORY_ADDR_LEB, sym, r.addend);
         }
     }
 
@@ -1141,7 +1141,7 @@ private bool emitRelocCodeSection(ref OutBuffer out_, ref WasmModule wmod, uint 
         payload.writeByte(r.type);
         payload.writeuLEB128(r.absOffset);
         payload.writeuLEB128(r.sym);
-        if (r.type == R_WASM_MEMORY_ADDR_LEB)
+        if (r.type == R_WASM.MEMORY_ADDR_LEB)
             payload.writesLEB128(cast(int) r.addend); // addend is SLEB per spec
     }
 
@@ -1315,7 +1315,7 @@ void WasmObj_term2(const(char)[] objfilename, ref WasmModule wmod, ref OutBuffer
             }
         }
         // In relocatable mode, funcRelocations are left as 0 placeholders;
-        // wasm-ld patches them via R_WASM_TABLE_INDEX_I32 in reloc.DATA.
+        // wasm-ld patches them via R_WASM.TABLE_INDEX_I32 in reloc.DATA.
 
         // Always patch data-to-data address references (stable across linking).
         foreach (ref WasmModule.DataReloc rel; wmod.dataRelocations)
@@ -1779,9 +1779,9 @@ uint wmod_internType(ubyte[] params, ubyte[] results)
 }
 
 // Find the function index of a named function whose WASM type matches typeIdx.
-// Used to produce R_WASM_TYPE_INDEX_LEB relocations for call_indirect instructions
+// Used to produce R_WASM.TYPE_INDEX_LEB relocations for call_indirect instructions
 // so wasm-ld can patch the type index when merging type tables.
-// Prefers import functions: wasm-ld 22 can crash on R_WASM_TYPE_INDEX_LEB
+// Prefers import functions: wasm-ld 22 can crash on R_WASM.TYPE_INDEX_LEB
 // relocations targeting locally-defined symbols; imports are always safe.
 uint wmod_findFuncForType(uint typeIdx)
 {
@@ -1807,7 +1807,7 @@ uint wmod_findFuncForType(uint typeIdx)
     return localFallback;
 }
 
-// Record a R_WASM_MEMORY_ADDR_LEB relocation for a data symbol address emitted
+// Record a R_WASM.MEMORY_ADDR_LEB relocation for a data symbol address emitted
 // in the current function's code.  codeOffset is the byte offset within the
 // current WasmFuncBody.code buffer where the 5-byte padded ULEB128 begins.
 // sym is the D Symbol for the data object; addend is the extra byte offset
