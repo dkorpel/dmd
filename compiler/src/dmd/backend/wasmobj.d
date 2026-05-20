@@ -462,7 +462,7 @@ private WasmFuncType buildFuncType(type* t, Symbol* sfunc)
 // Section writers
 // ---------------------------------------------------------------------------
 
-private void writeSection(ref OutBuffer out_, WasmSection id, OutBuffer* payload)
+private void writeSection(ref OutBuffer out_, WASM_SECTION id, OutBuffer* payload)
 {
     out_.writeByte(cast(ubyte) id);
     out_.writeuLEB128(cast(uint) payload.length());
@@ -487,7 +487,7 @@ private bool emitTypeSection(ref OutBuffer out_, ref WasmModule wmod)
     if (wmod.funcTypes.length == 0)
         return false;
 
-    writeSection(out_, WasmSection.type_, s);
+    writeSection(out_, WASM_SECTION.type_, s);
     return true;
 }
 
@@ -517,7 +517,7 @@ private bool emitImportSection(ref OutBuffer out_, ref WasmModule wmod)
         s.writeByte(0x00); // limits: no max
         s.writeuLEB128(0); // min size = 0 (linker sets actual size)
     }
-    writeSection(out_, WasmSection.import_, s);
+    writeSection(out_, WASM_SECTION.import_, s);
     return true;
 }
 
@@ -532,7 +532,7 @@ private bool emitFunctionSection(ref OutBuffer out_, ref WasmModule wmod)
     s.writeuLEB128(defined);
     foreach (ref const WasmFunc f; wmod.funcs[wmod.numImports .. $])
         s.writeuLEB128(f.typeIdx);
-    writeSection(out_, WasmSection.function_, s);
+    writeSection(out_, WASM_SECTION.function_, s);
     return true;
 }
 
@@ -552,7 +552,7 @@ private bool emitTableSection(ref OutBuffer out_, ref WasmModule wmod)
     s.writeByte(0x01); // has min and max (limits flag)
     s.writeuLEB128(defined); // min = number of defined functions
     s.writeuLEB128(defined); // max = same
-    writeSection(out_, WasmSection.table, s);
+    writeSection(out_, WASM_SECTION.table, s);
     return true;
 }
 
@@ -587,7 +587,7 @@ private bool emitElementSection(ref OutBuffer out_, ref WasmModule wmod)
         (*s).writeuLEB128_5(fidx); // 5-byte padded ULEB for linker relocation patching
         entryOffset += 5;
     }
-    writeSection(out_, WasmSection.element, s);
+    writeSection(out_, WASM_SECTION.element, s);
     return true;
 }
 
@@ -601,7 +601,7 @@ private bool emitMemorySection(ref OutBuffer out_, ref WasmModule wmod)
     s.writeuLEB128(1); // one memory
     s.writeByte(0x00); // flags: no maximum
     s.writeuLEB128(wmod.memoryPageCount ? wmod.memoryPageCount : 1);
-    writeSection(out_, WasmSection.memory, s);
+    writeSection(out_, WASM_SECTION.memory, s);
     return true;
 }
 
@@ -628,7 +628,7 @@ private bool emitGlobalSection(ref OutBuffer out_, ref WasmModule wmod)
 
         s.writeByte(0x0B); // end of sequence
     }
-    writeSection(out_, WasmSection.global, s);
+    writeSection(out_, WASM_SECTION.global, s);
     return true;
 }
 
@@ -657,7 +657,7 @@ private bool emitExportSection(ref OutBuffer out_, ref WasmModule wmod)
         s.writeByte(WASM_EXPORT.FUNC);
         s.writeuLEB128(cast(uint) i);
     }
-    writeSection(out_, WasmSection.export_, s);
+    writeSection(out_, WASM_SECTION.export_, s);
     return true;
 }
 
@@ -716,7 +716,7 @@ private bool emitCodeSection(ref OutBuffer out_, ref WasmModule wmod)
 
         payloadOffset += bodySizeBytes + bodySize;
     }
-    writeSection(out_, WasmSection.code, s);
+    writeSection(out_, WASM_SECTION.code, s);
     return true;
 }
 
@@ -738,7 +738,7 @@ private bool emitDataSection(ref OutBuffer out_, ref WasmModule wmod)
         s.writeuLEB128(cast(uint) ds.data.length());
         s.write(ds.data.peekSlice());
     }
-    writeSection(out_, WasmSection.data, s);
+    writeSection(out_, WASM_SECTION.data, s);
     return true;
 }
 

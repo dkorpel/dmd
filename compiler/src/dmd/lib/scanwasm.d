@@ -22,22 +22,6 @@ import dmd.backend.wasm;
 
 nothrow:
 
-// WASM section IDs.
-private enum WASM_SECTION_CUSTOM   = 0;
-private enum WASM_SECTION_FUNCTION = 3;
-private enum WASM_SECTION_EXPORT   = 7;
-
-// Linking subsection type for the symbol table.
-private enum WASM_SYMBOL_TABLE = 8;
-
-// Symbol kinds.
-private enum WASM_SYMKIND_FUNCTION = 0;
-private enum WASM_SYMKIND_DATA     = 1;
-private enum WASM_SYMKIND_GLOBAL   = 2;
-private enum WASM_SYMKIND_SECTION  = 3;
-private enum WASM_SYMKIND_TAG      = 4;
-private enum WASM_SYMKIND_TABLE    = 5;
-
 /*****************************************
  * Read a WASM relocatable object and pass names of global (exported) symbols
  * to pAddSymbol.
@@ -106,7 +90,7 @@ void scanWasmObjModule(void delegate(const(char)[] name, int pickAny) nothrow pA
         if (sectionEnd > base.length)
             return corrupt(__LINE__);
 
-        if (sectionId != WASM_SECTION_CUSTOM)
+        if (sectionId != WASM_SECTION.custom)
         {
             pos = sectionEnd;
             continue;
@@ -138,7 +122,7 @@ void scanWasmObjModule(void delegate(const(char)[] name, int pickAny) nothrow pA
             if (subEnd > sectionEnd)
                 return corrupt(__LINE__);
 
-            if (subtype != WASM_SYMBOL_TABLE)
+            if (subtype != WASM_LINKING.SYMBOL_TABLE)
             {
                 pos = subEnd;
                 continue;
@@ -161,15 +145,15 @@ void scanWasmObjModule(void delegate(const(char)[] name, int pickAny) nothrow pA
 
                 const(char)[] symName;
 
-                if (kind == WASM_SYMKIND_FUNCTION || kind == WASM_SYMKIND_GLOBAL ||
-                    kind == WASM_SYMKIND_TAG || kind == WASM_SYMKIND_TABLE)
+                if (kind == WASM_SYMTAB.FUNCTION || kind == WASM_SYMTAB.GLOBAL ||
+                    kind == WASM_SYMTAB.TAG || kind == WASM_SYMTAB.TABLE)
                 {
                     if (!isUndefined)
                         readULEB(pos); // index — consume but don't use
                     if (hasName || isUndefined)
                         symName = readName(pos);
                 }
-                else if (kind == WASM_SYMKIND_DATA)
+                else if (kind == WASM_SYMTAB.DATA)
                 {
                     symName = readName(pos);
                     if (!isUndefined)
@@ -179,7 +163,7 @@ void scanWasmObjModule(void delegate(const(char)[] name, int pickAny) nothrow pA
                         readULEB(pos); // size
                     }
                 }
-                else if (kind == WASM_SYMKIND_SECTION)
+                else if (kind == WASM_SYMTAB.SECTION)
                 {
                     readULEB(pos); // section index
                 }
