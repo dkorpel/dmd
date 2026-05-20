@@ -105,7 +105,7 @@ void backend_init(const ref Param params, const ref DMDparams driverParams, cons
     // or a self-contained final module (for direct execution with wasmtime.
     if (target.isWasm)
     {
-        import dmd.backend.wasmobj : wasm_relocatable;
+        import dmd.backend.wasm.obj : wasm_relocatable;
         // Emit relocatable objects whenever wasm-ld will be involved:
         //  - -c (not linking): always relocatable
         //  - non-betterC linking: druntime is auto-linked, so wasm-ld is always used

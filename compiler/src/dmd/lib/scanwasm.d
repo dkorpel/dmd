@@ -18,7 +18,7 @@ module dmd.lib.scanwasm;
 import dmd.errorsink;
 import dmd.location;
 import dmd.root.string : fTuple;
-import dmd.backend.wasm;
+import dmd.backend.wasm.enums;
 
 nothrow:
 
