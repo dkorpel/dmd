@@ -17,8 +17,11 @@
 
 module dmd.backend.wasm.codgen;
 
-import core.stdc.string : strlen;
+import std.stdio;
+import std.string;
+import dmd.backend.debugprint;
 
+import core.stdc.string : strlen;
 import dmd.backend.cc;
 import dmd.backend.cdef;
 import dmd.backend.el;
@@ -93,7 +96,10 @@ WASM_TYPE wasmType(tym_t ty)
         return WASM_F64;
 
     default:
-        return WASM_I32; // aggregate / unknown: pass by pointer
+        import dmd.backend.debugprint: tym_str;
+        debug writeln("ty = ", tym_str(ty).fromStringz);
+        assert(0);
+        // return WASM_I32; // aggregate / unknown: pass by pointer
     }
 }
 
@@ -421,9 +427,10 @@ private void emitCoerce(ref WasmCG cg, WASM_TYPE from, WASM_TYPE to)
         return;
     }
 
-    static ubyte coerceOp(ubyte from, ubyte to)
+    static ubyte coerceOp(WASM_TYPE from, WASM_TYPE to)
     {
-        static int X(ubyte from, ubyte to) { return from << 8 | to; }
+        debug writeln(from, to);
+        static int X(WASM_TYPE from, WASM_TYPE to) { return from << 8 | to; }
 
         switch (X(from, to))
         {
@@ -973,14 +980,6 @@ private bool genElem(ref WasmCG cg, elem* e)
                 return true;
             }
 
-            // Coerce if expression type differs from the local's stored type.
-            // Skip when e.Ety is an aggregate (TYstruct/TYarray): aggregates
-            // live by reference (i32 pointer in linear memory), so don't sign-
-            // extend the pointer into an i64 struct-value just because Ety
-            // claims a struct type wider than the actual local.
-            const tym_t eebTy = tybasic(e.Ety);
-            if (eebTy != TYstruct && eebTy != TYarray)
-                emitCoerce(cg, wasmType(cg.locals[idx].ty), wasmType(e.Ety));
             return true;
         }
 
@@ -1566,8 +1565,7 @@ private bool genElem(ref WasmCG cg, elem* e)
     case OPpopcnt:
         {
             cg.genElem(e.E1);
-            const ty = e.wasmType;
-            cg.emit(ty == WASM_I64 ? OP_I64_POPCNT : OP_I32_POPCNT);
+            cg.emit(e.wasmType == WASM_I64 ? OP_I64_POPCNT : OP_I32_POPCNT);
             // result matches input width (int for uint, long for ulong)
             return true;
         }
@@ -1708,51 +1706,6 @@ private void genElemAddr(ref WasmCG cg, elem* e)
     cg.genElem(e);
 }
 
-// Emit argument list (OPparam chain or single elem)
-// In DMD IR, OPparam(E1, E2) is right-to-left: E2 is the leftmost argument.
-// True if `t` looks like a D delegate (TYllong wrapper with a function-typed
-// Tnext). Delegates share the TYllong basic type with slices on WASM32 but
-// must NOT be split into (len, ptr) at call sites — buildFuncType passes them
-// as a single packed i64 param.
-private bool isDelegateType(const(type)* t)
-{
-    if (!t || !t.Tnext)
-        return false;
-    return tyfunc(t.Tnext.Tty) != 0;
-}
-
-// True if a callee parameter type is a D slice (TYdarray == TYullong+Tnext on WASM32).
-private bool paramIsSlice(const(param_t)* p)
-{
-    if (!p || !p.Ptype)
-        return false;
-    const(type)* t = p.Ptype;
-    return tybasic(t.Tty) == TYullong && t.Tnext !is null && !isDelegateType(t);
-}
-
-// Conservative slice signal for call_indirect, where the callee type is not
-// available — we can only inspect the arg elem. A function pointer's symbol
-// type doesn't carry param info, so the indirect-call signature is derived
-// purely from arg shape. Only firmly slice-shaped operands count: an OPpair
-// (which on WASM always packs a slice), or an OPvar / OPind / typed elem
-// whose carrier type is TYullong + Tnext and not a delegate.
-private bool sliceShape(const(elem)* e)
-{
-    const tym_t ty = tybasic(e.Ety);
-    if (ty != TYullong && ty != TYllong)
-        return false;
-    if (e.ET && tybasic(e.ET.Tty) == TYullong && e.ET.Tnext
-        && !isDelegateType(e.ET))
-        return true;
-    if (e.Eoper == OPvar && e.Vsym && e.Vsym.Stype
-        && tybasic(e.Vsym.Stype.Tty) == TYullong
-        && e.Vsym.Stype.Tnext
-        && !isDelegateType(e.Vsym.Stype))
-        return true;
-    if (e.Eoper == OPpair || e.Eoper == OPrpair)
-        return true;
-    return false;
-}
 
 private bool paramIsAggregate(const(param_t)* p)
 {
@@ -1762,89 +1715,6 @@ private bool paramIsAggregate(const(param_t)* p)
     return tb == TYstruct || tb == TYarray;
 }
 
-// Emit a call argument whose declared param is an aggregate (struct/static
-// array) as its address (i32), instead of the loaded struct value. Unwraps
-// OPcomma chains, OPind, OPvar of shadow/data symbols. Returns true if it
-// emitted the address; false if it didn't recognize the form (caller should
-// fall back to genOneArg).
-private bool emitAggregateArgAsPointer(ref WasmCG cg, elem* a)
-{
-    // OPcomma(E1, E2): evaluate E1 for side effects (drop result), then
-    // unwrap to E2 — the actual value of the comma expression.
-    while (a && a.Eoper == OPcomma)
-    {
-        const bool r1 = cg.genElem(a.E1);
-        if (r1)
-            cg.emit(OP_DROP);
-        a = a.E2;
-    }
-    if (!a)
-        return false;
-    // Strip arbitrary nesting of OPstrpar and OPcomma chains.
-    while (a)
-    {
-        if (a.Eoper == OPstrpar && a.E1)
-            a = a.E1;
-        else if (a.Eoper == OPcomma)
-        {
-            const bool r1 = cg.genElem(a.E1);
-            if (r1)
-                cg.emit(OP_DROP);
-            a = a.E2;
-        }
-        else
-            break;
-    }
-    if (!a)
-        return false;
-    if (a.Eoper == OPind)
-    {
-        if (a.E1)
-        {
-            cg.genElem(a.E1);
-            return true;
-        }
-    }
-    if (a.Eoper == OPvar && a.Vsym)
-    {
-        Symbol* vs = a.Vsym;
-        if (cg.inShadow(vs))
-        {
-            // Struct/array params: WASM local IS the pointer to the struct.
-            if (isStructByRefParam(vs))
-            {
-                const uint pidx = cg.localFor(vs);
-                cg.emitLocal(OP_LOCAL_GET, pidx);
-                if (a.Voffset != 0)
-                {
-                    cg.emitConst(OP_I32_CONST, cast(int) a.Voffset);
-                    cg.emit(OP_I32_ADD);
-                }
-                return true;
-            }
-            cg.emitShadowAddr(vs);
-            if (a.Voffset != 0)
-            {
-                cg.emitConst(OP_I32_CONST, cast(int) a.Voffset);
-                cg.emit(OP_I32_ADD);
-            }
-            return true;
-        }
-        if (isDataSym(vs.Sfl))
-        {
-            cg.emitDataAddr(vs, cast(uint) a.Voffset);
-            return true;
-        }
-    }
-    // OPcall returning a struct (sret) already leaves the sret address on
-    // the stack — exactly the pointer the callee expects. No extra load.
-    if (a.Eoper == OPcall || a.Eoper == OPucall)
-    {
-        cg.genElem(a);
-        return true;
-    }
-    return false;
-}
 
 // Pick the WASM opcode variant matching the IR operand's numeric kind.
 // Order: f32, f64, i64, i32. Pass OP_UNREACHABLE for kinds that don't apply.
