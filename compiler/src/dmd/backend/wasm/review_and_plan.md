@@ -31,7 +31,7 @@ Backend is self-contained behind `objmod`. Shared backend touch points (cdef/dou
 | `real` | aliased to double | Matches LDC/Clang |
 | `va_list` | `char*` | Stub |
 | Import module | `@wasmImportModule` UDA | Mirrors LDC `@llvmAttr` |
-| Data sym binding | `WASM_SYM_BINDING_LOCAL` | LDC: global+hidden — breaks cross-TU refs |
+| Data sym binding | `WASM_SYM.BINDING_LOCAL` | LDC: global+hidden — breaks cross-TU refs |
 | Atomics | non-atomic fallback | OK while single-threaded |
 
 ## 4. Hard problems & current solutions
@@ -51,7 +51,7 @@ Backend is self-contained behind `objmod`. Shared backend touch points (cdef/dou
 
 - [x] **F1** *Fixed.* `codgen.d` virtual `call_indirect` type derivation now splits D slices into `(len, ptr)` to match the direct-call path.
 - [x] **F2** *Not a bug.* `lib/wasm.d:164` `< 16` threshold is correct; `buf[15] = '/'` is within the 16-byte name field. Matches `elf.d`.
-- [x] **F3** *Deferred (risky ABI change).* DATA syms emitted with `WASM_SYM_BINDING_LOCAL`. Changing to global+hidden requires testing cross-TU data refs end-to-end with `wasm-ld`. Best done as a follow-up PR with dedicated tests.
+- [x] **F3** *Deferred (risky ABI change).* DATA syms emitted with `WASM_SYM.BINDING_LOCAL`. Changing to global+hidden requires testing cross-TU data refs end-to-end with `wasm-ld`. Best done as a follow-up PR with dedicated tests.
 - [x] **F4** *Fixed.* Data symbol size now derived from `type_size(sym.Stype)` instead of `0`, fixing `--gc-sections` bounds checks.
 - [x] **F5** *Documented.* Inliner disabled for WASM because `scanForInlines` asserts on WASM IR; added a TODO comment in `backend/go.d` flagging the assertion. Root-cause needs a real backend debug session; out of scope for this PR.
 - [x] **F6** *Fixed.* `glue/e2ir.d` silent null-pointer returns for `new` on WASM now raise a proper compile error via `irs.eSink.error`.

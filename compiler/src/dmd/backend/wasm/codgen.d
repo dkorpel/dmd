@@ -110,7 +110,7 @@ struct WasmCG
     uint numParams; /// number of parameters (= first numParams locals)
     bool relocatable; /// generate relocatable
     WasmFuncBody.CodeReloc[] codeRelocs; /// relocations for direct function calls
-    WasmFuncBody.DataAddrReloc[] dataAddrRelocs; /// R_WASM_MEMORY_ADDR_LEB relocations
+    WasmFuncBody.DataAddrReloc[] dataAddrRelocs; /// R_WASM.MEMORY_ADDR_LEB relocations
 
     // Shadow stack frame (for locals whose address is taken)
     bool hasShadowFrame;
@@ -206,7 +206,7 @@ nothrow:
 
     // Emit OP_I32_CONST with a data-segment address.
     // In relocatable mode, emits a 5-byte padded ULEB128 and records a
-    // R_WASM_MEMORY_ADDR_LEB relocation so wasm-ld patches the address after
+    // R_WASM.MEMORY_ADDR_LEB relocation so wasm-ld patches the address after
     // moving the data section to its final location.
     // In non-relocatable (final) mode, emits a compact SLEB128 — the data
     // section is already at its final address in that case.
@@ -220,7 +220,7 @@ nothrow:
         // valid offset in the single initialized data segment.
         // Only relocate symbols in the INITIALIZED data section.
         // BSS (FL.udata) and TLS (FL.tlsdata) have offsets beyond the active
-        // data segment and don't map to valid WASM_SYMTAB_DATA entries in it.
+        // data segment and don't map to valid WASM_SYMTAB.DATA entries in it.
         const bool canRelocate = relocatable && sym.Sident.ptr != null &&
             sym.Sfl != FL.udata && sym.Sfl != FL.tlsdata;
         if (canRelocate)
@@ -236,19 +236,19 @@ nothrow:
     }
 
     // Emit OP_CALL with a 5-byte padded ULEB128 function index and record a
-    // R_WASM_FUNCTION_INDEX_LEB relocation so wasm-ld can patch the index.
+    // R_WASM.FUNCTION_INDEX_LEB relocation so wasm-ld can patch the index.
     // Symbol* is recorded so that if wmod.funcs is reordered before term time
     // (e.g. additional imports inserted), the relocation still resolves to the
     // intended symbol rather than a stale funcIdx.
     void emitCall(uint fidx, Symbol* sym = null)
     {
         emit(OP_CALL);
-        codeRelocs ~= WasmFuncBody.CodeReloc(cast(uint) code.length, R_WASM_FUNCTION_INDEX_LEB, fidx, 0, sym);
+        codeRelocs ~= WasmFuncBody.CodeReloc(cast(uint) code.length, R_WASM.FUNCTION_INDEX_LEB, fidx, 0, sym);
         emitULEBpadded(fidx);
     }
 
     // Emit OP_I32_CONST with a function-table index, recording a
-    // R_WASM_TABLE_INDEX_SLEB relocation so wasm-ld patches the value to the
+    // R_WASM.TABLE_INDEX_SLEB relocation so wasm-ld patches the value to the
     // function's runtime table slot after linker-side table layout is decided.
     // Used for taking the address of a function (function pointer).
     void emitTableIndex(uint fidx, Symbol* sym)
@@ -257,7 +257,7 @@ nothrow:
         if (relocatable)
         {
             codeRelocs ~= WasmFuncBody.CodeReloc(cast(uint) code.length,
-                R_WASM_TABLE_INDEX_SLEB, fidx, 0, sym);
+                R_WASM.TABLE_INDEX_SLEB, fidx, 0, sym);
             emitULEBpadded(fidx);
         }
         else
@@ -267,7 +267,7 @@ nothrow:
     }
 
     // Emit the type index operand of call_indirect.
-    // In relocatable mode, emit R_WASM_TYPE_INDEX_LEB so wasm-ld can patch the
+    // In relocatable mode, emit R_WASM.TYPE_INDEX_LEB so wasm-ld can patch the
     // type index when merging type tables from multiple objects.  The relocation
     // references a named function whose type matches, preferring imports to avoid
     // a wasm-ld 22 crash on locally-defined symbol targets.  If no suitable
@@ -286,7 +286,7 @@ nothrow:
                 // resolves it correctly even after wmod.funcs is reordered late
                 // in codegen — otherwise the stored fidx points at a different
                 // function whose typeIdx is unrelated (and often type 0).
-                auto reloc = WasmFuncBody.CodeReloc(cast(uint) code.length, R_WASM_TYPE_INDEX_LEB, fidx);
+                auto reloc = WasmFuncBody.CodeReloc(cast(uint) code.length, R_WASM.TYPE_INDEX_LEB, fidx);
                 reloc.sym = wmod_funcs(fidx);
                 codeRelocs ~= reloc;
 
@@ -1045,7 +1045,7 @@ private bool genElem(ref WasmCG cg, elem* e)
             else if (rs && rs.Sfl == FL.func)
             {
                 // Address of a function → emit i32.const placeholder with
-                // R_WASM_TABLE_INDEX_SLEB relocation; wasm-ld patches it to the
+                // R_WASM.TABLE_INDEX_SLEB relocation; wasm-ld patches it to the
                 // function's runtime table slot. funcIdx is a hint — relocation
                 // resolution is symbol-driven.
                 uint fidx = funcIndex(rs);

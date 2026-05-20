@@ -18,15 +18,9 @@ module dmd.lib.scanwasm;
 import dmd.errorsink;
 import dmd.location;
 import dmd.root.string : fTuple;
+import dmd.backend.wasm;
 
 nothrow:
-
-// Symbol-table flags (WASM_SYM_* from tool-conventions).
-private enum WASM_SYM_BINDING_WEAK    = 0x01;
-private enum WASM_SYM_BINDING_LOCAL   = 0x02;
-private enum WASM_SYM_VISIBILITY_HIDDEN = 0x04;
-private enum WASM_SYM_UNDEFINED       = 0x10;
-private enum WASM_SYM_EXPLICIT_NAME   = 0x40;
 
 // WASM section IDs.
 private enum WASM_SECTION_CUSTOM   = 0;
@@ -160,10 +154,10 @@ void scanWasmObjModule(void delegate(const(char)[] name, int pickAny) nothrow pA
                 uint kind  = readULEB(pos);
                 uint flags = readULEB(pos);
 
-                bool isLocal     = (flags & WASM_SYM_BINDING_LOCAL) != 0;
-                bool isUndefined = (flags & WASM_SYM_UNDEFINED) != 0;
-                bool isHidden    = (flags & WASM_SYM_VISIBILITY_HIDDEN) != 0;
-                bool hasName     = (flags & WASM_SYM_EXPLICIT_NAME) != 0;
+                bool isLocal     = (flags & WASM_SYM.BINDING_LOCAL) != 0;
+                bool isUndefined = (flags & WASM_SYM.UNDEFINED) != 0;
+                bool isHidden    = (flags & WASM_SYM.VISIBILITY_HIDDEN) != 0;
+                bool hasName     = (flags & WASM_SYM.EXPLICIT_NAME) != 0;
 
                 const(char)[] symName;
 
