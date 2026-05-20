@@ -16,6 +16,8 @@ void writeuLEB128_5(ref OutBuffer buf, uint v) nothrow @safe
     buf.writeByte(cast(ubyte)((v >> 28) & 0x0F)); // MSB=0 to terminate
 }
 
+alias WASM_OP = ubyte;
+
 /// WASM instruction opcodes
 enum : ubyte
 {
