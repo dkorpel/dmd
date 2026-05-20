@@ -398,7 +398,7 @@ private bool isAggregateType(type* t)
 
 // Build a WasmFuncType from a backend function type.
 // Aggregates are passed/returned by pointer; aggregate return adds a hidden i32 first.
-private WasmFuncType buildFuncType(type* t)
+private WasmFuncType buildFuncType(type* t, Symbol* sfunc)
 {
     WasmFuncType ft;
 
@@ -408,29 +408,18 @@ private WasmFuncType buildFuncType(type* t)
     if (hiddenPtr)
         ft.params ~= WASM_I32; // hidden return pointer (first param)
 
+    // D member functions (Fmember) receive 'this' as an implicit first parameter.
+    // D nested functions (Fnested) receive a static-link/closure pointer.
+    // Neither is in Tparamtypes, so prepend an i32.
+    if (sfunc.Sfunc && (sfunc.Sfunc.Fflags3 & (Fmember | Fnested)))
+        ft.params = WASM_I32 ~ ft.params;
+
     // Parameters. D dynamic arrays (TYdarray = TYullong on WASM32) are decomposed
     // by toArgTypes_wasm into (size_t length, void* ptr) = (i32, i32), matching
     // LDC2's WebAssembly ABI. TYdarray is identified by Tnext != null (element type).
-    //
-    // For TYjfunc (D linkage), the globsym used to build the function's locals
-    // is reversed (see glue/package.d), and callers push args in reverse-source
-    // order. The WASM signature must match that order, so iterate Tparamtypes
-    // in reverse for TYjfunc.
     const tym_t fty = tybasic(t.Tty);
-    const bool reversed = (fty == TYjfunc);
-    param_t*[] plist;
+
     for (param_t* p = t.Tparamtypes; p; p = p.Pnext)
-        plist ~= p;
-    if (reversed)
-    {
-        foreach (k; 0 .. plist.length / 2)
-        {
-            auto tmp = plist[k];
-            plist[k] = plist[$ - 1 - k];
-            plist[$ - 1 - k] = tmp;
-        }
-    }
-    foreach (p; plist)
     {
         if (p.Ptype && tybasic(p.Ptype.Tty) != TYvoid)
         {
@@ -443,7 +432,9 @@ private WasmFuncType buildFuncType(type* t)
                 ft.params ~= WASM_I32;
             }
             else
+            {
                 ft.params ~= wasmType(pty);
+            }
         }
     }
 
@@ -619,6 +610,7 @@ private bool emitGlobalSection(ref OutBuffer out_, ref WasmModule wmod)
 {
     if (!wmod.globals.length)
         return false;
+
     OutBuffer* s = &wmod.scratch;
     s.reset();
     s.writeuLEB128(cast(uint) wmod.globals.length);
@@ -628,18 +620,12 @@ private bool emitGlobalSection(ref OutBuffer out_, ref WasmModule wmod)
         s.writeByte(g.valType);
         s.writeByte(g.mutable_ ? 1 : 0);
 
+        assert(g.valType == WASM_I32); // TODO: support other types
+
         // constant-expression initializer
-        if (g.valType == WASM_I32)
-        {
-            s.writeByte(OP_I32_CONST);
-            s.writesLEB128(g.initVal);
-        }
-        else
-        {
-            // Fallback: emit i32.const 0 for unknown types
-            s.writeByte(OP_I32_CONST);
-            s.writeByte(0x00);
-        }
+        s.writeByte(OP_I32_CONST);
+        s.writesLEB128(g.initVal);
+
         s.writeByte(0x0B); // end of sequence
     }
     writeSection(out_, WasmSection.global, s);
@@ -1372,7 +1358,7 @@ void WasmObj_term2(const(char)[] objfilename, ref WasmModule wmod, ref OutBuffer
     sectionIdx += emitCodeSection(out_, wmod);
 
     // BSS allocations advance dataHeap without writing to the data segment.
-    // Pad with zeros so all symbol addresses fall within the segment payload —
+    // Pad with zeros so all symbol addresses fall within the segment payload
     // wasm-ld rejects data symbols whose offset is past the segment size.
     if (wmod.dataSegs.length > 0)
     {
@@ -1479,9 +1465,7 @@ int WasmObj_comdat(Symbol* s)
     WasmFuncType ft;
     if (tybasic(s.Stype.Tty) != TYvoid)
     {
-        ft = buildFuncType(s.Stype);
-        if (s.Sfunc && s.Sfunc.Fflags3 & Fmember)
-            ft.params = WASM_I32 ~ ft.params;
+        ft = buildFuncType(s.Stype, s);
     }
     WasmFunc f;
     f.typeIdx = wmod.internType(ft);
@@ -1617,22 +1601,6 @@ uint wmod_func_param_count(uint fidx)
     return cast(uint) wmod.funcTypes[typeIdx].params.length;
 }
 
-// argument types are known at the call site (runtime symbols use a generic
-// placeholder type that lacks parameter info).
-void wmod_fixImportType(uint fidx, const(ubyte)[] params, const(ubyte)[] results)
-{
-    if (fidx >= wmod.funcs.length || !wmod.funcs[fidx].isImport)
-        return;
-    const existing = wmod.funcTypes[wmod.funcs[fidx].typeIdx];
-    // Only fix if the existing type has no parameters (generic placeholder).
-    if (existing.params.length != 0)
-        return;
-    WasmFuncType newFT;
-    newFT.params = params.dup;
-    newFT.results = results.dup;
-    wmod.funcs[fidx].typeIdx = wmod.internType(newFT);
-}
-
 int WasmObj_external(Symbol* s)
 {
     if (!s || !s.Stype)
@@ -1662,7 +1630,7 @@ int WasmObj_external(Symbol* s)
     // Register as an import. Module name comes from pragma(wasm_import_module), else "env".
     WasmFuncType ft;
     if (tybasic(s.Stype.Tty) != TYvoid)
-        ft = buildFuncType(s.Stype);
+        ft = buildFuncType(s.Stype, s);
     WasmFunc f;
     f.typeIdx = wmod.internType(ft);
     f.sym = s;
@@ -1802,8 +1770,8 @@ Symbol* wmod_funcs(size_t i)
 // Used by codgen.d to compute typeIdx for virtual call_indirect.
 uint wmod_internType(ubyte[] params, ubyte[] results)
 {
-    if (!wmod)
-        return 0;
+    assert(wmod);
+
     WasmFuncType ft;
     ft.params = params;
     ft.results = results;
@@ -1817,8 +1785,7 @@ uint wmod_internType(ubyte[] params, ubyte[] results)
 // relocations targeting locally-defined symbols; imports are always safe.
 uint wmod_findFuncForType(uint typeIdx)
 {
-    if (!wmod)
-        return uint.max;
+    assert(wmod);
 
     uint localFallback = uint.max;
     foreach (size_t i, ref const WasmFunc f; wmod.funcs)
@@ -1964,12 +1931,9 @@ void WasmObj_func_start(Symbol* sfunc)
 {
     if (!sfunc || !sfunc.Stype)
         return;
-    WasmFuncType ft = buildFuncType(sfunc.Stype);
-    // D member functions (Fmember) receive 'this' as an implicit first parameter.
-    // D nested functions (Fnested) receive a static-link/closure pointer.
-    // Neither is in Tparamtypes, so prepend an i32.
-    if (sfunc.Sfunc && (sfunc.Sfunc.Fflags3 & (Fmember | Fnested)))
-        ft.params = WASM_I32 ~ ft.params;
+
+    WasmFuncType ft = buildFuncType(sfunc.Stype, sfunc);
+
     WasmFunc f;
     f.typeIdx = wmod.internType(ft);
     f.sym = sfunc;
