@@ -21,7 +21,6 @@ import std.stdio;
 import std.string;
 import dmd.backend.debugprint;
 
-import core.stdc.string : strlen;
 import dmd.backend.cc;
 import dmd.backend.cdef;
 import dmd.backend.el;
@@ -97,7 +96,6 @@ WASM_TYPE wasmType(tym_t ty)
         return WASM_F64;
 
     default:
-        import dmd.backend.debugprint: tym_str;
         debug writeln("ty = ", tym_str(ty).fromStringz);
         assert(0);
         // return WASM_I32; // aggregate / unknown: pass by pointer
@@ -126,8 +124,9 @@ struct WasmCG
     WasmFuncBody.CodeReloc[] codeRelocs; /// relocations for direct function calls
     WasmFuncBody.DataAddrReloc[] dataAddrRelocs; /// R_WASM.MEMORY_ADDR_LEB relocations
 
-    // Shadow stack frame (for locals whose address is taken)
+    // Shadow stack frame
     bool hasShadowFrame;
+
     uint shadowBaseLocal; /// WASM local index holding the shadow frame base address
     uint shadowFrameSize; /// total size in bytes of shadow frame
     Symbol*[] shadowEntries; /// per-symbol shadow frame offsets
@@ -177,9 +176,8 @@ nothrow:
         import std.stdio; debug writeln("registering in shadow ", s.identifier);
 
         assert(s.Stype);
-        import dmd.backend.type : type_size, type_alignsize;
         const uint sz = cast(uint) type_size(s.Stype);
-        const uint al = type_alignsize(s.Stype);
+        const uint al = Symbol_Salignsize(*s);
         const uint off = (shadowFrameSize + al - 1) & ~(al - 1);
         s.Soffset = off;
         shadowEntries ~= s;
@@ -704,9 +702,6 @@ elem*[] gatherCallArgs(elem* p)
 // Expression code generation
 private bool genCall(ref WasmCG cg, elem* e)
 {
-    // case OPcall:
-    // case OPucall:
-
     // E1 is the function.
     // Direct call: E1 is OPvar of a function symbol.
     if (e.E1.Eoper == OPvar && e.E1.Vsym && e.E1.Vsym.Sclass != SC.auto_ &&
@@ -783,7 +778,10 @@ private bool genCall(ref WasmCG cg, elem* e)
 
             param_t*[] declParams;
 
-            auto paramTypes = (calleeSym.Stype !is null) ? calleeSym.Stype.Tparamtypes : null;
+            assert(calleeSym.Stype);
+
+            auto paramTypes = calleeSym.Stype.Tparamtypes;
+
             for (param_t* q = paramTypes; q; q = q.Pnext)
                 declParams ~= q;
 
@@ -830,13 +828,13 @@ private bool genCall(ref WasmCG cg, elem* e)
     {
         elem*[] indArgs = gatherCallArgs(e.E2);
 
-        ubyte[] callParams;
+        WASM_TYPE[] callParams;
         foreach (a; indArgs)
         {
             cg.genElem(a);
             callParams ~= wasmType(tybasic(a.Ety));
         }
-        ubyte[] callResults;
+        WASM_TYPE[] callResults;
         {
             const tym_t retTy0 = tybasic(e.Ety);
             if (retTy0 != TYvoid && retTy0 != TYnoreturn)
@@ -846,6 +844,7 @@ private bool genCall(ref WasmCG cg, elem* e)
 
         elem* fexpr = e.E1;
         Symbol* fpSym = null;
+
         if (fexpr.Eoper == OPind && fexpr.E1 && fexpr.E1.Eoper == OPvar)
         {
             // OPind(OPvar(fptr)) — fptr holds a table index.
@@ -900,8 +899,8 @@ private bool genElem(ref WasmCG cg, elem* e)
 
     const op = e.Eoper;
 
-    elem_print(e);
     // import std.stdio; debug writeln()
+    // elem_print(e);
 
     bool unaryOp(WASM_OP op)
     {
@@ -912,6 +911,9 @@ private bool genElem(ref WasmCG cg, elem* e)
 
     switch (op)
     {
+    case OPcall:
+    case OPucall:
+        return cg.genCall(e);
     case OPconst:
         {
             switch (e.wasmType)
@@ -1437,27 +1439,6 @@ private bool genElem(ref WasmCG cg, elem* e)
         cg.emitConst(OP_I32_CONST, cast(int) e.Vlong);
         return true;
 
-    case OPpair:
-    case OPrpair:
-        assert(0);
-        {
-            // OPpair always packs two i32 halves into one i64 quadword
-            // (D slices, long long, delegates). The Ety can be TYullong,
-            // TYllong, TYdelegate (= TYllong), or wrapper types — always pack.
-            // OPpair:  E1=lo (len), E2=hi (ptr) → i64 = (E2<<32) | E1
-            // OPrpair: E1=hi (ptr), E2=lo (len) → i64 = (E1<<32) | E2
-            elem* loE = (e.Eoper == OPrpair) ? e.E2 : e.E1;
-            elem* hiE = (e.Eoper == OPrpair) ? e.E1 : e.E2;
-            cg.genElem(hiE);
-            cg.emit(OP_I64_EXTEND_I32_U);
-            cg.emitConst(OP_I64_CONST, 32);
-            cg.emit(OP_I64_SHL);
-            cg.genElem(loE);
-            cg.emit(OP_I64_EXTEND_I32_U);
-            cg.emit(OP_I64_OR);
-            return true;
-        }
-
     case OPstreq:
         {
             // Struct assignment: copy type_size(e.ET) bytes from E2 to E1.
@@ -1586,6 +1567,7 @@ private bool genElem(ref WasmCG cg, elem* e)
 
     default:
         cg.emit(OP_UNREACHABLE);
+        debug writeln("-----------------");
         elem_print(e);
         assert(0);
         return tybasic(e.Ety) != TYvoid;
@@ -2482,12 +2464,13 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb, bool relocatable)
     // WASM locals — pre-register them in the shadow frame instead.
     foreach (s; globsym[])
     {
-        import std.stdio; debug writeln("scan ", s.identifier);
+        // import std.stdio; debug writeln("scan ", s.identifier);
+
         // s.isParameter ||
         if (s.Sclass == SC.auto_ || s.Sclass == SC.register || s.Sclass == SC.stack)
         {
+            // import std.stdio; debug writeln("tb = ", ty_str(tb).fromStringz);
             const tym_t tb = tybasic(s.ty());
-            import std.stdio; debug writeln("tb = ", tb);
             if (tb == TYstruct || tb == TYarray)
             {
                 cg.registerShadow(s); // aggregate: lives in linear memory
@@ -2501,7 +2484,8 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb, bool relocatable)
 
     // Determine return type. Aggregate-returning functions return the hidden ptr (i32).
     type* retType = sfunc.Stype.Tnext;
-    const bool hasReturn = retType && tybasic(retType.Tty) != TYvoid;
+    assert(retType);
+    const bool hasReturn = tybasic(retType.Tty) != TYvoid;
 
     // Scan all IR blocks for address-taken locals → populate shadow frame.
     block* startblock = sfunc.Sfunc.Fstartblock;
