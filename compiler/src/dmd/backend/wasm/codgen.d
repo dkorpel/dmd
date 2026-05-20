@@ -100,7 +100,8 @@ WASM_TYPE wasmType(tym_t ty)
 /// Duplicated: also in dvarstats.d
 bool isParameter(Symbol* s)
 {
-    return s.Sclass == SC.parameter || s.Sclass == SC.regpar || s.Sclass == SC.fastpar || s.Sclass == SC.shadowreg;
+    const sc = s.Sclass;
+    return sc == SC.parameter || sc == SC.regpar || sc == SC.fastpar || sc == SC.shadowreg;
 }
 
 bool typeHasValue(tym_t ty)
@@ -153,6 +154,7 @@ nothrow:
     /// Returns: true if symbol `s` lives in the shadow frame.
     bool inShadow(Symbol* s) const
     {
+        // return s.sc == SC.shadowReg
         foreach (e; shadowEntries)
             if (e == s)
                 return true;
@@ -164,6 +166,8 @@ nothrow:
     {
         if (inShadow(s))
             return;
+
+        import std.stdio; debug writeln("registering in shadow ", s.identifier);
 
         assert(s.Stype);
         import dmd.backend.type : type_size, type_alignsize;
@@ -2613,9 +2617,12 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb, bool relocatable)
     // WASM locals — pre-register them in the shadow frame instead.
     foreach (s; globsym[])
     {
+        import std.stdio; debug writeln("scan ", s.identifier);
+        // s.isParameter ||
         if (s.Sclass == SC.auto_ || s.Sclass == SC.register || s.Sclass == SC.stack)
         {
             const tym_t tb = tybasic(s.ty());
+            import std.stdio; debug writeln("tb = ", tb);
             if (tb == TYstruct || tb == TYarray)
             {
                 cg.registerShadow(s); // aggregate: lives in linear memory
