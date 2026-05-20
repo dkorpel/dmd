@@ -1,6 +1,6 @@
 # LDC2 WebAssembly ABI for D Features
 
-Investigation of how LDC2 (1.42.0 / LLVM 21) compiles D to WASM32.  
+Investigation of how LDC2 (1.42.0 / LLVM 21) compiles D to WASM32.
 Test programs compiled with `-mtriple=wasm32-unknown-unknown -betterC -O0`.
 
 ---
@@ -533,10 +533,10 @@ Follows the [WebAssembly tool conventions linking format](https://github.com/Web
 - **"linking"** custom section (version 2) with `WASM_SYMBOL_TABLE` subsection.
   - FUNCTION symbols: undefined (imports) have no name; defined have explicit name + global binding.
   - TABLE symbol: for the defined function table (`__indirect_function_table`, BINDING_LOCAL).
-- **"reloc.CODE"**: `R_WASM_FUNCTION_INDEX_LEB` for each direct function call (5-byte padded ULEB).
-- **"reloc.ELEM"**: `R_WASM_FUNCTION_INDEX_LEB` for each element in the element section (5-byte padded ULEB).
-- **"reloc.DATA"**: `R_WASM_TABLE_INDEX_I32` for each 4-byte function table index in the data section (vtable entries).
+- **"reloc.CODE"**: `R_WASM.FUNCTION_INDEX_LEB` for each direct function call (5-byte padded ULEB).
+- **"reloc.ELEM"**: `R_WASM.FUNCTION_INDEX_LEB` for each element in the element section (5-byte padded ULEB).
+- **"reloc.DATA"**: `R_WASM.TABLE_INDEX_I32` for each 4-byte function table index in the data section (vtable entries).
 - Import type ordering: import function types are placed first in the type section so `call_indirect` type indices remain stable after wasm-ld merges the type table.
 
 ### Known limitation
-`R_WASM_TYPE_INDEX_LEB` relocations for `call_indirect` type indices are not emitted (wasm-ld 22 rejects local function symbols as relocation targets for this type). For multi-file linking involving `call_indirect`, the type indices may be incorrect if wasm-ld reorders the type table differently from our ordering heuristic.
+`R_WASM.TYPE_INDEX_LEB` relocations for `call_indirect` type indices are not emitted (wasm-ld 22 rejects local function symbols as relocation targets for this type). For multi-file linking involving `call_indirect`, the type indices may be incorrect if wasm-ld reorders the type table differently from our ordering heuristic.
