@@ -167,10 +167,6 @@ private void writeCustomSection(ref OutBuffer out_, const(char)[] name, OutBuffe
     out_.write(payload.peekSlice());
 }
 
-// ---------------------------------------------------------------------------
-// Data structures
-// ---------------------------------------------------------------------------
-
 // WASM function type: params and result
 struct WasmFuncType
 {
@@ -194,7 +190,18 @@ struct WasmFunc
 struct WasmLocal
 {
     Symbol* sym; // null for anonymous temporaries
-    ubyte ty; // WASM value type
+    WASM_TYPE ty; // WASM value type
+
+    this(WASM_TYPE type) nothrow
+    {
+        this.ty = type;
+    }
+
+    this(Symbol* sym) nothrow
+    {
+        this.sym = sym;
+        this.ty = tybasic(sym.ty).wasmType;
+    }
 }
 
 // Generated code body for a defined function
