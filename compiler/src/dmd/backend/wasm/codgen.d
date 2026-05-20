@@ -136,10 +136,10 @@ nothrow:
     /// Allocate an anonymous temp local of the given WASM type
     ///
     /// Returns: index of allocated temp in `locals` array
-    uint allocTemp(ubyte ty)
+    uint allocTemp(WASM_TYPE ty)
     {
         const uint result = cast(uint) locals.length;
-        locals ~= WasmLocal(null, ty);
+        locals ~= WasmLocal(ty);
         return result;
     }
 
@@ -153,7 +153,7 @@ nothrow:
                 return cast(uint) i;
 
         const uint result = cast(uint) locals.length;
-        locals ~= WasmLocal(s, s.ty().wasmType());
+        locals ~= WasmLocal(s);
         return result;
     }
 
@@ -201,16 +201,16 @@ nothrow:
     }
 
     /// Write constant value `v`
-    void emitConst(ubyte OP, long v)
+    void emitConst(WASM_OP op, long v)
     {
-        emit(OP);
+        emit(op);
         emitSLEB(v);
     }
 
     /// Access local at index `v`
-    void emitLocal(ubyte OP, long v)
+    void emitLocal(WASM_OP op, long v)
     {
-        emit(OP);
+        emit(op);
         emitULEB(cast(uint) v);
     }
 
@@ -230,6 +230,7 @@ nothrow:
     {
         emit(OP_I32_CONST);
         const uint addr = cast(uint)(sym.Soffset + addend);
+
         // Only relocate symbols in the INITIALIZED data section (FL.data, FL.csdata,
         // FL.datseg).  BSS (FL.udata) variables have offsets relative to the BSS
         // region which is handled differently by wasm-ld; they don't map to a
@@ -597,7 +598,7 @@ private void genVarArgs(ref WasmCG cg, elem*[] varArgs, ref uint spLocal, ref ui
     {
         elem* e;
         uint off;
-        ubyte storeOp;
+        WASM_OP storeOp;
         uint alignLog2;
         bool promoteF32;
     }
@@ -901,7 +902,7 @@ private bool genElem(ref WasmCG cg, elem* e)
     elem_print(e);
     // import std.stdio; debug writeln()
 
-    bool unaryOp(ubyte op)
+    bool unaryOp(WASM_OP op)
     {
         cg.genElem(e.E1);
         cg.emit(op);
@@ -1152,7 +1153,7 @@ private bool genElem(ref WasmCG cg, elem* e)
                     cg.emitDataAddr(s, addend);
                     cg.emitDataAddr(s, addend);
                     cg.emitLoad(e.E1.Ety);
-                    cg.genElem(e.E2, wasmType(e.Ety));
+                    cg.genElem(e.E2, wasmType(e));
                     cg.emitBinop(compoundToBinop(op), e.Ety);
                     cg.emitStore(e.E1.Ety);
                     cg.emitDataAddr(s, addend);
@@ -1164,10 +1165,10 @@ private bool genElem(ref WasmCG cg, elem* e)
                 {
                     cg.emitShadowAddr(s);
                     cg.emitLoad(e.E1.Ety);
-                    cg.genElem(e.E2, wasmType(e.Ety));
+                    cg.genElem(e.E2, wasmType(e));
                     cg.emitBinop(compoundToBinop(op), e.Ety);
                     // Stash result, then push [addr, value] in store order.
-                    uint valTmp2 = cg.allocTemp(wasmType(e.Ety));
+                    uint valTmp2 = cg.allocTemp(wasmType(e));
                     cg.emit(OP_LOCAL_SET);
                     cg.emitULEB(valTmp2);
                     cg.emitShadowAddr(s);
@@ -1179,7 +1180,7 @@ private bool genElem(ref WasmCG cg, elem* e)
                 }
                 const uint idx = cg.localFor(s);
                 cg.emitLocal(OP_LOCAL_GET, idx);
-                cg.genElem(e.E2, wasmType(e.Ety));
+                cg.genElem(e.E2, wasmType(e));
                 cg.emitBinop(compoundToBinop(op), e.Ety);
                 // Mask for narrow types (ubyte, ushort, etc.) to preserve wrapping.
                 cg.maskSmallInt(e.E1.Ety);
@@ -2119,12 +2120,7 @@ private void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
             size_t nw = dests.length;
 
             // Emit switch expression
-            if (b.Belem)
-                cg.genElem(b.Belem);
-            else
-            {
-                cg.emitConst(OP_I32_CONST, 0);
-            }
+            cg.genElem(b.Belem);
 
             // Compute vmin/vmax from case values
             long vmin = long.max;
@@ -2160,28 +2156,26 @@ private void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
             // sparse (table would exceed 1024 entries).
             enum maxJumpTableSize = 1024;
 
-            const bool is64bit = (b.Belem && (tybasic(b.Belem.Ety) == TYllong || tybasic(b.Belem.Ety) == TYullong));
             const ulong tableLen64 = cast(ulong)(vmax - vmin) + 1;
-            const bool useBrTable = !is64bit && tableLen64 <= maxJumpTableSize &&
-                tableLen64 <= b.Bswitch.length * 4UL + 4;
+            const bool useBrTable = tableLen64 <= maxJumpTableSize && tableLen64 <= b.Bswitch.length * 4UL + 4;
 
             if (!useBrTable)
             {
                 // If-else chain: store condition in a local, compare each case.
-                const ubyte condTy = is64bit ? WASM_I64 : WASM_I32;
-                uint condLocal = cg.allocTemp(condTy);
+                const condType = b.Belem.wasmType;
+                uint condLocal = cg.allocTemp(condType);
                 cg.emit(OP_LOCAL_SET);
                 cg.emitULEB(condLocal);
                 foreach (size_t ci, long cv; b.Bswitch)
                 {
                     int caseIdx = blockIdx(b.nthSucc(cast(int)(ci + 1)));
                     cg.emitLocal(OP_LOCAL_GET, condLocal);
-                    if (is64bit)
+                    if (condType == WASM_I64)
                     {
                         cg.emitConst(OP_I64_CONST, cv);
                         cg.emit(OP_I64_EQ);
                     }
-                    else
+                    else if (condType == WASM_I32)
                     {
                         cg.emitConst(OP_I32_CONST, cast(int) cv);
                         cg.emit(OP_I32_EQ);
@@ -2478,7 +2472,7 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb, bool relocatable)
         if (s.isParameter)
         {
             // D slice: TYdarray == TYullong on WASM32; identified by s.Stype.Tnext.
-            cg.locals ~= WasmLocal(s, s.ty().wasmType);
+            cg.locals ~= WasmLocal(s);
         }
     }
     cg.numParams = cast(uint) cg.locals.length;
@@ -2499,10 +2493,7 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb, bool relocatable)
             }
             else
             {
-                WasmLocal l;
-                l.sym = s;
-                l.ty = wasmType(s.ty());
-                cg.locals ~= l;
+                cg.locals ~= WasmLocal(s);
             }
         }
     }
