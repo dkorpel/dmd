@@ -1,0 +1,46 @@
+Preview switch `-preview=firstClassTypes` adds the `type_t` value type
+
+Under `-preview=firstClassTypes`, types become first-class CTFE values via a
+new built-in `type_t`. A `type_t` value wraps a type and folds at compile
+time so properties like `.sizeof`, `.stringof`, and `.mangleof` see through
+the wrapper.
+
+A ternary whose arms are types yields a `type_t` value:
+
+---
+static assert((true  ? int : long).sizeof == 4);
+static assert((false ? int : long).sizeof == 8);
+---
+
+`type_t` works as a variable, parameter, return type, and array element:
+
+---
+enum type_t T = int;
+static immutable type_t[] types = [int, long, byte];
+
+type_t pick(bool b, type_t a, type_t c) { return b ? a : c; }
+static assert(pick(true, int, long).sizeof == 4);
+static assert(types[1].sizeof == 8);
+---
+
+`alias X = expr;` accepts a `type_t`-valued expression on the RHS:
+
+---
+enum bool is64bit = true;
+alias size_t2 = is64bit ? ulong : uint;
+static assert(size_t2.sizeof == 8);
+---
+
+`==` and `!=` on `type_t` values compare by mangle identity, and
+`__traits(toType, x.mangleof)` round-trips a `type_t` back to its wrapped
+type:
+
+---
+static assert(int == int);
+static assert(int != long);
+static assert(__traits(toType, T.mangleof) == T);
+---
+
+Functions whose signatures mention `type_t` are CTFE-only and skip codegen;
+taking their address is rejected. Arithmetic on `type_t` values is also
+rejected.

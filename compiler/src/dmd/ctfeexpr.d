@@ -990,6 +990,9 @@ bool isCtfeComparable(Expression e)
         // TypeInfo object is comparable in CTFE
         if (e.op == EXP.typeid_)
             return true;
+        // First-class types: `type_t` values are comparable via mangle identity.
+        if (e.op == EXP.type)
+            return true;
         return false;
     }
     return true;
@@ -1167,6 +1170,19 @@ private int ctfeRawCmp(Loc loc, Expression e1, Expression e2, bool identity = fa
         assert(t1);
         assert(t2);
         return t1 != t2;
+    }
+    // First-class types: compare wrapped types of two `type_t` values
+    // by mangle identity.
+    if (e1.op == EXP.type && e2.op == EXP.type)
+    {
+        import dmd.mangle : mangleToBuffer;
+        import dmd.common.outbuffer : OutBuffer;
+        OutBuffer b1, b2;
+        mangleToBuffer(e1.isTypeExp().type, b1);
+        mangleToBuffer(e2.isTypeExp().type, b2);
+        if (b1.length != b2.length)
+            return 1;
+        return b1.peekChars()[0 .. b1.length] == b2.peekChars()[0 .. b2.length] ? 0 : 1;
     }
     // null == null, regardless of type
     if (e1.op == EXP.null_ && e2.op == EXP.null_)

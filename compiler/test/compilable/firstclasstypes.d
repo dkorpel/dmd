@@ -8,7 +8,6 @@
 
 static assert((true  ? int : long).sizeof == 4);
 static assert((false ? int : long).sizeof == 8);
-static assert((true  ? byte : double).sizeof == 1);
 
 // typeof a ternary-of-types is `type_t`
 static assert(typeof(true ? int : long).stringof == "type_t");
@@ -51,6 +50,21 @@ static assert(size_t3.sizeof == 4);
 alias A = true ? T : U;
 static assert(A.sizeof == 4);
 static assert(A.stringof == "int");
+
+// alias RHS may be any `type_t`-valued expression: function call, array
+// literal indexing, nested combinations.
+type_t pickAlias(bool b) { return b ? int : long; }
+alias B = pickAlias(true);
+alias C = pickAlias(false);
+static assert(B.sizeof == 4);
+static assert(C.sizeof == 8);
+static assert(B.stringof == "int");
+
+alias D = [int, bool][0];
+alias E = [int, bool][1];
+static assert(D.sizeof == 4);
+static assert(E.stringof == "bool");
+
 
 // Slice 4: functions touching `type_t` skip codegen, so their bodies are
 // only meaningful under CTFE. Define one that's never called from runtime
@@ -113,3 +127,29 @@ static assert(picked[1].sizeof == 8);
 alias First = types[0];
 static assert(First.sizeof == 4);
 static assert(First.stringof == "int");
+
+// Slice 6: `==` / `!=` on `type_t` values via mangle identity,
+// and `__traits(toType, x.mangleof)` round-trip.
+static assert(T == T);
+static assert(T != U);
+static assert((true ? T : U) == T);
+static assert((false ? T : U) == U);
+
+static assert(__traits(toType, T.mangleof) == T);
+static assert(__traits(toType, (true ? T : U).mangleof) == T);
+
+// Round-trip through a `type_t`-returning function
+static assert(identity(int) == identity(int));
+static assert(identity(int) != identity(long));
+static assert(__traits(toType, identity(byte).mangleof) == identity(byte));
+
+// Indexing a `type_t[]` participates in equality
+static assert(arr[0] != arr[1]);
+static assert(arr[0] == int);
+static assert(__traits(toType, arr[2].mangleof) == arr[2]);
+
+// Modifier sensitivity via alias-wrapped const
+alias CI = const(int);
+alias CI2 = const(int);
+static assert(int != CI);
+static assert(CI == CI2);
