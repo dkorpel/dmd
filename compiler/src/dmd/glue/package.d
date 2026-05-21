@@ -318,6 +318,7 @@ tym_t totym(Type tx)
             t = TYint;
             break;
 
+        case Ttype:
         case Tnull:
             t = TYnptr;
             break;

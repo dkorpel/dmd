@@ -3469,6 +3469,16 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
             }
         }
 
+        // Functions using type_t are CTFE only
+        if (dsym.type.toBasetype().ty == Ttype)
+        {
+            if (sc.func)
+            {
+                // printf("skip func = %s\n", sc.func.toChars);
+                sc.func.skipCodegen = true;
+            }
+        }
+
         dsym.semanticRun = PASS.semanticdone;
 
         if (dsym.type.toBasetype().ty == Terror)

@@ -1175,14 +1175,7 @@ private int ctfeRawCmp(Loc loc, Expression e1, Expression e2, bool identity = fa
     // by mangle identity.
     if (e1.op == EXP.type && e2.op == EXP.type)
     {
-        import dmd.mangle : mangleToBuffer;
-        import dmd.common.outbuffer : OutBuffer;
-        OutBuffer b1, b2;
-        mangleToBuffer(e1.isTypeExp().type, b1);
-        mangleToBuffer(e2.isTypeExp().type, b2);
-        if (b1.length != b2.length)
-            return 1;
-        return b1.peekChars()[0 .. b1.length] == b2.peekChars()[0 .. b2.length] ? 0 : 1;
+        return e1.isTypeExp().type != e2.isTypeExp().type;
     }
     // null == null, regardless of type
     if (e1.op == EXP.null_ && e2.op == EXP.null_)

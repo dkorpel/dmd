@@ -14980,31 +14980,17 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
         // wrapped types by mangle identity.
         if (global.params.firstClassTypes)
         {
-            bool isTypeVal(Expression e)
+            auto t1 = exp.e1.isTypeExp();
+            auto t2 = exp.e2.isTypeExp();
+            if (t1 && t2)
             {
-                return e.op == EXP.type ||
-                    (e.type && e.type.toBasetype().ty == Ttype);
-            }
-            if (isTypeVal(exp.e1) && isTypeVal(exp.e2))
-            {
-                if (exp.e1.op == EXP.type && exp.e2.op == EXP.type)
-                {
-                    import dmd.mangle : mangleToBuffer;
-                    import dmd.common.outbuffer : OutBuffer;
-                    auto t1 = exp.e1.isTypeExp().type;
-                    auto t2 = exp.e2.isTypeExp().type;
-                    OutBuffer b1, b2;
-                    mangleToBuffer(t1, b1);
-                    mangleToBuffer(t2, b2);
-                    bool eq = b1.length == b2.length &&
-                        b1.peekChars()[0 .. b1.length] == b2.peekChars()[0 .. b2.length];
-                    result = IntegerExp.createBool(eq == (exp.op == EXP.equal));
-                    return;
-                }
-                exp.type = Type.tbool;
-                result = exp;
+                bool eq = t1.type == t2.type;
+                result = IntegerExp.createBool(eq == (exp.op == EXP.equal));
                 return;
             }
+            exp.type = Type.tbool;
+            result = exp;
+            return;
         }
         if (exp.e1.op == EXP.type || exp.e2.op == EXP.type)
         {
