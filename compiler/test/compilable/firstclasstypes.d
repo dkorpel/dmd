@@ -90,3 +90,26 @@ static assert(largerType(int, long).sizeof == 8);
 static assert(largerType(short, byte).sizeof == 2);
 static assert(largerType(int, long).stringof == "long");
 static assert(largerType(largerType(byte, short), int).sizeof == 4);
+
+// Slice 5: `type_t[]` arrays, indexing, and alias-to-index
+static immutable type_t[] types = [int, long, byte];
+static assert(types.length == 3);
+static assert(types[0].sizeof == 4);
+static assert(types[1].sizeof == 8);
+static assert(types[2].sizeof == 1);
+static assert(types[0].stringof == "int");
+
+// Static-immutable fixed-size array of `type_t`
+static immutable type_t[3] arr = [int, long, byte];
+static assert(arr[0].sizeof == 4);
+static assert(arr[2].sizeof == 1);
+
+// Array elements may be computed `type_t` expressions
+static immutable type_t[] picked = [true ? int : long, false ? int : long];
+static assert(picked[0].sizeof == 4);
+static assert(picked[1].sizeof == 8);
+
+// `alias` to an indexing of a `type_t` array
+alias First = types[0];
+static assert(First.sizeof == 4);
+static assert(First.stringof == "int");

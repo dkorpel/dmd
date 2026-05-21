@@ -305,6 +305,7 @@ UnionExp copyLiteral(Expression e)
     case EXP.void_:
     case EXP.vector:
     case EXP.typeid_:
+    case EXP.type:
         // Simple value types
         // Keep e1 for DelegateExp and DotVarExp
         emplaceExp!(UnionExp)(&ue, e);
@@ -396,6 +397,13 @@ private UnionExp paintTypeOntoLiteralCopy(Type type, Expression lit)
 {
     UnionExp ue;
     if (lit.type.equals(type))
+    {
+        emplaceExp!(UnionExp)(&ue, lit);
+        return ue;
+    }
+    // First-class types: a TypeExp keeps its wrapped type as `.type`.
+    // Painting `type_t` over it would destroy the wrapped type.
+    if (lit.op == EXP.type)
     {
         emplaceExp!(UnionExp)(&ue, lit);
         return ue;

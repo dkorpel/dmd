@@ -475,9 +475,14 @@ void toObjFile(Dsymbol ds, bool multiobj)
                 return;
             }
 
-            // First-class types: `type_t` variables exist only at compile-time
-            if (vd.type.ty == Ttype)
-                return;
+            // First-class types: `type_t` variables (including arrays of `type_t`) exist only at compile-time
+            {
+                Type tt = vd.type.toBasetype();
+                while (tt.nextOf())
+                    tt = tt.nextOf().toBasetype();
+                if (tt.ty == Ttype)
+                    return;
+            }
 
             if (vd.aliasTuple)
             {

@@ -6974,9 +6974,30 @@ void aliasSemantic(AliasDeclaration ds, Scope* sc)
 
         if (e)  // Try to convert Expression to Dsymbol
         {
+            // First-class types: try expression semantic to see if it yields a type_t value.
+            if (global.params.firstClassTypes && (!e.type || e.type.ty != Ttype))
+            {
+                Expression e2 = e.expressionSemantic(sc2);
+                if (e2 && e2.type && e2.type.toBasetype().ty == Ttype)
+                    e = e2;
+            }
             // TupleExp is naturally converted to a TupleDeclaration
             if (auto te = e.isTupleExp())
                 s = new TupleDeclaration(te.loc, ds.ident, cast(Objects*)te.exps);
+            else if (global.params.firstClassTypes && e.type && e.type.toBasetype().ty == Ttype)
+            {
+                // alias X = expr; where expr yields a type_t value (e.g. types[0])
+                auto folded = e.ctfeInterpret();
+                if (auto teExp = folded.isTypeExp())
+                {
+                    ds.type = teExp.type;
+                    ds.originalType = teExp.type;
+                    ds.aliassym = null;
+                    return normalRet();
+                }
+                .error(ds.loc, "alias initializer `%s` did not fold to a type at compile time", e.toErrMsg());
+                return errorRet();
+            }
             else
             {
                 s = getDsymbol(e);
@@ -7177,6 +7198,20 @@ private void aliasAssignSemantic(AliasAssign ds, Scope* sc)
             // TupleExp is naturally converted to a TupleDeclaration
             if (auto te = e.isTupleExp())
                 s = new TupleDeclaration(te.loc, ds.ident, cast(Objects*)te.exps);
+            else if (global.params.firstClassTypes && e.type && e.type.toBasetype().ty == Ttype)
+            {
+                auto folded = e.ctfeInterpret();
+                if (auto teExp = folded.isTypeExp())
+                {
+                    aliassym.type = teExp.type;
+                    aliassym.aliassym = null;
+                    aliassym.ignoreRead = false;
+                    ds.semanticRun = PASS.semanticdone;
+                    return;
+                }
+                .error(ds.loc, "alias initializer `%s` did not fold to a type at compile time", e.toErrMsg());
+                return errorRet();
+            }
             else
             {
                 s = getDsymbol(e);
