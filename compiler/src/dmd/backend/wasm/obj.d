@@ -166,7 +166,8 @@ struct WasmFuncType
 // Recorded function definition
 struct WasmFunc
 {
-    uint typeIdx; // index into typeSection
+    uint typeIdx; // index into typeSection; uint.max until pendingType is interned
+    WasmFuncType pendingType; // signature of a defined function awaiting interning (after phase 1)
     Symbol* sym; // the D symbol
     bool exported;
     bool isImport;
@@ -298,49 +299,18 @@ struct WasmModule
 
 nothrow:
 
-    // Rearrange funcTypes so import function types come first (in import order).
-    // wasm-ld does the same when creating the final module, so by pre-empting
-    // this reordering our type indices remain stable after single-file linking,
-    // and call_indirect instructions stay correct without relocation patching.
-    void reorderImportTypesFirst() nothrow
+    // Intern the pending type of every defined function. Called after phase 1
+    // has registered all imports, so imports occupy type indices 0..numImports-1
+    // and defined-function types get appended in registration order. This matches
+    // what wasm-ld produces, so call_indirect type indices stay stable across
+    // single-file linking.
+    void internPendingTypes() nothrow
     {
-        if (!numImports || funcTypes.length == 0)
-            return;
-
-        // Build mapping: old type index -> new type index
-        uint[] oldToNew;
-        oldToNew.length = funcTypes.length;
-        oldToNew[] = uint.max;
-
-        WasmFuncType[] newTypes;
-
-        // Step 1: add import function types first, in import-function order.
-        foreach (ref const WasmFunc f; funcs[0 .. numImports])
-        {
-            uint oi = f.typeIdx;
-            if (oi < funcTypes.length && oldToNew[oi] == uint.max)
-            {
-                oldToNew[oi] = cast(uint) newTypes.length;
-                newTypes ~= WasmFuncType(funcTypes[oi].params.dup, funcTypes[oi].results.dup);
-            }
-        }
-
-        // Step 2: append remaining types in their original relative order.
-        foreach (size_t i, ref const WasmFuncType ft; funcTypes)
-        {
-            if (oldToNew[i] == uint.max)
-            {
-                oldToNew[i] = cast(uint) newTypes.length;
-                newTypes ~= WasmFuncType(ft.params.dup, ft.results.dup);
-            }
-        }
-
-        // Update typeIdx for all registered functions.
         foreach (ref WasmFunc f; funcs)
-            if (f.typeIdx < oldToNew.length)
-                f.typeIdx = oldToNew[f.typeIdx];
-
-        funcTypes = newTypes;
+        {
+            if (f.typeIdx == uint.max)
+                f.typeIdx = internType(f.pendingType);
+        }
     }
 
     // Return or create a type index for the given func type
@@ -1289,10 +1259,11 @@ void WasmObj_term2(const(char)[] objfilename, ref WasmModule wmod, ref OutBuffer
             for (; b; b = b.Bnext)
                 preRegisterExternals(b.Belem);
         }
-        // Reorder type table so import types come first — this must happen
-        // between phase 1 and phase 2 so that code generation uses the
-        // correct post-reorder type indices in call_indirect instructions.
-        wmod.reorderImportTypesFirst();
+        // Intern types of defined functions now that all import types are
+        // registered. Imports occupy indices 0..numImports-1; defined-function
+        // types are appended next, in registration order. Phase 2 codegen
+        // sees stable, ld-compatible type indices.
+        wmod.internPendingTypes();
 
         // Phase 2: generate code now that import indices are stable.
         // Restore each function's globsym before calling wasm_codgen.
@@ -1491,7 +1462,8 @@ int WasmObj_comdat(Symbol* s)
     }
 
     WasmFunc f;
-    f.typeIdx = wmod.internType(ft);
+    f.typeIdx = uint.max;
+    f.pendingType = ft;
     f.sym = s;
     f.exported = (s.Sclass == SC.global);
 
@@ -1933,7 +1905,8 @@ void WasmObj_func_start(Symbol* sfunc)
     WasmFuncType ft = buildFuncType(sfunc.Stype, sfunc);
 
     WasmFunc f;
-    f.typeIdx = wmod.internType(ft);
+    f.typeIdx = uint.max;
+    f.pendingType = ft;
     f.sym = sfunc;
     f.exported = (sfunc.Sclass == SC.global);
     wmod.funcs ~= f;
