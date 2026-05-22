@@ -13,6 +13,7 @@ module dmd.lsp;
 
 import core.stdc.stdio;
 import dmd.aggregate;
+import dmd.astenums;
 import dmd.ast_node;
 import dmd.common.outbuffer;
 import dmd.dclass;
@@ -29,6 +30,7 @@ import dmd.globals;
 import dmd.identifier;
 import dmd.lexer;
 import dmd.location;
+import dmd.mtype;
 import dmd.typesem : Type_init;
 import dmd.root.filename;
 import dmd.root.string;
@@ -165,6 +167,119 @@ ASTNode findCursorObject(ref Lsp lsp, Params params)
     return visitor.result;
 }
 
+/// LSP CompletionItemKind values for the kinds we currently emit.
+private int completionKind(Declaration d)
+{
+    if (d.isFuncDeclaration()) return 3;  // Function
+    if (d.isVarDeclaration()) return 6;   // Variable
+    return 1;                              // Text (fallback)
+}
+
+/// Convert a list of Declarations into LSP CompletionItem JSON, written
+/// comma-separated into `buf` (no enclosing brackets).
+void writeCompletionItems(ref OutBuffer buf, Declaration[] decls)
+{
+    bool first = true;
+    foreach (d; decls)
+    {
+        if (!d || !d.ident)
+            continue;
+        if (!first)
+            buf.writestring(",");
+        first = false;
+        buf.printf(`{"label":"%s","kind":%d`, d.ident.toChars, completionKind(d));
+        if (d.type)
+        {
+            buf.writestring(`,"detail":"`);
+            buf.writeJsonString(d.type.toChars.toDString);
+            buf.writestring(`"`);
+        }
+        buf.writestring(`}`);
+    }
+}
+
+/// MVP: emit completion items derived from a hard-coded Declaration[] so the
+/// LSP plumbing can be exercised end-to-end. Replace with real struct-field
+/// lookup once the wiring is verified.
+void completionItems(ref Lsp lsp, Params params, ref OutBuffer buf)
+{
+    Type_init();
+    Declaration[] decls = [
+        cast(Declaration) new VarDeclaration(Loc.initial, Type.tint32,    Identifier.idPool("alpha"), null),
+        cast(Declaration) new VarDeclaration(Loc.initial, Type.tstring,   Identifier.idPool("beta"),  null),
+        cast(Declaration) new VarDeclaration(Loc.initial, Type.tvoidptr,  Identifier.idPool("gamma"), null),
+    ];
+    writeCompletionItems(buf, decls);
+}
+
+/// Convert a list of Parameters into LSP SignatureInformation JSON for a
+/// single signature, written into `buf`.
+void writeSignature(ref OutBuffer buf, const(char)[] name, Parameter[] params_)
+{
+    buf.printf(`{"label":"%.*s(`, cast(int)name.length, name.ptr);
+    bool first = true;
+    foreach (p; params_)
+    {
+        if (!first)
+            buf.writestring(", ");
+        first = false;
+        if (p.type)
+            buf.printf("%s", p.type.toChars);
+        if (p.ident)
+            buf.printf(" %s", p.ident.toChars);
+    }
+    buf.writestring(`)","parameters":[`);
+    first = true;
+    foreach (p; params_)
+    {
+        if (!first)
+            buf.writestring(",");
+        first = false;
+        buf.writestring(`{"label":"`);
+        OutBuffer label;
+        if (p.type)
+            label.printf("%s", p.type.toChars);
+        if (p.ident)
+        {
+            if (p.type)
+                label.writestring(" ");
+            label.printf("%s", p.ident.toChars);
+        }
+        buf.writeJsonString(label.extractSlice);
+        buf.writestring(`"}`);
+    }
+    buf.writestring(`]}`);
+}
+
+/// MVP: emit a hard-coded signature with a hard-coded Parameter[].
+void signatureHelp(ref Lsp lsp, Params params, ref OutBuffer buf)
+{
+    Type_init();
+    Parameter[] sigParams = [
+        new Parameter(Loc.initial, STC.none, Type.tint32,  Identifier.idPool("x"), null, null),
+        new Parameter(Loc.initial, STC.none, Type.tstring, Identifier.idPool("y"), null, null),
+    ];
+    buf.writestring(`{"signatures":[`);
+    writeSignature(buf, "exampleFunc", sigParams);
+    buf.writestring(`],"activeSignature":0,"activeParameter":0}`);
+}
+
+/// Send a textDocument/publishDiagnostics notification with a single dummy
+/// error on the first line. LSP positions are 0-based, so "line":0 renders
+/// as line 1 in the editor.
+void publishDiagnostics(string uri)
+{
+    OutBuffer buf;
+    buf.writestring(`{"jsonrpc":"2.0","method":"textDocument/publishDiagnostics","params":{"uri":"`);
+    buf.writeJsonString(uri);
+    buf.writestring(`","diagnostics":[`);
+    buf.writestring(`{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":10}},"severity":1,"message":"dummy error"}`);
+    buf.writestring(`]}}`);
+    printf("Content-Length: %d\r\n\r\n", cast(int) buf.length);
+    printf("%s", buf.extractChars());
+    fflush(stdout);
+}
+
 int lspMain()
 {
     import core.stdc.stdlib : atoi;
@@ -255,6 +370,8 @@ void lspRespond(ref Lsp lsp, JsonRpc result)
         buf.writestring(`{"capabilities":{
             "definitionProvider":true,
             "hoverProvider":true,
+            "completionProvider":{"triggerCharacters":["."]},
+            "signatureHelpProvider":{"triggerCharacters":["(",","]},
             "textDocumentSync":1
             }}`);
     }
@@ -262,12 +379,13 @@ void lspRespond(ref Lsp lsp, JsonRpc result)
     {
         if (auto obj = findCursorObject(lsp, result.params))
         {
-            fprintf(stderr, obj);
-
-            if (auto d = obj.isDeclaration())
+            // fprintf(stderr, obj);
+            // TODO: add loc range for declaration
+            // if (auto d = obj.isDeclaration())
             {
 
             }
+
             if (auto e = obj.isExpression())
             {
                 if (auto ve = e.isVarExp())
@@ -342,15 +460,13 @@ void lspRespond(ref Lsp lsp, JsonRpc result)
     }
     else if (result.method == "textDocument/completion")
     {
-        // auto-complete
+        buf.writestring(`{"isIncomplete":false,"items":[`);
+        completionItems(lsp, result.params, buf);
+        buf.writestring(`]}`);
     }
     else if (result.method == "textDocument/signatureHelp")
     {
-        // show parameters when opening a f() for a function call
-    }
-    else if (result.method == "textDocument/publishDiagnostics")
-    {
-        // show errors
+        signatureHelp(lsp, result.params, buf);
     }
     else if (result.method == "textDocument/documentSymbol")
     {
@@ -359,12 +475,14 @@ void lspRespond(ref Lsp lsp, JsonRpc result)
     else if (result.method == "textDocument/didOpen")
     {
         lsp.openDocuments[result.params.textDocument.uri] = result.params.textDocument.text;
+        publishDiagnostics(result.params.textDocument.uri);
         return; // notification, no response
     }
     else if (result.method == "textDocument/didChange")
     {
         // textDocumentSync: Full (1) — contentChanges[0].text is the complete new content
         lsp.openDocuments[result.params.textDocument.uri] = result.params.contentChanges.text;
+        publishDiagnostics(result.params.textDocument.uri);
         return; // notification, no response
     }
     else if (result.method == "textDocument/didClose")
