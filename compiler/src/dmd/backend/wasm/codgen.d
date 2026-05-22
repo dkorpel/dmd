@@ -159,13 +159,9 @@ nothrow:
     }
 
     /// Returns: true if symbol `s` lives in the shadow frame.
-    bool inShadow(Symbol* s) const
+    static bool inShadow(Symbol* s)
     {
-        // return s.sc == SC.shadowReg
-        foreach (e; shadowEntries)
-            if (e == s)
-                return true;
-        return false;
+        return (s.Sflags & SFLwasmshadow) != 0;
     }
 
     /// Register a symbol in the shadow frame (idempotent).
@@ -174,13 +170,12 @@ nothrow:
         if (inShadow(s))
             return;
 
-        import std.stdio; debug writeln("registering in shadow ", s.identifier);
-
         assert(s.Stype);
         const uint sz = cast(uint) type_size(s.Stype);
         const uint al = Symbol_Salignsize(*s);
         const uint off = (shadowFrameSize + al - 1) & ~(al - 1);
         s.Soffset = off;
+        s.Sflags |= SFLwasmshadow;
         shadowEntries ~= s;
         shadowFrameSize = off + sz;
     }
@@ -822,7 +817,6 @@ private bool genCall(ref WasmCG cg, elem* e)
             calleeSym.Stype.Tparamtypes !is null &&
             variadic(calleeSym.Stype);
 
-
         if (isCVariadic)
         {
             // C variadic ABI (matches LDC2/wasi-libc): variadic args are spilled
@@ -912,7 +906,7 @@ private bool genCall(ref WasmCG cg, elem* e)
             WASM_TYPE[] callParams;
             foreach (a; args)
             {
-                if (a.Ety == TYdarray || a.Ety == TYdelegate)
+                // if (a.Ety == TYdarray || a.Ety == TYdelegate)
 
                 callParams ~= wasmType(tybasic(a.Ety));
             }
