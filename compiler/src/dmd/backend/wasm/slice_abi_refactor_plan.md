@@ -1,6 +1,16 @@
-# Slice ABI refactor: rip out i64 packing, treat slices like structs
+# Slice ABI: stop packing slices/delegates into i64
 
-## Status
+**Current direction (2026-05-22):** slices and delegates are **never** packed
+into a single i64 anywhere. They are always represented as two i32 values —
+`(length, ptr)` for slices, `(context, funcptr)` for delegates — both on the
+WASM value stack and in shadow-frame memory (two adjacent i32 slots).
+Any IR producing an i64 representation is a bug to be fixed at the producer.
+
+The historical refactor notes below are kept only for context on prior
+failed attempts; they describe an earlier mixed-mode design that is now
+deprecated.
+
+## Status (historical)
 **Commit 2 landed** (Simplify sliceparams? — 323630d2a6): `isSliceElem` heuristic
 gone, replaced by callee-param-driven splitting + a small RTL prototype table.
 Commits 1 and 3 still **deferred** after a failed attempt — see "Failed attempt"
