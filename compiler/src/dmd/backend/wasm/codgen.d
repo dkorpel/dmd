@@ -115,6 +115,18 @@ bool typeHasValue(tym_t ty)
     return tybasic(ty) == TYvoid || tybasic(ty) == TYnoreturn;
 }
 
+/// Per-call scope used during OPparam tree traversal. The genElem recursion
+/// over OPparam consumes one arg per leaf, advancing `nextParam` along the
+/// callee's declared param list. Args past the declared list are queued in
+/// `varArgs` when the callee is C-variadic (spilled to the shadow frame
+/// after the recursion completes).
+struct CallCtx
+{
+    param_t* nextParam;  /// next declared param (null when out of declared)
+    bool isCVariadic;    /// true when callee takes `...`
+    elem*[] varArgs;     /// args collected for the variadic shadow-frame spill
+}
+
 /// Per-function code-generation state
 struct WasmCG
 {
@@ -131,6 +143,11 @@ struct WasmCG
     uint shadowBaseLocal; /// WASM local index holding the shadow frame base address
     uint shadowFrameSize; /// total size in bytes of shadow frame
     Symbol*[] shadowEntries; /// per-symbol shadow frame offsets
+
+    /// Scope for an in-progress call. Pushed on entry to genCall, popped on exit.
+    /// Leaves of the OPparam tree consult the top of the stack to decide how to
+    /// emit themselves (split slice into two i32s, queue as variadic, plain emit).
+    CallCtx[] callCtxStack;
 
 nothrow:
 
@@ -688,35 +705,6 @@ private void genVarArgs(ref WasmCG cg, elem*[] varArgs, ref uint spLocal, ref ui
     cg.emitLocal(OP_LOCAL_GET, spLocal);
 }
 
-// Non-variadic direct call.
-// Gather args in WASM call order. For D linkage (TYjfunc),
-// the function signature's globsym is built by reversing
-// the source params then prepending sthis/shidden, so the
-// declared param order is [this, shidden, line, file, args]
-// (reversed src + leading hidden). The caller-side OPparam
-// tree is built as left-fold of source-order args with
-// ethis (and ehidden) appended last: OPparam(.. (args,file) .. line), this).
-// Visiting E2 first then E1 walks this tree to produce the
-// matching order: [this, line, file, args].
-elem*[] gatherCallArgs(elem* p)
-{
-    elem*[] callArgs;
-    void gather(elem* p) nothrow
-    {
-        if (!p)
-            return;
-        if (p.Eoper == OPparam)
-        {
-            gather(p.E2);
-            gather(p.E1);
-            return;
-        }
-        callArgs ~= p;
-    }
-    gather(p);
-    return callArgs;
-}
-
 // Drop OPcomma side-effect chains, emitting and dropping each LHS, until we
 // land on something that isn't an OPcomma. Returns the remaining value-expr.
 private elem* unwrapComma(ref WasmCG cg, elem* e)
@@ -769,17 +757,9 @@ private bool paramIsSlice(const(param_t)* p)
     return tb == TYdarray || tb == TYdelegate;
 }
 
-// Emit `arg` for a call site. When `slice` is true, the callee expects the
-// arg as two separate i32 values (length/context first, then ptr/funcptr) —
-// slices/delegates are never packed into a single i64. Load both halves
-// directly from the arg's address.
-private void emitCallArg(ref WasmCG cg, elem* arg, bool slice)
+// Emit `arg` as a slice/delegate split into (length, ptr) i32s.
+private void emitSliceArg(ref WasmCG cg, elem* arg)
 {
-    if (!slice)
-    {
-        cg.genElem(arg);
-        return;
-    }
     elem* a = unwrapComma(cg, arg);
     // OPconst null slice/delegate → emit (0, 0).
     if (a.Eoper == OPconst)
@@ -791,134 +771,100 @@ private void emitCallArg(ref WasmCG cg, elem* arg, bool slice)
     if (emitSliceHalf(cg, a, /*ptrHalf*/ false) &&
         emitSliceHalf(cg, a, /*ptrHalf*/ true))
         return;
-    // Fallback: well-formed IR shouldn't reach here.
     cg.emit(OP_UNREACHABLE);
+}
+
+// Consume one leaf of the current call's OPparam tree as a single argument,
+// using the CallCtx at top of `cg.callCtxStack` to decide how to emit it.
+// `case OPparam` in genElem walks E2 then E1 and dispatches each leaf here.
+//
+// Walk order: for D linkage (TYjfunc), the OPparam tree is left-folded with
+// source-order args plus ethis/ehidden appended last, so E2-first/E1-second
+// yields the declared param order [this, line, file, args].
+private void consumeCallArg(ref WasmCG cg, elem* e)
+{
+    if (!e)
+        return;
+    if (e.Eoper == OPparam)
+    {
+        cg.genElem(e); // → case OPparam → recurses through here
+        return;
+    }
+    CallCtx* ctx = &cg.callCtxStack[$ - 1];
+    param_t* p = ctx.nextParam;
+    if (p)
+    {
+        ctx.nextParam = p.Pnext;
+        if (paramIsSlice(p))
+        {
+            emitSliceArg(cg, e);
+            return;
+        }
+    }
+    else if (ctx.isCVariadic)
+    {
+        // Past declared params: stash for the post-recursion shadow-frame spill.
+        ctx.varArgs ~= e;
+        return;
+    }
+    cg.genElem(e);
 }
 
 // Expression code generation
 private bool genCall(ref WasmCG cg, elem* e)
 {
-    // E1 is the function.
-    // Direct call: E1 is OPvar of a function symbol.
+    // E1 is the function. Direct call: E1 is OPvar of a function symbol.
+    Symbol* calleeSym = null;
     if (e.E1.Eoper == OPvar && e.E1.Vsym && e.E1.Vsym.Sclass != SC.auto_ &&
         e.E1.Vsym.Sclass != SC.parameter && e.E1.Vsym.Sclass != SC.fastpar)
     {
-        Symbol* calleeSym = e.E1.Vsym;
-        uint fidx = funcIndex(calleeSym);
+        calleeSym = e.E1.Vsym;
+    }
 
-        // C variadic requires at least one fixed parameter (e.g. `printf(fmt, ...)`).
-        // Bare TYnfunc/TYjfunc types set TF.prototype with no Tparamtypes — those are
-        // unprototyped declarations (typical of runtime/RTL symbols built via type_fake),
-        // not real variadics, and must not enter the spill-to-shadow path.
-        const bool isCVariadic = calleeSym.Stype !is null &&
-            calleeSym.Stype.Tparamtypes !is null &&
-            variadic(calleeSym.Stype);
+    type* fty = calleeSym ? calleeSym.Stype : null;
 
-        if (isCVariadic)
-        {
-            // C variadic ABI (matches LDC2/wasi-libc): variadic args are spilled
-            // to a shadow stack frame; a pointer to that frame is passed as the
-            // last i32 parameter after all fixed args.  When there are no variadic
-            // args the pointer is null (i32.const 0).
-            //
-            // C default promotions apply inside `...`:
-            //   float  → double (f64)
-            //   char/short → int (i32)
+    // C variadic requires Tparamtypes set (bare TYnfunc/TYjfunc with no
+    // params is an unprototyped RTL decl, not a real variadic).
+    CallCtx ctx;
+    ctx.nextParam = fty ? fty.Tparamtypes : null;
+    ctx.isCVariadic = fty !is null && fty.Tparamtypes !is null && variadic(fty);
 
-            // Collect all args left-to-right (E2-first in OPparam tree).
-            elem*[] allArgs = gatherCallArgs(e.E2);
+    // Walk the OPparam tree via genElem natural recursion; consumeCallArg
+    // emits each leaf using `ctx`, queueing variadics into ctx.varArgs.
+    cg.callCtxStack ~= ctx;
+    consumeCallArg(cg, e.E2);
+    elem*[] varArgs = cg.callCtxStack[$ - 1].varArgs;
+    cg.callCtxStack.length--;
 
-            // Count fixed (non-variadic) params from the function type
-            // and collect them positionally for slice-split decisions.
-            int nFixed = 0;
-            param_t*[] fixedParams;
-            for (param_t* p = calleeSym.Stype.Tparamtypes; p; p = p.Pnext)
-            {
-                fixedParams ~= p;
-                nFixed++;
-            }
+    // For C variadics, spill the queued args to the shadow frame and push
+    // the frame pointer as the trailing i32 arg.
+    uint spLocal;
+    uint vaFrameSize;
+    if (ctx.isCVariadic)
+        cg.genVarArgs(varArgs, spLocal, vaFrameSize);
 
-            // Emit fixed args to the WASM value stack. A fixed param
-            // declared as a D slice splits the matching i64 arg into
-            // (len, ptr). C variadic linkage has no param reversal, so
-            // fixedParams aligns with allArgs by position directly.
-            foreach (i, a; allArgs[0 .. nFixed])
-                emitCallArg(cg, a, paramIsSlice(fixedParams[i]));
-
-            // Compute variadic args layout and emit shadow-stack spill.
-            elem*[] varArgs = allArgs[nFixed .. $];
-
-            uint spLocal;
-            uint vaFrameSize;
-            cg.genVarArgs(varArgs, spLocal, vaFrameSize);
-
-            cg.emitCall(fidx, calleeSym);
-
-            // Restore __stack_pointer after the call.
-            if (varArgs.length)
-            {
-                uint spIdx = wmod_getOrCreateStackPtrGlobal();
-                cg.emitLocal(OP_LOCAL_GET, spLocal);
-                cg.emitConst(OP_I32_CONST, cast(int) vaFrameSize);
-                cg.emit(OP_I32_ADD);
-                cg.emit(OP_GLOBAL_SET);
-                cg.emitULEB(spIdx);
-            }
-
-            if (calleeSym.Sflags & SFLexit)
-                cg.emit(OP_UNREACHABLE);
-        }
-        else
-        {
-            auto callArgs = gatherCallArgs(e.E2);
-
-            param_t*[] declParams;
-
-            assert(calleeSym.Stype);
-
-            auto paramTypes = calleeSym.Stype.Tparamtypes;
-
-            for (param_t* q = paramTypes; q; q = q.Pnext)
-                declParams ~= q;
-
-            foreach (i, a; callArgs)
-            {
-                const bool splitSlice = i < declParams.length && paramIsSlice(declParams[i]);
-                emitCallArg(cg, a, splitSlice);
-            }
-
-            cg.emitCall(fidx, calleeSym);
-            // Noreturn (SFLexit) functions leave the stack empty. Emit unreachable
-            // so WASM's type checker accepts any type expectations after the call.
-            if (calleeSym.Sflags & SFLexit)
-                cg.emit(OP_UNREACHABLE);
-        }
+    if (calleeSym)
+    {
+        cg.emitCall(funcIndex(calleeSym), calleeSym);
     }
     else
     {
-        WasmFuncType paramTypesFromElem(elem* e)
+        // Indirect call. Derive the WASM type signature from arg shapes; this
+        // mirrors paramTypesFromElem's old behavior (no slice-split for now
+        // since type info on the function pointer isn't reliably available).
+        WASM_TYPE[] callParams;
+        void collect(elem* p)
         {
-            elem*[] args = gatherCallArgs(e.E2);
-
-            WASM_TYPE[] callParams;
-            foreach (a; args)
-            {
-                // if (a.Ety == TYdarray || a.Ety == TYdelegate)
-
-                callParams ~= wasmType(tybasic(a.Ety));
-            }
-            WASM_TYPE[] callResults;
-            {
-                const tym_t retTy0 = tybasic(e.Ety);
-                if (typeHasValue(retTy0))
-                    callResults ~= wasmType(retTy0);
-            }
-            return WasmFuncType(callParams, callResults);
+            if (!p) return;
+            if (p.Eoper == OPparam) { collect(p.E2); collect(p.E1); return; }
+            callParams ~= wasmType(tybasic(p.Ety));
         }
-
-        // foreach
-        cg.genElem(e.E2);
-        uint typeIdx = wmod_internType(paramTypesFromElem(e.E2));
+        collect(e.E2);
+        WASM_TYPE[] callResults;
+        const tym_t retTy0 = tybasic(e.Ety);
+        if (typeHasValue(retTy0))
+            callResults ~= wasmType(retTy0);
+        uint typeIdx = wmod_internType(WasmFuncType(callParams, callResults));
 
         // Function pointer source: strip an outer OPind (fptr table index
         // lives at the address) and evaluate the inner expression to push
@@ -929,6 +875,22 @@ private bool genCall(ref WasmCG cg, elem* e)
         cg.emitCallIndirectType(typeIdx);
         cg.emitULEB(0); // table index 0
     }
+
+    // Restore __stack_pointer after a variadic call that spilled args.
+    if (ctx.isCVariadic && varArgs.length)
+    {
+        uint spIdx = wmod_getOrCreateStackPtrGlobal();
+        cg.emitLocal(OP_LOCAL_GET, spLocal);
+        cg.emitConst(OP_I32_CONST, cast(int) vaFrameSize);
+        cg.emit(OP_I32_ADD);
+        cg.emit(OP_GLOBAL_SET);
+        cg.emitULEB(spIdx);
+    }
+
+    // Noreturn (SFLexit) functions leave the stack empty. Emit unreachable
+    // so WASM's type checker accepts any type expectations after the call.
+    if (calleeSym && (calleeSym.Sflags & SFLexit))
+        cg.emit(OP_UNREACHABLE);
     // Whether the call left a value on the WASM stack depends on the
     // callee's WASM signature, not e.Ety. For direct calls to a function
     // defined in this module, e.Ety can disagree with the function's
@@ -975,6 +937,13 @@ bool genElem(ref WasmCG cg, elem* e)
     case OPcall:
     case OPucall:
         return cg.genCall(e);
+    case OPparam:
+        // OPparam is only valid inside an OPcall's E2 subtree. Walk E2 then E1
+        // (call-order: see consumeCallArg comment) and dispatch each leaf via
+        // the active CallCtx on top of cg.callCtxStack.
+        consumeCallArg(cg, e.E2);
+        consumeCallArg(cg, e.E1);
+        return false;
     case OPconst:
         {
             switch (e.wasmType)
