@@ -299,7 +299,8 @@ nothrow:
     // references a named function whose type matches, preferring imports to avoid
     // a wasm-ld 22 crash on locally-defined symbol targets.  If no suitable
     // function is found yet (rare), fall back to compact ULEB without relocation
-    // (type indices are stable for single-file linking via reorderImportTypesFirst).
+    // (type indices are stable for single-file linking — imports get indices
+    // 0..numImports-1, defined-function types follow, matching wasm-ld's order).
     void emitCallIndirectType(uint typeIdx)
     {
         import dmd.backend.wasm.obj : wmod_findFuncForType, wmod_funcs;
@@ -602,8 +603,7 @@ SavedLValue saveLValueAddr(ref WasmCG cg, elem* e)
     const bool ok = emitLValueAddr(cg, e);
     assert(ok);
     r.addrTemp = cg.allocTemp(WASM_I32);
-    cg.emit(OP_LOCAL_SET);
-    cg.emitULEB(r.addrTemp);
+    cg.emitLocal(OP_LOCAL_SET, r.addrTemp);
     return r;
 }
 
@@ -1129,8 +1129,7 @@ bool genElem(ref WasmCG cg, elem* e)
             cg.maskSmallInt(e.E1.Ety);
             // Save new value, store, leave on stack as result.
             uint vTmp = cg.allocTemp(wasmType(e.E1.Ety));
-            cg.emit(OP_LOCAL_SET);
-            cg.emitULEB(vTmp);
+            cg.emitLocal(OP_LOCAL_SET, vTmp);
             replayAddr(cg, lv);
             cg.emitLocal(OP_LOCAL_GET, vTmp);
             cg.emitStore(e.E1.Ety);
