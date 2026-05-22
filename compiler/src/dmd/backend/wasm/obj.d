@@ -1223,10 +1223,30 @@ void preRegisterExternals(elem* e)
     {
         if (e.E1 && e.E1.Eoper == OPvar)
         {
+            // elem_print(e);
+
             Symbol* s = e.E1.Vsym;
-            if (s && s.Sclass != SC.auto_ && s.Sclass != SC.parameter &&
-                s.Sclass != SC.fastpar)
+            import std.stdio; debug writeln("call to: ", s.identifier);
+
+            import dmd.backend.debugprint;
+            import std.string;
+            // return type: tym_str(e.Ety).fromStringz
+            // TYfunc: tym_str(e.E1.Ety)
+            // auto Tparamtypes;
+            debug writeln("params types ", s.Stype.Tparamtypes.length);
+            debug writeln("variadic: ", variadic(s.Stype));
+            debug writeln("args: ", );
+
+            // t.Tparamtypes
+            if (e.Ety == TYnptr)
+            {
+                debug writeln("POSER");
+            }
+
+            if (s && s.Sclass != SC.auto_ && s.Sclass != SC.parameter && s.Sclass != SC.fastpar)
+            {
                 funcIndex(s); // side-effect: registers as import if not defined
+            }
         }
         if (e.E1)
             preRegisterExternals(e.E1);
@@ -1763,10 +1783,10 @@ Symbol* wmod_funcs(size_t i)
 
 // Intern a WASM function type given explicit param and result byte arrays.
 // Used by codgen.d to compute typeIdx for virtual call_indirect.
-uint wmod_internType(WASM_TYPE[] params, WASM_TYPE[] results)
+uint wmod_internType(WasmFuncType funcType)
 {
     assert(wmod);
-    return wmod.internType(WasmFuncType(params, results));
+    return wmod.internType(funcType);
 }
 
 // Find the function index of a named function whose WASM type matches typeIdx.
