@@ -1238,7 +1238,6 @@ void preRegisterExternals(elem* e)
             if (s && s.Stype && tyfunc(s.Stype.Tty) &&
                 s.Stype.Tparamtypes.length == 0 && e.E2)
             {
-                // Todo: fake func types are variadic? !variadic(s.Stype) == false
                 void appendArgTypes(elem* p)
                 {
                     if (!p)
@@ -1249,10 +1248,12 @@ void preRegisterExternals(elem* e)
                         appendArgTypes(p.E2);
                         return;
                     }
-                    // debug writeln(tym_str(tybasic(p.Ety)).fromStringz);
                     param_append_type(&s.Stype.Tparamtypes, type_fake(tybasic(p.Ety)));
                 }
                 appendArgTypes(e.E2);
+                // Synthesised arity is full and fixed — flag so variadic() returns false
+                // and we don't emit a spurious trailing varargs i32 pointer.
+                s.Stype.Tflags |= TF.fixed;
             }
 
             if (s && s.Sclass != SC.auto_ && s.Sclass != SC.parameter && s.Sclass != SC.fastpar)

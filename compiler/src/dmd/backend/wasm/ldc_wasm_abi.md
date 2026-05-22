@@ -384,20 +384,14 @@ For member functions (D or extern(C) with D name mangling), the parameter order 
 | Aspect | LDC | DMD (current) |
 |--------|-----|---------------|
 | Slice parameter | two i32: `(len, ptr)` | two i32: `(len, ptr)` ✓ |
-| Slice return | sret first param, `-> nil` | `-> i64` packed as `(ptr<<32)\|len` |
-| Member with sret | `(sret, this, ...)` | `(this, sret, ...)` (wrong order) |
+| Slice return | sret first param, `-> nil` | sret first param, `-> nil` (target) |
+| Member with sret | `(sret, this, ...)` | `(sret, this, ...)` (target) |
 
-**DMD's `SplitParam` approach for slice parameters is correct** — it creates two i32 params
-in `(len, ptr)` order and reconstructs them as i64 internally for use in the function body.
-
-**DMD's slice return differs**: DMD declares slice-returning functions as `-> i64`
-and packs the slice as `(ptr<<32) | len` in a single i64. LDC uses sret.
-This means DMD-compiled and LDC-compiled slice-returning functions are **not ABI-compatible**
-for cross-module calls. Within a single DMD compilation, the convention is consistent.
-
-**Consequence**: `Circle.kind() -> const(char)[]` in DMD has type `(i32 this) -> i64`.
-The OPpair operator (used to construct slice return values) must pack into i64, not push
-two i32s. Fixed in `codgen.d`: OPpair/OPrpair with `TYullong` result packs into i64.
+**Slices and delegates are never packed into a single i64.** Both parameters
+and return values are represented as two separate i32 values: `(length, ptr)`
+for slices, `(context, funcptr)` for delegates. Returning a slice/delegate
+uses sret — the caller passes a pointer to a two-i32 destination as the first
+parameter, and the WASM signature has no result value for that field.
 
 ---
 

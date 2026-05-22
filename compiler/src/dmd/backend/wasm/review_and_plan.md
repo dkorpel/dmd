@@ -24,8 +24,11 @@ Backend is self-contained behind `objmod`. Shared backend touch points (cdef/dou
 
 | Topic | Choice | Note |
 |---|---|---|
-| Slice return | packed i64 `(ptr<<32)\|len` | Diverges from LDC sret |
+| Slice return | sret first param (TBD) | Matches LDC |
 | Slice param | split into `(len, ptr)` | Matches LDC §1 |
+
+> Slices and delegates are never packed into a single i64. They are always
+> two i32s — `(length, ptr)` for slices, `(context, funcptr)` for delegates.
 | Member fn sret | `(this, sret, …)` | Diverges from LDC `(sret, this, …)` |
 | Indirect table | switchable import/define | LDC always imports |
 | `real` | aliased to double | Matches LDC/Clang |

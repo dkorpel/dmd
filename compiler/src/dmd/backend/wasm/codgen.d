@@ -511,6 +511,42 @@ void emitShadowAddr(ref WasmCG cg, Symbol* s)
     }
 }
 
+/// Push the linear-memory address of `s + off` on the value stack.
+/// Handles globals (FL.data, .csdata, .tlsdata, .udata, .datseg, .extern_)
+/// and shadow-frame locals uniformly.
+/// Returns: true if `s` is addressable through linear memory. Functions
+/// (FL.func) return false — their "address" is a table index, not a memory
+/// address, so callers handle them separately.
+bool emitSymAddr(ref WasmCG cg, Symbol* s, uint off)
+{
+    if (isDataSym(s.Sfl))
+    {
+        cg.emitDataAddr(s, off);
+        return true;
+    }
+    if (cg.inShadow(s))
+    {
+        cg.emitShadowAddr(s);
+        if (off != 0)
+        {
+            cg.emitConst(OP_I32_CONST, cast(int) off);
+            cg.emit(OP_I32_ADD);
+        }
+        return true;
+    }
+    return false;
+}
+
+/// Emit `<addr> ; load.ty` for the symbol value at `s + off`.
+/// Returns: true on success.
+bool emitSymLoad(ref WasmCG cg, Symbol* s, uint off, tym_t ty)
+{
+    if (!emitSymAddr(cg, s, off))
+        return false;
+    cg.emitLoad(ty);
+    return true;
+}
+
 /// Emit shadow stack frame prologue (called once at function entry).
 /// Creates the shadow base local, gets __stack_pointer, subtracts frame size, stores back.
 void emitShadowPrologue(ref WasmCG cg)
@@ -689,6 +725,84 @@ elem*[] gatherCallArgs(elem* p)
     return callArgs;
 }
 
+// Drop OPcomma side-effect chains, emitting and dropping each LHS, until we
+// land on something that isn't an OPcomma. Returns the remaining value-expr.
+private elem* unwrapComma(ref WasmCG cg, elem* e)
+{
+    while (e && e.Eoper == OPcomma)
+    {
+        if (cg.genElem(e.E1))
+            cg.emit(OP_DROP);
+        e = e.E2;
+    }
+    return e;
+}
+
+// Emit one half of a slice/delegate `e` (the i32 at offset 0 or offset 4 of
+// its in-memory representation) without going through an i64-packed value.
+// `e` must already be OPcomma-unwrapped via unwrapComma.
+// Returns: true on success. Returns false when `e` isn't an addressable
+// slice/delegate that we can decompose.
+private bool emitSliceHalf(ref WasmCG cg, elem* e, bool ptrHalf)
+{
+    if (!e)
+        return false;
+    const tym_t ety = tybasic(e.Ety);
+    if (ety != TYdarray && ety != TYdelegate)
+        return false;
+    const uint half = ptrHalf ? 4u : 0u;
+    if (e.Eoper == OPvar && e.Vsym &&
+        emitSymAddr(cg, e.Vsym, cast(uint) e.Voffset + half))
+    {
+        cg.emit(OP_I32_LOAD);
+        cg.emitMemArg(2, 0);
+        return true;
+    }
+    if (e.Eoper == OPind && e.E1)
+    {
+        cg.genElem(e.E1);
+        cg.emit(OP_I32_LOAD);
+        cg.emitMemArg(2, half);
+        return true;
+    }
+    return false;
+}
+
+// Returns: true if param_t denotes a D slice/delegate (split into two i32s).
+private bool paramIsSlice(const(param_t)* p)
+{
+    if (!p || !p.Ptype)
+        return false;
+    const tym_t tb = tybasic(p.Ptype.Tty);
+    return tb == TYdarray || tb == TYdelegate;
+}
+
+// Emit `arg` for a call site. When `slice` is true, the callee expects the
+// arg as two separate i32 values (length/context first, then ptr/funcptr) —
+// slices/delegates are never packed into a single i64. Load both halves
+// directly from the arg's address.
+private void emitCallArg(ref WasmCG cg, elem* arg, bool slice)
+{
+    if (!slice)
+    {
+        cg.genElem(arg);
+        return;
+    }
+    elem* a = unwrapComma(cg, arg);
+    // OPconst null slice/delegate → emit (0, 0).
+    if (a.Eoper == OPconst)
+    {
+        cg.emitConst(OP_I32_CONST, 0);
+        cg.emitConst(OP_I32_CONST, 0);
+        return;
+    }
+    if (emitSliceHalf(cg, a, /*ptrHalf*/ false) &&
+        emitSliceHalf(cg, a, /*ptrHalf*/ true))
+        return;
+    // Fallback: well-formed IR shouldn't reach here.
+    cg.emit(OP_UNREACHABLE);
+}
+
 // Expression code generation
 private bool genCall(ref WasmCG cg, elem* e)
 {
@@ -707,6 +821,7 @@ private bool genCall(ref WasmCG cg, elem* e)
         const bool isCVariadic = calleeSym.Stype !is null &&
             calleeSym.Stype.Tparamtypes !is null &&
             variadic(calleeSym.Stype);
+
 
         if (isCVariadic)
         {
@@ -736,8 +851,8 @@ private bool genCall(ref WasmCG cg, elem* e)
             // declared as a D slice splits the matching i64 arg into
             // (len, ptr). C variadic linkage has no param reversal, so
             // fixedParams aligns with allArgs by position directly.
-            foreach (a; allArgs[0 .. nFixed])
-                cg.genElem(a);
+            foreach (i, a; allArgs[0 .. nFixed])
+                emitCallArg(cg, a, paramIsSlice(fixedParams[i]));
 
             // Compute variadic args layout and emit shadow-stack spill.
             elem*[] varArgs = allArgs[nFixed .. $];
@@ -777,8 +892,8 @@ private bool genCall(ref WasmCG cg, elem* e)
 
             foreach (i, a; callArgs)
             {
-                const tym_t aty = tybasic(a.Ety);
-                cg.genElem(a);
+                const bool splitSlice = i < declParams.length && paramIsSlice(declParams[i]);
+                emitCallArg(cg, a, splitSlice);
             }
 
             cg.emitCall(fidx, calleeSym);
@@ -814,29 +929,11 @@ private bool genCall(ref WasmCG cg, elem* e)
         cg.genElem(e.E2);
         uint typeIdx = wmod_internType(paramTypesFromElem(e.E2));
 
-        elem* fexpr = e.E1;
-        Symbol* fpSym = null;
-
-        if (fexpr.Eoper == OPind && fexpr.E1 && fexpr.E1.Eoper == OPvar)
-        {
-            // OPind(OPvar(fptr)) — fptr holds a table index.
-            fpSym = fexpr.E1.Vsym;
-            if (fpSym && isLocalSym(fpSym) && !cg.inShadow(fpSym))
-            {
-                const uint idx = cg.localFor(fpSym);
-                cg.emitLocal(OP_LOCAL_GET, idx);
-            }
-            else
-            {
-                cg.genElem(fexpr.E1);
-            }
-        }
-        else
-        {
-            // Virtual dispatch / general function pointer.
-            elem* fn = (fexpr.Eoper == OPind) ? fexpr.E1 : fexpr;
-            cg.genElem(fn);
-        }
+        // Function pointer source: strip an outer OPind (fptr table index
+        // lives at the address) and evaluate the inner expression to push
+        // the table index on the value stack.
+        elem* fn = (e.E1.Eoper == OPind && e.E1.E1) ? e.E1.E1 : e.E1;
+        cg.genElem(fn);
         cg.emit(OP_CALL_INDIRECT);
         cg.emitCallIndirectType(typeIdx);
         cg.emitULEB(0); // table index 0
@@ -916,26 +1013,10 @@ bool genElem(ref WasmCG cg, elem* e)
     case OPvar:
         {
             Symbol* s = e.Vsym;
-            // Globals live in linear memory; locals/params live in WASM locals.
-            if (isDataSym(s.Sfl))
-            {
-                cg.emitDataAddr(s, cast(uint) e.Voffset);
-                cg.emitLoad(e.Ety);
+            if (emitSymLoad(cg, s, cast(uint) e.Voffset, e.Ety))
                 return true;
-            }
-            // Shadow-frame locals: load from linear memory.
-            if (cg.inShadow(s))
-            {
-                cg.emitShadowAddr(s);
-                if (e.Voffset != 0)
-                {
-                    cg.emitConst(OP_I32_CONST, cast(int) e.Voffset);
-                    cg.emit(OP_I32_ADD);
-                }
-                cg.emitLoad(e.Ety);
-                return true;
-            }
-
+            // Bare WASM-local fallback (should not normally hit after the
+            // shadow-stack refactor — every globsym now lives in shadow).
             const uint idx = cg.localFor(s);
             cg.emitLocal(OP_LOCAL_GET, idx);
             return true;
@@ -943,48 +1024,24 @@ bool genElem(ref WasmCG cg, elem* e)
 
     case OPrelconst:
         {
-            // import std.stdio; debug writeln("relconst");
             Symbol* rs = e.Vsym;
-            if (rs && isLocalSym(rs) && cg.inShadow(rs))
+            // Function address → table-index relocation, not a memory address.
+            if (rs && rs.Sfl == FL.func)
             {
-                // Address of a shadow-frame local.
-                cg.emitShadowAddr(rs);
-                if (e.Voffset != 0)
-                {
-                    cg.emitConst(OP_I32_CONST, cast(int) e.Voffset);
-                    cg.emit(OP_I32_ADD);
-                }
+                cg.emitTableIndex(funcIndex(rs), rs);
+                return true;
             }
-            else if (rs && rs.Sfl == FL.func)
-            {
-                // Address of a function → emit i32.const placeholder with
-                // R_WASM.TABLE_INDEX_SLEB relocation; wasm-ld patches it to the
-                // function's runtime table slot. funcIdx is a hint — relocation
-                // resolution is symbol-driven.
-                uint fidx = funcIndex(rs);
-                cg.emitTableIndex(fidx, rs);
-            }
-            else
-            {
-                // Address of a global in linear memory.
-                cg.emitDataAddr(rs, cast(uint) e.Voffset);
-            }
+            // Memory address — data sym or shadow-frame local.
+            emitSymAddr(cg, rs, cast(uint) e.Voffset);
             return true;
         }
 
     case OPaddr:
         {
-            // Address-of operator: OPaddr(OPvar(x)) for local x.
-            if (e.E1 && e.E1.Eoper == OPvar)
-            {
-                Symbol* as = e.E1.Vsym;
-                if (as && isLocalSym(as) && cg.inShadow(as))
-                {
-                    cg.emitShadowAddr(as);
-                    return true;
-                }
-            }
-            // Fallback: just evaluate E1 address (e.g., OPaddr of global)
+            // Address-of operator: OPaddr(OPvar(s, off)).
+            if (e.E1 && e.E1.Eoper == OPvar && e.E1.Vsym &&
+                emitSymAddr(cg, e.E1.Vsym, cast(uint) e.E1.Voffset))
+                return true;
             return cg.genElem(e.E1);
         }
 
@@ -1000,30 +1057,12 @@ bool genElem(ref WasmCG cg, elem* e)
             if (e.E1.Eoper == OPvar)
             {
                 Symbol* lhs = e.E1.Vsym;
-                if (isDataSym(lhs.Sfl))
+                const uint loff = cast(uint) e.E1.Voffset;
+                if (emitSymAddr(cg, lhs, loff))
                 {
-                    // Store to global in linear memory
-                    cg.emitDataAddr(lhs, cast(uint) e.E1.Voffset);
                     cg.genElem(e.E2);
                     cg.emitStore(e.E1.Ety);
-                    // Re-load for expression result
-                    cg.emitDataAddr(lhs, cast(uint) e.E1.Voffset);
-                    cg.emitLoad(e.E1.Ety);
-                    return true;
-                }
-                // Shadow-frame local: store to linear memory, reload for result.
-                if (cg.inShadow(lhs))
-                {
-                    cg.emitShadowAddr(lhs);
-                    if (e.E1.Voffset != 0)
-                    {
-                        cg.emitConst(OP_I32_CONST, cast(int) e.E1.Voffset);
-                        cg.emit(OP_I32_ADD);
-                    }
-                    cg.genElem(e.E2);
-                    cg.emitStore(e.E1.Ety);
-                    cg.emitShadowAddr(lhs);
-                    cg.emitLoad(e.E1.Ety);
+                    emitSymLoad(cg, lhs, loff, e.E1.Ety);
                     return true;
                 }
                 const uint idx = cg.localFor(lhs);
@@ -1100,19 +1139,26 @@ bool genElem(ref WasmCG cg, elem* e)
     case OPashrass:
         {
             // Desugar: lhs op= rhs  =>  lhs = lhs op rhs
-            if (e.E1.Eoper == OPvar)
+            // Load lhs, evaluate rhs, apply op, mask narrow, store back, leave result.
+            if (e.E1.Eoper == OPvar && e.E1.Vsym)
             {
                 Symbol* s = e.E1.Vsym;
-                const uint idx = cg.localFor(s);
-                cg.emitLocal(OP_LOCAL_GET, idx);
-                cg.genElem(e.E2, wasmType(e));
-                cg.emitBinop(compoundToBinop(op), e.Ety);
-                // Mask for narrow types (ubyte, ushort, etc.) to preserve wrapping.
-                cg.maskSmallInt(e.E1.Ety);
+                const uint loff = cast(uint) e.E1.Voffset;
+                if (emitSymLoad(cg, s, loff, e.E1.Ety))
+                {
+                    cg.genElem(e.E2, wasmType(e));
+                    cg.emitBinop(compoundToBinop(op), e.Ety);
+                    cg.maskSmallInt(e.E1.Ety);
 
-                cg.emit(OP_LOCAL_TEE);
-                cg.emitULEB(idx);
-                return true;
+                    uint vTmp = cg.allocTemp(wasmType(e.E1.Ety));
+                    cg.emit(OP_LOCAL_TEE);
+                    cg.emitULEB(vTmp);
+                    emitSymAddr(cg, s, loff);
+                    cg.emitLocal(OP_LOCAL_GET, vTmp);
+                    cg.emitStore(e.E1.Ety);
+                    cg.emitLocal(OP_LOCAL_GET, vTmp);
+                    return true;
+                }
             }
 
             cg.genElem(e.E2);
@@ -1215,12 +1261,20 @@ bool genElem(ref WasmCG cg, elem* e)
     case OPu64_d: return unaryOp(OP_F64_CONVERT_I64_S);
 
     case OPmsw:
-        // Extract high 32 bits of a 64-bit value
-        cg.genElem(e.E1);
-        cg.emitConst(OP_I64_CONST, 32);
-        cg.emit(OP_I64_SHR_U);
-        cg.emit(OP_I32_WRAP_I64);
-        return true;
+        {
+            // Slice/delegate: high 32 bits live at offset +4 of the
+            // slice's address. Load them directly — slices/delegates
+            // are never packed into a single i64.
+            elem* src = unwrapComma(cg, e.E1);
+            if (emitSliceHalf(cg, src, /*ptrHalf*/ true))
+                return true;
+            // Fallback: 64-bit value (non-slice). Extract via shift.
+            cg.genElem(src);
+            cg.emitConst(OP_I64_CONST, 32);
+            cg.emit(OP_I64_SHR_U);
+            cg.emit(OP_I32_WRAP_I64);
+            return true;
+        }
 
     case OP16_8:
         cg.genElem(e.E1);
@@ -1537,8 +1591,8 @@ private void emitBswap64(ref WasmCG cg)
 
 // Get the address of an lvalue expression
 // OPind → its pointer;
-// OPvar in shadow → shadow addr;
-// else genElem
+// OPvar in shadow/data → its memory address;
+// else genElem (expected to push an address itself)
 private void genElemAddr(ref WasmCG cg, elem* e)
 {
     if (!e)
@@ -1548,37 +1602,12 @@ private void genElemAddr(ref WasmCG cg, elem* e)
     }
     if (e.Eoper == OPind)
     {
-        cg.genElem(e.E1); // evaluate the pointer
+        cg.genElem(e.E1);
         return;
     }
-    if (e.Eoper == OPvar)
-    {
-        Symbol* s = e.Vsym;
-        if (s)
-        {
-            // Shadow-frame variable: emit its address.
-            if (cg.inShadow(s))
-            {
-                cg.emitShadowAddr(s);
-                return;
-            }
-            // Global: its Soffset is the linear memory address.
-            if (isDataSym(s.Sfl))
-            {
-                cg.emitDataAddr(s, cast(uint) e.Voffset);
-                return;
-            }
-            // Local in a WASM local — can't take address unless shadow-framed.
-            // Fall through to genElem (will push the value, not the address).
-        }
-    }
-    if (e.Eoper == OPrelconst)
-    {
-        // Address of something already in memory.
-        cg.genElem(e);
+    if (e.Eoper == OPvar && e.Vsym &&
+        emitSymAddr(cg, e.Vsym, cast(uint) e.Voffset))
         return;
-    }
-    // Generic: evaluate the expression (which should produce an address).
     cg.genElem(e);
 }
 
@@ -1787,118 +1816,100 @@ void wasm_codgen(Symbol* sfunc, bool relocatable)
     wasm_codgen2(sfunc, *fb, relocatable);
 }
 
+// Describes how one WASM-level param slot maps into a shadow-frame slot.
+private struct ParamSpill
+{
+    uint wasmLocalIdx; // index of incoming WASM param
+    Symbol* sym;       // symbol whose shadow slot this fills
+    uint byteOffset;   // offset within the symbol's shadow slot
+    tym_t ty;          // backend type of the param (used to pick store op + alignment)
+}
+
 void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb, bool relocatable)
 {
     WasmCG cg;
     cg.relocatable = relocatable;
 
+    // All params and locals live in the shadow stack frame; WASM locals
+    // hold only the incoming param values (to be spilled into the frame)
+    // and anonymous temporaries allocated via allocTemp.
+    ParamSpill[] paramSpills;
+
     foreach (s; globsym[])
     {
-        if (s.isParameter)
+        if (!s.isParameter)
+            continue;
+        cg.registerShadow(s);
+        const tym_t pty = tybasic(s.ty());
+        if (pty == TYdarray || pty == TYdelegate)
         {
-            // D slice: TYdarray == TYullong on WASM32; identified by s.Stype.Tnext.
-            cg.locals ~= WasmLocal(s);
+            // Slice/delegate: 2 i32 WASM params (len/context, ptr/funcptr).
+            const uint i0 = cast(uint) cg.locals.length;
+            cg.locals ~= WasmLocal(WASM_I32);
+            cg.locals ~= WasmLocal(WASM_I32);
+            paramSpills ~= ParamSpill(i0, s, 0, TYuint);
+            paramSpills ~= ParamSpill(i0 + 1, s, 4, TYuint);
+        }
+        else if (pty == TYstruct || pty == TYarray)
+        {
+            // Aggregate param: passed by pointer (i32).
+            const uint i0 = cast(uint) cg.locals.length;
+            cg.locals ~= WasmLocal(WASM_I32);
+            paramSpills ~= ParamSpill(i0, s, 0, TYuint);
+        }
+        else
+        {
+            const uint i0 = cast(uint) cg.locals.length;
+            cg.locals ~= WasmLocal(wasmType(pty));
+            paramSpills ~= ParamSpill(i0, s, 0, pty);
         }
     }
     cg.numParams = cast(uint) cg.locals.length;
 
-    // Then non-parameter locals. Aggregates (structs/arrays) can't live in
-    // WASM locals — pre-register them in the shadow frame instead.
+    // Register every non-param local in the shadow frame.
     foreach (s; globsym[])
     {
-        // import std.stdio; debug writeln("scan ", s.identifier);
-
-        // s.isParameter ||
+        if (s.isParameter)
+            continue;
         if (s.Sclass == SC.auto_ || s.Sclass == SC.register || s.Sclass == SC.stack)
-        {
-            // import std.stdio; debug writeln("tb = ", ty_str(tb).fromStringz);
-            const tym_t tb = tybasic(s.ty());
-            if (tb == TYstruct || tb == TYarray)
-            {
-                cg.registerShadow(s); // aggregate: lives in linear memory
-            }
-            else
-            {
-                cg.locals ~= WasmLocal(s);
-            }
-        }
+            cg.registerShadow(s);
     }
 
-    // Determine return type. Aggregate-returning functions return the hidden ptr (i32).
     type* retType = sfunc.Stype.Tnext;
     assert(retType);
     const bool hasReturn = tybasic(retType.Tty) != TYvoid;
 
-    // Scan all IR blocks for address-taken locals → populate shadow frame.
-    block* startblock = sfunc.Sfunc.Fstartblock;
-    for (block* sb = startblock; sb; sb = sb.Bnext)
-        scanShadow(sb.Belem, cg);
+    // Always allocate a shadow frame, even when empty — keeps code paths uniform.
+    cg.hasShadowFrame = true;
+    emitShadowPrologue(cg);
 
-    // If any locals need addresses, set up the shadow stack frame.
-    if (cg.shadowEntries.length > 0)
+    // Spill incoming WASM params into their shadow-frame slots.
+    foreach (ref sp; paramSpills)
     {
-        cg.hasShadowFrame = true;
-        emitShadowPrologue(cg);
+        cg.emitLocal(OP_LOCAL_GET, cg.shadowBaseLocal);
+        const uint off = cast(uint) sp.sym.Soffset + sp.byteOffset;
+        if (off != 0)
+        {
+            cg.emitConst(OP_I32_CONST, cast(int) off);
+            cg.emit(OP_I32_ADD);
+        }
+        cg.emitLocal(OP_LOCAL_GET, sp.wasmLocalIdx);
+        const m = memOpsFor(sp.ty);
+        cg.emit(m.storeOp);
+        cg.emitMemArg(m.alignLog2, 0);
     }
 
-    // Generate code from the block CFG
+    block* startblock = sfunc.Sfunc.Fstartblock;
     if (startblock)
         genBlocksProper(cg, startblock, hasReturn);
 
-    // Emit epilogue at function end (reached when all paths fall through without explicit return).
     if (cg.hasShadowFrame)
         emitShadowEpilogue(cg);
 
-    // If the function has a return type but every path that reaches here did
-    // so via an unreachable construct (infinite loop with internal returns,
-    // assert-noreturn tail, etc.), the implicit-return point still needs to
-    // satisfy WASM's type checker. Emit unreachable so the validator treats
-    // the fallthrough as a polymorphic stack.
-    // if (hasReturn)
-    //     cg.emit(OP_UNREACHABLE);
-
-    // Store results back into the WasmFuncBody
     fb.locals = cg.locals;
     fb.numParams = cg.numParams;
     fb.codeRelocs = cg.codeRelocs;
     fb.dataAddrRelocs = cg.dataAddrRelocs;
     fb.code.reset();
     fb.code.write(cg.code.peekSlice());
-}
-
-void spillParamsToShadow(ref WasmCG cg)
-{
-    // Spill address-taken parameters from their WASM locals into their
-    // shadow-frame slots. Without this, taking the address of a param
-    // (e.g. passing a slice arg by ref to another function) yields a
-    // valid address but the memory at that address is uninitialized.
-    foreach (s; cg.shadowEntries)
-    {
-        if (!s.isParameter)
-            continue;
-
-        const tym_t pty = tybasic(s.ty());
-
-        if (pty == TYstruct || pty == TYarray)
-            continue; // aggregate params are already pointers
-
-        // Scalar param: find its WASM local index and store.
-        uint localIdx = uint.max;
-        foreach (i, ref const l; cg.locals)
-            if (l.sym is s)
-            {
-                localIdx = cast(uint) i;
-                break;
-            }
-        if (localIdx == uint.max)
-            continue;
-        cg.emitLocal(OP_LOCAL_GET, cg.shadowBaseLocal);
-        if (s.Soffset != 0)
-        {
-            cg.emitConst(OP_I32_CONST, cast(int) s.Soffset);
-            cg.emit(OP_I32_ADD);
-        }
-        cg.emitLocal(OP_LOCAL_GET, localIdx);
-        cg.emitStore(s.ty());
-    }
 }
