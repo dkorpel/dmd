@@ -110,9 +110,10 @@ bool isParameter(Symbol* s)
     return sc == SC.parameter || sc == SC.regpar || sc == SC.fastpar || sc == SC.shadowreg;
 }
 
+/// Returns: true if `ty` represents a real value (i.e. NOT void or noreturn).
 bool typeHasValue(tym_t ty)
 {
-    return tybasic(ty) == TYvoid || tybasic(ty) == TYnoreturn;
+    return tybasic(ty) != TYvoid && tybasic(ty) != TYnoreturn;
 }
 
 /// Per-call scope used during OPparam tree traversal. The genElem recursion
@@ -554,6 +555,68 @@ bool emitSymLoad(ref WasmCG cg, Symbol* s, uint off, tym_t ty)
         return false;
     cg.emitLoad(ty);
     return true;
+}
+
+/// Push the linear-memory address of an lvalue elem on the value stack.
+/// Handles OPvar (memory-backed via emitSymAddr) and OPind (recurse on E1).
+/// Returns: true on success. False means the lvalue has no memory address
+/// (e.g. an OPvar referring to a WASM local), and callers must fall back.
+bool emitLValueAddr(ref WasmCG cg, elem* e)
+{
+    if (!e)
+        return false;
+    switch (e.Eoper)
+    {
+    case OPvar:
+        return e.Vsym && emitSymAddr(cg, e.Vsym, cast(uint) e.Voffset);
+    case OPind:
+        cg.genElem(e.E1);
+        return true;
+    default:
+        return false;
+    }
+}
+
+/// A captured lvalue address that can be re-pushed onto the value stack
+/// multiple times. For OPvar the address is re-emitted from the symbol
+/// (cheap and side-effect free); for OPind the address expression is
+/// evaluated once and stashed in an i32 temp.
+struct SavedLValue
+{
+    Symbol* directSym;  /// OPvar: the symbol; null otherwise
+    uint directOff;     /// OPvar: byte offset
+    uint addrTemp;      /// non-OPvar: temp i32 local index holding the addr
+}
+
+/// Evaluate `e`'s address-producing subexpressions once and return a
+/// SavedLValue that can be replayed any number of times via `replayAddr`.
+SavedLValue saveLValueAddr(ref WasmCG cg, elem* e)
+{
+    SavedLValue r;
+    if (e.Eoper == OPvar && e.Vsym)
+    {
+        r.directSym = e.Vsym;
+        r.directOff = cast(uint) e.Voffset;
+        return r;
+    }
+    const bool ok = emitLValueAddr(cg, e);
+    assert(ok);
+    r.addrTemp = cg.allocTemp(WASM_I32);
+    cg.emit(OP_LOCAL_SET);
+    cg.emitULEB(r.addrTemp);
+    return r;
+}
+
+/// Re-push the saved lvalue address onto the value stack.
+void replayAddr(ref WasmCG cg, SavedLValue r)
+{
+    if (r.directSym)
+    {
+        const bool ok = emitSymAddr(cg, r.directSym, r.directOff);
+        assert(ok);
+        return;
+    }
+    cg.emitLocal(OP_LOCAL_GET, r.addrTemp);
 }
 
 /// Emit shadow stack frame prologue (called once at function entry).
@@ -999,9 +1062,9 @@ bool genElem(ref WasmCG cg, elem* e)
         }
 
     case OPaddr:
-        // Address-of operator: OPaddr(OPvar(s, off)).
-        if (e.E1 && e.E1.Eoper == OPvar && e.E1.Vsym &&
-            emitSymAddr(cg, e.E1.Vsym, cast(uint) e.E1.Voffset))
+        // Address-of an lvalue. Falls through to genElem(E1) only if E1 isn't
+        // a recognised lvalue (e.g. address-of an rvalue computation).
+        if (emitLValueAddr(cg, e.E1))
             return true;
         return cg.genElem(e.E1);
 
@@ -1012,74 +1075,29 @@ bool genElem(ref WasmCG cg, elem* e)
 
     case OPeq:
         {
-            if (e.E1.Eoper == OPvar)
+            // Store rhs through lvalue E1, leaving the rhs value on stack.
+            if (emitLValueAddr(cg, e.E1))
             {
-                Symbol* lhs = e.E1.Vsym;
-                const uint loff = cast(uint) e.E1.Voffset;
-                if (emitSymAddr(cg, lhs, loff))
-                {
-                    cg.genElem(e.E2);
-                    cg.emitStore(e.E1.Ety);
-                    emitSymLoad(cg, lhs, loff, e.E1.Ety);
-                    return true;
-                }
-                const uint idx = cg.localFor(lhs);
                 cg.genElem(e.E2);
-
-                tym_t rhsTy = e.E2.Ety;
-
-                // Coerce i32→i64 if needed (e.g. assigning integer to ulong local).
-                if (cg.locals[idx].ty == WASM_I64 && wasmType(rhsTy) == WASM_I32)
-                    cg.emit(OP_I64_EXTEND_I32_S);
-                // Bit-pun assignments arising from *cast(long*)&y and similar:
-                // optelem can collapse OPind(OPaddr(localf)) into the float value
-                // and leave the type-mismatched OPeq for the codegen to widen.
-                else if (cg.locals[idx].ty == WASM_I64 && wasmType(rhsTy) == WASM_F32)
-                {
-                    cg.emit(OP_I32_REINTERPRET_F32);
-                    cg.emit(OP_I64_EXTEND_I32_U);
-                }
-                else if (cg.locals[idx].ty == WASM_I64 && wasmType(rhsTy) == WASM_F64)
-                    cg.emit(OP_I64_REINTERPRET_F64);
-                else if (cg.locals[idx].ty == WASM_F32 && wasmType(rhsTy) == WASM_I64)
-                {
-                    // i64 → low 32 bits → f32
-                    cg.emit(OP_I32_WRAP_I64);
-                    cg.emit(OP_F32_REINTERPRET_I32);
-                }
-                else if (cg.locals[idx].ty == WASM_F32 && wasmType(rhsTy) == WASM_I32)
-                    cg.emit(OP_F32_REINTERPRET_I32);
-                else if (cg.locals[idx].ty == WASM_F64 && wasmType(rhsTy) == WASM_I64)
-                    cg.emit(OP_F64_REINTERPRET_I64);
-                // Numeric narrowings the optimizer left for codegen.
-                else if (cg.locals[idx].ty == WASM_I32 && wasmType(rhsTy) == WASM_F32)
-                    cg.emit(OP_I32_TRUNC_F32_S);
-                else if (cg.locals[idx].ty == WASM_I32 && wasmType(rhsTy) == WASM_F64)
-                    cg.emit(OP_I32_TRUNC_F64_S);
-                else if (cg.locals[idx].ty == WASM_I32 && wasmType(rhsTy) == WASM_I64)
-                    cg.emit(OP_I32_WRAP_I64);
-
-                // Mask if storing into a narrow-type local (ubyte, bool, short, etc.).
+                // Save value so the store doesn't consume our result.
+                uint valTmp = cg.allocTemp(wasmType(e.Ety));
+                cg.emit(OP_LOCAL_TEE);
+                cg.emitULEB(valTmp);
+                cg.emitStore(e.E1.Ety);
+                cg.emitLocal(OP_LOCAL_GET, valTmp);
+                return true;
+            }
+            // Fallback: OPvar with no memory address (a bare WASM local).
+            // Shouldn't normally hit after the shadow-stack refactor.
+            if (e.E1.Eoper == OPvar && e.E1.Vsym)
+            {
+                const uint idx = cg.localFor(e.E1.Vsym);
+                cg.genElem(e.E2);
                 cg.maskSmallInt(e.E1.Ety);
-
                 cg.emit(OP_LOCAL_TEE);
                 cg.emitULEB(idx);
                 return true;
             }
-            else if (e.E1.Eoper == OPind)
-            {
-                // Store to memory. Save result in a temp to avoid re-evaluating
-                // E2 (which may have side effects like i++ in arr[k++] = L[i++]).
-                cg.genElem(e.E1.E1); // address
-                cg.genElem(e.E2); // value
-                uint valTmp = cg.allocTemp(wasmType(e.Ety));
-                cg.emit(OP_LOCAL_TEE);
-                cg.emitULEB(valTmp); // save, keep on stack
-                cg.emitStore(e.E1.Ety); // store [addr, val]
-                cg.emitLocal(OP_LOCAL_GET, valTmp); // result
-                return true;
-            }
-            // Fallthrough: unsupported, just evaluate RHS
             cg.genElem(e.E2);
             return true;
         }
@@ -1096,30 +1114,27 @@ bool genElem(ref WasmCG cg, elem* e)
     case OPshrass:
     case OPashrass:
         {
-            // Desugar: lhs op= rhs  =>  lhs = lhs op rhs
-            // Load lhs, evaluate rhs, apply op, mask narrow, store back, leave result.
-            if (e.E1.Eoper == OPvar && e.E1.Vsym)
+            // Desugar: lhs op= rhs  =>  lhs = lhs op rhs.
+            // Lvalue address is needed twice (load + store) — capture it.
+            if (e.E1.Eoper != OPvar && e.E1.Eoper != OPind)
             {
-                Symbol* s = e.E1.Vsym;
-                const uint loff = cast(uint) e.E1.Voffset;
-                if (emitSymLoad(cg, s, loff, e.E1.Ety))
-                {
-                    cg.genElem(e.E2, wasmType(e));
-                    cg.emitBinop(compoundToBinop(op), e.Ety);
-                    cg.maskSmallInt(e.E1.Ety);
-
-                    uint vTmp = cg.allocTemp(wasmType(e.E1.Ety));
-                    cg.emit(OP_LOCAL_TEE);
-                    cg.emitULEB(vTmp);
-                    emitSymAddr(cg, s, loff);
-                    cg.emitLocal(OP_LOCAL_GET, vTmp);
-                    cg.emitStore(e.E1.Ety);
-                    cg.emitLocal(OP_LOCAL_GET, vTmp);
-                    return true;
-                }
+                cg.genElem(e.E2);
+                return true;
             }
-
-            cg.genElem(e.E2);
+            auto lv = saveLValueAddr(cg, e.E1);
+            replayAddr(cg, lv);
+            cg.emitLoad(e.E1.Ety);
+            cg.genElem(e.E2, wasmType(e));
+            cg.emitBinop(compoundToBinop(op), e.Ety);
+            cg.maskSmallInt(e.E1.Ety);
+            // Save new value, store, leave on stack as result.
+            uint vTmp = cg.allocTemp(wasmType(e.E1.Ety));
+            cg.emit(OP_LOCAL_SET);
+            cg.emitULEB(vTmp);
+            replayAddr(cg, lv);
+            cg.emitLocal(OP_LOCAL_GET, vTmp);
+            cg.emitStore(e.E1.Ety);
+            cg.emitLocal(OP_LOCAL_GET, vTmp);
             return true;
         }
 
@@ -1256,7 +1271,7 @@ bool genElem(ref WasmCG cg, elem* e)
             // e.E1 ? e.E2.E1 : e.E2.E2
             cg.genElem(e.E1);
             emitCondToI32(cg, e.E1); // i64 cond → i32 truthiness
-            const bool voidCond = typeHasValue(e.Ety);
+            const bool voidCond = !typeHasValue(e.Ety);
             cg.emit(OP_IF);
             if (voidCond)
                 cg.emit(WASM_VOID_BLOCK); // void blocktype: discard any branch value
@@ -1287,7 +1302,7 @@ bool genElem(ref WasmCG cg, elem* e)
             cg.emit(OP_ELSE);
             cg.genElem(e.E2);
 
-            if (typeHasValue(e.E2.Ety))
+            if (!typeHasValue(e.E2.Ety))
             {
                 // Void RHS leaves nothing on the stack; synthesise a result so
                 // the if-block type checks. Caller will typically drop it.
@@ -1309,7 +1324,7 @@ bool genElem(ref WasmCG cg, elem* e)
             cg.emit(OP_IF);
             cg.emit(WASM_I32);
             cg.genElem(e.E2);
-            if (typeHasValue(e.E2.Ety))
+            if (!typeHasValue(e.E2.Ety))
             {
                 cg.emitConst(OP_I32_CONST, 0);
             }
