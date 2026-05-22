@@ -159,10 +159,7 @@ nothrow:
     }
 
     /// Returns: true if symbol `s` lives in the shadow frame.
-    static bool inShadow(Symbol* s)
-    {
-        return (s.Sflags & SFLwasmshadow) != 0;
-    }
+    static bool inShadow(Symbol* s) { return (s.Sflags & SFLwasmshadow) != 0; }
 
     /// Register a symbol in the shadow frame (idempotent).
     void registerShadow(Symbol* s)
