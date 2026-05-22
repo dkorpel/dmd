@@ -15,11 +15,13 @@
 
 module dmd.backend.wasm.obj;
 
-import core.stdc.string : strlen;
+import std.stdio;
+import std.string;
 
 import dmd.backend.cc;
 import dmd.backend.cdef;
 import dmd.backend.code;
+import dmd.backend.debugprint;
 import dmd.backend.el;
 import dmd.backend.obj;
 import dmd.backend.ty;
@@ -396,6 +398,7 @@ private bool returnByPtr(type* t)
 // Aggregates are passed/returned by pointer; aggregate return adds a hidden i32 first.
 private WasmFuncType buildFuncType(type* t, Symbol* sfunc)
 {
+    debug writeln("build function type for ", sfunc.identifier);
     WasmFuncType ft;
 
     // Check for aggregate return: requires a hidden pointer as the first parameter.
@@ -1034,8 +1037,7 @@ private bool emitRelocCodeSection(ref OutBuffer out_, ref WasmModule wmod, uint 
                     return cast(uint) k;
             if (r.sym.Sident.ptr)
             {
-                import core.stdc.string : strlen;
-                const(char)[] rname = r.sym.Sident.ptr[0 .. strlen(r.sym.Sident.ptr)];
+                const(char)[] rname = r.sym.identifier;
                 foreach (size_t k, ref const WasmFunc f; wmod.funcs)
                     if (funcName(f) == rname)
                         return cast(uint) k;
@@ -1232,9 +1234,11 @@ void preRegisterExternals(elem* e)
             // won't match the real definition in libdruntime, so wasm-ld emits
             // "function signature mismatch" warnings. Synthesize Tparamtypes by
             // walking the OPparam tree in e.E2 and recording each arg's tym_t.
-            if (s && s.Stype && tyfunc(s.Stype.Tty) && !variadic(s.Stype) &&
-                s.Stype.Tparamtypes is null && e.E2)
+            // debug writeln("amend function type for ", s.identifier, " ", );
+            if (s && s.Stype && tyfunc(s.Stype.Tty) &&
+                s.Stype.Tparamtypes.length == 0 && e.E2)
             {
+                // Todo: fake func types are variadic? !variadic(s.Stype) == false
                 void appendArgTypes(elem* p)
                 {
                     if (!p)
@@ -1245,6 +1249,7 @@ void preRegisterExternals(elem* e)
                         appendArgTypes(p.E2);
                         return;
                     }
+                    // debug writeln(tym_str(tybasic(p.Ety)).fromStringz);
                     param_append_type(&s.Stype.Tparamtypes, type_fake(tybasic(p.Ety)));
                 }
                 appendArgTypes(e.E2);
@@ -1480,21 +1485,25 @@ int WasmObj_comdat(Symbol* s)
 {
     if (!s || !s.Stype)
         return 0;
+
     // Dedup: if already registered, return existing func index
     if (s.Sseg >= 0 && s.Sseg < wmod.funcs.length && wmod.funcs[s.Sseg].sym == s)
         return s.Sseg;
+
     // Register a defined function
     WasmFuncType ft;
     if (tybasic(s.Stype.Tty) != TYvoid)
     {
         ft = buildFuncType(s.Stype, s);
     }
+
     WasmFunc f;
     f.typeIdx = wmod.internType(ft);
     f.sym = s;
     f.exported = (s.Sclass == SC.global);
+
+    s.Sseg = cast(int) wmod.funcs.length;
     wmod.funcs ~= f;
-    s.Sseg = cast(int)(wmod.funcs.length - 1);
     return s.Sseg;
 }
 
