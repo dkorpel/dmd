@@ -26,7 +26,7 @@ import dmd.backend.el;
 import dmd.backend.obj;
 import dmd.backend.ty;
 import dmd.backend.type;
-import dmd.backend.wasm.codgen : wasmType, funcIndex;
+import dmd.backend.wasm.codgen;
 import dmd.backend.wasm.enums;
 import dmd.backend.wasm.util : ulebSize, writeuLEB128_5;
 import dmd.common.outbuffer;
@@ -394,11 +394,13 @@ private bool returnByPtr(type* t)
     }
 }
 
-// Build a WasmFuncType from a backend function type.
-// Aggregates are passed/returned by pointer; aggregate return adds a hidden i32 first.
+/// Build a WasmFuncType from a backend function type.
+/// Aggregates are passed/returned by pointer; aggregate return adds a hidden i32 first.
+/// Slices and delegates are split into 2 params.
 private WasmFuncType buildFuncType(type* t, Symbol* sfunc)
 {
-    debug writeln("build function type for ", sfunc.identifier);
+    // debug writeln("build function type for ", sfunc.identifier);
+
     WasmFuncType ft;
 
     // Check for aggregate return: requires a hidden pointer as the first parameter.
@@ -410,26 +412,21 @@ private WasmFuncType buildFuncType(type* t, Symbol* sfunc)
     // D member functions (Fmember) receive 'this' as an implicit first parameter.
     // D nested functions (Fnested) receive a static-link/closure pointer.
     // Neither is in Tparamtypes, so prepend an i32.
+    // (TODO: what order are hidden ret and this ptr passed? doesn't matter here, but still...)
     if (sfunc.Sfunc && (sfunc.Sfunc.Fflags3 & (Fmember | Fnested)))
-        ft.params = WASM_I32 ~ ft.params;
+        ft.params ~= WASM_I32;
 
-    // Parameters. D dynamic arrays (TYdarray = TYullong on WASM32) are decomposed
-    // by toArgTypes_wasm into (size_t length, void* ptr) = (i32, i32), matching
-    // LDC2's WebAssembly ABI. TYdarray is identified by Tnext != null (element type).
     const tym_t fty = tybasic(t.Tty);
 
     for (param_t* p = t.Tparamtypes; p; p = p.Pnext)
     {
-        if (!p.Ptype)
-            continue;
-
-        if (tybasic(p.Ptype.Tty) == TYvoid)
+        if (!p.Ptype || !typeHasValue(p.Ptype.Tty))
             continue;
 
         const tym_t pty = tybasic(p.Ptype.Tty);
-        // TYdarray (D slice) == TYullong on WASM32; Tnext holds the element type.
+
         // Split into two i32 WASM params: (size_t len, T* ptr).
-        if (p.Ptype.Tty == TYdarray || p.Ptype.Tty == TYdelegate) //
+        if (p.Ptype.Tty == TYdarray || p.Ptype.Tty == TYdelegate)
         {
             ft.params ~= WASM_I32;
             ft.params ~= WASM_I32;
@@ -443,18 +440,13 @@ private WasmFuncType buildFuncType(type* t, Symbol* sfunc)
     // C variadic (`...`): append a trailing i32 varargs-pointer parameter.
     // Matches the LDC2/wasi-libc ABI: caller spills variadic args to the shadow
     // stack and passes a pointer to that region as the last function parameter.
-    // A real C variadic requires at least one fixed param; bare type_fake(TYnfunc)
-    // symbols (RTL: _d_assertp, etc.) have TF.prototype set but Tparamtypes == null
-    // and must not get the trailing varargs ptr.
-    import dmd.backend.type : variadic;
-
     if (variadic(t) && t.Tparamtypes !is null)
         ft.params ~= WASM_I32;
 
     // Return type (void and noreturn both produce no WASM result)
     if (hiddenPtr)
         ft.results ~= WASM_I32; // returns hidden ptr
-    else if (ret && tybasic(ret.Tty) != TYvoid && tybasic(ret.Tty) != TYnoreturn)
+    else if (ret && typeHasValue(ret.Tty))
         ft.results ~= wasmType(ret.Tty);
 
     return ft;

@@ -814,12 +814,10 @@ private void consumeCallArg(ref WasmCG cg, elem* e)
 private bool genCall(ref WasmCG cg, elem* e)
 {
     // E1 is the function. Direct call: E1 is OPvar of a function symbol.
-    Symbol* calleeSym = null;
-    if (e.E1.Eoper == OPvar && e.E1.Vsym && e.E1.Vsym.Sclass != SC.auto_ &&
-        e.E1.Vsym.Sclass != SC.parameter && e.E1.Vsym.Sclass != SC.fastpar)
-    {
-        calleeSym = e.E1.Vsym;
-    }
+    Symbol* calleeSym = e.E1.Vsym;
+    // null;
+    // if (e.E1.Eoper == OPvar && e.E1.Vsym && e.E1.Vsym.Sclass != SC.auto_ && e.E1.Vsym.Sclass != SC.parameter && e.E1.Vsym.Sclass != SC.fastpar)
+    //    calleeSym = e.E1.Vsym;
 
     type* fty = calleeSym ? calleeSym.Stype : null;
 
@@ -855,10 +853,17 @@ private bool genCall(ref WasmCG cg, elem* e)
         WASM_TYPE[] callParams;
         void collect(elem* p)
         {
-            if (!p) return;
-            if (p.Eoper == OPparam) { collect(p.E2); collect(p.E1); return; }
+            if (!p)
+                return;
+            if (p.Eoper == OPparam)
+            {
+                collect(p.E2);
+                collect(p.E1);
+                return;
+            }
             callParams ~= wasmType(tybasic(p.Ety));
         }
+
         collect(e.E2);
         WASM_TYPE[] callResults;
         const tym_t retTy0 = tybasic(e.Ety);
@@ -891,13 +896,14 @@ private bool genCall(ref WasmCG cg, elem* e)
     // so WASM's type checker accepts any type expectations after the call.
     if (calleeSym && (calleeSym.Sflags & SFLexit))
         cg.emit(OP_UNREACHABLE);
+
     // Whether the call left a value on the WASM stack depends on the
     // callee's WASM signature, not e.Ety. For direct calls to a function
     // defined in this module, e.Ety can disagree with the function's
     // actual return type (e.g. a void member call appearing in an
     // OPcomma chain): trust the callee's Stype.Tnext.
     const retTy = tybasic(e.Ety);
-    bool pushedValue = retTy != TYvoid && retTy != TYnoreturn;
+    bool pushedValue = typeHasValue(e.Ety); // EtyretTy != TYvoid && retTy != TYnoreturn;
     if (e.E1.Eoper == OPvar && e.E1.Vsym && e.E1.Vsym.Stype && e.E1.Vsym.Stype.Tnext)
     {
         const tym_t calleeRet = tybasic(e.E1.Vsym.Stype.Tnext.Tty);
@@ -937,6 +943,7 @@ bool genElem(ref WasmCG cg, elem* e)
     case OPcall:
     case OPucall:
         return cg.genCall(e);
+
     case OPparam:
         // OPparam is only valid inside an OPcall's E2 subtree. Walk E2 then E1
         // (call-order: see consumeCallArg comment) and dispatch each leaf via
@@ -944,43 +951,38 @@ bool genElem(ref WasmCG cg, elem* e)
         consumeCallArg(cg, e.E2);
         consumeCallArg(cg, e.E1);
         return false;
+
     case OPconst:
+        switch (e.wasmType)
         {
-            switch (e.wasmType)
-            {
-            case WASM_I64:
-                cg.emitConst(OP_I64_CONST, e.Vllong);
-                break;
-            case WASM_F32:
-                cg.emit(OP_F32_CONST);
-                float f = e.Vfloat;
-                cg.code.write(&f, 4);
-                break;
-            case WASM_F64:
-                cg.emit(OP_F64_CONST);
-                double d = e.Vdouble;
-                cg.code.write(&d, 8);
-                break;
-            case WASM_I32:
-                cg.emitConst(OP_I32_CONST, cast(int) e.Vlong);
-                break;
-            default:
-                assert(0);
-            }
-            return true;
+        case WASM_I64:
+            cg.emitConst(OP_I64_CONST, e.Vllong);
+            break;
+        case WASM_F32:
+            cg.emit(OP_F32_CONST);
+            float f = e.Vfloat;
+            cg.code.write(&f, 4);
+            break;
+        case WASM_F64:
+            cg.emit(OP_F64_CONST);
+            double d = e.Vdouble;
+            cg.code.write(&d, 8);
+            break;
+        case WASM_I32:
+            cg.emitConst(OP_I32_CONST, cast(int) e.Vlong);
+            break;
+        default:
+            assert(0);
         }
+        return true;
 
     case OPvar:
-        {
-            Symbol* s = e.Vsym;
-            if (emitSymLoad(cg, s, cast(uint) e.Voffset, e.Ety))
-                return true;
-            // Bare WASM-local fallback (should not normally hit after the
-            // shadow-stack refactor — every globsym now lives in shadow).
-            const uint idx = cg.localFor(s);
-            cg.emitLocal(OP_LOCAL_GET, idx);
+        if (emitSymLoad(cg, e.Vsym, cast(uint) e.Voffset, e.Ety))
             return true;
-        }
+
+        //
+        cg.emitLocal(OP_LOCAL_GET, cg.localFor(e.Vsym));
+        return true;
 
     case OPrelconst:
         {
@@ -997,20 +999,16 @@ bool genElem(ref WasmCG cg, elem* e)
         }
 
     case OPaddr:
-        {
-            // Address-of operator: OPaddr(OPvar(s, off)).
-            if (e.E1 && e.E1.Eoper == OPvar && e.E1.Vsym &&
-                emitSymAddr(cg, e.E1.Vsym, cast(uint) e.E1.Voffset))
-                return true;
-            return cg.genElem(e.E1);
-        }
+        // Address-of operator: OPaddr(OPvar(s, off)).
+        if (e.E1 && e.E1.Eoper == OPvar && e.E1.Vsym &&
+            emitSymAddr(cg, e.E1.Vsym, cast(uint) e.E1.Voffset))
+            return true;
+        return cg.genElem(e.E1);
 
     case OPind:
-        {
-            cg.genElem(e.E1); // address on stack
-            cg.emitLoad(e.Ety);
-            return true;
-        }
+        cg.genElem(e.E1); // address on stack
+        cg.emitLoad(e.Ety);
+        return true;
 
     case OPeq:
         {
