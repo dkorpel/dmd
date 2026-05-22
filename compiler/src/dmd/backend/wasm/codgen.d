@@ -30,7 +30,7 @@ import dmd.backend.type;
 import dmd.backend.var : globsym;
 import dmd.backend.wasm.enums;
 import dmd.backend.wasm.util : writeuLEB128_5;
-import dmd.backend.wasm.obj : WasmFuncBody, wasmFuncBodies, WasmLocal, wmod_internType, wmod_getOrCreateStackPtrGlobal;
+import dmd.backend.wasm.obj;
 import dmd.backend.wasm.blocks;
 
 import dmd.common.outbuffer;
@@ -775,36 +775,10 @@ private bool genCall(ref WasmCG cg, elem* e)
             for (param_t* q = paramTypes; q; q = q.Pnext)
                 declParams ~= q;
 
-            ubyte[] aparams;
             foreach (i, a; callArgs)
             {
                 const tym_t aty = tybasic(a.Ety);
                 cg.genElem(a);
-
-                /+
-                // Coerce pushed type to the callee's declared param
-                // type when they differ (e.g. i32 ptr sign-extended
-                // to i64 by an OPs32_64 cast, but callee declared
-                // the param as a plain i32 pointer).
-                ubyte pushedTy = wasmType(aty);
-                if (pp && pp.Ptype && !paramIsSlice(pp))
-                {
-                    ubyte declTy = wasmType(pp.Ptype.Tty);
-                    // Only coerce within the integer domain. Crossing
-                    // into float would misinterpret pointer-like ints
-                    // as numeric values.
-                    bool intDomain(ubyte t)
-                    {
-                        return t == WASM_I32 || t == WASM_I64;
-                    }
-
-                    if (declTy != pushedTy && intDomain(declTy) && intDomain(pushedTy))
-                    {
-                        emitCoerce(cg, pushedTy, declTy);
-                        pushedTy = declTy;
-                    }
-                }
-                +/
             }
 
             cg.emitCall(fidx, calleeSym);
@@ -816,21 +790,29 @@ private bool genCall(ref WasmCG cg, elem* e)
     }
     else
     {
-        elem*[] indArgs = gatherCallArgs(e.E2);
+        WasmFuncType paramTypesFromElem(elem* e)
+        {
+            elem*[] args = gatherCallArgs(e.E2);
 
-        WASM_TYPE[] callParams;
-        foreach (a; indArgs)
-        {
-            cg.genElem(a);
-            callParams ~= wasmType(tybasic(a.Ety));
+            WASM_TYPE[] callParams;
+            foreach (a; args)
+            {
+                if (a.Ety == TYdarray || a.Ety == TYdelegate)
+
+                callParams ~= wasmType(tybasic(a.Ety));
+            }
+            WASM_TYPE[] callResults;
+            {
+                const tym_t retTy0 = tybasic(e.Ety);
+                if (typeHasValue(retTy0))
+                    callResults ~= wasmType(retTy0);
+            }
+            return WasmFuncType(callParams, callResults);
         }
-        WASM_TYPE[] callResults;
-        {
-            const tym_t retTy0 = tybasic(e.Ety);
-            if (retTy0 != TYvoid && retTy0 != TYnoreturn)
-                callResults ~= wasmType(retTy0);
-        }
-        uint typeIdx = wmod_internType(callParams, callResults);
+
+        // foreach
+        cg.genElem(e.E2);
+        uint typeIdx = wmod_internType(paramTypesFromElem(e.E2));
 
         elem* fexpr = e.E1;
         Symbol* fpSym = null;
@@ -869,7 +851,7 @@ private bool genCall(ref WasmCG cg, elem* e)
     if (e.E1.Eoper == OPvar && e.E1.Vsym && e.E1.Vsym.Stype && e.E1.Vsym.Stype.Tnext)
     {
         const tym_t calleeRet = tybasic(e.E1.Vsym.Stype.Tnext.Tty);
-        pushedValue = calleeRet != TYvoid && calleeRet != TYnoreturn;
+        pushedValue = typeHasValue(calleeRet);
     }
     return pushedValue;
 }
