@@ -12,6 +12,7 @@ module dmd.lsp;
 // echo -e "Content-Length: 49\r\n\r\n{\"jsonrpc\":\"2.0\",\"method\":\"initialize\",\"id\":1}" | nc -U /tmp/lsp-socket
 
 import core.stdc.stdio;
+import core.vararg;
 import dmd.aggregate;
 import dmd.astenums;
 import dmd.ast_node;
@@ -48,6 +49,51 @@ struct Lsp
 
     /// In-memory document store: URI -> content (kept in sync via textDocument/did* notifications)
     string[string] openDocuments;
+
+    /// Sink that collects diagnostics produced during analyzeModule
+    ErrorSinkLsp eSink;
+}
+
+/// One LSP diagnostic collected from an ErrorSink callback.
+/// `line`/`column` are 1-based (as returned by SourceLoc); 0 means "unknown".
+struct Diagnostic
+{
+    int line;
+    int column;
+    int severity; // 1=Error, 2=Warning, 3=Info, 4=Hint
+    string message;
+}
+
+/// ErrorSink that captures diagnostics into a list instead of printing them.
+/// One instance is owned by Lsp and reused across requests; callers must
+/// clear `diagnostics` before each analysis run.
+class ErrorSinkLsp : ErrorSinkNull
+{
+    Diagnostic[] diagnostics;
+
+    private void add(Loc loc, int severity, const(char)* format, va_list ap) nothrow
+    {
+        OutBuffer msg;
+        msg.vprintf(format, ap);
+        auto sl = SourceLoc(loc);
+        diagnostics ~= Diagnostic(sl.line, sl.column, severity, msg.extractSlice.idup);
+    }
+
+    private void appendToLast(const(char)* format, va_list ap) nothrow
+    {
+        if (diagnostics.length == 0)
+            return;
+        OutBuffer msg;
+        msg.vprintf(format, ap);
+        diagnostics[$ - 1].message ~= "\n" ~ msg.extractSlice.idup;
+    }
+
+    extern(C++) override:
+
+    void verror(Loc loc, const(char)* format, va_list ap)             { add(loc, 1, format, ap); }
+    void vwarning(Loc loc, const(char)* format, va_list ap)           { add(loc, 2, format, ap); }
+    void verrorSupplemental(Loc loc, const(char)* format, va_list ap) { appendToLast(format, ap); }
+    void vwarningSupplemental(Loc loc, const(char)* format, va_list ap) { appendToLast(format, ap); }
 }
 
 
@@ -110,68 +156,86 @@ extern(C++) class LspVisitor : SemanticTimeTransitiveVisitor
     }
 }
 
-/// Find the AST node under the object
-ASTNode findCursorObject(ref Lsp lsp, Params params)
+/// Run the dmd pipeline (read → parse → semantic) on the document at `uri`.
+/// Errors are routed through `lsp.eSink`; caller is responsible for clearing
+/// `lsp.eSink.diagnostics` beforehand and for calling `deinitializeModule()`
+/// when done with the returned module.
+///
+/// Returns: the post-semantic Module, or null on read/parse failure.
+Module analyzeModule(ref Lsp lsp, string uri)
 {
-    {
-        Type_init();
-        Module._init();
-        Loc._init();
-    }
+    Type_init();
+    Module._init();
+    Loc._init();
 
-    SourceLoc sl = toSourceLoc(params.textDocument.uri, params.position);
+    SourceLoc sl = toSourceLoc(uri, Position(0, 0));
     const(char)[] p = FileName.name(sl.filename); // strip path
     auto ext = FileName.ext(sl.filename);
     p = p[0 .. $ - ext.length - 1];
     Loc loc = Loc.singleFilename(sl.filename.ptr);
     auto id = Identifier.idPool(p);
-    // fprintf(stderr, "loc = %s\n", loc.toChars);
     Module m = new Module(loc, sl.filename, id, /*ddoc*/ true, false);
 
     // Use in-memory content if available (avoids reading unsaved file from disk)
-    if (auto content = params.textDocument.uri in lsp.openDocuments)
+    if (auto content = uri in lsp.openDocuments)
         m.src = cast(const(ubyte)[]) (*content ~ "\0\0\0\0");
 
-    if (!m.read(loc))
+    // Route compiler diagnostics into our collector for the duration of analysis
+    auto savedSink = global.errorSink;
+    auto savedErrors = global.errors;
+    global.errorSink = lsp.eSink;
+    global.errors = 0;
+    scope(exit)
     {
-        fprintf(stderr, "[!] read erorrs!\n");
-        return null;
+        global.errorSink = savedSink;
+        global.errors = savedErrors;
     }
+
+    if (!m.read(loc))
+        return null;
     m = m.parse();
     if (!m)
-    {
-        fprintf(stderr, "[!] parse erorrs!\n");
         return null;
-    }
     m.importedFrom = m;
     m.importAll(null);
     m.dsymbolSemantic(null);
     m.semantic2(null);
     m.semantic3(null);
+    return m;
+}
 
+/// Reset compiler globals so the next analyzeModule call starts fresh.
+void deinitializeModule()
+{
+    Type_init();
+    Module.deinitialize();
+    FuncDeclaration.lastMain = null;
+}
+
+/// Find the AST node under the cursor.
+ASTNode findCursorObject(ref Lsp lsp, Params params)
+{
+    lsp.eSink.diagnostics = null;
+    SourceLoc sl = toSourceLoc(params.textDocument.uri, params.position);
+    Module m = analyzeModule(lsp, params.textDocument.uri);
+    if (!m)
+    {
+        deinitializeModule();
+        return null;
+    }
     scope visitor = new LspVisitor(sl.line, sl.column);
     visitor.visit(m);
-
-
-    {
-        Type_init();
-        Module.deinitialize();
-        FuncDeclaration.lastMain = null;
-
-        // global.deinitialize();
-        // target.deinitialize();
-        // Expression.deinitialize();
-        // Dsymbol.deinitialize();
-    }
-
+    deinitializeModule();
     return visitor.result;
 }
 
 /// LSP CompletionItemKind values for the kinds we currently emit.
 private int completionKind(Declaration d)
 {
-    if (d.isFuncDeclaration()) return 3;  // Function
-    if (d.isVarDeclaration()) return 6;   // Variable
+    if (d.isFuncDeclaration())
+        return 3;  // Function
+    if (d.isVarDeclaration())
+        return 6;   // Variable
     return 1;                              // Text (fallback)
 }
 
@@ -264,16 +328,32 @@ void signatureHelp(ref Lsp lsp, Params params, ref OutBuffer buf)
     buf.writestring(`],"activeSignature":0,"activeParameter":0}`);
 }
 
-/// Send a textDocument/publishDiagnostics notification with a single dummy
-/// error on the first line. LSP positions are 0-based, so "line":0 renders
-/// as line 1 in the editor.
-void publishDiagnostics(string uri)
+/// Send a textDocument/publishDiagnostics notification with errors and
+/// warnings collected from analyzing the document at `uri`.
+void publishDiagnostics(ref Lsp lsp, string uri)
 {
+    lsp.eSink.diagnostics = null;
+    analyzeModule(lsp, uri);
+    deinitializeModule();
+
     OutBuffer buf;
     buf.writestring(`{"jsonrpc":"2.0","method":"textDocument/publishDiagnostics","params":{"uri":"`);
     buf.writeJsonString(uri);
     buf.writestring(`","diagnostics":[`);
-    buf.writestring(`{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":10}},"severity":1,"message":"dummy error"}`);
+    bool first = true;
+    foreach (d; lsp.eSink.diagnostics)
+    {
+        if (!first)
+            buf.writestring(",");
+        first = false;
+        // LSP positions are 0-based; SourceLoc is 1-based, 0 means unknown
+        const line = d.line > 0 ? d.line - 1 : 0;
+        const col = d.column > 0 ? d.column - 1 : 0;
+        buf.printf(`{"range":{"start":{"line":%d,"character":%d},"end":{"line":%d,"character":%d}},"severity":%d,"message":"`,
+            line, col, line, col + 1, d.severity);
+        buf.writeJsonString(d.message);
+        buf.writestring(`"}`);
+    }
     buf.writestring(`]}}`);
     printf("Content-Length: %d\r\n\r\n", cast(int) buf.length);
     printf("%s", buf.extractChars());
@@ -283,34 +363,10 @@ void publishDiagnostics(string uri)
 int lspMain()
 {
     import core.stdc.stdlib : atoi;
-    import core.vararg;
-
-    class ErrorSinkLsp : ErrorSinkNull
-    {
-        OutBuffer result;
-        int errors = 0;
-        extern(C++): override:
-
-        void verror(Loc loc, const(char)* format, va_list ap)
-        {
-            result.reset();
-            result.printf("Error (%d): ", loc.charnum);
-            result.vprintf(format, ap);
-            result.writestring("\n");
-            if (errors++ < 10)
-                fprintf(stderr, "%s", result.extractChars);
-        }
-
-        void verrorSupplemental(Loc loc, const(char)* format, va_list ap)
-        {
-            result.vprintf(format, ap);
-            result.writestring("\n");
-        }
-    }
 
     Lsp lsp;
-    scope eSink = new ErrorSinkLsp();
-    // scope eSink = new ErrorSinkNull;
+    lsp.eSink = new ErrorSinkLsp();
+    auto eSink = lsp.eSink;
 
     char[] buffer = new char[16 * 1024];
 
@@ -475,14 +531,14 @@ void lspRespond(ref Lsp lsp, JsonRpc result)
     else if (result.method == "textDocument/didOpen")
     {
         lsp.openDocuments[result.params.textDocument.uri] = result.params.textDocument.text;
-        publishDiagnostics(result.params.textDocument.uri);
+        publishDiagnostics(lsp, result.params.textDocument.uri);
         return; // notification, no response
     }
     else if (result.method == "textDocument/didChange")
     {
         // textDocumentSync: Full (1) — contentChanges[0].text is the complete new content
         lsp.openDocuments[result.params.textDocument.uri] = result.params.contentChanges.text;
-        publishDiagnostics(result.params.textDocument.uri);
+        publishDiagnostics(lsp, result.params.textDocument.uri);
         return; // notification, no response
     }
     else if (result.method == "textDocument/didClose")
