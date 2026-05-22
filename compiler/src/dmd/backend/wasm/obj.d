@@ -66,7 +66,7 @@ private const(char)[] funcName(ref const WasmFunc f)
 {
     if (f.sym)
         return f.sym.identifier;
-    return f.importName.length ? f.importName : f.name[];
+    return f.importName;
 }
 
 // Index of the func that "owns" the symbol-table entry for the given name:
@@ -170,7 +170,7 @@ struct WasmFunc
     bool isImport;
     const(char)[] importModule; // for imports: module name
     const(char)[] importName; // for imports: field name
-    string name; // for synthesized functions with no Symbol and no importName
+    // string name; // for synthesized functions with no Symbol and no importName
 }
 
 // Local variable in a WASM function
@@ -1226,21 +1226,28 @@ void preRegisterExternals(elem* e)
             // elem_print(e);
 
             Symbol* s = e.E1.Vsym;
-            import std.stdio; debug writeln("call to: ", s.identifier);
 
-            import dmd.backend.debugprint;
-            import std.string;
-            // return type: tym_str(e.Ety).fromStringz
-            // TYfunc: tym_str(e.E1.Ety)
-            // auto Tparamtypes;
-            debug writeln("params types ", s.Stype.Tparamtypes.length);
-            debug writeln("variadic: ", variadic(s.Stype));
-            debug writeln("args: ", );
-
-            // t.Tparamtypes
-            if (e.Ety == TYnptr)
+            // RTLSYMs like _d_arraybounds_indexp are declared with type_fake(TYnfunc),
+            // leaving Tparamtypes null. The signature derived from such a declaration
+            // won't match the real definition in libdruntime, so wasm-ld emits
+            // "function signature mismatch" warnings. Synthesize Tparamtypes by
+            // walking the OPparam tree in e.E2 and recording each arg's tym_t.
+            if (s && s.Stype && tyfunc(s.Stype.Tty) && !variadic(s.Stype) &&
+                s.Stype.Tparamtypes is null && e.E2)
             {
-                debug writeln("POSER");
+                void appendArgTypes(elem* p)
+                {
+                    if (!p)
+                        return;
+                    if (p.Eoper == OPparam)
+                    {
+                        appendArgTypes(p.E1);
+                        appendArgTypes(p.E2);
+                        return;
+                    }
+                    param_append_type(&s.Stype.Tparamtypes, type_fake(tybasic(p.Ety)));
+                }
+                appendArgTypes(e.E2);
             }
 
             if (s && s.Sclass != SC.auto_ && s.Sclass != SC.parameter && s.Sclass != SC.fastpar)
@@ -1621,7 +1628,8 @@ int WasmObj_external(Symbol* s)
     if (!s || !s.Stype)
         return 0;
     // If the same symbol is already registered (import or defined), return its index.
-    const(char)[] id = s.Sident.ptr[0 .. strlen(s.Sident.ptr)];
+    const(char)[] id = s.identifier;
+
     foreach (size_t i, ref const WasmFunc f; wmod.funcs)
     {
         // Deduplicate imports: multiple D modules may declare the same extern(C) symbol.
@@ -1832,29 +1840,6 @@ void wmod_recordDataAddrReloc(uint codeOffset, Symbol* sym, uint addend)
     r.sym = sym;
     r.addend = addend;
     wasmFuncBodies[$ - 1].dataAddrRelocs ~= r;
-}
-
-// Add a synthesized (no-Symbol) function to the module with the given type signature.
-// Returns the combined function index (numImports + body position).
-// After calling, the caller must write code into wasmFuncBodies[$-1].code.
-uint wmod_addDefinedFunc(string name, WasmLocal[] locals, uint numParams,
-    WASM_TYPE[] params, WASM_TYPE[] results)
-{
-    WasmFuncType ft;
-    ft.params = params.dup;
-    ft.results = results.dup;
-    WasmFunc f;
-    f.typeIdx = wmod.internType(ft);
-    f.sym = null;
-    f.exported = false;
-    f.name = name; // store for symbol table
-    wmod.funcs ~= f;
-    WasmFuncBody empty;
-    empty.name = name;
-    empty.locals = locals;
-    empty.numParams = numParams;
-    wasmFuncBodies ~= empty;
-    return wmod.numImports + cast(uint)(wasmFuncBodies.length - 1);
 }
 
 // Return the index of the __stack_pointer mutable global, creating it if needed.
