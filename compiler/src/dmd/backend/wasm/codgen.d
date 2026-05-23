@@ -1492,8 +1492,10 @@ bool genElem(ref WasmCG cg, elem* e)
 
     default:
         cg.emit(OP_UNREACHABLE);
-        debug writeln("-----------------");
-        elem_print(e);
+        try {
+            writeln("-----------------\n unimplemented e.Eoper: ", oper_str(e.Eoper).fromStringz);
+            elem_print(e);
+        } catch (Exception e) {}
         assert(0);
         return tybasic(e.Ety) != TYvoid;
     }
