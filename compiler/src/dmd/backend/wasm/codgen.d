@@ -1207,6 +1207,8 @@ bool genElem(ref WasmCG cg, elem* e)
     case OPshl:
     case OPshr:
     case OPashr:
+    case OProl: // OProl/OPror are from `core.bitop.rol`/`ror` or recognized patterns
+    case OPror:
         {
             const rty = wasmType(e.Ety);
             cg.genElem(e.E1, rty);
@@ -1284,6 +1286,110 @@ bool genElem(ref WasmCG cg, elem* e)
             return true;
         default:
             assert(0);
+        }
+
+    case OPabs:
+        // D `import core.math; abs(x);` and `std.math.abs`. Generated as
+        // an intrinsic when the frontend recognises the call.
+        switch (e.wasmType)
+        {
+        case WASM_F32: return unaryOp(OP_F32_ABS);
+        case WASM_F64: return unaryOp(OP_F64_ABS);
+        case WASM_I32:
+        case WASM_I64:
+            // No native integer abs. Compute `(x ^ (x >> N-1)) - (x >> N-1)`,
+            // i.e. flip-on-negative-then-subtract-mask. Saves a branch.
+            {
+                const bool is64 = (e.wasmType == WASM_I64);
+                uint t = cg.allocTemp(is64 ? WASM_I64 : WASM_I32);
+                cg.genElem(e.E1);
+                cg.emitLocal(OP_LOCAL_TEE, t); // stash x
+                // Arithmetic shift right to get sign mask.
+                if (is64)
+                {
+                    cg.emitConst(OP_I64_CONST, 63);
+                    cg.emit(OP_I64_SHR_S);
+                }
+                else
+                {
+                    cg.emitConst(OP_I32_CONST, 31);
+                    cg.emit(OP_I32_SHR_S);
+                }
+                uint m = cg.allocTemp(is64 ? WASM_I64 : WASM_I32);
+                cg.emitLocal(OP_LOCAL_TEE, m); // stash mask
+                cg.emitLocal(OP_LOCAL_GET, t);
+                cg.emit(is64 ? OP_I64_XOR : OP_I32_XOR); // x ^ mask
+                cg.emitLocal(OP_LOCAL_GET, m);
+                cg.emit(is64 ? OP_I64_SUB : OP_I32_SUB); // - mask
+                return true;
+            }
+        default:
+            assert(0);
+        }
+
+    case OPsqrt: // D `import core.math; sqrt(x);`
+        switch (e.wasmType)
+        {
+        case WASM_F32: return unaryOp(OP_F32_SQRT);
+        case WASM_F64: return unaryOp(OP_F64_SQRT);
+        case WASM_I32:
+        case WASM_I64:
+            assert(0);
+        default:
+            assert(0);
+        }
+
+    case OPnegass:
+        // `x = -x;` lowered as a single op (an in-place negation).
+        // Reuse the OPneg emitter for the value, then store back.
+        {
+            if (e.E1.Eoper != OPvar && e.E1.Eoper != OPind)
+            {
+                cg.emit(OP_UNREACHABLE);
+                return typeHasValue(e.Ety);
+            }
+            auto lv = saveLValueAddr(cg, e.E1);
+            replayAddr(cg, lv);
+            cg.emitLoad(e.E1.Ety);
+            // Apply negation in-stack using the wasm type of the lhs.
+            const wty = e.E1.Ety.wasmType;
+            switch (wty)
+            {
+            case WASM_F32:
+                cg.emit(OP_F32_NEG);
+                break;
+            case WASM_F64:
+                cg.emit(OP_F64_NEG);
+                break;
+            case WASM_I64:
+                {
+                    uint t = cg.allocTemp(WASM_I64);
+                    cg.emitLocal(OP_LOCAL_SET, t);
+                    cg.emitConst(OP_I64_CONST, 0);
+                    cg.emitLocal(OP_LOCAL_GET, t);
+                    cg.emit(OP_I64_SUB);
+                    break;
+                }
+            case WASM_I32:
+                {
+                    uint t = cg.allocTemp(WASM_I32);
+                    cg.emitLocal(OP_LOCAL_SET, t);
+                    cg.emitConst(OP_I32_CONST, 0);
+                    cg.emitLocal(OP_LOCAL_GET, t);
+                    cg.emit(OP_I32_SUB);
+                    break;
+                }
+            default:
+                assert(0);
+            }
+            cg.maskSmallInt(e.E1.Ety);
+            uint vTmp = cg.allocTemp(wty);
+            cg.emitLocal(OP_LOCAL_SET, vTmp);
+            replayAddr(cg, lv);
+            cg.emitLocal(OP_LOCAL_GET, vTmp);
+            cg.emitStore(e.E1.Ety);
+            cg.emitLocal(OP_LOCAL_GET, vTmp);
+            return true;
         }
 
     case OPnot:
@@ -1404,6 +1510,43 @@ bool genElem(ref WasmCG cg, elem* e)
             cg.emitConst(OP_I64_CONST, 32);
             cg.emit(OP_I64_SHR_U);
             cg.emit(OP_I32_WRAP_I64);
+            return true;
+        }
+
+    case OPstrpar:
+        // `void f(S s)` callsite: `f(myS)` becomes `OPstrpar(myS)`.
+        // The contained E1 is the struct value (typically an lvalue: OPvar
+        // for a variable, OPind for a pointer dereference, or a comma chain
+        // that ends in one of those).
+        if (emitLValueAddr(cg, e.E1))
+            return true;
+
+        assert(0);
+
+    case OPpair:
+    case OPrpair:
+        // Build a 64-bit value from two 32-bit halves. Emitted by glue/optimizer
+        // for slice/delegate construction (D `T[] s = arr[0 .. n];` and
+        // `auto dg = &obj.method;`) and for elsewhere-disabled struct-pair SROA.
+        //   OPpair:  E1 = low  (offset +0), E2 = high (offset +4)
+        //   OPrpair: E1 = high (offset +4), E2 = low  (offset +0)
+        // Resulting i64 packs as `(hi << 32) | (lo & 0xFFFFFFFF)`. When stored
+        // via i64.store the little-endian layout puts `lo` at addr+0 and `hi`
+        // at addr+4, matching the in-memory slice/delegate layout. The
+        // dedicated OPeq decomposition above already handles the common
+        // store path with two i32 stores — this case handles uses that
+        // consume the pair as a single 64-bit value (e.g. passed to OPmsw,
+        // OP64_32, or stored as a whole via i64).
+        {
+            elem* lo = (op == OPpair) ? e.E1 : e.E2;
+            elem* hi = (op == OPpair) ? e.E2 : e.E1;
+            cg.genElem(lo);
+            cg.emit(OP_I64_EXTEND_I32_U);
+            cg.genElem(hi);
+            cg.emit(OP_I64_EXTEND_I32_U);
+            cg.emitConst(OP_I64_CONST, 32);
+            cg.emit(OP_I64_SHL);
+            cg.emit(OP_I64_OR);
             return true;
         }
 
@@ -1815,6 +1958,8 @@ private void emitBinop(ref WasmCG cg, int op, tym_t ty)
         case OPshl:  return pickByKind(ty, U, U, OP_I64_SHL, OP_I32_SHL);
         case OPshr:  return pickByKind(ty, U, U, OP_I64_SHR_U, OP_I32_SHR_U);
         case OPashr: return pickByKind(ty, U, U, OP_I64_SHR_S, OP_I32_SHR_S);
+        case OProl:  return pickByKind(ty, U, U, OP_I64_ROTL, OP_I32_ROTL);
+        case OPror:  return pickByKind(ty, U, U, OP_I64_ROTR, OP_I32_ROTR);
         default:
             return OP_UNREACHABLE;
         }
