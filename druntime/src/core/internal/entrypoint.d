@@ -18,51 +18,28 @@ this code into the module.
 */
 template _d_cmain()
 {
-    version (WebAssembly)
+    extern(C)
     {
-        // WASM needs a typed _Dmain wrapper (always `(char[][]) -> int`) because
-        // call_indirect requires an exact signature match, and the user's main
-        // may have a different one. The compiler mangles the user's main as
-        // `__d_user_main` so this wrapper can own the `_Dmain` symbol. We use
-        // pragma(mangle) on both wrappers so that `main` inside the template
-        // body still refers to the user's function.
-        private extern(C) int _d_run_main(int argc, char** argv, void* mainFunc) nothrow;
+        // Typed MainFunc so taking `&_Dmain` on WASM produces a call_indirect
+        // with the right signature.  Non-WASM ABIs don't care about the
+        // typedef (the underlying definition in rt.dmain2 uses the same).
+        private alias MainFunc = extern(C) int function(char[][] args);
+        int _d_run_main(int argc, char** argv, MainFunc mainFunc);
 
-        pragma(mangle, "main")
-        extern(C) int __wasm_c_main(int argc, char** argv) nothrow
+        int _Dmain(char[][] args);
+
+        version (WebAssembly)
         {
-            return _d_run_main(argc, argv, &__wasm_Dmain);
+            // WASI has no argc/argv; `_start` calls `main()` with no args.
+            pragma(mangle, "main")
+            int __wasm_c_main()
+            {
+                return _d_run_main(0, null, &_Dmain);
+            }
         }
-
-        // Avoid wrapping `main` in a lambda — the WASM backend has no closure
-        // support yet, so a nested call that captures `args` traps. Inline the
-        // dispatch into each static-if branch instead.
-        pragma(mangle, "_Dmain")
-        extern(C) int __wasm_Dmain(char[][] args)
+        else
         {
-            static if (is(typeof(main(cast(string[]) args)) == int))
-                return main(cast(string[]) args);
-            else static if (is(typeof(main(args)) == int))
-                return main(args);
-            else static if (is(typeof(main()) == int))
-                return main();
-            else static if (is(typeof(main(cast(string[]) args))))
-            { main(cast(string[]) args); return 0; }
-            else static if (is(typeof(main(args))))
-            { main(args); return 0; }
-            else
-            { main(); return 0; }
-        }
-    }
-    else
-    {
-        extern(C)
-        {
-            int _d_run_main(int argc, char **argv, void* mainFunc);
-
-            int _Dmain(char[][] args);
-
-            int main(int argc, char **argv)
+            int main(int argc, char** argv)
             {
                 return _d_run_main(argc, argv, &_Dmain);
             }

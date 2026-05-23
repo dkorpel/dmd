@@ -367,7 +367,8 @@ private bool returnByPtr(type* t)
 /// Build a WasmFuncType from a backend function type.
 /// Aggregates are passed/returned by pointer; aggregate return adds a hidden i32 first.
 /// Slices and delegates are split into 2 params.
-private WasmFuncType buildFuncType(type* t, Symbol* sfunc)
+/// `sfunc` may be null for indirect calls — Fmember/Fnested fixups are skipped.
+public WasmFuncType buildFuncType(type* t, Symbol* sfunc)
 {
     // debug writeln("build function type for ", sfunc.identifier);
 
@@ -383,7 +384,7 @@ private WasmFuncType buildFuncType(type* t, Symbol* sfunc)
     // D nested functions (Fnested) receive a static-link/closure pointer.
     // Neither is in Tparamtypes, so prepend an i32.
     // (TODO: what order are hidden ret and this ptr passed? doesn't matter here, but still...)
-    if (sfunc.Sfunc && (sfunc.Sfunc.Fflags3 & (Fmember | Fnested)))
+    if (sfunc && sfunc.Sfunc && (sfunc.Sfunc.Fflags3 & (Fmember | Fnested)))
         ft.params ~= WASM_I32;
 
     const tym_t fty = tybasic(t.Tty);
@@ -1051,17 +1052,15 @@ private bool emitRelocCodeSection(ref OutBuffer out_, ref WasmModule wmod, uint 
         foreach (ref const WasmFuncBody.CodeReloc r; fb.codeRelocs)
         {
             uint idx;
-            uint fi = currentFuncIdx(r);
             if (r.type == R_WASM.TYPE_INDEX_LEB)
             {
-                // Type relocs reference the type section directly; r.symIdx
-                // holds the funcIdx whose type we want to import-merge against.
-                if (fi >= wmod.funcs.length)
-                    continue;
-                idx = wmod.funcs[fi].typeIdx;
+                // R_WASM.TYPE_INDEX_LEB references the local type section
+                // index directly — wasm-ld remaps to the merged type table.
+                idx = r.symIdx;
             }
             else
             {
+                uint fi = currentFuncIdx(r);
                 if (fi >= funcToSymIdx.length)
                     continue;
                 idx = funcToSymIdx[fi];
