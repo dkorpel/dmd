@@ -558,12 +558,6 @@ Target[] predefinedTargets(string[] targets)
             case "arm":
                 newTargets ~= Target("",
                     [hostDMD, "-i", "-I" ~ scriptDir, "-run", testPath(buildPath("dshell", "arm_cross.d"))]);
-            case "wasm_compilable":
-                newTargets.put(findFiles("compilable").map!createWasmCompilableTarget);
-                break;
-
-            case "wasm_runnable":
-                newTargets.put(findFiles("runnable").map!createWasmRunnableTarget);
                 break;
 
             case "all":
