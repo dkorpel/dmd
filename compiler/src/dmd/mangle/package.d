@@ -719,13 +719,7 @@ public:
         }
         if (fd.isMain())
         {
-            // On WASM the entrypoint template generates a _Dmain wrapper with the
-            // standard (char[][], len) -> int type.  The user's actual main body
-            // must have a different external name so the two don't conflict.
-            if (target.objectFormat() == Target.ObjectFormat.wasm)
-                buf.writestring("__d_user_main");
-            else
-                buf.writestring("_Dmain");
+            buf.writestring("_Dmain");
             return;
         }
         if (fd.isWinMain() || fd.isDllMain())

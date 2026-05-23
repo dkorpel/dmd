@@ -302,36 +302,21 @@ nothrow:
     }
 
     // Emit the type index operand of call_indirect.
-    // In relocatable mode, emit R_WASM.TYPE_INDEX_LEB so wasm-ld can patch the
-    // type index when merging type tables from multiple objects.  The relocation
-    // references a named function whose type matches, preferring imports to avoid
-    // a wasm-ld 22 crash on locally-defined symbol targets.  If no suitable
-    // function is found yet (rare), fall back to compact ULEB without relocation
-    // (type indices are stable for single-file linking — imports get indices
-    // 0..numImports-1, defined-function types follow, matching wasm-ld's order).
+    // In relocatable mode, emit R_WASM.TYPE_INDEX_LEB with the local typeIdx
+    // as its symIdx — wasm-ld remaps local type indices to the merged type
+    // table at link time (no function-symbol anchor needed; the reloc target
+    // is the type-section index directly).
     void emitCallIndirectType(uint typeIdx)
     {
-        import dmd.backend.wasm.obj : wmod_findFuncForType, wmod_funcs;
-
         if (relocatable)
         {
-            uint fidx = wmod_findFuncForType(typeIdx);
-            if (fidx != uint.max)
-            {
-                // Anchor the reloc to the function's Symbol* so currentFuncIdx
-                // resolves it correctly even after wmod.funcs is reordered late
-                // in codegen — otherwise the stored fidx points at a different
-                // function whose typeIdx is unrelated (and often type 0).
-                auto reloc = WasmFuncBody.CodeReloc(cast(uint) code.length, R_WASM.TYPE_INDEX_LEB, fidx);
-                reloc.sym = wmod_funcs(fidx);
-                codeRelocs ~= reloc;
-
-                // 5-byte padded ULEB128 so wasm-ld has room to write the patched index.
-                emitULEBpadded(typeIdx);
-                return;
-            }
+            codeRelocs ~= WasmFuncBody.CodeReloc(cast(uint) code.length,
+                R_WASM.TYPE_INDEX_LEB, typeIdx);
+            // 5-byte padded ULEB128 so wasm-ld has room to write the patched index.
+            emitULEBpadded(typeIdx);
+            return;
         }
-        emitULEB(typeIdx); // single-file / no matching symbol: compact ULEB
+        emitULEB(typeIdx); // non-relocatable (single-file): compact ULEB
     }
 
     void emitMemArg(uint align_, uint offset)
@@ -898,6 +883,28 @@ private bool genCall(ref WasmCG cg, elem* e)
     //    calleeSym = e.E1.Vsym;
 
     type* fty = calleeSym ? calleeSym.Stype : null;
+    // Indirect call: derive the function type from the function-pointer
+    // variable's declared type so slice/delegate args still split into
+    // (length, ptr) and the call_indirect type signature matches the
+    // callee's declared signature. e.ET is only set for TYstruct/TYarray
+    // elems, so for function pointers we have to fish the type out of the
+    // underlying Symbol (Stype is pointer-to-function; Tnext is the func).
+    if (!fty)
+    {
+        elem* fe = e.E1;
+        // Peel an outer OPind: e2ir often emits `*&f` for function calls.
+        if (fe && fe.Eoper == OPind && fe.E1)
+            fe = fe.E1;
+        Symbol* fsym = (fe && (fe.Eoper == OPvar || fe.Eoper == OPrelconst)) ? fe.Vsym : null;
+        if (fsym && fsym.Stype)
+        {
+            type* st = fsym.Stype;
+            if (st.Tnext && tyfunc(st.Tnext.Tty))
+                fty = st.Tnext;          // pointer-to-function variable
+            else if (tyfunc(st.Tty))
+                fty = st;                 // direct function symbol via OPrelconst
+        }
+    }
 
     // C variadic requires Tparamtypes set (bare TYnfunc/TYjfunc with no
     // params is an unprototyped RTL decl, not a real variadic).
@@ -925,29 +932,39 @@ private bool genCall(ref WasmCG cg, elem* e)
     }
     else
     {
-        // Indirect call. Derive the WASM type signature from arg shapes; this
-        // mirrors paramTypesFromElem's old behavior (no slice-split for now
-        // since type info on the function pointer isn't reliably available).
-        WASM_TYPE[] callParams;
-        void collect(elem* p)
+        // Indirect call. Prefer the declared function type when available so
+        // slices/delegates split into (length, ptr) i32 pairs and aggregates
+        // pass by hidden pointer — matching what buildFuncType does for
+        // direct calls. Fall back to deriving from arg shapes when the
+        // function pointer carries no type info.
+        uint typeIdx;
+        if (fty)
         {
-            if (!p)
-                return;
-            if (p.Eoper == OPparam)
-            {
-                collect(p.E2);
-                collect(p.E1);
-                return;
-            }
-            callParams ~= wasmType(tybasic(p.Ety));
+            typeIdx = wmod_internType(buildFuncType(fty, null));
         }
+        else
+        {
+            WASM_TYPE[] callParams;
+            void collect(elem* p)
+            {
+                if (!p)
+                    return;
+                if (p.Eoper == OPparam)
+                {
+                    collect(p.E2);
+                    collect(p.E1);
+                    return;
+                }
+                callParams ~= wasmType(tybasic(p.Ety));
+            }
 
-        collect(e.E2);
-        WASM_TYPE[] callResults;
-        const tym_t retTy0 = tybasic(e.Ety);
-        if (typeHasValue(retTy0))
-            callResults ~= wasmType(retTy0);
-        uint typeIdx = wmod_internType(WasmFuncType(callParams, callResults));
+            collect(e.E2);
+            WASM_TYPE[] callResults;
+            const tym_t retTy0 = tybasic(e.Ety);
+            if (typeHasValue(retTy0))
+                callResults ~= wasmType(retTy0);
+            typeIdx = wmod_internType(WasmFuncType(callParams, callResults));
+        }
 
         // Function pointer source: strip an outer OPind (fptr table index
         // lives at the address) and evaluate the inner expression to push
