@@ -1009,6 +1009,26 @@ string execute(ref File f, string command, const ubyte expectedRc,
     return result.output;
 }
 
+/**
+ * Run `wasm-validate` on a produced WASM module/object and throw on failure.
+ * Silently no-ops if the file is missing (e.g. earlier compile step failed
+ * in a way that left no artifact) or if `wasm-validate` is not installed.
+ */
+void validateWasmArtifact(ref File f, string path)
+{
+    if (!std.file.exists(path))
+        return;
+    const cmd = "wasm-validate " ~ quoteSpaces(path);
+    f.writeln(cmd);
+    const result = std.process.executeShell(cmd);
+    f.write(result.output);
+    // 127 == command not found; skip silently so hosts without wabt still work.
+    if (result.status == 127)
+        return;
+    enforce(result.status == 0,
+        "wasm-validate failed for " ~ path ~ ":\n" ~ result.output);
+}
+
 /// add quotes around the whole string if it contains spaces that are not in quotes
 string quoteSpaces(string str)
 {
@@ -1904,6 +1924,31 @@ int tryMain(string[] args)
                 const diff = generateDiff(testArgs.compileOutput, testArgs.compileOutputFile,
                                             compile_output, test_base_name);
                 throw new CompareException(testArgs.compileOutput, compile_output, diff);
+            }
+
+            // Structurally validate every WASM artifact produced. Runs for
+            // compilable, link, and runnable; `wasmtime run` already validates
+            // the final module at instantiation, but compilable tests would
+            // otherwise pass on malformed bytecode.
+            if (envData.os == "wasm" && testArgs.mode != TestMode.FAIL_COMPILE)
+            {
+                string[] artifacts;
+                if (!testArgs.compileSeparately)
+                {
+                    if (testArgs.mode == TestMode.RUN || testArgs.link)
+                        artifacts ~= test_app_dmd;
+                    else
+                        artifacts ~= output_dir ~ envData.sep ~ test_name ~ "_" ~ to!string(permuteIndex) ~ envData.obj;
+                }
+                else
+                {
+                    foreach (filename; testArgs.sources ~ (autoCompileImports ? null : testArgs.compiledImports))
+                        artifacts ~= output_dir ~ envData.sep ~ filename.baseName().setExtension(envData.obj);
+                    if (testArgs.mode == TestMode.RUN || testArgs.link)
+                        artifacts ~= test_app_dmd;
+                }
+                foreach (art; artifacts)
+                    validateWasmArtifact(fThisRun, art);
             }
 
             if (testArgs.mode == TestMode.RUN)
