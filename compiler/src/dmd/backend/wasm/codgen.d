@@ -103,7 +103,9 @@ WASM_TYPE wasmType(tym_t ty)
         return WASM_I32;
 
     default:
-        debug writeln("ty = ", tym_str(ty).fromStringz);
+        try {
+            writeln("ty = ", tym_str(ty).fromStringz);
+        } catch (Exception e) {}
         assert(0);
         // return WASM_I32; // aggregate / unknown: pass by pointer
     }
@@ -1030,6 +1032,7 @@ bool genElem(ref WasmCG cg, elem* e)
         return false;
 
     case OPconst:
+        elem_print(e);
         switch (e.wasmType)
         {
         case WASM_I64:
