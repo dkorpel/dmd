@@ -187,8 +187,14 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
             {
                 if (b.Belem) // return value is on the stack
                 {
-                    // Save, epilogue, reload.
-                    uint retTmp = cg.allocTemp(wasmType(b.Belem.Ety));
+                    // Save, epilogue, reload. Aggregates returned via
+                    // hidden pointer leave an i32 on the stack.
+                    const tym_t bty = tybasic(b.Belem.Ety);
+                    WASM_TYPE retTy = (bty == TYstruct || bty == TYarray ||
+                                       bty == TYdarray || bty == TYdelegate)
+                        ? WASM_I32
+                        : wasmType(bty);
+                    uint retTmp = cg.allocTemp(retTy);
                     cg.emit(OP_LOCAL_SET);
                     cg.emitULEB(retTmp);
                     emitShadowEpilogue(cg);
