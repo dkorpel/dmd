@@ -1177,6 +1177,55 @@ void WasmObj_term(const(char)[] objfilename)
 import dmd.backend.el;
 import dmd.backend.oper;
 
+// RTLSYMs like _d_arraybounds_indexp and libc functions like memcmp are
+// declared with type_fake(TYnfunc) and all share a single __gshared `t`
+// (see rtlsym.d:146), leaving Tparamtypes null and Tnext = TYvoid.
+// The signature derived from such a declaration won't match the real
+// definition, so wasm-ld emits "function signature mismatch" warnings,
+// and (worse) memcmp's missing i32 return makes callers underflow the
+// operand stack. Clone Stype so each symbol gets its own type, then
+// synthesize Tparamtypes from the OPparam tree and Tnext from e.Ety.
+void guessTypeFromCall(ref Symbol s, ref elem e)
+{
+    if (!s.Stype || !tyfunc(s.Stype.Tty))
+        return;
+
+    if (s.Stype.Tparamtypes.length != 0)
+        return;
+
+    s.Stype = type_copy(s.Stype);
+    s.Stype.Tcount++;
+    if (e.E2)
+    {
+        void appendArgTypes(elem* p)
+        {
+            if (!p)
+                return;
+            if (p.Eoper == OPparam)
+            {
+                appendArgTypes(p.E1);
+                appendArgTypes(p.E2);
+                return;
+            }
+            param_append_type(&s.Stype.Tparamtypes, type_fake(tybasic(p.Ety)));
+        }
+        appendArgTypes(e.E2);
+        // Synthesised arity is full and fixed — flag so variadic() returns false
+        // and we don't emit a spurious trailing varargs i32 pointer.
+        s.Stype.Tflags |= TF.fixed;
+    }
+    // Synthesize the return type from the call expression's type.
+    // The shared placeholder Tnext is TYvoid; replace it with whatever
+    // the caller expects (e.g. memcmp → TYint, memcpy → TYnptr).
+    if (s.Stype.Tnext && tybasic(s.Stype.Tnext.Tty) == TYvoid && typeHasValue(e.Ety))
+    {
+        type* old = s.Stype.Tnext;
+        s.Stype.Tnext = type_fake(tybasic(e.Ety));
+        s.Stype.Tnext.Tcount++;
+        type_free(old);
+    }
+}
+
 // Walk the IR tree and pre-register any external function calls as imports.
 // Must run before code generation so that import indices are stable across
 // the whole module (call_indirect type indices are encoded as fixed-width
@@ -1185,66 +1234,27 @@ void preRegisterExternals(elem* e)
 {
     if (!e)
         return;
+
     const op = e.Eoper;
     if (OTleaf(op))
         return;
+
     if (op == OPcall || op == OPucall)
     {
         if (e.E1 && e.E1.Eoper == OPvar)
         {
             // elem_print(e);
-
             Symbol* s = e.E1.Vsym;
-
-            // RTLSYMs like _d_arraybounds_indexp and libc functions like memcmp are
-            // declared with type_fake(TYnfunc) and all share a single __gshared `t`
-            // (see rtlsym.d:146), leaving Tparamtypes null and Tnext = TYvoid.
-            // The signature derived from such a declaration won't match the real
-            // definition, so wasm-ld emits "function signature mismatch" warnings,
-            // and (worse) memcmp's missing i32 return makes callers underflow the
-            // operand stack. Clone Stype so each symbol gets its own type, then
-            // synthesize Tparamtypes from the OPparam tree and Tnext from e.Ety.
-            if (s && s.Stype && tyfunc(s.Stype.Tty) &&
-                s.Stype.Tparamtypes.length == 0)
+            if (s)
             {
-                s.Stype = type_copy(s.Stype);
-                s.Stype.Tcount++;
-                if (e.E2)
+                guessTypeFromCall(*s, * e);
+                if (s.Sclass != SC.auto_ && s.Sclass != SC.parameter && s.Sclass != SC.fastpar)
                 {
-                    void appendArgTypes(elem* p)
-                    {
-                        if (!p)
-                            return;
-                        if (p.Eoper == OPparam)
-                        {
-                            appendArgTypes(p.E1);
-                            appendArgTypes(p.E2);
-                            return;
-                        }
-                        param_append_type(&s.Stype.Tparamtypes, type_fake(tybasic(p.Ety)));
-                    }
-                    appendArgTypes(e.E2);
-                    // Synthesised arity is full and fixed — flag so variadic() returns false
-                    // and we don't emit a spurious trailing varargs i32 pointer.
-                    s.Stype.Tflags |= TF.fixed;
+                    funcIndex(s); // side-effect: registers as import if not defined
                 }
-                // Synthesize the return type from the call expression's type.
-                // The shared placeholder Tnext is TYvoid; replace it with whatever
-                // the caller expects (e.g. memcmp → TYint, memcpy → TYnptr).
-                if (s.Stype.Tnext && tybasic(s.Stype.Tnext.Tty) == TYvoid && typeHasValue(e.Ety))
-                {
-                    type* old = s.Stype.Tnext;
-                    s.Stype.Tnext = type_fake(tybasic(e.Ety));
-                    s.Stype.Tnext.Tcount++;
-                    type_free(old);
-                }
-            }
-
-            if (s && s.Sclass != SC.auto_ && s.Sclass != SC.parameter && s.Sclass != SC.fastpar)
-            {
-                funcIndex(s); // side-effect: registers as import if not defined
             }
         }
+
         if (e.E1)
             preRegisterExternals(e.E1);
         if (e.E2)
