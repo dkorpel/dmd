@@ -401,6 +401,11 @@ private WasmFuncType buildFuncType(type* t, Symbol* sfunc)
             ft.params ~= WASM_I32;
             ft.params ~= WASM_I32;
         }
+        else if (pty == TYstruct || pty == TYarray)
+        {
+            // Pass aggregates by hidden pointer.
+            ft.params ~= WASM_I32;
+        }
         else
         {
             ft.params ~= wasmType(pty);

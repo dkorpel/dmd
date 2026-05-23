@@ -384,7 +384,11 @@ void optfunc(ref GlobalOptimizer go, ref BlockOpt bo)
             blockopt(go, bo);           // do block optimization
         out_regcand(globsym[]);         // recompute register candidates
         go.changes = 0;                 // no changes yet
-        sliceStructs(globsym, bo.startblock);
+        /* WASM: sliceStructs rewrites struct-pair accesses into OPpair/OPrpair
+         * which the WASM backend does not yet implement.
+         */
+        if (config.objfmt != OBJ_WASM)
+            sliceStructs(globsym, bo.startblock);
         if (go.mfoptim & MFcnp)
             constprop(go, bo);              /* make relationals unsigned     */
         if (go.mfoptim & (MFli | MFliv))
