@@ -1032,7 +1032,12 @@ bool genElem(ref WasmCG cg, elem* e)
         return false;
 
     case OPconst:
-        elem_print(e);
+        // A TYvoid OPconst is the dead "result" of a folded short-circuit
+        // expression in statement context (cgelem.d:eloror rewrites
+        // `true || noreturnCall` into `OPcomma(1, OPconst(TYvoid, 1))`).
+        // The OPcomma already knows not to drop a non-push, so emit nothing.
+        if (tybasic(e.Ety) == TYvoid)
+            return false;
         switch (e.wasmType)
         {
         case WASM_I64:
