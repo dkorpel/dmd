@@ -189,11 +189,12 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
                 {
                     // Save, epilogue, reload. Aggregates returned via
                     // hidden pointer leave an i32 on the stack.
+                    // Use the function-level retByHiddenPtr flag because
+                    // TYdarray/TYdelegate alias TYullong/TYllong on wasm32,
+                    // so b.Belem.Ety can't distinguish a slice/delegate
+                    // return from a plain ulong/long.
                     const tym_t bty = tybasic(b.Belem.Ety);
-                    WASM_TYPE retTy = (bty == TYstruct || bty == TYarray ||
-                                       bty == TYdarray || bty == TYdelegate)
-                        ? WASM_I32
-                        : wasmType(bty);
+                    WASM_TYPE retTy = cg.retByHiddenPtr ? WASM_I32 : wasmType(bty);
                     uint retTmp = cg.allocTemp(retTy);
                     cg.emit(OP_LOCAL_SET);
                     cg.emitULEB(retTmp);
