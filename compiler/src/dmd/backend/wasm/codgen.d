@@ -77,6 +77,8 @@ WASM_TYPE wasmType(tym_t ty)
     case TYhptr:
     case TYvptr:
     case TYfgPtr:
+    case TYsharePtr:
+    case TYimmutPtr:
         return WASM_I32; // I64 for 64-bit
 
     case TYllong:
@@ -104,7 +106,7 @@ WASM_TYPE wasmType(tym_t ty)
 
     default:
         try {
-            writeln("ty = ", tym_str(ty).fromStringz);
+            writeln("ty = ", tym_str(ty).fromStringz, ", tybasic = ", tybasic(ty));
         } catch (Exception e) {}
         assert(0);
         // return WASM_I32; // aggregate / unknown: pass by pointer
