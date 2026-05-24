@@ -387,6 +387,22 @@ public WasmFuncType buildFuncType(type* t, Symbol* sfunc)
 {
     WasmFuncType ft;
 
+    if (sfunc)
+    {
+        // debug writeln(sfunc.identifier);
+        // #HACK:
+        // D allows `void main()`, but WASM wants a consistent function type
+        // Normalize to `int main(string[] args)` or `extern(C) int main(int argc, char** argv)`
+        if (sfunc.identifier == "_Dmain")
+        {
+            return WasmFuncType([WASM_I32, WASM_I32], [WASM_I32]);
+        }
+        if (sfunc.identifier == "main")
+        {
+            return WasmFuncType([WASM_I32, WASM_I32], [WASM_I32]);
+        }
+    }
+
     // Check for aggregate return: requires a hidden pointer as the first parameter.
     type* ret = t.Tnext;
     const bool hiddenPtr = returnByPtr(ret);
