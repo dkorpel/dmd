@@ -256,7 +256,12 @@ Symbol* toSymbol(Dsymbol s)
                 if (target.os == Target.OS.Windows && target.isX86_64 && vd.isParameter())
                     t = type_fake(TYnptr);
                 else
-                    t = type_fake(TYdelegate);          // Tdelegate as C type
+                {
+                    // `lazy T` parameters mangle as `T delegate()`
+                    type* tret = Type_toCtype(vd.type);
+                    type* tf = type_function(TYnfunc, null, false, tret);
+                    t = type_delegate(tf);
+                }
                 t.Tcount++;
             }
             else if (vd.isParameter() && ISX64REF(vd))
