@@ -1338,7 +1338,7 @@ bool genElem(ref WasmCG cg, elem* e)
     case OPabs:
         // D `import core.math; abs(x);` and `std.math.abs`. Generated as
         // an intrinsic when the frontend recognises the call.
-        switch (e.wasmType)
+        final switch (e.wasmType)
         {
         case WASM_F32: return unaryOp(OP_F32_ABS);
         case WASM_F64: return unaryOp(OP_F64_ABS);
@@ -1370,19 +1370,15 @@ bool genElem(ref WasmCG cg, elem* e)
                 cg.emit(is64 ? OP_I64_SUB : OP_I32_SUB); // - mask
                 return true;
             }
-        default:
-            assert(0);
         }
 
     case OPsqrt: // D `import core.math; sqrt(x);`
-        switch (e.wasmType)
+        final switch (e.wasmType)
         {
         case WASM_F32: return unaryOp(OP_F32_SQRT);
         case WASM_F64: return unaryOp(OP_F64_SQRT);
         case WASM_I32:
         case WASM_I64:
-            assert(0);
-        default:
             assert(0);
         }
 
@@ -1392,6 +1388,7 @@ bool genElem(ref WasmCG cg, elem* e)
         {
             if (e.E1.Eoper != OPvar && e.E1.Eoper != OPind)
             {
+                assert(0);
                 cg.emit(OP_UNREACHABLE);
                 return typeHasValue(e.Ety);
             }
@@ -1400,7 +1397,7 @@ bool genElem(ref WasmCG cg, elem* e)
             cg.emitLoad(e.E1.Ety);
             // Apply negation in-stack using the wasm type of the lhs.
             const wty = e.E1.Ety.wasmType;
-            switch (wty)
+            final switch (wty)
             {
             case WASM_F32:
                 cg.emit(OP_F32_NEG);
@@ -1426,8 +1423,6 @@ bool genElem(ref WasmCG cg, elem* e)
                     cg.emit(OP_I32_SUB);
                     break;
                 }
-            default:
-                assert(0);
             }
             cg.maskSmallInt(e.E1.Ety);
             uint vTmp = cg.allocTemp(wty);
@@ -1446,7 +1441,7 @@ bool genElem(ref WasmCG cg, elem* e)
 
     case OPcom:
         // ~x = x ^ 0xFFFFFFFF
-        switch (e.wasmType)
+        final switch (e.wasmType)
         {
         case WASM_I64:
             cg.genElem(e.E1);
@@ -1460,7 +1455,6 @@ bool genElem(ref WasmCG cg, elem* e)
             return true;
         case WASM_F32:
         case WASM_F64:
-        default:
             assert(0); // operator not defined for float types
         }
 
@@ -1477,20 +1471,20 @@ bool genElem(ref WasmCG cg, elem* e)
     case OPu32_64: return unaryOp(OP_I64_EXTEND_I32_U);
     case OPs32_64: return unaryOp(OP_I64_EXTEND_I32_S);
 
-    // Integer narrowing (D `long l; int i = cast(int)l;`).
+    // Integer narrowing (D `long l; int i = cast(int) l;`).
     case OP64_32: return unaryOp(OP_I32_WRAP_I64);
 
-    // Float<->double (D `float f = cast(float)d;` and reverse).
+    // Float<->double (D `float f = cast(float) d;` and reverse).
     case OPd_f: return unaryOp(OP_F32_DEMOTE_F64);
     case OPf_d: return unaryOp(OP_F64_PROMOTE_F32);
 
-    // Float to integer (D `int i = cast(int)d;` etc.).
+    // Float to integer (D `int i = cast(int) d;` etc.).
     case OPd_s32: return unaryOp(OP_I32_TRUNC_F64_S);
     case OPd_u32: return unaryOp(OP_I32_TRUNC_F64_U);
     case OPd_s64: return unaryOp(OP_I64_TRUNC_F64_S);
     case OPd_u64: return unaryOp(OP_I64_TRUNC_F64_U);
 
-    // Integer to float (D `double d = cast(double)i;` etc.).
+    // Integer to float (D `double d = cast(double) i;` etc.).
     case OPs32_d: return unaryOp(OP_F64_CONVERT_I32_S);
     case OPu32_d: return unaryOp(OP_F64_CONVERT_I32_U);
     case OPs64_d: return unaryOp(OP_F64_CONVERT_I64_S);
@@ -1575,8 +1569,6 @@ bool genElem(ref WasmCG cg, elem* e)
         // store path with two i32 stores — this case handles uses that
         // consume the pair as a single 64-bit value (e.g. passed to OPmsw,
         // OP64_32, or stored as a whole via i64).
-        assert(0);
-
         {
             elem* lo = (op == OPpair) ? e.E1 : e.E2;
             elem* hi = (op == OPpair) ? e.E2 : e.E1;
@@ -1589,6 +1581,7 @@ bool genElem(ref WasmCG cg, elem* e)
             cg.emit(OP_I64_OR);
             return true;
         }
+        // assert(0);
 
     case OP16_8:
         cg.genElem(e.E1);
@@ -1718,11 +1711,11 @@ bool genElem(ref WasmCG cg, elem* e)
         {
             // Struct assignment: copy type_size(e.ET) bytes from E2 to E1.
             // Result: the destination address (i32) for chained assignment.
-            import dmd.backend.type : type_size;
 
             uint sz = e.ET ? cast(uint) type_size(e.ET) : 0;
             if (sz == 0)
                 return false;
+
             uint dstTmp = cg.allocTemp(WASM_I32);
             genElemAddr(cg, e.E1);
             cg.emit(OP_LOCAL_TEE);
@@ -1768,16 +1761,11 @@ bool genElem(ref WasmCG cg, elem* e)
             cg.genElem(e.E1);
             cg.emit(OP_LOCAL_TEE);
             cg.emitULEB(dstTmp); // stack: dst
-            if (e.E2 && e.E2.Eoper == OPparam)
-            {
-                cg.genElem(e.E2.E2, WASM_I32); // val
-                cg.genElem(e.E2.E1, WASM_I32); // count
-            }
-            else
-            {
-                cg.emitConst(OP_I32_CONST, 0); // val
-                cg.emitConst(OP_I32_CONST, 0); // count
-            }
+            assert(e.E2.Eoper == OPparam);
+
+            cg.genElem(e.E2.E2, WASM_I32); // val
+            cg.genElem(e.E2.E1, WASM_I32); // count
+
             emitMemoryFill(cg);
             cg.emitLocal(OP_LOCAL_GET, dstTmp);
             return true;
@@ -1785,7 +1773,7 @@ bool genElem(ref WasmCG cg, elem* e)
 
     // bit scan forward = count trailing zeros; result is always i32
     case OPbsf:
-        switch (e.wasmType)
+        final switch (e.wasmType)
         {
             case WASM_I64:
                 cg.genElem(e.E1);
@@ -1793,15 +1781,14 @@ bool genElem(ref WasmCG cg, elem* e)
                 cg.emit(OP_I32_WRAP_I64);
                 return true;
             case WASM_I32:
-                cg.genElem(e.E1);
-                cg.emit(OP_I32_CTZ);
-                return true;
-            default:
+                return unaryOp(OP_I32_CTZ);
+            case WASM_F32:
+            case WASM_F64:
                 assert(0);
         }
 
     case OPbsr:
-        switch (e.wasmType)
+        final switch (e.wasmType)
         {
             case WASM_I64:
                 cg.emitConst(OP_I64_CONST, 63);
@@ -1816,7 +1803,8 @@ bool genElem(ref WasmCG cg, elem* e)
                 cg.emit(OP_I32_CLZ);
                 cg.emit(OP_I32_SUB);
                 return true;
-            default:
+            case WASM_F32:
+            case WASM_F64:
                 assert(0);
         }
 
@@ -1963,26 +1951,24 @@ private bool paramIsAggregate(const(param_t)* p)
 // Order: f32, f64, i64, i32. Pass OP_UNREACHABLE for kinds that don't apply.
 private ubyte pickByKind(tym_t ty, ubyte f32, ubyte f64, ubyte i64, ubyte i32)
 {
-    switch (tybasic(ty).wasmType)
+    final switch (tybasic(ty).wasmType)
     {
     case WASM_F32: return f32;
     case WASM_F64: return f64;
     case WASM_I64: return i64;
     case WASM_I32: return i32;
-    default: return i32;
     }
 }
 
 private ubyte pickByKindSigned(tym_t ty, ubyte f32, ubyte f64, ubyte i64, ubyte s64, ubyte i32, ubyte s32)
 {
     const bool isUns = tyuns(ty) != 0;
-    switch (tybasic(ty).wasmType)
+    final switch (tybasic(ty).wasmType)
     {
     case WASM_F32: return f32;
     case WASM_F64: return f64;
     case WASM_I64: return isUns ? i64 : s64;
     case WASM_I32: return isUns ? i32 : s32;
-    default: return i32;
     }
 }
 
@@ -2015,7 +2001,7 @@ private void emitBinop(ref WasmCG cg, int op, tym_t ty)
         case OProl:  return pickByKind(ty, U, U, OP_I64_ROTL, OP_I32_ROTL);
         case OPror:  return pickByKind(ty, U, U, OP_I64_ROTR, OP_I32_ROTR);
         default:
-            return OP_UNREACHABLE;
+            assert(0);
         }
     }
 
@@ -2051,7 +2037,7 @@ private void emitRelop(ref WasmCG cg, int op, tym_t ty)
                 isUns ? OP_I32_GE_U : OP_I32_GE_S);
             break;
         default:
-            return OP_UNREACHABLE;
+            assert(0);
         }
     }
     cg.emit(relOp(op, ty));
