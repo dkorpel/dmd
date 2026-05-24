@@ -171,6 +171,9 @@ nothrow:
 
     auto stackPtrGlobal() => wmod_getOrCreateStackPtrGlobal();
 
+    /// Returns: function type index for `x`
+    auto internType(WasmFuncType x) => wmod_internType(x);
+
     /// Allocate an anonymous temp local of the given WASM type
     ///
     /// Returns: index of allocated temp in `locals` array
@@ -957,7 +960,7 @@ private bool genCall(ref WasmCG cg, elem* e)
 
     if (calleeSym)
     {
-        cg.emitCall(funcIndex(calleeSym), calleeSym);
+        cg.emitCall(cg.funcIndex(calleeSym), calleeSym);
     }
     else
     {
@@ -969,30 +972,11 @@ private bool genCall(ref WasmCG cg, elem* e)
         uint typeIdx;
         if (fty)
         {
-            typeIdx = wmod_internType(buildFuncType(fty, null));
+            typeIdx = cg.internType(buildFuncType(fty, null));
         }
         else
         {
-            WASM_TYPE[] callParams;
-            void collect(elem* p)
-            {
-                if (!p)
-                    return;
-                if (p.Eoper == OPparam)
-                {
-                    collect(p.E2);
-                    collect(p.E1);
-                    return;
-                }
-                callParams ~= wasmType(tybasic(p.Ety));
-            }
-
-            collect(e.E2);
-            WASM_TYPE[] callResults;
-            const tym_t retTy0 = tybasic(e.Ety);
-            if (typeHasValue(retTy0))
-                callResults ~= wasmType(retTy0);
-            typeIdx = wmod_internType(WasmFuncType(callParams, callResults));
+            typeIdx = cg.internType(buildFuncType(e.E2));
         }
 
         // Function pointer source: strip an outer OPind (fptr table index
@@ -1027,7 +1011,7 @@ private bool genCall(ref WasmCG cg, elem* e)
     // actual return type (e.g. a void member call appearing in an
     // OPcomma chain): trust the callee's Stype.Tnext.
     const retTy = tybasic(e.Ety);
-    bool pushedValue = typeHasValue(e.Ety); // EtyretTy != TYvoid && retTy != TYnoreturn;
+    bool pushedValue = typeHasValue(e.Ety);
     if (e.E1.Eoper == OPvar && e.E1.Vsym && e.E1.Vsym.Stype && e.E1.Vsym.Stype.Tnext)
     {
         const tym_t calleeRet = tybasic(e.E1.Vsym.Stype.Tnext.Tty);
@@ -1053,7 +1037,6 @@ bool genElem(ref WasmCG cg, elem* e)
 
     const op = e.Eoper;
 
-    // import std.stdio; debug writeln()
     // elem_print(e);
 
     bool unaryOp(WASM_OP op)
@@ -1111,9 +1094,9 @@ bool genElem(ref WasmCG cg, elem* e)
         if (emitSymLoad(cg, e.Vsym, cast(uint) e.Voffset, e.Ety))
             return true;
 
-        //
-        cg.emitLocal(OP_LOCAL_GET, cg.localFor(e.Vsym));
-        return true;
+        assert(0);
+        // cg.emitLocal(OP_LOCAL_GET, cg.localFor(e.Vsym));
+        // return true;
 
     case OPrelconst:
         if (Symbol* rs = e.Vsym)
@@ -1121,11 +1104,11 @@ bool genElem(ref WasmCG cg, elem* e)
             // Function address, table-index relocation
             if (rs.Sfl == FL.func)
             {
-                cg.emitTableIndex(funcIndex(rs), rs);
+                cg.emitTableIndex(cg.funcIndex(rs), rs);
                 return true;
             }
 
-            emitSymAddr(cg, rs, cast(uint) e.Voffset);
+            cg.emitSymAddr(rs, cast(uint) e.Voffset);
             return true;
         }
         assert(0);
@@ -1152,6 +1135,9 @@ bool genElem(ref WasmCG cg, elem* e)
             // rather than treating the 8-byte aggregate as one value.
             // Peek through trailing OPcomma side effects on the RHS.
             const tym_t lty = tybasic(e.E1.Ety);
+
+            // unwrapComma()
+
             elem* rhsTail = e.E2;
             while (rhsTail && rhsTail.Eoper == OPcomma)
                 rhsTail = rhsTail.E2;
@@ -1187,7 +1173,7 @@ bool genElem(ref WasmCG cg, elem* e)
             }
             // Store rhs through lvalue E1, leaving the rhs value on stack
             // (unless this assignment is used as a statement, e.Ety == void).
-            if (emitLValueAddr(cg, e.E1))
+            if (cg.emitLValueAddr(e.E1))
             {
                 cg.genElem(e.E2);
                 if (typeHasValue(e.Ety))
@@ -1279,26 +1265,30 @@ bool genElem(ref WasmCG cg, elem* e)
             // result = old value of E1; then E1 = old +/- E2
             if (e.E1.Eoper != OPvar && e.E1.Eoper != OPind)
             {
-                cg.emit(OP_UNREACHABLE);
-                return typeHasValue(e.Ety);
+                assert(0);
             }
+
             auto lv = saveLValueAddr(cg, e.E1);
             replayAddr(cg, lv);
             cg.emitLoad(e.E1.Ety);
+
             // Stash old value as the result.
-            uint oldTmp = cg.allocTemp(wasmType(e.E1.Ety));
+            uint oldTmp = cg.allocTemp(wasmType(e.E1));
             cg.emit(OP_LOCAL_TEE);
             cg.emitULEB(oldTmp);
+
             // Compute new value = old +/- E2.
             cg.genElem(e.E2, wasmType(e.E1.Ety));
             cg.emitBinop(op == OPpostinc ? OPadd : OPmin, e.E1.Ety);
             cg.maskSmallInt(e.E1.Ety);
+
             // Store new value back.
-            uint newTmp = cg.allocTemp(wasmType(e.E1.Ety));
+            uint newTmp = cg.allocTemp(wasmType(e.E1));
             cg.emitLocal(OP_LOCAL_SET, newTmp);
             replayAddr(cg, lv);
             cg.emitLocal(OP_LOCAL_GET, newTmp);
             cg.emitStore(e.E1.Ety);
+
             // Result: old value.
             cg.emitLocal(OP_LOCAL_GET, oldTmp);
             return true;
@@ -1311,7 +1301,7 @@ bool genElem(ref WasmCG cg, elem* e)
     case OPgt:
     case OPge:
         cg.genElem(e.E1);
-        cg.genElem(e.E2, wasmType(e.E1.Ety));
+        cg.genElem(e.E2, e.E1.wasmType);
         emitRelop(cg, op, e.E1.Ety);
         return true;
 
@@ -1610,7 +1600,7 @@ bool genElem(ref WasmCG cg, elem* e)
             if (voidCond)
                 cg.emit(WASM_VOID_BLOCK); // void blocktype: discard any branch value
             else
-                cg.emit(wasmType(e.Ety));
+                cg.emit(e.wasmType);
 
             const bool thenPushed = cg.genElem(e.E2.E1);
             if (voidCond && thenPushed)
@@ -2046,10 +2036,13 @@ private void emitRelop(ref WasmCG cg, int op, tym_t ty)
 /// Function index lookup
 ///
 /// Returns: index of `sfunc`
+uint funcIndex(ref WasmCG cg, Symbol* sfunc)
+{
+    return funcIndex(sfunc);
+}
+
 uint funcIndex(Symbol* sfunc)
 {
-    import dmd.backend.wasm.obj : wasmFuncBodies, wmod_funcs, wmod_numImports;
-
     // Imports come first in wmod.funcs; defined functions come after.
     // Check imports (registered via WasmObj_external).
     uint nimports = wmod_numImports();
@@ -2063,9 +2056,6 @@ uint funcIndex(Symbol* sfunc)
     foreach (size_t i, ref const fb; wasmFuncBodies)
         if (fb.sym == sfunc)
             return nimports + cast(uint) i;
-
-    // External symbol not yet registered — register as import now.
-    import dmd.backend.wasm.obj : WasmObj_external;
 
     if (sfunc && sfunc.Stype)
     {
