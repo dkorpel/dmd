@@ -134,6 +134,8 @@ bool typeHasValue(tym_t ty)
 struct CallCtx
 {
     param_t* nextParam;  /// next declared param (null when out of declared)
+    uint skipCount;      /// number of ABI-prepended leaves (hidden ret ptr, ethis,
+                         /// nested-link) consumed before nextParam advances
     bool isCVariadic;    /// true when callee takes `...`
     elem*[] varArgs;     /// args collected for the variadic shadow-frame spill
 }
@@ -366,8 +368,7 @@ private MemOps memOpsFor(tym_t ty) @safe
     }
 }
 
-// Emit `memory.copy 0 0` (stack: dst, src, n → empty).
-// Bulk-memory proposal — supported by every current wasm runtime.
+/// Emit `memory.copy 0 0`
 private void emitMemoryCopy(ref WasmCG cg)
 {
     cg.emit(OP_FC_PREFIX);
@@ -376,7 +377,7 @@ private void emitMemoryCopy(ref WasmCG cg)
     cg.emit(0x00); // src memidx
 }
 
-// Emit `memory.fill 0` (stack: dst, val, n → empty).
+/// Emit `memory.fill 0`
 private void emitMemoryFill(ref WasmCG cg)
 {
     cg.emit(OP_FC_PREFIX);
@@ -573,6 +574,8 @@ bool emitLValueAddr(ref WasmCG cg, elem* e)
     case OPind:
         cg.genElem(e.E1);
         return true;
+    case OPcomma:
+        //
     default:
         return false;
     }
@@ -840,7 +843,9 @@ private void emitSliceArg(ref WasmCG cg, elem* arg)
     if (emitSliceHalf(cg, a, /*ptrHalf*/ false) &&
         emitSliceHalf(cg, a, /*ptrHalf*/ true))
         return;
-    cg.emit(OP_UNREACHABLE);
+
+    elem_print(arg);
+    assert(0);
 }
 
 // Consume one leaf of the current call's OPparam tree as a single argument,
@@ -860,6 +865,15 @@ private void consumeCallArg(ref WasmCG cg, elem* e)
         return;
     }
     CallCtx* ctx = &cg.callCtxStack[$ - 1];
+    if (ctx.skipCount > 0)
+    {
+        // ABI-prepended leaf (hidden ret ptr, ethis, nested static-link).
+        // These come first in stack order but aren't in Tparamtypes — emit
+        // them as plain i32s without advancing nextParam.
+        ctx.skipCount--;
+        cg.genElem(e);
+        return;
+    }
     param_t* p = ctx.nextParam;
     if (p)
     {
@@ -917,6 +931,16 @@ private bool genCall(ref WasmCG cg, elem* e)
     CallCtx ctx;
     ctx.nextParam = fty ? fty.Tparamtypes : null;
     ctx.isCVariadic = fty !is null && fty.Tparamtypes !is null && variadic(fty);
+
+    // Hidden-ret pointer (struct/array return) and ethis/nested static link
+    // are prepended to the WASM signature by buildFuncType, but they don't
+    // appear in Tparamtypes. The OPparam tree contains them as leaves walked
+    // before the declared args, so let consumeCallArg skip past them.
+    if (fty && fty.Tnext && returnByPtr(fty.Tnext))
+        ctx.skipCount++;
+    if (calleeSym && calleeSym.Sfunc &&
+        (calleeSym.Sfunc.Fflags3 & (Fmember | Fnested)))
+        ctx.skipCount++;
 
     // Walk the OPparam tree via genElem natural recursion; consumeCallArg
     // emits each leaf using `ctx`, queueing variadics into ctx.varArgs.
@@ -1111,7 +1135,8 @@ bool genElem(ref WasmCG cg, elem* e)
         // a recognised lvalue (e.g. address-of an rvalue computation).
         if (emitLValueAddr(cg, e.E1))
             return true;
-        return cg.genElem(e.E1);
+        elem_print(e.E1);
+        assert(0);
 
     case OPind:
         cg.genElem(e.E1); // address on stack
@@ -1130,6 +1155,7 @@ bool genElem(ref WasmCG cg, elem* e)
             elem* rhsTail = e.E2;
             while (rhsTail && rhsTail.Eoper == OPcomma)
                 rhsTail = rhsTail.E2;
+
             if ((lty == TYdarray || lty == TYdelegate) &&
                 rhsTail && (rhsTail.Eoper == OPpair || rhsTail.Eoper == OPrpair) &&
                 emitLValueAddr(cg, e.E1))
@@ -1177,18 +1203,8 @@ bool genElem(ref WasmCG cg, elem* e)
                 cg.emitStore(e.E1.Ety);
                 return false;
             }
-            // Fallback: OPvar with no memory address (a bare WASM local).
-            // Shouldn't normally hit after the shadow-stack refactor.
-            if (e.E1.Eoper == OPvar && e.E1.Vsym)
-            {
-                const uint idx = cg.localFor(e.E1.Vsym);
-                cg.genElem(e.E2);
-                cg.maskSmallInt(e.E1.Ety);
-                cg.emit(OP_LOCAL_TEE);
-                cg.emitULEB(idx);
-                return true;
-            }
-            cg.genElem(e.E2);
+            elem_print(e);
+            assert(0);
             return true;
         }
 
@@ -1519,15 +1535,6 @@ bool genElem(ref WasmCG cg, elem* e)
         // D `ulong u = cast(ulong)r;` with real==double on WASM.
         return unaryOp(OP_I64_TRUNC_F64_U);
 
-    // Skipped/unsupported numeric conversions on WASM:
-    //   OPu64_128, OPs64_128, OP128_64 — cent/ucent (no native 128-bit; would
-    //     need a shadow-stack pair). Not produced by typical D code today.
-    //   OPc_r, OPc_i — complex types, also unsupported by wasmType.
-    //   OPvp_fp, OPcvp_fp, OPnp_fp, OPnp_f16p, OPf16p_np — DOS-era far/near
-    //     pointer conversions, not applicable to a flat WASM address space.
-    //   OPvecfill — vector broadcast (no SIMD here yet).
-    //   OPoffset — segmented-address offset extraction, not applicable.
-
     case OPmsw:
         {
             // Slice/delegate: high 32 bits live at offset +4 of the
@@ -1830,6 +1837,20 @@ bool genElem(ref WasmCG cg, elem* e)
                 emitBswap32(cg);
             return true;
         }
+
+    case OPu64_128: // no cent/ucent
+    case OPs64_128:
+    case OP128_64:
+    case OPc_r: // no complex numbers
+    case OPc_i:
+    case OPvp_fp: //  DOS era near/far
+    case OPcvp_fp:
+    case OPnp_fp:
+    case OPnp_f16p:
+    case OPf16p_np:
+    case OPvecfill: // No SIMD yet
+    case OPoffset: // segmented-address offset extraction, not applicable.
+        assert(0);
 
     default:
         cg.emit(OP_UNREACHABLE);
@@ -2179,6 +2200,19 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb, bool relocatable)
             const uint i0 = cast(uint) cg.locals.length;
             cg.locals ~= WasmLocal(wasmType(pty));
             paramSpills ~= ParamSpill(i0, s, 0, pty);
+        }
+    }
+    // buildFuncType may force-extend a function's WASM signature beyond what
+    // the D source declared (e.g. `_Dmain` is normalised to (i32, i32) -> i32
+    // regardless of the user's source).  Pad cg.locals with placeholder params
+    // so the implicit WASM locals 0..numParams-1 don't get clobbered by
+    // subsequent allocTemp() calls.
+    {
+        WasmFuncType ft = buildFuncType(sfunc.Stype, sfunc);
+        while (cg.locals.length < ft.params.length)
+        {
+            ubyte v = ft.params[cg.locals.length];
+            cg.locals ~= WasmLocal(cast(WASM_TYPE) v);
         }
     }
     cg.numParams = cast(uint) cg.locals.length;
