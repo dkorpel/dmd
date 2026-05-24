@@ -346,14 +346,29 @@ void WasmObj_registerImportModule(const(char)[] mangledName, const(char)[] modul
 }
 
 
+// TYdarray and TYdelegate alias TYullong/TYllong on wasm32, so the Tty enum
+// can't distinguish them from a plain ulong/long. Real slices and delegates
+// are allocated via type_dyn_array/type_delegate, which set Tnext; the
+// integer types do not. Use that to disambiguate.
+public bool isSliceOrDelegate(type* t) @trusted nothrow
+{
+    if (!t || t.Tnext is null)
+        return false;
+    const tym_t tb = tybasic(t.Tty);
+    return tb == TYdarray || tb == TYdelegate;
+}
+
 // Returns true if the backend type is an aggregate (struct/array) that must be
 // returned via a hidden pointer parameter in the WASM calling convention.
+//
+// Note: slices and delegates are NOT returned via hidden pointer at the WASM
+// level — they continue to be returned as a packed i64 (length<<32 | ptr).
+// The front-end builds them as OPpair-to-i64 and we keep that representation
+// at the ABI boundary. Adding sret for slice/delegate returns is a larger
+// refactor (see slice_abi_refactor_plan.md).
 private bool returnByPtr(type* t)
 {
     assert(t);
-    if (t.Tty == TYdarray || t.Tty == TYdelegate)
-        return true;
-
     switch (tybasic(t.Tty))
     {
     case TYstruct:
@@ -370,8 +385,6 @@ private bool returnByPtr(type* t)
 /// `sfunc` may be null for indirect calls — Fmember/Fnested fixups are skipped.
 public WasmFuncType buildFuncType(type* t, Symbol* sfunc)
 {
-    // debug writeln("build function type for ", sfunc.identifier);
-
     WasmFuncType ft;
 
     // Check for aggregate return: requires a hidden pointer as the first parameter.
@@ -397,7 +410,9 @@ public WasmFuncType buildFuncType(type* t, Symbol* sfunc)
         const tym_t pty = tybasic(p.Ptype.Tty);
 
         // Split into two i32 WASM params: (size_t len, T* ptr).
-        if (p.Ptype.Tty == TYdarray || p.Ptype.Tty == TYdelegate)
+        // TYdarray/TYdelegate alias TYullong/TYllong on wasm32 — distinguish
+        // a real slice/delegate (Tnext != null) from a plain ulong/long.
+        if (isSliceOrDelegate(p.Ptype))
         {
             ft.params ~= WASM_I32;
             ft.params ~= WASM_I32;
@@ -822,6 +837,24 @@ private bool emitLinkingSection(ref OutBuffer out_, ref WasmModule wmod)
         symtab.writeByte(WASM_SYMTAB.TABLE);
         symtab.writeuLEB128(WASM_SYM.UNDEFINED);
         symtab.writeuLEB128(0); // table index 0
+    }
+
+    // SEGMENT_INFO subsection: name our single data segment ".rodata" so
+    // wasm-ld places it alongside other read-only data instead of into an
+    // unnamed catch-all segment that gets concatenated with unrelated content.
+    if (wmod.dataSegs.length > 0)
+    {
+        OutBuffer seginfo;
+        seginfo.writeuLEB128(1); // one segment
+        const(char)[] segName = ".rodata";
+        seginfo.writeuLEB128(cast(uint) segName.length);
+        seginfo.write(segName.ptr, cast(uint) segName.length);
+        seginfo.writeuLEB128(2); // alignment log2 (4-byte alignment)
+        seginfo.writeuLEB128(0); // flags
+
+        body_.writeByte(WASM_LINKING.SEGMENT_INFO);
+        body_.writeuLEB128(cast(uint) seginfo.length());
+        body_.write(seginfo.peekSlice());
     }
 
     body_.writeByte(WASM_LINKING.SYMBOL_TABLE);
@@ -1571,6 +1604,27 @@ int WasmObj_data_start(Symbol* sdata, targ_size_t datasize, int seg)
         return 0;
     wmod.needsMemory = true;
 
+    if (wmod.dataSegs.length == 0)
+    {
+        wmod.dataSegs.length = 1;
+        wmod.dataSegs[0].offset = 4; // reserve address 0 as null pointer
+    }
+
+    // Keep dataHeap in sync with the actual buffer end so the assigned
+    // address corresponds to the buffer position where the data lands.
+    // (See allocRoData for the rationale.)
+    {
+        const uint segOff = wmod.dataSegs[0].offset;
+        uint bufEnd = cast(uint) wmod.dataSegs[0].data.length() + segOff;
+        if (bufEnd > wmod.dataHeap)
+            wmod.dataHeap = bufEnd;
+        else
+        {
+            while (cast(uint) wmod.dataSegs[0].data.length() + segOff < wmod.dataHeap)
+                wmod.dataSegs[0].data.writeByte(0);
+        }
+    }
+
     // All data goes into a single data segment at offset wmod.dataHeap.
     // Align to natural alignment of the data type (max 8 bytes).
     uint align_ = 4;
@@ -1582,12 +1636,6 @@ int WasmObj_data_start(Symbol* sdata, targ_size_t datasize, int seg)
     }
     uint mask = align_ - 1;
     uint base = (wmod.dataHeap + mask) & ~mask;
-
-    if (wmod.dataSegs.length == 0)
-    {
-        wmod.dataSegs.length = 1;
-        wmod.dataSegs[0].offset = 4; // reserve address 0 as null pointer
-    }
 
     if (seg == WASM_UDATA)
     {
@@ -1878,6 +1926,25 @@ private uint allocRoData(const(void)* p, uint len, uint align_)
     {
         wmod.dataSegs.length = 1;
         wmod.dataSegs[0].offset = 4; // reserve address 0 as null pointer
+    }
+    // Keep dataHeap in sync with the actual buffer end so the returned
+    // address corresponds to the buffer position where the data lands.
+    //   - Backend data-emit hooks (write_byte, bytes, reftoident, …)
+    //     append without bumping dataHeap, so buffer can outrun dataHeap.
+    //   - BSS reservations bump dataHeap past the buffer end without
+    //     writing bytes, so dataHeap can outrun the buffer.
+    // Resolve both directions: if buffer is ahead, advance dataHeap; if
+    // dataHeap is ahead, pad the buffer up to dataHeap.
+    {
+        const uint segOff = wmod.dataSegs[0].offset;
+        uint bufEnd = cast(uint) wmod.dataSegs[0].data.length() + segOff;
+        if (bufEnd > wmod.dataHeap)
+            wmod.dataHeap = bufEnd;
+        else
+        {
+            while (cast(uint) wmod.dataSegs[0].data.length() + segOff < wmod.dataHeap)
+                wmod.dataSegs[0].data.writeByte(0);
+        }
     }
     uint mask = align_ - 1;
     uint base = (wmod.dataHeap + mask) & ~mask;
