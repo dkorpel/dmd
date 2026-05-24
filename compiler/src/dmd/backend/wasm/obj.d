@@ -384,6 +384,30 @@ bool returnByPtr(type* t)
     }
 }
 
+WasmFuncType buildFuncType(elem* e)
+{
+    WASM_TYPE[] callParams;
+    void collect(elem* p)
+    {
+        if (!p)
+            return;
+        if (p.Eoper == OPparam)
+        {
+            collect(p.E2);
+            collect(p.E1);
+            return;
+        }
+        callParams ~= wasmType(tybasic(p.Ety));
+    }
+
+    collect(e);
+    WASM_TYPE[] callResults;
+    const tym_t retTy0 = tybasic(e.Ety);
+    if (typeHasValue(retTy0))
+        callResults ~= wasmType(retTy0);
+    return WasmFuncType(callParams, callResults);
+}
+
 /// Build a WasmFuncType from a backend function type.
 /// Aggregates are passed/returned by pointer; aggregate return adds a hidden i32 first.
 /// Slices and delegates are split into 2 params.
