@@ -153,6 +153,11 @@ struct WasmCG
     uint shadowFrameSize; /// total size in bytes of shadow frame
     Symbol*[] shadowEntries; /// per-symbol shadow frame offsets
 
+    /// Function return: true when this function returns via a hidden pointer
+    /// (struct/array/slice/delegate). Set during wasm_codgen2 init so retexp
+    /// emission can pick the right local type for the saved return value.
+    bool retByHiddenPtr;
+
     /// Scope for an in-progress call. Pushed on entry to genCall, popped on exit.
     /// Leaves of the OPparam tree consult the top of the stack to decide how to
     /// emit themselves (split slice into two i32s, queue as variadic, plain emit).
@@ -809,8 +814,7 @@ private bool paramIsSlice(const(param_t)* p)
 {
     if (!p || !p.Ptype)
         return false;
-    const tym_t tb = tybasic(p.Ptype.Tty);
-    return tb == TYdarray || tb == TYdelegate;
+    return isSliceOrDelegate(cast(type*) p.Ptype);
 }
 
 // Emit `arg` as a slice/delegate split into (length, ptr) i32s.
@@ -2152,7 +2156,7 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb, bool relocatable)
             continue;
         cg.registerShadow(s);
         const tym_t pty = tybasic(s.ty());
-        if (pty == TYdarray || pty == TYdelegate)
+        if (isSliceOrDelegate(s.Stype))
         {
             // Slice/delegate: 2 i32 WASM params (len/context, ptr/funcptr).
             const uint i0 = cast(uint) cg.locals.length;
@@ -2189,6 +2193,10 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb, bool relocatable)
     type* retType = sfunc.Stype.Tnext;
     assert(retType);
     const bool hasReturn = tybasic(retType.Tty) != TYvoid;
+    {
+        const tym_t rb = tybasic(retType.Tty);
+        cg.retByHiddenPtr = (rb == TYstruct || rb == TYarray);
+    }
 
     // Always allocate a shadow frame, even when empty — keeps code paths uniform.
     cg.hasShadowFrame = true;

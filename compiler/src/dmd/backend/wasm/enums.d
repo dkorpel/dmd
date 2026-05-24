@@ -16,6 +16,7 @@ enum : ubyte
     OP_LOOP = 0x03,
     OP_IF = 0x04,
     OP_ELSE = 0x05,
+    // 0x06 .. 0x0A = Exception handling
     OP_END = 0x0B,
     OP_BR = 0x0C,
     OP_BR_IF = 0x0D,
@@ -24,6 +25,8 @@ enum : ubyte
     // Call
     OP_CALL = 0x10,
     OP_CALL_INDIRECT = 0x11,
+    OP_RETURN_CALL = 0x12,
+    OP_RETURN_CALL_INDIRECT = 0x13,
     OP_DROP = 0x1A,
     OP_SELECT = 0x1B,
     // Locals
