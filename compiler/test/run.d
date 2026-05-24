@@ -139,7 +139,7 @@ Options:
         wasmTarget = true;
         environment["OS"] = "wasm";
         environment["ARGS"] = "";
-        args = ["fail_compilation", "compilable", "runnable"];
+        args = ["compilable", "runnable"];
         wasmKnownFailures = loadWasmKnownFailures();
     }
 
