@@ -23,14 +23,6 @@ private struct BlkInfo
     int[] jmptabDests; // for BC.jmptab: unique sorted destination block indices
 }
 
-private block*[] collectBlocks(block* start)
-{
-    block*[] v;
-    for (block* b = start; b; b = b.Bnext)
-        v ~= b;
-    return v;
-}
-
 private int blockIdx(block* b)
 {
     return b ? b.Bdfoidx : int.max;
@@ -47,6 +39,14 @@ private block* succ(block* b, int n)
 /// Structured control flow synthesis (block CFG => WASM)
 void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
 {
+    static block*[] collectBlocks(block* start)
+    {
+        block*[] v;
+        for (block* b = start; b; b = b.Bnext)
+            v ~= b;
+        return v;
+    }
+
     block*[] blocks = collectBlocks(startblock);
     const int N = cast(int) blocks.length;
     if (N == 0)
