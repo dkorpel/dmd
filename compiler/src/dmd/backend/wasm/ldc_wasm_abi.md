@@ -1,7 +1,15 @@
 # LDC2 WebAssembly ABI for D Features
 
-Investigation of how LDC2 (1.42.0 / LLVM 21) compiles D to WASM32.
-Test programs compiled with `-mtriple=wasm32-unknown-unknown -betterC -O0`.
+LDC2 (1.42.0 / LLVM 21) D→WASM32 compilation investigation.
+Test programs: `-mtriple=wasm32-unknown-unknown -betterC -O0`.
+
+# Slice ABI: stop packing slices/delegates into i64
+
+**Current direction (2026-05-22):** slices and delegates are **never** packed
+into a single i64 anywhere. They are always represented as two i32 values —
+`(length, ptr)` for slices, `(context, funcptr)` for delegates — both on the
+WASM value stack and in shadow-frame memory (two adjacent i32 slots).
+Any IR producing an i64 representation is a bug to be fixed at the producer.
 
 ---
 
@@ -25,9 +33,9 @@ struct Vec2 {
 | `value-return struct method` | `(i32 hidden_ret, i32 this, params...)` |
 | `primitive-return method` | `(i32 this, params...) → primitive` |
 
-- `this` is always the **first explicit i32 parameter** (pointer to struct in linear memory).
-- Structs returned by value get a **hidden i32 return-pointer prepended before `this`**. The function writes to that address and returns void.
-- Fields accessed via `i32.load/store offset=N` where N is the byte offset in the struct.
+- `this` always **first explicit i32 param** (pointer to struct in linear memory).
+- Struct return by value → **hidden i32 return-pointer prepended before `this`**. Function writes there, returns void.
+- Fields accessed via `i32.load/store offset=N` (N = byte offset in struct).
 
 **Generated WAT for `dot`:**
 ```wat
@@ -74,9 +82,9 @@ Offset  Size  Field
 ```
 
 - Instance size: `4 (vptr) + 4 (monitor) + user fields`
-- `Base` instance = 12 bytes, `Derived` instance = 16 bytes.
-- The `__initZ` symbol is the default instance data blob placed in the **data section**:
-  - First i32 = address of the class's vtable (`__vtblZ`) in linear memory.
+- `Base` = 12 bytes, `Derived` = 16 bytes.
+- `__initZ` symbol = default instance data blob in **data section**:
+  - First i32 = vtable address (`__vtblZ`) in linear memory.
   - Remaining bytes = default field values (zeros unless initialized).
 
 **Example init data for Dog (at linear address 44):**
@@ -90,9 +98,9 @@ Offset  Size  Field
 
 ## 3. Vtable Layout (`__vtblZ`)
 
-The vtable is an array of **i32 WASM function table indices** stored in the data section.
+Vtable = array of **i32 WASM function table indices** in data section.
 
-**Slot assignment** (for a class inheriting from `Object`):
+**Slot assignment** (class inheriting from `Object`):
 
 ```
 Slot  Offset  Contents
@@ -145,7 +153,7 @@ local.get 2        ;; save table_idx (from above)
 call_indirect (type N)  ;; calls table[table_idx](this, ...)
 ```
 
-The `call_indirect` places the table index at the TOP of the stack, with arguments below it.
+`call_indirect` places table index at TOP of stack, arguments below.
 
 ### What `Animal.doubled()` generates:
 
@@ -170,11 +178,11 @@ i32.shl                ;; * 2
     Dog.sound  Animal.doubled  Cat.sound)
 ```
 
-- The function table is **imported** from `"env"` as `"__indirect_function_table"`.
-- Element section initializes table starting at **index 1** (index 0 is reserved/null).
-- Imported functions (Object base methods) get the lowest table indices.
+- Function table **imported** from `"env"` as `"__indirect_function_table"`.
+- Element section starts at **index 1** (index 0 = reserved/null).
+- Imported functions (Object base methods) get lowest table indices.
 - Defined methods get sequential indices after imports.
-- **This means function table indices in vtables are stable compile-time constants** — LDC computes them when building the vtable data.
+- **Function table indices in vtables = stable compile-time constants** — LDC computes them when building vtable data.
 
 ---
 
@@ -187,7 +195,7 @@ int testNested(int x) {
 }
 ```
 
-### ABI: nested function receives a **frame pointer** as first i32
+### ABI: nested function receives **frame pointer** as first i32
 
 ```wat
 (func $helper (param i32 i32) (result i32)  ;; (frame_ptr, y) -> i32
@@ -214,10 +222,10 @@ int testNested(int x) {
 ```
 
 **Rules:**
-- Nested function's **first parameter** = pointer to the captured-variable region.
-- Captured **mutable** variables also live in the frame so mutations propagate back.
-- The frame pointer is a plain i32 linear memory address.
-- The outer function passes `frame + offset_of_captured_var` (not the full frame base).
+- Nested function **first param** = pointer to captured-variable region.
+- Captured **mutable** variables live in frame so mutations propagate back.
+- Frame pointer = plain i32 linear memory address.
+- Outer passes `frame + offset_of_captured_var` (not full frame base).
 
 ### Mutation example (`increment` mutating `counter`):
 
@@ -231,19 +239,19 @@ int testNested(int x) {
   i32.store)         ;; *frame_ptr = counter + 1
 ```
 
-The outer function reads back `*frame_ptr` after the nested call to get the updated value.
+Outer reads back `*frame_ptr` after nested call to get updated value.
 
 ---
 
 ## 7. Shadow Stack
 
-Every function needing a frame (locals whose address is taken, struct temporaries, etc.) uses a **linear-memory shadow stack**:
+Functions needing a frame (address-taken locals, struct temporaries) use **linear-memory shadow stack**:
 
-- `__stack_pointer` is an i32 **mutable global** imported from `"env"`.
+- `__stack_pointer` = i32 **mutable global** imported from `"env"`.
 - **Prologue**: `sp = __stack_pointer - frame_size; __stack_pointer = sp`
 - **Epilogue**: `__stack_pointer = sp + frame_size`
-- The stack grows **downward** (subtract to allocate).
-- Local variables live at positive offsets from `sp` (e.g., `sp+4`, `sp+8`, ...).
+- Stack grows **downward** (subtract to allocate).
+- Locals at positive offsets from `sp` (`sp+4`, `sp+8`, ...).
 
 ---
 
@@ -255,21 +263,21 @@ Every function needing a frame (locals whose address is taken, struct temporarie
 - Access fields via `i32.load/store` with compile-time byte offsets.
 
 ### Classes
-- **`__initZ`**: static data blob with `vptr = address(class.__vtblZ)` at offset 0, then field defaults. Emitted in the data section.
-- **`__vtblZ`**: static data blob of i32 table indices. Slot 0 = 0 (ClassInfo null). Slots 1-4 = Object base methods. User methods start at slot 5+.
+- **`__initZ`**: static data blob, `vptr = address(class.__vtblZ)` at offset 0, then field defaults. Data section.
+- **`__vtblZ`**: static data blob of i32 table indices. Slot 0 = 0 (ClassInfo null). Slots 1-4 = Object base. User methods slot 5+.
 - **Virtual dispatch**: `this.load` (vptr) → `vptr.load(offset=slot*4)` (table_idx) → `call_indirect(table_idx, this, args)`.
 - **Constructor**: returns `this` (i32). Calls parent ctor explicitly.
 
 ### Nested functions
 - Prepend frame_ptr (i32) as first parameter.
-- Outer function allocates shadow frame, copies captures there.
+- Outer allocates shadow frame, copies captures there.
 - Pass `frame_ptr + field_offset` to nested function.
 
 ### Function table
 - Import `__indirect_function_table` from `"env"`.
-- Element section initializes from index 1 (index 0 = null).
+- Element section starts from index 1 (index 0 = null).
 - Vtable values = function table indices, set at compile time.
-- DMD's two-phase codegen must assign stable table indices before emitting vtable data.
+- DMD two-phase codegen must assign stable table indices before emitting vtable data.
 
 ---
 
@@ -336,16 +344,16 @@ int totalLen(const(char)[] a, const(char)[] b);   // two slice params
 
 ### Slice as parameter
 
-A D slice `T[]` (`{size_t length; T* ptr}`) is **split into two i32 WASM parameters**:
-- First i32 = **length** (field at offset 0)
-- Second i32 = **ptr** (field at offset 4)
+D slice `T[]` (`{size_t length; T* ptr}`) **split into two i32 WASM params**:
+- First i32 = **length** (offset 0)
+- Second i32 = **ptr** (offset 4)
 
 ```
 (func $sliceLen (param i32 i32) (result i32))
 ;;                    len  ptr
 ```
 
-Two slices become four i32 params:
+Two slices = four i32 params:
 ```
 (func $totalLen (param i32 i32 i32 i32) (result i32))
 ;;                   a.len a.ptr b.len b.ptr
@@ -353,15 +361,15 @@ Two slices become four i32 params:
 
 ### Slice as return value
 
-A function returning a slice uses a **hidden sret pointer** as its **first parameter**.
-The function writes `{length, ptr}` into memory at that address and returns **nil** (void):
+Slice return → **hidden sret pointer** as **first param**.
+Function writes `{length, ptr}` at that address, returns void:
 
 ```
 (func $makeSlice (param i32 i32 i32))
 ;;                    sret  p   len
 ```
 
-The sret address layout:
+sret layout:
 ```
 sret[+0] = length (i32, D slice offset 0)
 sret[+4] = ptr    (i32, D slice offset 4)
@@ -369,13 +377,13 @@ sret[+4] = ptr    (i32, D slice offset 4)
 
 ### Member function returning slice
 
-For member functions (D or extern(C) with D name mangling), the parameter order is:
+Member functions with hidden return pointer:
 ```
 (func $Str__asSlice (param i32 i32))
 ;;                       sret this
 ```
 
-**sret comes before `this`** when the function has a hidden return pointer.
+**sret before `this`** when function has hidden return pointer.
 
 ---
 
@@ -387,17 +395,13 @@ For member functions (D or extern(C) with D name mangling), the parameter order 
 | Slice return | sret first param, `-> nil` | sret first param, `-> nil` (target) |
 | Member with sret | `(sret, this, ...)` | `(sret, this, ...)` (target) |
 
-**Slices and delegates are never packed into a single i64.** Both parameters
-and return values are represented as two separate i32 values: `(length, ptr)`
-for slices, `(context, funcptr)` for delegates. Returning a slice/delegate
-uses sret — the caller passes a pointer to a two-i32 destination as the first
-parameter, and the WASM signature has no result value for that field.
+**Slices and delegates never packed into single i64.** Both params and returns = two separate i32 values: `(length, ptr)` for slices, `(context, funcptr)` for delegates. Returning slice/delegate uses sret — caller passes pointer to two-i32 destination as first param, WASM signature has no result value for that field.
 
 ---
 
 ## 11. C Variadic Functions (`printf`, `...`)
 
-Tested with LDC 1.42.0 / LLVM 21, `-O0`.
+Tested: LDC 1.42.0 / LLVM 21, `-O0`.
 
 ```d
 extern(C):
@@ -411,9 +415,8 @@ void testUserVariadic(){ myVariadic(3, 1, 2, 3); }
 
 ### Function type
 
-C variadic functions have WASM type `(fixed_params..., i32 varargs_ptr) → result`.
-The `...` is replaced by a single trailing `i32` pointer regardless of how many
-variadic args are passed at any call site.
+C variadics have WASM type `(fixed_params..., i32 varargs_ptr) → result`.
+`...` replaced by single trailing `i32` pointer regardless of vararg count.
 
 ```wat
 (import "env" "printf"     (func (param i32 i32) (result i32)))
@@ -422,13 +425,11 @@ variadic args are passed at any call site.
 
 ### Caller convention
 
-1. **Fixed args** are pushed to the WASM value stack in left-to-right order.
-2. **Variadic args** are spilled to a shadow stack frame in left-to-right order
-   with natural C alignment (4-byte for i32/f32→f64, 8-byte for i64/f64).
-   C default argument promotions apply: `float → double`, `char/short → int`.
-3. A pointer to the varargs frame is pushed as the last `i32` parameter.
-4. If there are **no** variadic args, `i32.const 0` (null) is passed instead.
-5. `__stack_pointer` is restored after the call.
+1. **Fixed args** pushed to WASM value stack left-to-right.
+2. **Variadic args** spilled to shadow stack frame left-to-right with natural C alignment (4-byte for i32/f32→f64, 8-byte for i64/f64). C default promotions apply: `float → double`, `char/short → int`.
+3. Pointer to varargs frame pushed as last `i32` param.
+4. **No** variadic args → `i32.const 0` (null).
+5. `__stack_pointer` restored after call.
 
 ### Generated WAT for `testPrintf` (LDC)
 
@@ -466,8 +467,7 @@ global.set __stack_pointer      ; restore
 | 4      | 4    | (pad)    | —     |
 | 8      | 8    | double   | 3.14  |
 
-Natural alignment: `int` at offset 0, `double` at offset 8 (next 8-byte boundary).
-Frame size rounded up to 16 bytes.
+Natural alignment: `int` at offset 0, `double` at offset 8 (next 8-byte boundary). Frame size rounded to 16 bytes.
 
 ### DMD vs LDC comparison
 
@@ -480,15 +480,12 @@ Frame size rounded up to 16 bytes.
 | `float` vararg | `f64.promote_f32` + `f64.store` | `f64.promote_f32` + `f64.store` ✓ |
 | Stack restore | after call | after call ✓ |
 
-The `i64.store` vs `f64.store` difference for double varargs is cosmetic — both
-write the same 8 bytes. The calling convention is fully compatible.
+`i64.store` vs `f64.store` for double varargs = cosmetic — both write same 8 bytes. Calling convention fully compatible.
 
 ### Implementation in DMD
 
 - `wasmobj.d: buildFuncType()`: appends `i32` to params when `variadic(t)`.
-- `codgen.d: case OPcall`: detects `variadic(calleeSym.Stype)`, collects args into
-  a flat array, emits fixed args to the WASM stack, spills variadic args to a
-  dynamically-allocated shadow frame, passes the frame pointer as the last `i32`.
+- `codgen.d: case OPcall`: detects `variadic(calleeSym.Stype)`, collects args into flat array, emits fixed args to WASM stack, spills variadic args to dynamically-allocated shadow frame, passes frame pointer as last `i32`.
 
 ---
 
@@ -504,33 +501,33 @@ write the same 8 bytes. The calling convention is fully compatible.
 | Nested function closure | usually via GC or stack pointer | explicit frame pointer i32 as first param |
 | Stack | hardware stack (rsp) | shadow stack via mutable global `__stack_pointer` |
 
-**Critical implementation note**: Because vtable entries are table indices (not addresses), DMD's WASM backend must know all function table indices **before** emitting `__vtblZ` data. This requires either:
-1. A two-pass approach: register all functions first, then emit vtable data, or
-2. A relocation mechanism that patches vtable entries after function registration.
+**Critical**: vtable entries = table indices (not addresses), so DMD WASM backend must know all function table indices **before** emitting `__vtblZ` data. Requires either:
+1. Two-pass: register all functions first, then emit vtable data, or
+2. Relocation mechanism patching vtable entries after function registration.
 
-LDC handles this by building the full module (including element section) in a single LLVM codegen pass where all indices are known.
+LDC handles this via single LLVM codegen pass where all indices known.
 
 ---
 
 ## 12. DMD Relocatable Object Format (wasm-ld compatibility)
 
-DMD emits one of two WASM binary formats depending on compilation mode:
+DMD emits two WASM binary formats depending on compilation mode:
 
 ### Final module (no `-c` flag)
-- Self-contained WASM module, runnable directly with wasmtime.
+- Self-contained WASM module, runnable with wasmtime.
 - No "linking" or "reloc.*" custom sections.
 - Function table indices in vtable data patched at compile time.
-- Element section populated with compact ULEB function indices.
+- Element section with compact ULEB function indices.
 
 ### Relocatable object (`-c` flag)
-Follows the [WebAssembly tool conventions linking format](https://github.com/WebAssembly/tool-conventions/blob/main/Linking.md):
+Follows [WebAssembly tool conventions linking format](https://github.com/WebAssembly/tool-conventions/blob/main/Linking.md):
 - **"linking"** custom section (version 2) with `WASM_SYMBOL_TABLE` subsection.
   - FUNCTION symbols: undefined (imports) have no name; defined have explicit name + global binding.
-  - TABLE symbol: for the defined function table (`__indirect_function_table`, BINDING_LOCAL).
+  - TABLE symbol: defined function table (`__indirect_function_table`, BINDING_LOCAL).
 - **"reloc.CODE"**: `R_WASM.FUNCTION_INDEX_LEB` for each direct function call (5-byte padded ULEB).
-- **"reloc.ELEM"**: `R_WASM.FUNCTION_INDEX_LEB` for each element in the element section (5-byte padded ULEB).
-- **"reloc.DATA"**: `R_WASM.TABLE_INDEX_I32` for each 4-byte function table index in the data section (vtable entries).
-- Import type ordering: import function types are placed first in the type section so `call_indirect` type indices remain stable after wasm-ld merges the type table.
+- **"reloc.ELEM"**: `R_WASM.FUNCTION_INDEX_LEB` for each element section entry (5-byte padded ULEB).
+- **"reloc.DATA"**: `R_WASM.TABLE_INDEX_I32` for each 4-byte function table index in data section (vtable entries).
+- Import type ordering: import function types first in type section so `call_indirect` type indices stay stable after wasm-ld merges type table.
 
 ### Known limitation
-`R_WASM.TYPE_INDEX_LEB` relocations for `call_indirect` type indices are not emitted (wasm-ld 22 rejects local function symbols as relocation targets for this type). For multi-file linking involving `call_indirect`, the type indices may be incorrect if wasm-ld reorders the type table differently from our ordering heuristic.
+`R_WASM.TYPE_INDEX_LEB` relocations for `call_indirect` type indices not emitted (wasm-ld 22 rejects local function symbols as relocation targets for this type). Multi-file linking with `call_indirect` may have incorrect type indices if wasm-ld reorders type table differently from our ordering heuristic.
