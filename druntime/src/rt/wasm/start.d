@@ -30,7 +30,7 @@ private extern(C) void __wasm_call_dtors() @nogc nothrow;
 
 // `main` is either the user's extern(C) main or the compiler-generated
 // mixin wrapper (for D main).  Both have signature `() -> int` on WASM.
-pragma(mangle, "main") private extern(C) int __wasm_user_main() nothrow;
+private extern(C) int main(int argc, char** argv) nothrow;
 
 // ── WASI _start entry point ───────────────────────────────────────────────────
 // wasmtime (WASI command ABI) calls _start, not main.  proc_exit called from
@@ -39,7 +39,7 @@ pragma(mangle, "main") private extern(C) int __wasm_user_main() nothrow;
 export void _start() nothrow
 {
     __wasm_call_ctors();
-    int rc = __wasm_user_main();
+    int rc = main(0, null);
     __wasm_call_dtors();
     proc_exit(rc);
     while (true) {}
@@ -53,10 +53,7 @@ void rt_moduleDtor()  {}
 void rt_moduleTlsCtor() @nogc {}
 void rt_moduleTlsDtor() @nogc {}
 
-// ── _d_run_main ───────────────────────────────────────────────────────────────
-// Called by the compiler-generated `main` wrapper (for D main).  Typed
-// MainFunc parameter — `mainFunc(args)` lowers to call_indirect with the
-// `(char[][]) -> int` signature that &_Dmain was registered with.
+// Called by the compiler-generated `main` wrapper (for D main).
 private alias MainFunc = extern(C) int function(char[][] args);
 
 int _d_run_main(int argc, char** argv, MainFunc mainFunc)
@@ -70,10 +67,7 @@ int _d_run_main(int argc, char** argv, MainFunc mainFunc)
     return result;
 }
 
-// ── _d_initMonoTime stub ──────────────────────────────────────────────────────
 void _d_initMonoTime() @nogc {}
-
-// ── WASI abort helper (single proc_exit import across the whole runtime) ──────
 
 import core.attribute : wasmImportModule;
 
