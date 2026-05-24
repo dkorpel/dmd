@@ -169,6 +169,8 @@ struct WasmCG
 
 nothrow:
 
+    auto stackPtrGlobal() => wmod_getOrCreateStackPtrGlobal();
+
     /// Allocate an anonymous temp local of the given WASM type
     ///
     /// Returns: index of allocated temp in `locals` array
@@ -300,8 +302,7 @@ nothrow:
         emit(OP_I32_CONST);
         if (relocatable)
         {
-            codeRelocs ~= WasmFuncBody.CodeReloc(cast(uint) code.length,
-                R_WASM.TABLE_INDEX_SLEB, fidx, 0, sym);
+            codeRelocs ~= WasmFuncBody.CodeReloc(cast(uint) code.length, R_WASM.TABLE_INDEX_SLEB, fidx, 0, sym);
             emitULEBpadded(fidx);
         }
         else
@@ -626,9 +627,7 @@ void replayAddr(ref WasmCG cg, SavedLValue r)
 /// Creates the shadow base local, gets __stack_pointer, subtracts frame size, stores back.
 void emitShadowPrologue(ref WasmCG cg)
 {
-    import dmd.backend.wasm.obj : wmod_getOrCreateStackPtrGlobal;
-
-    uint spIdx = wmod_getOrCreateStackPtrGlobal();
+    uint spIdx = cg.stackPtrGlobal();
 
     // Round frame size up to 16
 
@@ -651,7 +650,7 @@ void emitShadowPrologue(ref WasmCG cg)
 /// Emit shadow stack frame epilogue (restore __stack_pointer).
 void emitShadowEpilogue(ref WasmCG cg)
 {
-    uint spIdx = wmod_getOrCreateStackPtrGlobal();
+    uint spIdx = cg.stackPtrGlobal();
     uint fsz = (cg.shadowFrameSize + 15) & ~15u;
 
     // Emit: __stack_pointer = shadow_base + frame_size
@@ -745,7 +744,7 @@ private void genVarArgs(ref WasmCG cg, elem*[] varArgs, ref uint spLocal, ref ui
     vaFrameSize = (offset + 15) & ~15;
 
     // Allocate shadow stack frame for varargs.
-    uint spIdx = wmod_getOrCreateStackPtrGlobal();
+    uint spIdx = cg.stackPtrGlobal();
     spLocal = cg.allocTemp(WASM_I32);
     cg.emit(OP_GLOBAL_GET);
     cg.emitULEB(spIdx);
@@ -1009,7 +1008,7 @@ private bool genCall(ref WasmCG cg, elem* e)
     // Restore __stack_pointer after a variadic call that spilled args.
     if (ctx.isCVariadic && varArgs.length)
     {
-        uint spIdx = wmod_getOrCreateStackPtrGlobal();
+        uint spIdx = cg.stackPtrGlobal();
         cg.emitLocal(OP_LOCAL_GET, spLocal);
         cg.emitConst(OP_I32_CONST, cast(int) vaFrameSize);
         cg.emit(OP_I32_ADD);
@@ -1117,18 +1116,19 @@ bool genElem(ref WasmCG cg, elem* e)
         return true;
 
     case OPrelconst:
+        if (Symbol* rs = e.Vsym)
         {
-            Symbol* rs = e.Vsym;
-            // Function address → table-index relocation, not a memory address.
-            if (rs && rs.Sfl == FL.func)
+            // Function address, table-index relocation
+            if (rs.Sfl == FL.func)
             {
                 cg.emitTableIndex(funcIndex(rs), rs);
                 return true;
             }
-            // Memory address — data sym or shadow-frame local.
+
             emitSymAddr(cg, rs, cast(uint) e.Voffset);
             return true;
         }
+        assert(0);
 
     case OPaddr:
         // Address-of an lvalue. Falls through to genElem(E1) only if E1 isn't
@@ -1231,7 +1231,7 @@ bool genElem(ref WasmCG cg, elem* e)
             replayAddr(cg, lv);
             cg.emitLoad(e.E1.Ety);
             cg.genElem(e.E2, wasmType(e));
-            cg.emitBinop(compoundToBinop(op), e.Ety);
+            cg.emitBinop(opeqtoop(op), e.Ety);
             cg.maskSmallInt(e.E1.Ety);
             // Save new value, store, leave on stack as result.
             uint vTmp = cg.allocTemp(wasmType(e.E1.Ety));
@@ -1575,6 +1575,8 @@ bool genElem(ref WasmCG cg, elem* e)
         // store path with two i32 stores — this case handles uses that
         // consume the pair as a single 64-bit value (e.g. passed to OPmsw,
         // OP64_32, or stored as a whole via i64).
+        assert(0);
+
         {
             elem* lo = (op == OPpair) ? e.E1 : e.E2;
             elem* hi = (op == OPpair) ? e.E2 : e.E1;
@@ -2019,9 +2021,6 @@ private void emitBinop(ref WasmCG cg, int op, tym_t ty)
 
     cg.emit(binOp(op, ty));
 }
-
-// Map compound-assignment op to its binary counterpart
-alias compoundToBinop = opeqtoop;
 
 // Emit a relational/comparison opcode
 private void emitRelop(ref WasmCG cg, int op, tym_t ty)
