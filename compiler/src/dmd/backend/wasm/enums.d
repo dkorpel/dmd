@@ -217,7 +217,29 @@ enum WASM_SECTION : ubyte
     data = 11,
 }
 
-/// Export kinds
+/// Reference type bytes (used in element type fields, e.g. table imports)
+enum WASM_REFTYPE : ubyte
+{
+    FUNCREF = 0x70,
+    EXTERNREF = 0x6F,
+}
+
+/// Limits flags byte (used in memory and table types)
+enum WASM_LIMITS : ubyte
+{
+    NO_MAX = 0x00,
+    HAS_MAX = 0x01,
+}
+
+/// Mutability flag byte (used in global types)
+enum WASM_MUT : ubyte
+{
+    CONST = 0x00,
+    VAR = 0x01,
+}
+
+/// Import/export descriptor kinds. Same byte encoding for both
+/// `importdesc` and `exportdesc` per the WASM core spec.
 enum WASM_EXPORT : ubyte
 {
     FUNC = 0x00,
