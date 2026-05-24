@@ -358,18 +358,23 @@ public bool isSliceOrDelegate(type* t) @trusted nothrow
     return tb == TYdarray || tb == TYdelegate;
 }
 
-// Returns true if the backend type is an aggregate (struct/array) that must be
-// returned via a hidden pointer parameter in the WASM calling convention.
+///: Returns true if the backend type is an aggregate (struct/array) that must be
+/// returned via a hidden pointer parameter in the WASM calling convention.
 //
 // Note: slices and delegates are NOT returned via hidden pointer at the WASM
 // level — they continue to be returned as a packed i64 (length<<32 | ptr).
 // The front-end builds them as OPpair-to-i64 and we keep that representation
 // at the ABI boundary. Adding sret for slice/delegate returns is a larger
 // refactor (see slice_abi_refactor_plan.md).
-private bool returnByPtr(type* t)
+bool returnByPtr(type* t)
 {
-    assert(t);
-    switch (tybasic(t.Tty))
+    auto tb = tybasic(t.Tty);
+    if (tb == TYdarray || tb == TYdelegate)
+    {
+        // return true;
+    }
+
+    switch (tb)
     {
     case TYstruct:
     case TYarray:
@@ -475,7 +480,7 @@ public WasmFuncType buildFuncType(type* t, Symbol* sfunc)
     // C variadic (`...`): append a trailing i32 varargs-pointer parameter.
     // Matches the LDC2/wasi-libc ABI: caller spills variadic args to the shadow
     // stack and passes a pointer to that region as the last function parameter.
-    if (variadic(t) && t.Tparamtypes !is null)
+    if (variadic(t))
         ft.params ~= WASM_I32;
 
     // Return type (void and noreturn both produce no WASM result)
@@ -1894,6 +1899,23 @@ uint wmod_internType(WasmFuncType funcType)
 {
     assert(wmod);
     return wmod.internType(funcType);
+}
+
+/// Look up the WASM signature recorded for `sfunc` when its body was registered
+/// (via WasmObj_func_start).  Returns the registered param count, or uint.max
+/// if the function isn't in this module.  Used by wasm_codgen2 so locals get
+/// indexed past the implicit WASM params even when the source signature has
+/// fewer params than the recorded sig (e.g. `_Dmain` normalisation).
+uint wmod_recordedParamCount(Symbol* sfunc)
+{
+    if (!wmod || !sfunc)
+        return uint.max;
+    foreach (ref const WasmFunc f; wmod.funcs)
+    {
+        if (f.sym is sfunc)
+            return cast(uint) f.pendingType.params.length;
+    }
+    return uint.max;
 }
 
 // Find the function index of a named function whose WASM type matches typeIdx.
