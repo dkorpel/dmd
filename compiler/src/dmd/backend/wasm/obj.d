@@ -236,11 +236,16 @@ struct WasmFuncBody
 // Module-global table of function bodies (indexed same as WasmFunc)
 __gshared WasmFuncBody[] wasmFuncBodies;
 
-// Data segment (initialized global data)
+// Data segment (initialized global data). One per data symbol in the
+// LDC-style layout: each named D symbol (and each rodata literal) gets its
+// own WASM data segment, which lets wasm-ld dead-strip and reorder them.
 struct WasmDataSeg
 {
-    uint offset; // linear memory offset
-    OutBuffer data; // raw bytes
+    uint offset;          // linear memory offset of first byte
+    OutBuffer data;       // raw bytes
+    Symbol* sym;          // owning data symbol (null for anonymous rodata)
+    const(char)[] name;   // segment name for SEGMENT_INFO ("" => synthesise)
+    uint alignLog2 = 2;   // log2(alignment) for SEGMENT_INFO
 }
 
 // WASM mutable global (used for __stack_pointer)
@@ -263,8 +268,17 @@ struct WasmModule
     WasmFuncType[] funcTypes; // de-duplicated type table
     WasmFunc[] funcs; // all functions (imports first, then defined)
     uint numImports; // number of import functions
-    WasmDataSeg[] dataSegs; // data segments
-    WasmDataSeg* activeSeg; // current data segment being filled
+    WasmDataSeg[] dataSegs; // data segments (one per data symbol)
+    int activeSegIdx = -1;  // index into dataSegs of segment being filled, or -1
+
+    // dataSegs can grow (via data_start / allocRoData), invalidating any stored
+    // WasmDataSeg* — always go through this accessor so the pointer is recomputed.
+    @property WasmDataSeg* activeSeg() nothrow return
+    {
+        if (activeSegIdx < 0 || activeSegIdx >= cast(int) dataSegs.length)
+            return null;
+        return &dataSegs[activeSegIdx];
+    }
 
     uint memoryPageCount; // number of 64 KiB memory pages
     bool needsMemory; // true if any data segments or shadow stack exist
@@ -280,12 +294,14 @@ struct WasmModule
     // patched in WasmObj_term once all symbol addresses are known.
     struct FuncReloc
     {
-        uint dataByteOffset;
+        uint segIdx;          // which dataSegs entry this offset is within
+        uint dataByteOffset;  // byte offset inside that segment's data
         Symbol* sym;
     }
 
     struct DataReloc
     {
+        uint segIdx;
         uint dataByteOffset;
         Symbol* sym;
         uint addend;
@@ -817,8 +833,9 @@ private bool emitLinkingSection(ref OutBuffer out_, ref WasmModule wmod)
             continue;
         symCount++;
     }
-    // Data symbols referenced by code relocations.
-    Symbol*[] datasymsForLinking = collectRelocDataSyms();
+    // Data symbols: one DATA entry per data segment that has a sym, plus
+    // UNDEFINED entries for code-referenced syms without a segment (externs).
+    Symbol*[] datasymsForLinking = buildDataSymtabOrder();
     symCount += cast(uint) datasymsForLinking.length;
 
     // One TABLE symbol for the function table (defined or imported).
@@ -864,34 +881,42 @@ private bool emitLinkingSection(ref OutBuffer out_, ref WasmModule wmod)
             appendName(symtab, name); // only for defined symbols
     }
 
-    // Add WASM_SYMTAB.DATA entries for all globally-referenced data symbols.
-    // These are needed so R_WASM.MEMORY_ADDR_LEB relocations in reloc.CODE can
-    // reference them by symbol index for wasm-ld to patch after data relocation.
+    // Emit WASM_SYMTAB.DATA entries in buildDataSymtabOrder order.
     foreach (Symbol* sym; datasymsForLinking)
     {
-        symtab.writeByte(WASM_SYMTAB.DATA);
-        // Use local binding so same-named temporaries in different objects don't conflict.
-        symtab.writeuLEB128(WASM_SYM.BINDING_LOCAL | WASM_SYM.EXPLICIT_NAME);
-        appendName(symtab, sym.identifier);
-        // Data symbol payload: segment index (0), offset in segment, size.
-        // sym.Soffset is the linear memory address (including the null-pointer slot
-        // at 0..ds.offset-1).  The segment-relative offset subtracts the segment's
-        // own start address so wasm-ld computes: final_addr = segment_base + seg_off.
-        const uint dsBase = wmod.dataSegs.length ? wmod.dataSegs[0].offset : 4;
-        const uint segOff = sym.Soffset > dsBase ? cast(uint)(sym.Soffset - dsBase) : 0;
-        // Real symbol size if available (needed by --gc-sections / wasm-ld bounds
-        // checks). type_size returns the type size in bytes; for symbols whose
-        // type is unset, fall back to 0 (interpreted as opaque by wasm-ld).
-        uint symSize = 0;
-        if (sym.Stype)
+        uint segIdx = uint.max;
+        foreach (size_t i, ref const WasmDataSeg ds; wmod.dataSegs)
         {
-            const ts = type_size(sym.Stype);
-            if (ts <= uint.max)
-                symSize = cast(uint) ts;
+            if (ds.sym is sym)
+            {
+                segIdx = cast(uint) i;
+                break;
+            }
         }
-        symtab.writeuLEB128(0); // segment index (single data seg)
-        symtab.writeuLEB128(segOff); // offset within segment
-        symtab.writeuLEB128(symSize); // size in bytes
+
+        symtab.writeByte(WASM_SYMTAB.DATA);
+        if (segIdx == uint.max)
+        {
+            // Extern data symbol: no segment in this object; linker will resolve.
+            symtab.writeuLEB128(WASM_SYM.UNDEFINED | WASM_SYM.EXPLICIT_NAME);
+            appendName(symtab, sym.identifier);
+            // UNDEFINED data symbols carry no segment/offset/size payload.
+        }
+        else
+        {
+            symtab.writeuLEB128(WASM_SYM.BINDING_LOCAL | WASM_SYM.EXPLICIT_NAME);
+            appendName(symtab, sym.identifier);
+            uint symSize = cast(uint) wmod.dataSegs[segIdx].data.length();
+            if (sym.Stype)
+            {
+                const ts = type_size(sym.Stype);
+                if (ts <= uint.max)
+                    symSize = cast(uint) ts;
+            }
+            symtab.writeuLEB128(segIdx);
+            symtab.writeuLEB128(0); // offset within segment (sym starts at byte 0)
+            symtab.writeuLEB128(symSize);
+        }
     }
 
     // Add a SYMTAB_TABLE entry for the function table so wasm-ld accepts it.
@@ -912,18 +937,20 @@ private bool emitLinkingSection(ref OutBuffer out_, ref WasmModule wmod)
         symtab.writeuLEB128(0); // table index 0
     }
 
-    // SEGMENT_INFO subsection: name our single data segment ".rodata" so
-    // wasm-ld places it alongside other read-only data instead of into an
-    // unnamed catch-all segment that gets concatenated with unrelated content.
+    // SEGMENT_INFO subsection: one entry per data segment. Names give wasm-ld
+    // grouping/dead-strip granularity; alignment is the segment's own log2 align.
     if (wmod.dataSegs.length > 0)
     {
         OutBuffer seginfo;
-        seginfo.writeuLEB128(1); // one segment
-        const(char)[] segName = ".rodata";
-        seginfo.writeuLEB128(cast(uint) segName.length);
-        seginfo.write(segName.ptr, cast(uint) segName.length);
-        seginfo.writeuLEB128(2); // alignment log2 (4-byte alignment)
-        seginfo.writeuLEB128(0); // flags
+        seginfo.writeuLEB128(cast(uint) wmod.dataSegs.length);
+        foreach (size_t i, ref const WasmDataSeg ds; wmod.dataSegs)
+        {
+            const(char)[] segName = ds.name.length ? ds.name : ".rodata";
+            seginfo.writeuLEB128(cast(uint) segName.length);
+            seginfo.write(segName.ptr, cast(uint) segName.length);
+            seginfo.writeuLEB128(ds.alignLog2);
+            seginfo.writeuLEB128(0); // flags
+        }
 
         body_.writeByte(WASM_LINKING.SEGMENT_INFO);
         body_.writeuLEB128(cast(uint) seginfo.length());
@@ -951,16 +978,31 @@ private bool emitRelocDataSection(ref OutBuffer out_, ref WasmModule wmod, uint 
 
     uint[] funcToSymIdx = buildFuncToSymIdx();
 
-    // Compute the data section payload prefix size:
-    // [count=1 ULEB] + [seg_kind=0] + [i32.const=0x41] + [offset=4 ULEB] + [end=0x0B]
-    //   + [seg_size ULEB]
-    uint segSize = cast(uint) wmod.dataSegs[0].data.length();
-    uint dataSectionPrefix = 1 + 1 + 1 + ulebSize(4) + 1 + ulebSize(segSize);
+    // Data section payload layout (matches emitDataSection):
+    //   [count ULEB]
+    //   for each seg:
+    //     [kind=0x00] [i32.const=0x41] [offset ULEB] [end=0x0B]
+    //     [size ULEB] [data bytes]
+    // Pre-compute, for each segment, the byte offset of its first data byte
+    // within the data section payload.
+    uint[] segDataStart;
+    segDataStart.length = wmod.dataSegs.length;
+    uint cursor = ulebSize(cast(uint) wmod.dataSegs.length);
+    foreach (size_t i, ref const WasmDataSeg ds; wmod.dataSegs)
+    {
+        const uint sz = cast(uint) ds.data.length();
+        const uint header = 1 /*kind*/ + 1 /*i32.const*/ + ulebSize(ds.offset)
+                          + 1 /*end*/ + ulebSize(sz);
+        segDataStart[i] = cursor + header;
+        cursor += header + sz;
+    }
 
     // Two-pass: first count valid relocs, then write them.
     uint relCount = 0;
     foreach (ref WasmModule.FuncReloc rel; wmod.funcRelocations)
     {
+        if (rel.segIdx >= wmod.dataSegs.length)
+            continue;
         uint funcIdx = uint.max;
         foreach (size_t fi; wmod.numImports .. wmod.funcs.length)
             if (wmod.funcs[fi].sym == rel.sym)
@@ -981,6 +1023,8 @@ private bool emitRelocDataSection(ref OutBuffer out_, ref WasmModule wmod, uint 
 
     foreach (ref WasmModule.FuncReloc rel; wmod.funcRelocations)
     {
+        if (rel.segIdx >= wmod.dataSegs.length)
+            continue;
         uint funcIdx = uint.max;
         foreach (size_t fi; wmod.numImports .. wmod.funcs.length)
             if (wmod.funcs[fi].sym == rel.sym)
@@ -995,7 +1039,7 @@ private bool emitRelocDataSection(ref OutBuffer out_, ref WasmModule wmod, uint 
             continue;
 
         payload.writeByte(R_WASM.TABLE_INDEX_I32);
-        payload.writeuLEB128(dataSectionPrefix + rel.dataByteOffset);
+        payload.writeuLEB128(segDataStart[rel.segIdx] + rel.dataByteOffset);
         payload.writeuLEB128(sym);
     }
 
@@ -1049,30 +1093,9 @@ private bool emitRelocCodeSection(ref OutBuffer out_, ref WasmModule wmod, uint 
 {
     uint[] funcToSymIdx = buildFuncToSymIdx();
 
-    // Build ordered list of referenced data symbols and their symbol-table indices.
-    // Data symbols follow function symbols in the linking symbol table.
-    // We collect unique data symbols in the order first encountered.
-    Symbol*[] datasyms;
-    void collectDataSyms(const WasmFuncBody.DataAddrReloc[] relocs)
-    {
-        foreach (ref const r; relocs)
-        {
-            if (!r.sym)
-                continue;
-            bool found = false;
-            foreach (ds; datasyms)
-                if (ds == r.sym)
-                {
-                    found = true;
-                    break;
-                }
-            if (!found)
-                datasyms ~= cast(Symbol*) r.sym;
-        }
-    }
-
-    foreach (ref const WasmFuncBody fb; wasmFuncBodies)
-        collectDataSyms(fb.dataAddrRelocs);
+    // Data symbol table ordering: must match buildDataSymtabOrder used by
+    // emitLinkingSection (defined-by-segment first, then extern code-refs).
+    Symbol*[] datasyms = buildDataSymtabOrder();
 
     // The data symbol table indices start right after the function symbol table.
     // Count distinct function sym indices (shadowed funcs alias to a canonical
@@ -1216,6 +1239,28 @@ private bool emitRelocCodeSection(ref OutBuffer out_, ref WasmModule wmod, uint 
 
     writeCustomSection(out_, "reloc.CODE", &payload);
     return true;
+}
+
+// Symbol-table order for DATA entries:
+//   1. one entry per WasmDataSeg with a sym (defined data symbols), in seg order
+//   2. then extra Symbols referenced by code relocs but lacking a segment
+//      (extern data symbols — emitted as UNDEFINED)
+// Both the linking section and reloc.CODE must agree on this ordering.
+private Symbol*[] buildDataSymtabOrder()
+{
+    Symbol*[] order;
+    foreach (ref const WasmDataSeg ds; wmod.dataSegs)
+        if (ds.sym)
+            order ~= cast(Symbol*) ds.sym;
+    foreach (Symbol* sym; collectRelocDataSyms())
+    {
+        bool present = false;
+        foreach (s; order)
+            if (s is sym) { present = true; break; }
+        if (!present)
+            order ~= sym;
+    }
+    return order;
 }
 
 // Collect all data symbols referenced in code relocations.
@@ -1421,41 +1466,42 @@ void WasmObj_term2(const(char)[] objfilename, ref WasmModule wmod, ref OutBuffer
         globsym.setLength(0);
     }
 
-    // Patch deferred relocations in the data segment.
-    if (wmod.dataSegs.length > 0)
+    // Patch deferred relocations. Each reloc carries its segment index.
+    if (!wmod.relocatable)
     {
-        ubyte[] dataBuf = cast(ubyte[]) wmod.dataSegs[0].data.peekSlice();
-
-        if (!wmod.relocatable)
+        // Final module: resolve function-pointer table indices directly.
+        foreach (ref WasmModule.FuncReloc rel; wmod.funcRelocations)
         {
-            // Final module: resolve function-pointer table indices directly.
-            foreach (ref WasmModule.FuncReloc rel; wmod.funcRelocations)
-            {
-                if (rel.dataByteOffset + 4 > dataBuf.length)
-                    continue;
-                uint tableIdx = 0;
-                foreach (size_t fi; wmod.numImports .. wmod.funcs.length)
-                    if (wmod.funcs[fi].sym == rel.sym)
-                    {
-                        tableIdx = cast(uint)(fi - wmod.numImports);
-                        break;
-                    }
-                dataBuf[rel.dataByteOffset .. rel.dataByteOffset + 4] =
-                    (cast(ubyte*)&tableIdx)[0 .. 4];
-            }
-        }
-        // In relocatable mode, funcRelocations are left as 0 placeholders;
-        // wasm-ld patches them via R_WASM.TABLE_INDEX_I32 in reloc.DATA.
-
-        // Always patch data-to-data address references (stable across linking).
-        foreach (ref WasmModule.DataReloc rel; wmod.dataRelocations)
-        {
+            if (rel.segIdx >= wmod.dataSegs.length)
+                continue;
+            ubyte[] dataBuf = cast(ubyte[]) wmod.dataSegs[rel.segIdx].data.peekSlice();
             if (rel.dataByteOffset + 4 > dataBuf.length)
                 continue;
-            uint addr = cast(uint)(rel.sym.Soffset + rel.addend);
+            uint tableIdx = 0;
+            foreach (size_t fi; wmod.numImports .. wmod.funcs.length)
+                if (wmod.funcs[fi].sym == rel.sym)
+                {
+                    tableIdx = cast(uint)(fi - wmod.numImports);
+                    break;
+                }
             dataBuf[rel.dataByteOffset .. rel.dataByteOffset + 4] =
-                (cast(ubyte*)&addr)[0 .. 4];
+                (cast(ubyte*)&tableIdx)[0 .. 4];
         }
+    }
+    // In relocatable mode, funcRelocations are left as 0 placeholders;
+    // wasm-ld patches them via R_WASM.TABLE_INDEX_I32 in reloc.DATA.
+
+    // Always patch data-to-data address references (stable across linking).
+    foreach (ref WasmModule.DataReloc rel; wmod.dataRelocations)
+    {
+        if (rel.segIdx >= wmod.dataSegs.length)
+            continue;
+        ubyte[] dataBuf = cast(ubyte[]) wmod.dataSegs[rel.segIdx].data.peekSlice();
+        if (rel.dataByteOffset + 4 > dataBuf.length)
+            continue;
+        uint addr = cast(uint)(rel.sym.Soffset + rel.addend);
+        dataBuf[rel.dataByteOffset .. rel.dataByteOffset + 4] =
+            (cast(ubyte*)&addr)[0 .. 4];
     }
 
     // Finalize __stack_pointer initial value.
@@ -1486,17 +1532,6 @@ void WasmObj_term2(const(char)[] objfilename, ref WasmModule wmod, ref OutBuffer
 
     uint codeSectionIdx = sectionIdx;
     sectionIdx += emitCodeSection(out_, wmod);
-
-    // BSS allocations advance dataHeap without writing to the data segment.
-    // Pad with zeros so all symbol addresses fall within the segment payload
-    // wasm-ld rejects data symbols whose offset is past the segment size.
-    if (wmod.dataSegs.length > 0)
-    {
-        auto ds = &wmod.dataSegs[0];
-        uint needed = wmod.dataHeap > ds.offset ? wmod.dataHeap - ds.offset : 0;
-        while (ds.data.length() < needed)
-            ds.data.writeByte(0);
-    }
 
     uint dataSectionIdx = sectionIdx;
     sectionIdx += emitDataSection(out_, wmod);
@@ -1679,28 +1714,6 @@ int WasmObj_data_start(Symbol* sdata, targ_size_t datasize, int seg)
         return 0;
     wmod.needsMemory = true;
 
-    if (wmod.dataSegs.length == 0)
-    {
-        wmod.dataSegs.length = 1;
-        wmod.dataSegs[0].offset = 4; // reserve address 0 as null pointer
-    }
-
-    // Keep dataHeap in sync with the actual buffer end so the assigned
-    // address corresponds to the buffer position where the data lands.
-    // (See allocRoData for the rationale.)
-    {
-        const uint segOff = wmod.dataSegs[0].offset;
-        uint bufEnd = cast(uint) wmod.dataSegs[0].data.length() + segOff;
-        if (bufEnd > wmod.dataHeap)
-            wmod.dataHeap = bufEnd;
-        else
-        {
-            while (cast(uint) wmod.dataSegs[0].data.length() + segOff < wmod.dataHeap)
-                wmod.dataSegs[0].data.writeByte(0);
-        }
-    }
-
-    // All data goes into a single data segment at offset wmod.dataHeap.
     // Align to natural alignment of the data type (max 8 bytes).
     uint align_ = 4;
     if (sdata && sdata.Stype)
@@ -1717,18 +1730,28 @@ int WasmObj_data_start(Symbol* sdata, targ_size_t datasize, int seg)
         // BSS: just reserve address space. WASM linear memory is zero-initialized,
         // so no bytes need to be emitted. Deactivate the data buffer so subsequent
         // lidata/write calls (which don't exist for BSS) are ignored.
-        wmod.activeSeg = null;
+        wmod.activeSegIdx = -1;
         if (sdata)
             sdata.Soffset = base;
         wmod.dataHeap = base + cast(uint) datasize;
         return seg;
     }
 
-    wmod.activeSeg = &wmod.dataSegs[0];
+    // One WASM data segment per data symbol (LDC-style). Its own offset is
+    // the symbol's linear-memory address; the segment's bytes are exactly
+    // the symbol's payload.
+    WasmDataSeg ds;
+    ds.offset = base;
+    ds.sym = sdata;
+    if (sdata)
+        ds.name = sdata.identifier;
+    uint a = 1;
+    int log2 = 0;
+    while (a < align_) { a <<= 1; log2++; }
+    ds.alignLog2 = cast(uint) log2;
 
-    // Write alignment padding bytes so buffer position == symbol address.
-    foreach (_; wmod.dataHeap .. base)
-        wmod.activeSeg.data.writeByte(0);
+    wmod.dataSegs ~= ds;
+    wmod.activeSegIdx = cast(int)(wmod.dataSegs.length - 1);
 
     // Assign this symbol's linear memory address.
     if (sdata)
@@ -1868,15 +1891,17 @@ void WasmObj_reftocodeseg(int seg, targ_size_t offset, targ_size_t val)
 
 int WasmObj_reftoident(int seg, targ_size_t offset, Symbol* s, targ_size_t val, int flags)
 {
-    if (!wmod.activeSeg)
+    auto active = wmod.activeSeg;
+    if (!active)
         return 4;
+    const uint segIdx = cast(uint) wmod.activeSegIdx;
     // Function symbols: write 0 as placeholder; real table index patched in WasmObj_term.
     if (s && s.Stype && tyfunc(tybasic(s.Stype.Tty)))
     {
-        uint dataOff = cast(uint) wmod.activeSeg.data.length;
+        uint dataOff = cast(uint) active.data.length;
         uint zero = 0;
-        wmod.activeSeg.data.write(&zero, 4);
-        wmod.funcRelocations ~= WasmModule.FuncReloc(dataOff, s);
+        active.data.write(&zero, 4);
+        wmod.funcRelocations ~= WasmModule.FuncReloc(segIdx, dataOff, s);
         return 4;
     }
     // Data symbols: write linear memory address, or defer if not yet allocated.
@@ -1885,14 +1910,14 @@ int WasmObj_reftoident(int seg, targ_size_t offset, Symbol* s, targ_size_t val, 
     {
         // Soffset is 0: symbol may not be allocated yet. Record deferred relocation;
         // WasmObj_term will patch with the final address (or leave as 0 if truly external).
-        uint dataOff = cast(uint) wmod.activeSeg.data.length;
+        uint dataOff = cast(uint) active.data.length;
         uint zero = 0;
-        wmod.activeSeg.data.write(&zero, 4);
-        wmod.dataRelocations ~= WasmModule.DataReloc(dataOff, s, cast(uint) val);
+        active.data.write(&zero, 4);
+        wmod.dataRelocations ~= WasmModule.DataReloc(segIdx, dataOff, s, cast(uint) val);
         return 4;
     }
     addr = cast(uint)(s ? (s.Soffset + val) : val);
-    wmod.activeSeg.data.write(&addr, 4);
+    active.data.write(&addr, 4);
     return 4;
 }
 
@@ -2010,46 +2035,37 @@ uint allocRoData_wasm(const(void)* p, uint len, uint align_)
 }
 
 // Allocate `len` bytes of read-only data at the next aligned offset,
-// write the bytes, and return the linear memory address.
+// write the bytes into a fresh segment, and return the linear memory address.
 private uint allocRoData(const(void)* p, uint len, uint align_)
 {
     wmod.needsMemory = true;
-    if (wmod.dataSegs.length == 0)
-    {
-        wmod.dataSegs.length = 1;
-        wmod.dataSegs[0].offset = 4; // reserve address 0 as null pointer
-    }
-    // Keep dataHeap in sync with the actual buffer end so the returned
-    // address corresponds to the buffer position where the data lands.
-    //   - Backend data-emit hooks (write_byte, bytes, reftoident, …)
-    //     append without bumping dataHeap, so buffer can outrun dataHeap.
-    //   - BSS reservations bump dataHeap past the buffer end without
-    //     writing bytes, so dataHeap can outrun the buffer.
-    // Resolve both directions: if buffer is ahead, advance dataHeap; if
-    // dataHeap is ahead, pad the buffer up to dataHeap.
-    {
-        const uint segOff = wmod.dataSegs[0].offset;
-        uint bufEnd = cast(uint) wmod.dataSegs[0].data.length() + segOff;
-        if (bufEnd > wmod.dataHeap)
-            wmod.dataHeap = bufEnd;
-        else
-        {
-            while (cast(uint) wmod.dataSegs[0].data.length() + segOff < wmod.dataHeap)
-                wmod.dataSegs[0].data.writeByte(0);
-        }
-    }
     uint mask = align_ - 1;
     uint base = (wmod.dataHeap + mask) & ~mask;
-    // Pad with zeros up to the aligned base (relative to segment start = 4)
-    foreach (_; wmod.dataHeap .. base)
-        wmod.dataSegs[0].data.writeByte(0);
+
+    WasmDataSeg ds;
+    ds.offset = base;
+    // Synthesised name (".rodata.<n>") matches the LLVM convention so wasm-ld
+    // groups these alongside other rodata.
+    {
+        import core.stdc.stdio : snprintf;
+        char[32] buf;
+        const n = snprintf(buf.ptr, buf.length, ".rodata.%u",
+            cast(uint) wmod.dataSegs.length);
+        ds.name = buf[0 .. n].idup;
+    }
+    uint a = 1;
+    int log2 = 0;
+    while (a < align_) { a <<= 1; log2++; }
+    ds.alignLog2 = cast(uint) log2;
     if (p)
-        wmod.dataSegs[0].data.write(p, len);
+        ds.data.write(p, len);
     else
         foreach (_; 0 .. len)
-            wmod.dataSegs[0].data.writeByte(0);
+            ds.data.writeByte(0);
+
+    wmod.dataSegs ~= ds;
+    wmod.activeSegIdx = cast(int)(wmod.dataSegs.length - 1);
     wmod.dataHeap = base + len;
-    wmod.activeSeg = &wmod.dataSegs[0];
     return base;
 }
 
