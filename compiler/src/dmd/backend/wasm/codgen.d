@@ -2227,6 +2227,13 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb, bool relocatable)
     if (cg.hasShadowFrame)
         emitShadowEpilogue(cg);
 
+    // If the function returns a value but the body falls through (e.g. an
+    // infinite loop), the implicit return at function end would underflow
+    // the value stack.  Emit `unreachable` to mark the path as dead — the
+    // WASM validator then accepts the missing return value.
+    if (hasReturn)
+        cg.emit(OP_UNREACHABLE);
+
     fb.locals = cg.locals;
     fb.numParams = cg.numParams;
     fb.codeRelocs = cg.codeRelocs;

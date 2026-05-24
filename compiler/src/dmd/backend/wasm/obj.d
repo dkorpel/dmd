@@ -389,17 +389,45 @@ public WasmFuncType buildFuncType(type* t, Symbol* sfunc)
 
     if (sfunc)
     {
-        // debug writeln(sfunc.identifier);
-        // #HACK:
-        // D allows `void main()`, but WASM wants a consistent function type
-        // Normalize to `int main(string[] args)` or `extern(C) int main(int argc, char** argv)`
+        // D allows `void main()`, but druntime calls _Dmain through a fixed
+        // `extern(C) int function(char[][])` pointer.  Force _Dmain to that
+        // signature regardless of the user-written declaration.
         if (sfunc.identifier == "_Dmain")
         {
-            return WasmFuncType([WASM_I32, WASM_I32], [WASM_I32]);
+            enum WASM_PTR = WASM_I32; // assumes 32-bit
+            return WasmFuncType([WASM_I32, WASM_PTR], [WASM_I32]);
         }
+        // For `main`, the WASI _start shim calls it as `(i32, i32) -> i32`.
+        // Pad user-written `int main()` or `int main(int)` to the runtime ABI
+        // so wasm-ld doesn't warn.  Non-standard signatures (e.g. void main
+        // with 3 args) are left alone — those users won't be linking with
+        // the default WASI shim anyway.
         if (sfunc.identifier == "main")
         {
-            return WasmFuncType([WASM_I32, WASM_I32], [WASM_I32]);
+            int paramCount = 0;
+            bool allI32 = true;
+            for (param_t* p = t.Tparamtypes; p; p = p.Pnext)
+            {
+                if (!p.Ptype || !typeHasValue(p.Ptype.Tty))
+                    continue;
+                paramCount++;
+                const tym_t pty = tybasic(p.Ptype.Tty);
+                if (isSliceOrDelegate(p.Ptype) || pty == TYstruct || pty == TYarray)
+                {
+                    allI32 = false;
+                    break;
+                }
+                if (wasmType(pty) != WASM_I32)
+                {
+                    allI32 = false;
+                    break;
+                }
+            }
+            const type* retM = t.Tnext;
+            const bool retOK = retM && (tybasic(retM.Tty) == TYvoid ||
+                                        (typeHasValue(retM.Tty) && wasmType(retM.Tty) == WASM_I32));
+            if (allI32 && paramCount <= 2 && retOK)
+                return WasmFuncType([WASM_I32, WASM_I32], [WASM_I32]);
         }
     }
 
@@ -1251,8 +1279,10 @@ void guessTypeFromCall(ref Symbol s, ref elem e)
                 return;
             if (p.Eoper == OPparam)
             {
-                appendArgTypes(p.E1);
+                // Match consumeCallArg walk order (E2 then E1) so the
+                // synthesised param types line up with the actual push order.
                 appendArgTypes(p.E2);
+                appendArgTypes(p.E1);
                 return;
             }
             param_append_type(&s.Stype.Tparamtypes, type_fake(tybasic(p.Ety)));
