@@ -20,37 +20,21 @@ template _d_cmain()
 {
     extern(C)
     {
-        // Typed MainFunc so taking `&_Dmain` on WASM produces a call_indirect
-        // with the right signature.  Non-WASM ABIs don't care about the
-        // typedef (the underlying definition in rt.dmain2 uses the same).
-        private alias MainFunc = extern(C) int function(char[][] args);
-        int _d_run_main(int argc, char** argv, MainFunc mainFunc);
+        int _d_run_main(int argc, char **argv, void* mainFunc);
 
         int _Dmain(char[][] args);
 
-        version (WebAssembly)
+        int main(int argc, char **argv)
         {
-            // WASI has no argc/argv; `_start` calls `main()` with no args.
-            pragma(mangle, "main")
-            int __wasm_c_main()
-            {
-                return _d_run_main(0, null, &_Dmain);
-            }
+            return _d_run_main(argc, argv, &_Dmain);
         }
-        else
-        {
-            int main(int argc, char** argv)
-            {
-                return _d_run_main(argc, argv, &_Dmain);
-            }
 
-            // Solaris, for unknown reasons, requires both a main() and an _main()
-            version (Solaris)
+        // Solaris, for unknown reasons, requires both a main() and an _main()
+        version (Solaris)
+        {
+            int _main(int argc, char** argv)
             {
-                int _main(int argc, char** argv)
-                {
-                    return main(argc, argv);
-                }
+                return main(argc, argv);
             }
         }
     }
