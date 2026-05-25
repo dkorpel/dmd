@@ -274,7 +274,6 @@ struct WasmModule
 
     uint dataHeap = 4; // next free byte offset in linear memory; starts at 4 to reserve address 0 as null
 
-    bool importStackPtrGlobal; // true: import __stack_pointer from "env" (set when any function needs a shadow frame)
     uint[] elemFuncRelocOffsets; // payload offsets of function indices in the element section
 
     // Deferred relocations in data segments. Written as 0 at emit time;
@@ -560,7 +559,7 @@ private bool emitImportSection(ref OutBuffer out_, ref WasmModule wmod)
 {
     OutBuffer* s = &wmod.scratch;
     s.reset();
-    const count = wmod.numImports + 2 + (wmod.importStackPtrGlobal ? 1 : 0);
+    const count = wmod.numImports + 3;
     s.writeuLEB128(count);
     foreach (ref const WasmFunc f; wmod.funcs[0 .. wmod.numImports])
     {
@@ -572,15 +571,14 @@ private bool emitImportSection(ref OutBuffer out_, ref WasmModule wmod)
     appendImportHead(*s, "env", "__linear_memory", WASM_EXPORT.MEM);
     s.writeByte(WASM_LIMITS.NO_MAX);
     s.writeuLEB128(0); // min pages = 0 (linker sets actual size)
-    if (wmod.importStackPtrGlobal)
-    {
-        // (import "env" "__stack_pointer" (global (mut i32)))
-        // wasm-ld synthesises this global with the proper initial value
-        // (top of the linked stack region) and shares it across objects.
-        appendImportHead(*s, "env", "__stack_pointer", WASM_EXPORT.GLOBAL);
-        s.writeByte(WASM_I32);
-        s.writeByte(WASM_MUT.VAR);
-    }
+
+    // (import "env" "__stack_pointer" (global (mut i32)))
+    // wasm-ld synthesises this global with the proper initial value
+    // (top of the linked stack region) and shares it across objects.
+    appendImportHead(*s, "env", "__stack_pointer", WASM_EXPORT.GLOBAL);
+    s.writeByte(WASM_I32);
+    s.writeByte(WASM_MUT.VAR);
+
     // (import "env" "__indirect_function_table" (table 0 funcref))
     appendImportHead(*s, "env", "__indirect_function_table", WASM_EXPORT.TABLE);
     s.writeByte(WASM_REFTYPE.FUNCREF);
@@ -775,8 +773,8 @@ private bool emitLinkingSection(ref OutBuffer out_, ref WasmModule wmod)
     // One TABLE symbol for the imported function table.
     symCount++;
     // One GLOBAL symbol for __stack_pointer when imported.
-    if (wmod.importStackPtrGlobal)
-        symCount++;
+    symCount++;
+
     symtab.writeuLEB128(symCount);
 
     foreach (size_t i, ref const WasmFunc f; wmod.funcs)
@@ -858,14 +856,11 @@ private bool emitLinkingSection(ref OutBuffer out_, ref WasmModule wmod)
     symtab.writeuLEB128(WASM_SYM.UNDEFINED);
     symtab.writeuLEB128(0); // table index 0
 
-    if (wmod.importStackPtrGlobal)
-    {
-        // Imported __stack_pointer global: global index 0, undefined.
-        // Name is taken from the import section (no EXPLICIT_NAME).
-        symtab.writeByte(WASM_SYMTAB.GLOBAL);
-        symtab.writeuLEB128(WASM_SYM.UNDEFINED);
-        symtab.writeuLEB128(0); // global index 0
-    }
+    // Imported __stack_pointer global: global index 0, undefined.
+    // Name is taken from the import section (no EXPLICIT_NAME).
+    symtab.writeByte(WASM_SYMTAB.GLOBAL);
+    symtab.writeuLEB128(WASM_SYM.UNDEFINED);
+    symtab.writeuLEB128(0); // global index 0
 
     // SEGMENT_INFO subsection: one entry per data segment. Names give wasm-ld
     // grouping/dead-strip granularity; alignment is the segment's own log2 align.
@@ -1899,16 +1894,6 @@ void wmod_recordDataAddrReloc(uint codeOffset, Symbol* sym, uint addend)
     r.sym = sym;
     r.addend = addend;
     wasmFuncBodies[$ - 1].dataAddrRelocs ~= r;
-}
-
-// Mark __stack_pointer as needed and return its global index.
-// Called by codgen.d when a function needs a shadow stack frame.
-// __stack_pointer is imported from "env" so wasm-ld can merge stack pointers
-// across objects; as the only imported global it occupies global index 0.
-uint wmod_getOrCreateStackPtrGlobal()
-{
-    wmod.importStackPtrGlobal = true;
-    return 0;
 }
 
 // Public entry point for codgen.d to allocate string data directly.
