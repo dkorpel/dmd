@@ -168,7 +168,8 @@ struct WasmCG
 
 nothrow:
 
-    auto stackPtrGlobal() => wmod_getOrCreateStackPtrGlobal();
+    /// Index of global used for __stack_pointer
+    auto stackPtrGlobal() => 0;
 
     /// Returns: function type index for `x`
     auto internType(WasmFuncType x) => wmod_internType(x);
