@@ -146,7 +146,6 @@ struct WasmCG
     OutBuffer code; /// bytecode being emitted
     WasmLocal[] locals; /// local variable table (params first)
     uint numParams; /// number of parameters (= first numParams locals)
-    bool relocatable; /// generate relocatable
     WasmFuncBody.CodeReloc[] codeRelocs; /// relocations for direct function calls
     WasmFuncBody.DataAddrReloc[] dataAddrRelocs; /// R_WASM.MEMORY_ADDR_LEB relocations
 
@@ -253,28 +252,22 @@ nothrow:
     }
 
     // Emit OP_I32_CONST with a data-segment address.
-    // In relocatable mode, emits a 5-byte padded ULEB128 and records a
-    // R_WASM.MEMORY_ADDR_LEB relocation so wasm-ld patches the address after
-    // moving the data section to its final location.
-    // In non-relocatable (final) mode, emits a compact SLEB128 — the data
-    // section is already at its final address in that case.
+    // Emits a 5-byte padded ULEB128 and records a R_WASM.MEMORY_ADDR_LEB
+    // relocation so wasm-ld patches the address after moving the data section
+    // to its final location.
     void emitDataAddr(Symbol* sym, uint addend)
     {
         emit(OP_I32_CONST);
         const uint addr = cast(uint)(sym.Soffset + addend);
 
-        // Only relocate symbols in the INITIALIZED data section (FL.data, FL.csdata,
-        // FL.datseg).  BSS (FL.udata) variables have offsets relative to the BSS
-        // region which is handled differently by wasm-ld; they don't map to a
-        // valid offset in the single initialized data segment.
-        // Only relocate symbols in the INITIALIZED data section.
-        // BSS (FL.udata) and TLS (FL.tlsdata) have offsets beyond the active
-        // data segment and don't map to valid WASM_SYMTAB.DATA entries in it.
-        const bool canRelocate = relocatable && sym.Sident.ptr != null &&
+        // Only relocate symbols in the INITIALIZED data section (FL.data,
+        // FL.csdata, FL.datseg). BSS (FL.udata) and TLS (FL.tlsdata) have
+        // offsets beyond the active data segment and don't map to valid
+        // WASM_SYMTAB.DATA entries in it.
+        const bool canRelocate = sym.Sident.ptr != null &&
             sym.Sfl != FL.udata && sym.Sfl != FL.tlsdata;
         if (canRelocate)
         {
-            // 5-byte padded ULEB128 for wasm-ld relocation patching.
             dataAddrRelocs ~= WasmFuncBody.DataAddrReloc(cast(uint) code.length, sym, addend);
             emitULEBpadded(addr);
         }
@@ -303,33 +296,21 @@ nothrow:
     void emitTableIndex(uint fidx, Symbol* sym)
     {
         emit(OP_I32_CONST);
-        if (relocatable)
-        {
-            codeRelocs ~= WasmFuncBody.CodeReloc(cast(uint) code.length, R_WASM.TABLE_INDEX_SLEB, fidx, 0, sym);
-            emitULEBpadded(fidx);
-        }
-        else
-        {
-            emitSLEB(cast(int) fidx);
-        }
+        codeRelocs ~= WasmFuncBody.CodeReloc(cast(uint) code.length, R_WASM.TABLE_INDEX_SLEB, fidx, 0, sym);
+        emitULEBpadded(fidx);
     }
 
     // Emit the type index operand of call_indirect.
-    // In relocatable mode, emit R_WASM.TYPE_INDEX_LEB with the local typeIdx
-    // as its symIdx — wasm-ld remaps local type indices to the merged type
-    // table at link time (no function-symbol anchor needed; the reloc target
-    // is the type-section index directly).
+    // Emits R_WASM.TYPE_INDEX_LEB with the local typeIdx as its symIdx —
+    // wasm-ld remaps local type indices to the merged type table at link time
+    // (no function-symbol anchor needed; the reloc target is the type-section
+    // index directly).
     void emitCallIndirectType(uint typeIdx)
     {
-        if (relocatable)
-        {
-            codeRelocs ~= WasmFuncBody.CodeReloc(cast(uint) code.length,
-                R_WASM.TYPE_INDEX_LEB, typeIdx);
-            // 5-byte padded ULEB128 so wasm-ld has room to write the patched index.
-            emitULEBpadded(typeIdx);
-            return;
-        }
-        emitULEB(typeIdx); // non-relocatable (single-file): compact ULEB
+        codeRelocs ~= WasmFuncBody.CodeReloc(cast(uint) code.length,
+            R_WASM.TYPE_INDEX_LEB, typeIdx);
+        // 5-byte padded ULEB128 so wasm-ld has room to write the patched index.
+        emitULEBpadded(typeIdx);
     }
 
     void emitMemArg(uint align_, uint offset)
@@ -2111,7 +2092,7 @@ void emitCondInvert(ref WasmCG cg, elem* condElem)
 }
 
 /// Main entry point generating code for a function - called from dout.d
-void wasm_codgen(Symbol* sfunc, bool relocatable)
+void wasm_codgen(Symbol* sfunc)
 {
     import dmd.backend.wasm.obj : wasmFuncBodies, WasmFuncBody;
 
@@ -2126,7 +2107,7 @@ void wasm_codgen(Symbol* sfunc, bool relocatable)
         }
     }
     assert(fb);
-    wasm_codgen2(sfunc, *fb, relocatable);
+    wasm_codgen2(sfunc, *fb);
 }
 
 // Describes how one WASM-level param slot maps into a shadow-frame slot.
@@ -2138,10 +2119,9 @@ private struct ParamSpill
     tym_t ty;          // backend type of the param (used to pick store op + alignment)
 }
 
-void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb, bool relocatable)
+void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
 {
     WasmCG cg;
-    cg.relocatable = relocatable;
 
     // All params and locals live in the shadow stack frame; WASM locals
     // hold only the incoming param values (to be spilled into the frame)

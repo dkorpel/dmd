@@ -231,42 +231,6 @@ private int runWasmLINK(bool verbose, ref Param params, ErrorSink eSink)
 {
     const bool hasDruntime = !params.betterC;
 
-    // Fast path: betterC single-file with no extra libraries — just rename.
-    if (!hasDruntime && params.objfiles.length == 1 && !params.libfiles.length)
-    {
-        const(char)* src = params.objfiles[0];
-        const(char)[] outfile;
-        if (params.exefile)
-            outfile = params.exefile;
-        else
-        {
-            const(char)[] n = FileName.name(src[0 .. strlen(src)]);
-            outfile = FileName.forceExt(n, target.obj_ext);
-            params.exefile = outfile;
-        }
-        if (!ensurePathToNameExists(Loc.initial, outfile))
-            return STATUS_FAILED;
-        import core.stdc.string : strcmp;
-        if (strcmp(src, outfile.ptr) != 0)
-        {
-            version (Posix)
-            {
-                import core.sys.posix.stdio : rename;
-                if (rename(src, outfile.ptr) == 0)
-                    return 0;
-                // rename failed (cross-device); fall through to wasm-ld
-            }
-            version (Windows)
-            {
-                import core.sys.windows.winbase : MoveFileExA, MOVEFILE_REPLACE_EXISTING;
-                if (MoveFileExA(src, outfile.ptr, MOVEFILE_REPLACE_EXISTING))
-                    return 0;
-            }
-        }
-        else
-            return 0;
-    }
-
     Strings argv;
     const(char)* wasmld = getenv("WASM_LD");
     argv.push(wasmld ? wasmld : "wasm-ld");
