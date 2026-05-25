@@ -278,6 +278,26 @@ nothrow:
         }
     }
 
+    // Variant of emitDataAddr that records the relocation with addend=0 and
+    // leaves the constant offset for the caller to fold into the memarg of a
+    // following load/store. Matches LDC's pattern of `i32.const sym;
+    // i32.load offset=N` rather than `i32.const sym+N; i32.add; i32.load`.
+    void emitDataBase(Symbol* sym)
+    {
+        emit(OP_I32_CONST);
+        const bool canRelocate = sym.Sident.ptr != null &&
+            sym.Sfl != FL.udata && sym.Sfl != FL.tlsdata;
+        if (canRelocate)
+        {
+            dataAddrRelocs ~= WasmFuncBody.DataAddrReloc(cast(uint) code.length, sym, 0);
+            emitULEBpadded(cast(uint) sym.Soffset);
+        }
+        else
+        {
+            emitSLEB(cast(int) sym.Soffset);
+        }
+    }
+
     // Emit OP_CALL with a 5-byte padded ULEB128 function index and record a
     // R_WASM.FUNCTION_INDEX_LEB relocation so wasm-ld can patch the index.
     // Symbol* is recorded so that if wmod.funcs is reordered before term time
@@ -371,19 +391,19 @@ private void emitMemoryFill(ref WasmCG cg)
     cg.emit(0x00); // memidx
 }
 
-private void emitLoad(ref WasmCG cg, tym_t ty)
+private void emitLoad(ref WasmCG cg, tym_t ty, uint offset = 0)
 {
     const m = memOpsFor(ty);
     cg.emit(m.loadOp);
-    cg.emitMemArg(m.alignLog2, 0);
+    cg.emitMemArg(m.alignLog2, offset);
 }
 
 // Emit a typed store (address then value already on stack).
-private void emitStore(ref WasmCG cg, tym_t ty)
+private void emitStore(ref WasmCG cg, tym_t ty, uint offset = 0)
 {
     const m = memOpsFor(ty);
     cg.emit(m.storeOp);
-    cg.emitMemArg(m.alignLog2, 0);
+    cg.emitMemArg(m.alignLog2, offset);
 }
 
 private void emitReinterpret(ref WasmCG cg, WASM_TYPE from, WASM_TYPE to)
@@ -535,13 +555,35 @@ bool emitSymAddr(ref WasmCG cg, Symbol* s, uint off)
     return false;
 }
 
+/// Split form of `emitSymAddr`: pushes only the base address and returns the
+/// residual constant offset that the caller must fold into the memarg of a
+/// following load/store. Used to match LDC's `i32.const sym; i32.load offset=N`
+/// pattern instead of materializing the full address with `i32.add`.
+bool emitSymBase(ref WasmCG cg, Symbol* s, uint off, out uint memOff)
+{
+    if (isDataSym(s.Sfl))
+    {
+        cg.emitDataBase(s);
+        memOff = off;
+        return true;
+    }
+    if (cg.inShadow(s))
+    {
+        cg.emitLocal(OP_LOCAL_GET, cg.shadowBaseLocal);
+        memOff = cast(uint) s.Soffset + off;
+        return true;
+    }
+    return false;
+}
+
 /// Emit `<addr> ; load.ty` for the symbol value at `s + off`.
 /// Returns: true on success.
 bool emitSymLoad(ref WasmCG cg, Symbol* s, uint off, tym_t ty)
 {
-    if (!emitSymAddr(cg, s, off))
+    uint memOff;
+    if (!emitSymBase(cg, s, off, memOff))
         return false;
-    cg.emitLoad(ty);
+    cg.emitLoad(ty, memOff);
     return true;
 }
 
@@ -562,6 +604,26 @@ bool emitLValueAddr(ref WasmCG cg, elem* e)
         return true;
     case OPcomma:
         //
+    default:
+        return false;
+    }
+}
+
+/// Split form of `emitLValueAddr`: pushes only the base address and returns
+/// the residual constant offset for the caller to fold into the memarg of the
+/// following load/store.
+bool emitLValueBase(ref WasmCG cg, elem* e, out uint memOff)
+{
+    if (!e)
+        return false;
+    switch (e.Eoper)
+    {
+    case OPvar:
+        return e.Vsym && emitSymBase(cg, e.Vsym, cast(uint) e.Voffset, memOff);
+    case OPind:
+        cg.genElem(e.E1);
+        memOff = 0;
+        return true;
     default:
         return false;
     }
@@ -597,15 +659,20 @@ SavedLValue saveLValueAddr(ref WasmCG cg, elem* e)
 }
 
 /// Re-push the saved lvalue address onto the value stack.
-void replayAddr(ref WasmCG cg, SavedLValue r)
+/// Returns the constant offset the caller must pass to the following
+/// load/store as the memarg offset (so `sym + Soffset` can be split into
+/// `local.get base; i32.load offset=Soffset` etc.).
+uint replayAddr(ref WasmCG cg, SavedLValue r)
 {
     if (r.directSym)
     {
-        const bool ok = emitSymAddr(cg, r.directSym, r.directOff);
+        uint memOff;
+        const bool ok = emitSymBase(cg, r.directSym, r.directOff, memOff);
         assert(ok);
-        return;
+        return memOff;
     }
     cg.emitLocal(OP_LOCAL_GET, r.addrTemp);
+    return 0;
 }
 
 /// Emit shadow stack frame prologue (called once at function entry).
@@ -781,11 +848,12 @@ private bool emitSliceHalf(ref WasmCG cg, elem* e, bool ptrHalf)
     if (ety != TYdarray && ety != TYdelegate)
         return false;
     const uint half = ptrHalf ? 4u : 0u;
+    uint memOff;
     if (e.Eoper == OPvar && e.Vsym &&
-        emitSymAddr(cg, e.Vsym, cast(uint) e.Voffset + half))
+        emitSymBase(cg, e.Vsym, cast(uint) e.Voffset + half, memOff))
     {
         cg.emit(OP_I32_LOAD);
-        cg.emitMemArg(2, 0);
+        cg.emitMemArg(2, memOff);
         return true;
     }
     if (e.Eoper == OPind && e.E1)
@@ -1155,7 +1223,8 @@ bool genElem(ref WasmCG cg, elem* e)
             }
             // Store rhs through lvalue E1, leaving the rhs value on stack
             // (unless this assignment is used as a statement, e.Ety == void).
-            if (cg.emitLValueAddr(e.E1))
+            uint memOff;
+            if (cg.emitLValueBase(e.E1, memOff))
             {
                 cg.genElem(e.E2);
                 if (typeHasValue(e.Ety))
@@ -1164,11 +1233,11 @@ bool genElem(ref WasmCG cg, elem* e)
                     uint valTmp = cg.allocTemp(wasmType(e.E1.Ety));
                     cg.emit(OP_LOCAL_TEE);
                     cg.emitULEB(valTmp);
-                    cg.emitStore(e.E1.Ety);
+                    cg.emitStore(e.E1.Ety, memOff);
                     cg.emitLocal(OP_LOCAL_GET, valTmp);
                     return true;
                 }
-                cg.emitStore(e.E1.Ety);
+                cg.emitStore(e.E1.Ety, memOff);
                 return false;
             }
             elem_print(e);
@@ -1196,17 +1265,17 @@ bool genElem(ref WasmCG cg, elem* e)
                 return true;
             }
             auto lv = saveLValueAddr(cg, e.E1);
-            replayAddr(cg, lv);
-            cg.emitLoad(e.E1.Ety);
+            uint loadOff = replayAddr(cg, lv);
+            cg.emitLoad(e.E1.Ety, loadOff);
             cg.genElem(e.E2, wasmType(e));
             cg.emitBinop(opeqtoop(op), e.Ety);
             cg.maskSmallInt(e.E1.Ety);
             // Save new value, store, leave on stack as result.
             uint vTmp = cg.allocTemp(wasmType(e.E1.Ety));
             cg.emitLocal(OP_LOCAL_SET, vTmp);
-            replayAddr(cg, lv);
+            uint storeOff = replayAddr(cg, lv);
             cg.emitLocal(OP_LOCAL_GET, vTmp);
-            cg.emitStore(e.E1.Ety);
+            cg.emitStore(e.E1.Ety, storeOff);
             cg.emitLocal(OP_LOCAL_GET, vTmp);
             return true;
         }
@@ -1251,8 +1320,8 @@ bool genElem(ref WasmCG cg, elem* e)
             }
 
             auto lv = saveLValueAddr(cg, e.E1);
-            replayAddr(cg, lv);
-            cg.emitLoad(e.E1.Ety);
+            uint loadOff = replayAddr(cg, lv);
+            cg.emitLoad(e.E1.Ety, loadOff);
 
             // Stash old value as the result.
             uint oldTmp = cg.allocTemp(wasmType(e.E1));
@@ -1267,9 +1336,9 @@ bool genElem(ref WasmCG cg, elem* e)
             // Store new value back.
             uint newTmp = cg.allocTemp(wasmType(e.E1));
             cg.emitLocal(OP_LOCAL_SET, newTmp);
-            replayAddr(cg, lv);
+            uint storeOff = replayAddr(cg, lv);
             cg.emitLocal(OP_LOCAL_GET, newTmp);
-            cg.emitStore(e.E1.Ety);
+            cg.emitStore(e.E1.Ety, storeOff);
 
             // Result: old value.
             cg.emitLocal(OP_LOCAL_GET, oldTmp);
@@ -1365,8 +1434,8 @@ bool genElem(ref WasmCG cg, elem* e)
                 return typeHasValue(e.Ety);
             }
             auto lv = saveLValueAddr(cg, e.E1);
-            replayAddr(cg, lv);
-            cg.emitLoad(e.E1.Ety);
+            uint loadOff = replayAddr(cg, lv);
+            cg.emitLoad(e.E1.Ety, loadOff);
             // Apply negation in-stack using the wasm type of the lhs.
             const wty = e.E1.Ety.wasmType;
             final switch (wty)
@@ -1399,9 +1468,9 @@ bool genElem(ref WasmCG cg, elem* e)
             cg.maskSmallInt(e.E1.Ety);
             uint vTmp = cg.allocTemp(wty);
             cg.emitLocal(OP_LOCAL_SET, vTmp);
-            replayAddr(cg, lv);
+            uint storeOff = replayAddr(cg, lv);
             cg.emitLocal(OP_LOCAL_GET, vTmp);
-            cg.emitStore(e.E1.Ety);
+            cg.emitStore(e.E1.Ety, storeOff);
             cg.emitLocal(OP_LOCAL_GET, vTmp);
             return true;
         }
@@ -2198,16 +2267,11 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
     foreach (ref sp; paramSpills)
     {
         cg.emitLocal(OP_LOCAL_GET, cg.shadowBaseLocal);
-        const uint off = cast(uint) sp.sym.Soffset + sp.byteOffset;
-        if (off != 0)
-        {
-            cg.emitConst(OP_I32_CONST, cast(int) off);
-            cg.emit(OP_I32_ADD);
-        }
         cg.emitLocal(OP_LOCAL_GET, sp.wasmLocalIdx);
+        const uint off = cast(uint) sp.sym.Soffset + sp.byteOffset;
         const m = memOpsFor(sp.ty);
         cg.emit(m.storeOp);
-        cg.emitMemArg(m.alignLog2, 0);
+        cg.emitMemArg(m.alignLog2, off);
     }
 
     block* startblock = sfunc.Sfunc.Fstartblock;
