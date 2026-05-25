@@ -248,14 +248,6 @@ struct WasmDataSeg
     uint alignLog2 = 2;   // log2(alignment) for SEGMENT_INFO
 }
 
-// WASM mutable global (used for __stack_pointer)
-struct WasmGlobal
-{
-    ubyte valType; // e.g. WASM_I32
-    bool mutable_;
-    long initVal; // constant initializer (interpreted as i32 or i64)
-}
-
 // ---------------------------------------------------------------------------
 // Module state
 // ---------------------------------------------------------------------------
@@ -280,16 +272,10 @@ struct WasmModule
         return &dataSegs[activeSegIdx];
     }
 
-    uint memoryPageCount; // number of 64 KiB memory pages
-    bool needsMemory; // true if any data segments or shadow stack exist
     uint dataHeap = 4; // next free byte offset in linear memory; starts at 4 to reserve address 0 as null
 
-    WasmGlobal[] globals; // module-level mutable globals
-    int stackPtrGlobalIdx = -1; // index of __stack_pointer global (-1 = not created)
-    bool importStackPtrGlobal; // true: import __stack_pointer from "env" instead of defining it
-    bool importFuncTable; // true: import __indirect_function_table from "env"
+    bool importStackPtrGlobal; // true: import __stack_pointer from "env" (set when any function needs a shadow frame)
     uint[] elemFuncRelocOffsets; // payload offsets of function indices in the element section
-    bool relocatable; // true: emit linking/reloc sections (for -c / wasm-ld use)
 
     // Deferred relocations in data segments. Written as 0 at emit time;
     // patched in WasmObj_term once all symbol addresses are known.
@@ -345,10 +331,6 @@ nothrow:
 
 /// Global module instance (one per compilation unit)
 private WasmModule* wmod;
-
-// Set by the DMD frontend: true when -c is given (produce relocatable object
-// for wasm-ld), false when producing a self-contained final module directly.
-__gshared bool wasm_relocatable = true; // default: relocatable (for -c)
 
 /// Maps mangled function name to WebAssembly import module name.
 private __gshared const(char)[][string] g_importModuleTable;
@@ -572,32 +554,24 @@ private void appendImportHead(ref OutBuffer s, const(char)[] mod, const(char)[] 
     s.writeByte(kind);
 }
 
-/// Returns: true if section was actually written
+/// Always written: every relocatable object imports linear memory and the
+/// indirect function table from the linker.
 private bool emitImportSection(ref OutBuffer out_, ref WasmModule wmod)
 {
-    const count = wmod.numImports
-        + (wmod.importFuncTable ? 1 : 0)
-        + (wmod.importStackPtrGlobal ? 1 : 0)
-        + (wmod.relocatable ? 1 : 0);
-    if (!count)
-        return false;
     OutBuffer* s = &wmod.scratch;
     s.reset();
+    const count = wmod.numImports + 2 + (wmod.importStackPtrGlobal ? 1 : 0);
     s.writeuLEB128(count);
     foreach (ref const WasmFunc f; wmod.funcs[0 .. wmod.numImports])
     {
         appendImportHead(*s, f.importModule, f.importName, WASM_EXPORT.FUNC);
         s.writeuLEB128(f.typeIdx);
     }
-    if (wmod.relocatable)
-    {
-        // (import "env" "__linear_memory" (memory 0))
-        // Relocatable objects import memory from the linker (wasm-ld); the
-        // linker provides the actual memory definition and export.
-        appendImportHead(*s, "env", "__linear_memory", WASM_EXPORT.MEM);
-        s.writeByte(WASM_LIMITS.NO_MAX);
-        s.writeuLEB128(0); // min pages = 0 (linker sets actual size)
-    }
+    // (import "env" "__linear_memory" (memory 0))
+    // wasm-ld provides the actual memory definition and export.
+    appendImportHead(*s, "env", "__linear_memory", WASM_EXPORT.MEM);
+    s.writeByte(WASM_LIMITS.NO_MAX);
+    s.writeuLEB128(0); // min pages = 0 (linker sets actual size)
     if (wmod.importStackPtrGlobal)
     {
         // (import "env" "__stack_pointer" (global (mut i32)))
@@ -607,14 +581,11 @@ private bool emitImportSection(ref OutBuffer out_, ref WasmModule wmod)
         s.writeByte(WASM_I32);
         s.writeByte(WASM_MUT.VAR);
     }
-    if (wmod.importFuncTable)
-    {
-        // (import "env" "__indirect_function_table" (table 0 funcref))
-        appendImportHead(*s, "env", "__indirect_function_table", WASM_EXPORT.TABLE);
-        s.writeByte(WASM_REFTYPE.FUNCREF);
-        s.writeByte(WASM_LIMITS.NO_MAX);
-        s.writeuLEB128(0); // min size = 0 (linker sets actual size)
-    }
+    // (import "env" "__indirect_function_table" (table 0 funcref))
+    appendImportHead(*s, "env", "__indirect_function_table", WASM_EXPORT.TABLE);
+    s.writeByte(WASM_REFTYPE.FUNCREF);
+    s.writeByte(WASM_LIMITS.NO_MAX);
+    s.writeuLEB128(0); // min size = 0 (linker sets actual size)
     writeSection(out_, WASM_SECTION.import_, s);
     return true;
 }
@@ -631,26 +602,6 @@ private bool emitFunctionSection(ref OutBuffer out_, ref WasmModule wmod)
     foreach (ref const WasmFunc f; wmod.funcs[wmod.numImports .. $])
         s.writeuLEB128(f.typeIdx);
     writeSection(out_, WASM_SECTION.function_, s);
-    return true;
-}
-
-// Emit a table section with one funcref table sized to hold all defined functions.
-// Skipped when the table is imported as __indirect_function_table.
-private bool emitTableSection(ref OutBuffer out_, ref WasmModule wmod)
-{
-    if (wmod.importFuncTable)
-        return false; // table is imported, not defined here
-    const defined = cast(uint)(wmod.funcs.length - wmod.numImports);
-    if (!defined)
-        return false;
-    OutBuffer* s = &wmod.scratch;
-    s.reset();
-    s.writeuLEB128(1); // 1 table
-    s.writeByte(WASM_REFTYPE.FUNCREF);
-    s.writeByte(WASM_LIMITS.HAS_MAX);
-    s.writeuLEB128(defined); // min = number of defined functions
-    s.writeuLEB128(defined); // max = same
-    writeSection(out_, WASM_SECTION.table, s);
     return true;
 }
 
@@ -689,52 +640,8 @@ private bool emitElementSection(ref OutBuffer out_, ref WasmModule wmod)
     return true;
 }
 
-/// Returns: true if section was actually written
-private bool emitMemorySection(ref OutBuffer out_, ref WasmModule wmod)
-{
-    // In relocatable mode memory is imported from env (see emitImportSection),
-    // so the linker provides the definition — don't declare one here.
-    if (wmod.relocatable)
-        return false;
-    // Always declare one page of linear memory — any function using pointers
-    // or array indexing needs it, and it's harmless when unused.
-    OutBuffer* s = &wmod.scratch;
-    s.reset();
-    s.writeuLEB128(1); // one memory
-    s.writeByte(WASM_LIMITS.NO_MAX);
-    s.writeuLEB128(wmod.memoryPageCount ? wmod.memoryPageCount : 1);
-    writeSection(out_, WASM_SECTION.memory, s);
-    return true;
-}
-
-/// Returns: true if section was actually written
-private bool emitGlobalSection(ref OutBuffer out_, ref WasmModule wmod)
-{
-    if (!wmod.globals.length)
-        return false;
-
-    OutBuffer* s = &wmod.scratch;
-    s.reset();
-    s.writeuLEB128(cast(uint) wmod.globals.length);
-    foreach (ref const WasmGlobal g; wmod.globals)
-    {
-        // globaltype = valtype + mut flag
-        s.writeByte(g.valType);
-        s.writeByte(g.mutable_ ? WASM_MUT.VAR : WASM_MUT.CONST);
-
-        assert(g.valType == WASM_I32); // TODO: support other types
-
-        // constant-expression initializer
-        s.writeByte(OP_I32_CONST);
-        s.writesLEB128(g.initVal);
-
-        s.writeByte(0x0B); // end of sequence
-    }
-    writeSection(out_, WASM_SECTION.global, s);
-    return true;
-}
-
-/// Returns: true if section was actually written
+/// Returns: true if section was actually written.
+/// Only function exports are emitted; the linker provides the memory export.
 private bool emitExportSection(ref OutBuffer out_, ref WasmModule wmod)
 {
     OutBuffer* s = &wmod.scratch;
@@ -743,20 +650,9 @@ private bool emitExportSection(ref OutBuffer out_, ref WasmModule wmod)
     foreach (ref const WasmFunc f; wmod.funcs)
         if (f.exported)
             ++count;
-    // Memory is exported only in self-contained mode; in relocatable mode
-    // the linker exports memory itself.
-    const exportMemory = !wmod.relocatable;
-    if (exportMemory)
-        ++count;
     if (!count)
         return false;
     s.writeuLEB128(count);
-    if (exportMemory)
-    {
-        appendName(*s, "memory");
-        s.writeByte(WASM_EXPORT.MEM);
-        s.writeuLEB128(0); // memory index 0
-    }
     foreach (size_t i, ref const WasmFunc f; wmod.funcs)
     {
         if (!f.exported)
@@ -876,12 +772,8 @@ private bool emitLinkingSection(ref OutBuffer out_, ref WasmModule wmod)
     Symbol*[] datasymsForLinking = buildDataSymtabOrder();
     symCount += cast(uint) datasymsForLinking.length;
 
-    // One TABLE symbol for the function table (defined or imported).
-    const bool hasTable = !wmod.importFuncTable &&
-        (wmod.funcs.length > wmod.numImports);
-    const bool hasImportedTable = wmod.importFuncTable;
-    if (hasTable || hasImportedTable)
-        symCount++;
+    // One TABLE symbol for the imported function table.
+    symCount++;
     // One GLOBAL symbol for __stack_pointer when imported.
     if (wmod.importStackPtrGlobal)
         symCount++;
@@ -960,23 +852,11 @@ private bool emitLinkingSection(ref OutBuffer out_, ref WasmModule wmod)
         }
     }
 
-    // Add a SYMTAB_TABLE entry for the function table so wasm-ld accepts it.
-    if (hasTable)
-    {
-        // Defined table: table index 0, weak binding so wasm-ld can merge it
-        // with __indirect_function_table provided by other inputs.
-        symtab.writeByte(WASM_SYMTAB.TABLE);
-        symtab.writeuLEB128(WASM_SYM.BINDING_WEAK | WASM_SYM.EXPLICIT_NAME);
-        symtab.writeuLEB128(0); // table index 0
-        appendName(symtab, "__indirect_function_table");
-    }
-    else if (hasImportedTable)
-    {
-        // Imported table: table index 0, undefined.
-        symtab.writeByte(WASM_SYMTAB.TABLE);
-        symtab.writeuLEB128(WASM_SYM.UNDEFINED);
-        symtab.writeuLEB128(0); // table index 0
-    }
+    // Imported __indirect_function_table: table index 0, undefined.
+    // Name comes from the import section (no EXPLICIT_NAME).
+    symtab.writeByte(WASM_SYMTAB.TABLE);
+    symtab.writeuLEB128(WASM_SYM.UNDEFINED);
+    symtab.writeuLEB128(0); // table index 0
 
     if (wmod.importStackPtrGlobal)
     {
@@ -1347,8 +1227,6 @@ Obj WasmObj_init(OutBuffer* objbuf, const(char)* filename, const(char)* csegname
     wmod = new WasmModule();
     wmod.objbuf = objbuf;
     wasmFuncBodies = null;
-    // The relocatable flag is set externally (by the DMD frontend) when -c is given.
-    wmod.relocatable = wasm_relocatable;
 
     // Initialize the SegData array with placeholder entries for the standard
     // segment indices (CODE=1, DATA=2, CDATA=3, UDATA=4) so the backend's
@@ -1511,37 +1389,15 @@ void WasmObj_term2(const(char)[] objfilename, ref WasmModule wmod, ref OutBuffer
             globsym.setLength(cast(uint) fb.savedGlobsym.length);
             foreach (size_t i, s; fb.savedGlobsym)
                 globsym[i] = s;
-            wasm_codgen(fb.sym, wasm_relocatable);
+            wasm_codgen(fb.sym);
         }
         globsym.setLength(0);
     }
 
-    // Patch deferred relocations. Each reloc carries its segment index.
-    if (!wmod.relocatable)
-    {
-        // Final module: resolve function-pointer table indices directly.
-        foreach (ref WasmModule.FuncReloc rel; wmod.funcRelocations)
-        {
-            if (rel.segIdx >= wmod.dataSegs.length)
-                continue;
-            ubyte[] dataBuf = cast(ubyte[]) wmod.dataSegs[rel.segIdx].data.peekSlice();
-            if (rel.dataByteOffset + 4 > dataBuf.length)
-                continue;
-            uint tableIdx = 0;
-            foreach (size_t fi; wmod.numImports .. wmod.funcs.length)
-                if (wmod.funcs[fi].sym == rel.sym)
-                {
-                    tableIdx = cast(uint)(fi - wmod.numImports);
-                    break;
-                }
-            dataBuf[rel.dataByteOffset .. rel.dataByteOffset + 4] =
-                (cast(ubyte*)&tableIdx)[0 .. 4];
-        }
-    }
-    // In relocatable mode, funcRelocations are left as 0 placeholders;
-    // wasm-ld patches them via R_WASM.TABLE_INDEX_I32 in reloc.DATA.
+    // funcRelocations are left as 0 placeholders in data segments; wasm-ld
+    // patches them via R_WASM.TABLE_INDEX_I32 entries in reloc.DATA.
 
-    // Always patch data-to-data address references (stable across linking).
+    // Patch data-to-data address references (stable across linking).
     foreach (ref WasmModule.DataReloc rel; wmod.dataRelocations)
     {
         if (rel.segIdx >= wmod.dataSegs.length)
@@ -1554,29 +1410,14 @@ void WasmObj_term2(const(char)[] objfilename, ref WasmModule wmod, ref OutBuffer
             (cast(ubyte*)&addr)[0 .. 4];
     }
 
-    // Finalize __stack_pointer initial value (self-contained mode only).
-    // Data section occupies low addresses (0..dataHeap-1).
-    // Shadow stack grows downward from 65536 (top of first 64KiB page).
-    // Both fit in a single page as long as dataHeap < 65536.
-    // In relocatable mode the global is imported, not defined here, so the
-    // linker provides the initial value.
-    if (wmod.stackPtrGlobalIdx >= 0 && !wmod.importStackPtrGlobal)
-        wmod.globals[wmod.stackPtrGlobalIdx].initVal = 65536;
-
-    // In relocatable mode the linker owns __indirect_function_table; importing
-    // it (rather than defining it) lets wasm-ld merge tables across objects
-    // and avoids "reserved symbol must not be defined in input files".
-    wmod.importFuncTable = wmod.relocatable;
-
     // Emit all sections in canonical order and track section indices
     // so reloc.CODE can reference the code section by its module index.
+    // Memory, table, and __stack_pointer (when needed) are all imported from
+    // the linker; no memory/table/global sections are emitted here.
     uint sectionIdx = 0;
     sectionIdx += emitTypeSection(out_, wmod);
     sectionIdx += emitImportSection(out_, wmod);
     sectionIdx += emitFunctionSection(out_, wmod);
-    sectionIdx += emitTableSection(out_, wmod);
-    sectionIdx += emitMemorySection(out_, wmod);
-    sectionIdx += emitGlobalSection(out_, wmod);
     sectionIdx += emitExportSection(out_, wmod);
 
     const uint elemSectionIdx = sectionIdx;
@@ -1588,15 +1429,12 @@ void WasmObj_term2(const(char)[] objfilename, ref WasmModule wmod, ref OutBuffer
     uint dataSectionIdx = sectionIdx;
     sectionIdx += emitDataSection(out_, wmod);
 
-    // Relocatable objects include "linking" + "reloc.*" custom sections
-    // so wasm-ld can patch symbol references when linking.
-    if (wmod.relocatable)
-    {
-        emitLinkingSection(out_, wmod);
-        emitRelocDataSection(out_, wmod, dataSectionIdx);
-        emitRelocElemSection(out_, wmod, elemSectionIdx);
-        emitRelocCodeSection(out_, wmod, codeSectionIdx);
-    }
+    // "linking" + "reloc.*" custom sections let wasm-ld patch symbol
+    // references when linking.
+    emitLinkingSection(out_, wmod);
+    emitRelocDataSection(out_, wmod, dataSectionIdx);
+    emitRelocElemSection(out_, wmod, elemSectionIdx);
+    emitRelocCodeSection(out_, wmod, codeSectionIdx);
 }
 
 void WasmObj_linnum(Srcpos srcpos, int seg, targ_size_t offset)
@@ -1764,7 +1602,6 @@ int WasmObj_data_start(Symbol* sdata, targ_size_t datasize, int seg)
 {
     if (!datasize)
         return 0;
-    wmod.needsMemory = true;
 
     // Align to natural alignment of the data type (max 8 bytes).
     uint align_ = 4;
@@ -2064,34 +1901,14 @@ void wmod_recordDataAddrReloc(uint codeOffset, Symbol* sym, uint addend)
     wasmFuncBodies[$ - 1].dataAddrRelocs ~= r;
 }
 
-// Return the index of the __stack_pointer mutable global, creating it if needed.
+// Mark __stack_pointer as needed and return its global index.
 // Called by codgen.d when a function needs a shadow stack frame.
-//
-// Relocatable mode: import __stack_pointer from "env" so wasm-ld can merge
-// stack pointers across objects. The imported global occupies global index 0
-// in the WASM global index space (imports precede defined globals, and
-// __stack_pointer is currently the only imported global).
-//
-// Non-relocatable (self-contained) mode: define the global locally and let
-// WasmObj_term compute its initial value from the final data layout.
+// __stack_pointer is imported from "env" so wasm-ld can merge stack pointers
+// across objects; as the only imported global it occupies global index 0.
 uint wmod_getOrCreateStackPtrGlobal()
 {
-    if (wmod.stackPtrGlobalIdx >= 0)
-        return cast(uint) wmod.stackPtrGlobalIdx;
-    wmod.needsMemory = true; // shadow stack lives in linear memory
-    if (wmod.relocatable)
-    {
-        wmod.importStackPtrGlobal = true;
-        wmod.stackPtrGlobalIdx = 0; // first (and only) imported global
-        return 0;
-    }
-    WasmGlobal g;
-    g.valType = WASM_I32;
-    g.mutable_ = true;
-    g.initVal = 65536; // placeholder; updated in WasmObj_term from dataHeap
-    wmod.stackPtrGlobalIdx = cast(int) wmod.globals.length;
-    wmod.globals ~= g;
-    return cast(uint) wmod.stackPtrGlobalIdx;
+    wmod.importStackPtrGlobal = true;
+    return 0;
 }
 
 // Public entry point for codgen.d to allocate string data directly.
@@ -2104,7 +1921,6 @@ uint allocRoData_wasm(const(void)* p, uint len, uint align_)
 // write the bytes into a fresh segment, and return the linear memory address.
 private uint allocRoData(const(void)* p, uint len, uint align_)
 {
-    wmod.needsMemory = true;
     uint mask = align_ - 1;
     uint base = (wmod.dataHeap + mask) & ~mask;
 
