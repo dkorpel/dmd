@@ -288,7 +288,7 @@ Expression implicitCastTo(Expression e, Scope* sc, Type t)
     {
         // Only apply first-class-type rules for non-tuple TypeExps (i.e. actual type values).
         // Empty-tuple TypeExps (e.g. from AliasSeq!()) are not type_t values.
-        if (sc.previews.firstClassTypes && !e.type.isTypeTuple())
+        if (sc && sc.previews.firstClassTypes && !e.type.isTypeTuple())
         {
             if (t.ty == Ttype)
                 return e;
@@ -3459,7 +3459,7 @@ Type typeMerge(Scope* sc, EXP op, ref Expression pe1, ref Expression pe2)
         return Lret(towards);
     }
 
-    if (sc.previews.firstClassTypes &&
+    if (sc && sc.previews.firstClassTypes &&
         (e1.isTypeExp() || e1.type.ty == Ttype) &&
         (e2.isTypeExp() || e2.type.ty == Ttype))
     {

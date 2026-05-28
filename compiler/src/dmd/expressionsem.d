@@ -18702,7 +18702,7 @@ void semanticTypeInfo(Scope* sc, Type t)
     void visitAArray(TypeAArray t)
     {
         // First-class types: type_t has no runtime representation; skip TypeInfo.
-        if (sc.previews.firstClassTypes &&
+        if ((sc ? sc.previews.firstClassTypes : global.params.firstClassTypes) &&
             (t.index.ty == Ttype || t.nextOf().ty == Ttype))
             return;
         semanticTypeInfo(sc, t.index);
