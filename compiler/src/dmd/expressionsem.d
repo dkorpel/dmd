@@ -14886,6 +14886,13 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
             {
                 TypeAArray ta = cast(TypeAArray)t2b;
 
+                // `type_t`-keyed AA needs no `_d_aaIn` runtime hook
+                if (sc.previews.firstClassTypes && ta.index.toBasetype().ty == Ttype)
+                {
+                    exp.type = ta.nextOf().pointerTo();
+                    break;
+                }
+
                 // Special handling for array keys
                 if (!keyCompatibleWithoutCasting(exp.e1, ta.index))
                 {

@@ -7527,7 +7527,8 @@ Expression dotExp(Type mt, Scope* sc, Expression e, Identifier ident, DotExpFlag
     Expression visitTtype(TypeTtype mt)
     {
         // Example: (b ? int : bool).sizeof
-        // Try to constant-fold to TypeExp, then forward the property to the wrapped Type
+        // A property can only be forwarded once `e` is a TypeExp, so first try
+        // to constant-fold a non-constant `type_t` expression into one.
         if (e.op != EXP.type)
         {
             const errors = global.startGagging();
@@ -7535,36 +7536,32 @@ Expression dotExp(Type mt, Scope* sc, Expression e, Identifier ident, DotExpFlag
             const gagged = global.endGagging(errors);
             if (!gagged && efold)
                 if (auto te = efold.isTypeExp())
-                {
                     e = te;
-                    goto Lfolded;
-                }
-            {
-                // Defer until CTFE substitutes `e` to a TypeExp (e.g.
-                // function parameter resolved at call site). Only the
-                // well-known properties have a knowable result type.
-                Type resTy;
-                if (ident == Id.__sizeof || ident == Id.__xalignof)
-                    resTy = Type.tsize_t;
-                else if (ident == Id.stringof || ident == Id._mangleof)
-                    resTy = Type.tstring;
-                else if (ident == Id._init)
-                    resTy = Type.ttype;
-                if (resTy)
-                {
-                    auto die = new DotIdExp(e.loc, e, ident);
-                    die.type = resTy;
-                    return die;
-                }
-                error(e.loc, "expression `%s` of type `type_t` must be a compile-time constant", e.toChars());
-                return ErrorExp.get();
-            }
         }
-    Lfolded:
-        auto te = e.isTypeExp();
-        Type wrapped = te.type;
-        // Delegate property lookups (.sizeof / .stringof / .mangleof / .alignof) to the wrapped type
-        return wrapped.getProperty(sc, e.loc, ident, 0);
+
+        // Forward the property (.sizeof / .stringof / .mangleof / .alignof / .init)
+        // to the wrapped type.
+        if (auto te = e.isTypeExp())
+            return te.type.getProperty(sc, e.loc, ident, 0);
+
+        // `e` couldn't be folded yet (e.g. a function parameter resolved only at
+        // the CTFE call site). Defer by synthesizing a typed DotIdExp; only the
+        // well-known properties have a knowable result type.
+        Type resTy;
+        if (ident == Id.__sizeof || ident == Id.__xalignof)
+            resTy = Type.tsize_t;
+        else if (ident == Id.stringof || ident == Id._mangleof)
+            resTy = Type.tstring;
+        else if (ident == Id._init)
+            resTy = Type.ttype;
+        if (resTy)
+        {
+            auto die = new DotIdExp(e.loc, e, ident);
+            die.type = resTy;
+            return die;
+        }
+        error(e.loc, "expression `%s` of type `type_t` must be a compile-time constant", e.toChars());
+        return ErrorExp.get();
     }
 
     switch (mt.ty)

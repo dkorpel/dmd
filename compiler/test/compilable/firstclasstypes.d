@@ -87,6 +87,11 @@ enum typemap = [int: uint, short: ushort, byte: ubyte, long: ulong];
 static assert(typemap[int] == uint);
 static assert(typemap[short] == ushort);
 
+// `in` on a type_t-keyed AA yields a pointer to the value, like a regular AA
+static assert(int in typemap);
+static assert(!(float in typemap));
+static assert(*(int in typemap) == uint);
+
 type_t[] assignElems()
 {
     type_t[] arr = [int, float];

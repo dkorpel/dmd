@@ -3344,6 +3344,11 @@ public:
             interpretCompareCommon(e, &ctfeCmp);
             return;
 
+        case EXP.in_:
+            // A `type_t`-keyed AA is not lowered to `_d_aaIn`
+            result = interpret_aaIn(pue, istate, e.e2, e.e1);
+            return;
+
         default:
             printf("be = '%s' %s at [%s]\n", EXPtoString(e.op).ptr, e.toChars(), e.loc.toChars());
             assert(0);
@@ -5273,31 +5278,16 @@ public:
 
         if (e.e1.type.toBasetype().ty == Taarray)
         {
-            // type_t AA literals are not lowered; handle directly
+            // A `type_t`-keyed AA is not lowered to `_d_aaGetRvalueX(aa, key)[0]`,
+            // so interpret it with the same hook helper and dereference the
+            // returned pointer to obtain the value.
             auto taa = e.e1.type.toBasetype().isTypeAArray();
             if (taa.index.ty == Ttype || taa.nextOf().ty == Ttype)
             {
-                Expression e1 = interpretRegion(e.e1, istate);
-                if (exceptionOrCant(e1))
+                Expression ptr = interpret_aaGetRvalueX(pue, istate, e.e1, e.e2);
+                if (exceptionOrCant(ptr))
                     return;
-                Expression e2 = interpretRegion(e.e2, istate);
-                if (exceptionOrCant(e2))
-                    return;
-                auto aae = e1.isAssocArrayLiteralExp();
-                if (!aae)
-                {
-                    error(e.loc, "`%s` is null, cannot index it", e.e1.toErrMsg());
-                    result = CTFEExp.cantexp;
-                    return;
-                }
-                Expression val = findKeyInAA(e.loc, aae, e2);
-                if (!val)
-                {
-                    error(e.loc, "key not found in associative array");
-                    result = CTFEExp.cantexp;
-                    return;
-                }
-                result = val;
+                result = interpretRegion(ptr.isAddrExp().e1, istate);
                 return;
             }
 
