@@ -153,3 +153,26 @@ alias CI = const(int);
 alias CI2 = const(int);
 static assert(int != CI);
 static assert(CI == CI2);
+
+// Slice 7: `return <type expr>;` covering multiple branches, including
+// returning `void` as a `type_t` value (not an empty return).
+type_t unsignedOfSize(size_t n)
+{
+    if (n == 8)
+        return ulong;
+    if (n == 4)
+        return uint;
+    if (n == 2)
+        return ushort;
+    if (n == 1)
+        return ubyte;
+
+    return void;
+}
+
+static assert(unsignedOfSize(8).sizeof == 8);
+static assert(unsignedOfSize(4).sizeof == 4);
+static assert(unsignedOfSize(2).sizeof == 2);
+static assert(unsignedOfSize(1).stringof == "ubyte");
+static assert(unsignedOfSize(0).stringof == "void");
+static assert(unsignedOfSize(0) == void);

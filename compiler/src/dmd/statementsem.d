@@ -2728,7 +2728,7 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
             auto texp = rs.exp.type;
             const convToVoid = texp.ty == Tvoid || texp.isTypeNoreturn();
 
-            if (tbret && tbret.ty == Tvoid || convToVoid)
+            if (!ttypeReturn && (tbret && tbret.ty == Tvoid || convToVoid))
             {
                 if (!convToVoid && !texp.isTypeError())
                 {
