@@ -1148,7 +1148,8 @@ UnionExp Index(Type type, Expression e1, Expression e2, bool indexIsInBounds)
         else if (ArrayLiteralExp ale = e1.isArrayLiteralExp())
         {
             auto e = ale[cast(size_t)i];
-            e.type = type;
+            if (!e.isTypeExp()) // TypeExp.type is the wrapped type, not the expression type
+                e.type = type;
             e.loc = loc;
             if (hasSideEffect(e))
                 cantExp(ue);
@@ -1171,7 +1172,8 @@ UnionExp Index(Type type, Expression e1, Expression e2, bool indexIsInBounds)
             else
             {
                 auto e = ale[cast(size_t)i];
-                e.type = type;
+                if (!e.isTypeExp()) // TypeExp.type is the wrapped type, not the expression type
+                    e.type = type;
                 e.loc = loc;
                 if (hasSideEffect(e))
                     cantExp(ue);

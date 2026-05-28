@@ -52,8 +52,8 @@ type_t unsignedOf(type_t a)
 {
     switch (a)
     {
-    case int : return uint;
-    case long : return ulong;
+    case int: return uint;
+    case long: return ulong;
     default:
         assert(0);
     }
@@ -66,8 +66,8 @@ type_t[] integralChain(type_t a)
 {
     switch (a)
     {
-    case byte : return [ubyte, short] ~ integralChain(short);
-    case short : return [ushort, int];
+    case byte: return [ubyte, short] ~ integralChain(short);
+    case short: return [ushort, int];
     default:
         return [];
     }
@@ -75,3 +75,14 @@ type_t[] integralChain(type_t a)
 
 static assert(integralChain(byte).length == 4);
 static assert(integralChain(byte)[2] == ushort);
+
+//
+type_t f()
+{
+    return [void[3], void[], void*][0];
+}
+
+static assert(f().stringof == "void[3]");
+
+// Breaking change: this used to equal `typeof(0 ? short.init : ubyte.init)` = `int`
+static assert(typeof(0 ? short : ubyte) == ubyte);
