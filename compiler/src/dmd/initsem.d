@@ -419,7 +419,7 @@ Initializer initializerSemantic(Initializer init, Scope* sc, ref Type tx, NeedIn
             i.exp = new TupleExp(i.exp.loc, new Expressions());
             i.exp.type = et;
         }
-        if (i.exp.op == EXP.type && global.params.firstClassTypes && t.ty == Ttype)
+        if (i.exp.op == EXP.type && sc.previews.firstClassTypes && t.ty == Ttype)
         {
             // First-class types: a TypeExp is a value of `type_t`
             return i;

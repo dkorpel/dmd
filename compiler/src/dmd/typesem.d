@@ -5704,7 +5704,7 @@ void resolve(Type mt, Loc loc, Scope* sc, out Expression pe, out Type pt, out Ds
             error(loc, "variable `__ctfe` cannot be read at compile time");
             return returnError();
         }
-        if (mt.ident == Id.type_t && global.params.firstClassTypes)
+        if (mt.ident == Id.type_t && sc.previews.firstClassTypes)
         {
             pt = Type.ttype;
             return;

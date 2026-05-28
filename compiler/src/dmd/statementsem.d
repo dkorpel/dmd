@@ -1925,7 +1925,7 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
                 te = tenum;
             // First-class types: a `type_t` value is a valid switch condition;
             // cases are matched via type identity under CTFE.
-            if (global.params.firstClassTypes && ss.condition.type.ty == Ttype)
+            if (sc.previews.firstClassTypes && ss.condition.type.ty == Ttype)
                 break;
             if (ss.condition.type.isString())
             {
@@ -2314,7 +2314,7 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
 
             if (StringExp se = cs.exp.toStringExp())
                 cs.exp = se;
-            else if (global.params.firstClassTypes && cs.exp.isTypeExp())
+            else if (sc.previews.firstClassTypes && cs.exp.isTypeExp())
             {
                 // First-class types: a `type_t` case label, matched by type
                 // identity under CTFE.
@@ -2705,7 +2705,7 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
             // First-class types: a TypeExp returned from a `type_t`-returning
             // function is a value, not a type-as-symbol — skip the
             // "type is not an expression" check.
-            const ttypeReturn = global.params.firstClassTypes
+            const ttypeReturn = sc.previews.firstClassTypes
                 && tret && tret.ty == Ttype && rs.exp.isTypeExp();
             if (!ttypeReturn && !rs.exp.hasValidType())
                 rs.exp = ErrorExp.get();

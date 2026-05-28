@@ -3888,7 +3888,7 @@ private Type arrayExpressionToCommonType(Scope* sc, ref Expressions exps)
         }
         if (e.op == EXP.type)
         {
-            if (global.params.firstClassTypes)
+            if (sc.previews.firstClassTypes)
             {
                 // First-class types: a TypeExp element is a `type_t` value.
                 // Don't overwrite e.type (TypeExp uses it for the wrapped
@@ -4088,7 +4088,7 @@ private bool preFunctionParameters(Scope* sc, ArgumentList argumentList, ErrorSi
             // for static alias this: https://issues.dlang.org/show_bug.cgi?id=17684
             arg = resolveAliasThis(sc, arg);
 
-            if (arg.op == EXP.type && !global.params.firstClassTypes)
+            if (arg.op == EXP.type && !sc.previews.firstClassTypes)
             {
                 if (eSink)
                 {
@@ -6117,7 +6117,7 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
         assert(aaType);
         // First-class types: type_t has no runtime representation; keep AA as a
         // compile-time literal so CTFE can handle it directly.
-        if (global.params.firstClassTypes &&
+        if (sc.previews.firstClassTypes &&
             (aaType.index.ty == Ttype || aaType.nextOf().ty == Ttype))
             return;
         Expression hookFunc = new IdentifierExp(aaExp.loc, Id.empty);
@@ -10254,7 +10254,7 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
 
         // First-class types: functions taking or returning `type_t` are
         // CTFE-only (no codegen), so they have no runtime address.
-        if (global.params.firstClassTypes)
+        if (sc.previews.firstClassTypes)
         {
             FuncDeclaration fd;
             if (auto ve = exp.e1.isVarExp())
@@ -14987,7 +14987,7 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
         // a variable of type type_t).  Mixed comparisons fall through to the
         // normal "incompatible types" error.  Empty-tuple TypeExps (Seq!()) also
         // fall through so the existing issue-12520 handler works.
-        if (global.params.firstClassTypes)
+        if (sc.previews.firstClassTypes)
         {
             static bool isTypeTval(Expression e)
             {
@@ -15462,7 +15462,7 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
         }
 
         // First-class types: ternary between two `type_t` values yields `type_t`
-        if (global.params.firstClassTypes &&
+        if (sc.previews.firstClassTypes &&
             (exp.e1.isTypeExp() || t1.ty == Ttype) &&
             (exp.e2.isTypeExp() || t2.ty == Ttype))
         {
@@ -16746,7 +16746,7 @@ private bool checkIntegral(Expression e)
     return e.checkValue();
 }
 
-private bool checkArithmetic(Expression e, EXP op)
+private bool checkArithmetic(Expression e, EXP op, bool firstClassTypes = global.params.firstClassTypes)
 {
     if (op == EXP.error)
         return true;
@@ -16764,7 +16764,7 @@ private bool checkArithmetic(Expression e, EXP op)
 
     if ((op == EXP.add || op == EXP.min) && e.isTypeExp())
     {
-        if (global.params.firstClassTypes)
+        if (firstClassTypes)
         {
             error(e.loc, "`type_t` value `%s` cannot be used in arithmetic", e.toChars);
             return true;
@@ -16779,7 +16779,7 @@ private bool checkArithmetic(Expression e, EXP op)
     }
 
     // First-class types: reject arithmetic on `type_t`-typed values
-    if (global.params.firstClassTypes && e.type.ty == Ttype)
+    if (firstClassTypes && e.type.ty == Ttype)
     {
         error(e.loc, "`type_t` value `%s` cannot be used in arithmetic", e.toChars);
         return true;
@@ -18704,7 +18704,7 @@ void semanticTypeInfo(Scope* sc, Type t)
     void visitAArray(TypeAArray t)
     {
         // First-class types: type_t has no runtime representation; skip TypeInfo.
-        if (global.params.firstClassTypes &&
+        if (sc.previews.firstClassTypes &&
             (t.index.ty == Ttype || t.nextOf().ty == Ttype))
             return;
         semanticTypeInfo(sc, t.index);
@@ -19741,7 +19741,7 @@ private Expression buildAAIndexRValueX(Type t, Expression eaa, Expression ekey, 
         return null;
     // First-class types: type_t has no runtime representation; skip lowering
     // so CTFE can handle the indexing directly.
-    if (global.params.firstClassTypes &&
+    if (sc.previews.firstClassTypes &&
         (taa.index.ty == Ttype || taa.nextOf().ty == Ttype))
         return null;
 

@@ -1541,9 +1541,7 @@ Expression ctfeCast(UnionExp* pue, Loc loc, Type type, Type to, Expression e, bo
     if (e.op == EXP.null_)
         return paint();
 
-    // First-class types: a TypeExp is a value of `type_t`; casting to / from
-    // `type_t` is a no-op at CTFE.
-    if (global.params.firstClassTypes && e.op == EXP.type &&
+    if (e.op == EXP.type &&
         (to.ty == Ttype || type.ty == Ttype))
         return e;
 
