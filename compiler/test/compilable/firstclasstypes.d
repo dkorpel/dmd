@@ -176,3 +176,17 @@ static assert(unsignedOfSize(2).sizeof == 2);
 static assert(unsignedOfSize(1).stringof == "ubyte");
 static assert(unsignedOfSize(0).stringof == "void");
 static assert(unsignedOfSize(0) == void);
+
+type_t unsignedOf(type_t a)
+{
+    switch (a)
+    {
+        case long: return ulong;
+        case int: return uint;
+        case short: return ushort;
+        case byte: return ubyte;
+        default: assert(0);
+    }
+}
+
+static assert(unsignedOf(short) == ushort);
