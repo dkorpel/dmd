@@ -507,26 +507,6 @@ void funcDeclarationSemantic(Scope* sc, FuncDeclaration funcdecl)
     if (sc.traitsCompiles)
         funcdecl.skipCodegen = true;
 
-    // First-class types: functions taking or returning `type_t` are CTFE-only
-    if (global.params.firstClassTypes)
-    {
-        bool hasTtype(Type ty) { return ty && ty.ty == Ttype; }
-        bool anyTtype = hasTtype(tf.next);
-        if (!anyTtype && tf.parameterList.parameters)
-        {
-            foreach (p; *tf.parameterList.parameters)
-            {
-                if (hasTtype(p.type))
-                {
-                    anyTtype = true;
-                    break;
-                }
-            }
-        }
-        if (anyTtype)
-            funcdecl.skipCodegen = true;
-    }
-
     // Parser sets that a function is ctfeonly on the type when its applied postfix.
     // However when its propergated from a declaration @__ctfe: it won't be applied.
     // Normally we should be going through the cache, however this probably isn't required for this.
