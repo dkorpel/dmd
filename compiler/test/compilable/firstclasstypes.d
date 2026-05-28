@@ -76,12 +76,7 @@ type_t[] integralChain(type_t a)
 static assert(integralChain(byte).length == 4);
 static assert(integralChain(byte)[2] == ushort);
 
-//
-type_t f()
-{
-    return [void[3], void[], void*][0];
-}
-
+type_t f() => [void[3], void[], void*][0];
 static assert(f().stringof == "void[3]");
 
 // Breaking change: this used to equal `typeof(0 ? short.init : ubyte.init)` = `int`
@@ -91,3 +86,37 @@ static assert(typeof(0 ? short : ubyte) == ubyte);
 enum typemap = [int: uint, short: ushort, byte: ubyte, long: ulong];
 static assert(typemap[int] == uint);
 static assert(typemap[short] == ushort);
+
+type_t[] assignElems()
+{
+    type_t[] arr = [int, float];
+    arr[0] = bool;
+    return arr;
+}
+
+static assert(assignElems()[0] == bool);
+
+type_t[] expandLen()
+{
+    type_t[] arr;
+    arr ~= long;
+    arr.length = 3;
+    return arr;
+}
+
+static assert(expandLen().length == 3);
+static assert(expandLen()[0] == long);
+static assert(expandLen()[1] == void); // new elements filled with type_t.init = void
+
+// type_t.init = void (the simplest type, analogous to null pointer)
+void test(T)()
+{
+    static assert(is(T == type_t));
+    T x = T.init; // was ICE: null returned from defaultInit
+    static assert(is(typeof(x) == type_t));
+}
+
+void testTemplate()
+{
+    test!type_t();
+}
