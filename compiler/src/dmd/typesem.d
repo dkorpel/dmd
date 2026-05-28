@@ -5879,6 +5879,19 @@ void resolve(Type mt, Loc loc, Scope* sc, out Expression pe, out Type pt, out Ds
             error(loc, "forward reference to `%s`", mt.toErrMsg());
             goto Lerr;
         }
+        // First-class types: typeof(type_t_expr) unwraps to the contained type via CTFE.
+        // typeof(int) already works because TypeExp.type == int (not TypeTtype).
+        // This handles non-trivial expressions like typeof(cond ? A : B) or typeof(arr[i]).
+        // If the expression is not a compile-time constant, fall back to type_t.
+        if (t.ty == Ttype)
+        {
+            const errors = global.startGagging();
+            Expression folded = mt.exp.ctfeInterpret();
+            const failed = global.endGagging(errors);
+            if (!failed)
+                if (auto te = folded.isTypeExp())
+                    t = te.type;
+        }
         if (mt.idents.length == 0)
         {
             returnType(t.addMod(mt.mod));

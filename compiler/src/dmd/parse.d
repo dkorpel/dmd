@@ -5105,19 +5105,6 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
                     auto t = new AST.TypeIdentifier(loc, tokThis);
                     v = new AST.AliasDeclaration(loc, ident, t);
                 }
-                else if (compileEnv.firstClassTypes &&
-                    !isDeclaration(&token, NeedDeclaratorId.no, TOK.reserved, null))
-                {
-                    // First-class types: `alias X = expr;` where the RHS is
-                    // not a declaration/type, treat as a `type_t`-valued
-                    // expression (same lookahead strategy as template alias
-                    // parameter defaults).
-                    parseAttributes();
-                    if (udas)
-                        error("user-defined attributes not allowed for `alias` declarations");
-                    auto e = parseAssignExp();
-                    v = new AST.AliasDeclaration(loc, ident, e);
-                }
                 else
                 {
                     // type
@@ -7346,8 +7333,6 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
         //printf("isDeclaration(needId = %d)\n", needId);
         int haveId = 0;
         int haveTpl = 0;
-        bool seenExternLinkage = false;
-        Token* tAfterBasicType = null;
 
         while (1)
         {
@@ -7361,15 +7346,6 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
                 t = peek(t);
                 continue;
             }
-            if (t.value == TOK.extern_ && peek(t).value == TOK.leftParenthesis)
-            {
-                // extern(linkage) type
-                t = peek(t);
-                if (!skipParens(t, &t))
-                    goto Lisnot;
-                seenExternLinkage = true;
-                continue;
-            }
             break;
         }
 
@@ -7377,22 +7353,8 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
         {
             goto Lisnot;
         }
-        tAfterBasicType = t;
         if (!isDeclarator(&t, &haveId, &haveTpl, endtok, needId != NeedDeclaratorId.mustIfDstyle))
-        {
-            // After extern(linkage), `Type(params)` is an unambiguous function type
-            // e.g. `alias F = extern(Windows) int(HWND hwnd, int n);`
-            if (seenExternLinkage && tAfterBasicType.value == TOK.leftParenthesis)
-            {
-                t = tAfterBasicType;
-                if (!isParameters(&t))
-                    goto Lisnot;
-                haveId = 0;
-                haveTpl = 0;
-            }
-            else
-                goto Lisnot;
-        }
+            goto Lisnot;
         // needed for `__traits(compiles, arr[0] = 0)`
         if (!haveId && t.value == TOK.assign)
             goto Lisnot;

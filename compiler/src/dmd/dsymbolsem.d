@@ -6843,32 +6843,6 @@ void aliasSemantic(AliasDeclaration ds, Scope* sc)
     if (!ds.originalType && ds.type)
         ds.originalType = ds.type.syntaxCopy();
 
-    // First-class types: `alias X = expr;` where expr yields a `type_t` value.
-    if (ds.aliasExp && !ds.type)
-    {
-        Expression e = ds.aliasExp.expressionSemantic(sc);
-        if (e.op == EXP.error)
-            return errorRet();
-        if (e.type is null || e.type.ty != Ttype)
-        {
-            error(ds.loc, "cannot alias expression `%s` of type `%s`, must be a `type_t` value",
-                e.toErrMsg(), e.type ? e.type.toChars() : "(null)");
-            return errorRet();
-        }
-        e = e.ctfeInterpret();
-        auto te = e.isTypeExp();
-        if (!te)
-        {
-            error(ds.loc, "alias initializer `%s` did not fold to a type at compile time",
-                ds.aliasExp.toErrMsg());
-            return errorRet();
-        }
-        ds.type = te.type;
-        ds.originalType = te.type;
-        ds.aliassym = null;
-        return normalRet();
-    }
-
     if (ds.aliassym)
     {
         auto fd = ds.aliassym.isFuncLiteralDeclaration();
@@ -6984,30 +6958,9 @@ void aliasSemantic(AliasDeclaration ds, Scope* sc)
 
         if (e)  // Try to convert Expression to Dsymbol
         {
-            // First-class types: try expression semantic to see if it yields a type_t value.
-            if (global.params.firstClassTypes && (!e.type || e.type.ty != Ttype))
-            {
-                Expression e2 = e.expressionSemantic(sc2);
-                if (e2 && e2.type && e2.type.toBasetype().ty == Ttype)
-                    e = e2;
-            }
             // TupleExp is naturally converted to a TupleDeclaration
             if (auto te = e.isTupleExp())
                 s = new TupleDeclaration(te.loc, ds.ident, cast(Objects*)te.exps);
-            else if (global.params.firstClassTypes && e.type && e.type.toBasetype().ty == Ttype)
-            {
-                // alias X = expr; where expr yields a type_t value (e.g. types[0])
-                auto folded = e.ctfeInterpret();
-                if (auto teExp = folded.isTypeExp())
-                {
-                    ds.type = teExp.type;
-                    ds.originalType = teExp.type;
-                    ds.aliassym = null;
-                    return normalRet();
-                }
-                .error(ds.loc, "alias initializer `%s` did not fold to a type at compile time", e.toErrMsg());
-                return errorRet();
-            }
             else
             {
                 s = getDsymbol(e);
@@ -7208,20 +7161,6 @@ private void aliasAssignSemantic(AliasAssign ds, Scope* sc)
             // TupleExp is naturally converted to a TupleDeclaration
             if (auto te = e.isTupleExp())
                 s = new TupleDeclaration(te.loc, ds.ident, cast(Objects*)te.exps);
-            else if (global.params.firstClassTypes && e.type && e.type.toBasetype().ty == Ttype)
-            {
-                auto folded = e.ctfeInterpret();
-                if (auto teExp = folded.isTypeExp())
-                {
-                    aliassym.type = teExp.type;
-                    aliassym.aliassym = null;
-                    aliassym.ignoreRead = false;
-                    ds.semanticRun = PASS.semanticdone;
-                    return;
-                }
-                .error(ds.loc, "alias initializer `%s` did not fold to a type at compile time", e.toErrMsg());
-                return errorRet();
-            }
             else
             {
                 s = getDsymbol(e);
