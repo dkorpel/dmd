@@ -24,6 +24,7 @@ import dmd.dstruct;
 import dmd.dsymbol;
 import dmd.dsymbolsem;
 import dmd.dtemplate;
+import dmd.errors : ErrorSinkCompiler;
 import dmd.errorsink;
 import dmd.expression;
 import dmd.func;
@@ -67,7 +68,7 @@ struct Diagnostic
 /// ErrorSink that captures diagnostics into a list instead of printing them.
 /// One instance is owned by Lsp and reused across requests; callers must
 /// clear `diagnostics` before each analysis run.
-class ErrorSinkLsp : ErrorSinkNull
+class ErrorSinkLsp : ErrorSinkCompiler
 {
     Diagnostic[] diagnostics;
 
