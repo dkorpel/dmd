@@ -7658,6 +7658,13 @@ MATCH deduceType(scope RootObject o, scope Scope* sc, scope Type tparam,
             if (tparam.ty == Tarray && e.elements && e.elements.length)
             {
                 Type tn = (cast(TypeDArray)tparam).next;
+                // A `type_t[]` literal's elements are TypeExps whose `.type` is
+                // the wrapped type, not `type_t`.
+                if (e.type.toBasetype().nextOf().ty == Ttype)
+                {
+                    result = deduceType(e.type.toBasetype().nextOf(), sc, tn, parameters, dedtypes, wm);
+                    return;
+                }
                 result = MATCH.exact;
                 if (e.basis)
                 {

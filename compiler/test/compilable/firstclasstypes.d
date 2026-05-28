@@ -113,6 +113,20 @@ static assert(expandLen().length == 3);
 static assert(expandLen()[0] == long);
 static assert(expandLen()[1] == void); // new elements filled with type_t.init = void
 
+// `~=` of a variable (not a literal) must copy the wrapped type, not blank it
+type_t[] appendVar()
+{
+    type_t[] r;
+    type_t t = long;
+    r ~= t;
+    return r;
+}
+
+static assert(appendVar()[0] == long);
+
+// `.dup` must deduce its element type from a `type_t[]` literal
+static assert([int, long].dup[1] == long);
+
 // type_t.init = void (the simplest type, analogous to null pointer)
 void test(T)()
 {

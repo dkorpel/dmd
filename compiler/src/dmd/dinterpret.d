@@ -3558,8 +3558,10 @@ public:
                     // we can skip duplication, because it gets copied later anyway.
                     if (newval.type.ty != Tarray)
                     {
+                        const isTypeVal = newval.op == EXP.type;
                         newval = copyLiteral(newval).copy();
-                        newval.type = e.e2.type; // repaint type
+                        if (!isTypeVal) // a `type_t` value keeps its wrapped type as `.type`
+                            newval.type = e.e2.type; // repaint type
                     }
                     else
                     {
