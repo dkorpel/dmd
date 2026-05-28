@@ -5665,6 +5665,17 @@ public:
         Expression e1 = interpretRegion(e.e1, istate, goal);
         if (exceptionOrCant(e1))
             return;
+        // First-class types: a qualifier applied to a type_t value (e.g. `const(t)`)
+        // is a cast to `type_t` carrying the qualifier in `mod`; apply it to the
+        // wrapped type, yielding a new type_t value.
+        if (e.mod != cast(ubyte)~0 && e.e1.type && e.e1.type.toBasetype().ty == Ttype)
+        {
+            if (auto te = e1.isTypeExp())
+            {
+                result = ctfeEmplaceExp!TypeExp(e.loc, te.type.addMod(e.mod));
+                return;
+            }
+        }
         // If the expression has been cast to void, do nothing.
         if (e.to.ty == Tvoid)
         {

@@ -811,6 +811,10 @@ Expression optimize(Expression e, int result, bool keepLvalue = false)
             return;
         if (!keepLvalue)
             e.e1 = fromConstInitializer(result, e.e1);
+        // First-class types: a qualifier cast over a type_t value (e.g. `const(t)`)
+        // is resolved at CTFE; leave it untouched rather than folding it away.
+        if (e.e1.type && e.e1.type.toBasetype().ty == Ttype)
+            return;
         if (e.e1 == e1old && e.e1.op == EXP.arrayLiteral && e.type.toBasetype().ty == Tpointer && e.e1.type.toBasetype().ty != Tsarray)
         {
             // Casting this will result in the same expression, and

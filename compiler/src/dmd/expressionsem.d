@@ -6308,6 +6308,19 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
             }
             //printf("e = %s %s\n", Token.toChars(e.op), e.toChars());
             e = e.expressionSemantic(sc);
+
+            // First-class types: `const(t)` etc. on a `type_t` value resolves to
+            // the value expression with its qualifier dropped.  Re-apply the
+            // qualifier as a mod-only cast that CTFE turns into a new type_t value.
+            if (sc.previews.firstClassTypes && exp.type.mod &&
+                e.type && e.type.toBasetype().ty == Ttype)
+            {
+                auto ce = new CastExp(exp.loc, e, exp.type.mod);
+                ce.to = Type.ttype;
+                ce.type = Type.ttype;
+                ce.trusted = true;
+                e = ce;
+            }
         }
         else if (t)
         {
