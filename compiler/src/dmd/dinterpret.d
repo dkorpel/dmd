@@ -5275,6 +5275,36 @@ public:
 
         if (e.e1.type.toBasetype().ty == Taarray)
         {
+            // First-class types: type_t AA literals are not lowered; handle directly.
+            if (global.params.firstClassTypes)
+            {
+                auto taa = e.e1.type.toBasetype().isTypeAArray();
+                if (taa.index.ty == Ttype || taa.nextOf().ty == Ttype)
+                {
+                    Expression e1 = interpretRegion(e.e1, istate);
+                    if (exceptionOrCant(e1))
+                        return;
+                    Expression e2 = interpretRegion(e.e2, istate);
+                    if (exceptionOrCant(e2))
+                        return;
+                    auto aae = e1.isAssocArrayLiteralExp();
+                    if (!aae)
+                    {
+                        error(e.loc, "`%s` is null, cannot index it", e.e1.toErrMsg());
+                        result = CTFEExp.cantexp;
+                        return;
+                    }
+                    Expression val = findKeyInAA(e.loc, aae, e2);
+                    if (!val)
+                    {
+                        error(e.loc, "key not found in associative array");
+                        result = CTFEExp.cantexp;
+                        return;
+                    }
+                    result = val;
+                    return;
+                }
+            }
             assert(false, "indexing AA should have been lowered in semantic analysis");
         }
 

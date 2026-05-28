@@ -6115,6 +6115,11 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
 
         auto aaType = aaExp.type.toBasetype().isTypeAArray();
         assert(aaType);
+        // First-class types: type_t has no runtime representation; keep AA as a
+        // compile-time literal so CTFE can handle it directly.
+        if (global.params.firstClassTypes &&
+            (aaType.index.ty == Ttype || aaType.nextOf().ty == Ttype))
+            return;
         Expression hookFunc = new IdentifierExp(aaExp.loc, Id.empty);
         hookFunc = new DotIdExp(aaExp.loc, hookFunc, Id.object);
         auto keytype = aaType.index.substWildTo(MODFlags.const_);
@@ -18698,6 +18703,10 @@ void semanticTypeInfo(Scope* sc, Type t)
 
     void visitAArray(TypeAArray t)
     {
+        // First-class types: type_t has no runtime representation; skip TypeInfo.
+        if (global.params.firstClassTypes &&
+            (t.index.ty == Ttype || t.nextOf().ty == Ttype))
+            return;
         semanticTypeInfo(sc, t.index);
         semanticTypeInfo(sc, t.next);
 
@@ -19729,6 +19738,11 @@ private Expression buildAAIndexRValueX(Type t, Expression eaa, Expression ekey, 
 {
     auto taa = t.toBasetype().isTypeAArray();
     if (!taa)
+        return null;
+    // First-class types: type_t has no runtime representation; skip lowering
+    // so CTFE can handle the indexing directly.
+    if (global.params.firstClassTypes &&
+        (taa.index.ty == Ttype || taa.nextOf().ty == Ttype))
         return null;
 
     auto loc = eaa.loc;

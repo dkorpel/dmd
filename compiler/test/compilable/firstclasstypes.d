@@ -86,3 +86,8 @@ static assert(f().stringof == "void[3]");
 
 // Breaking change: this used to equal `typeof(0 ? short.init : ubyte.init)` = `int`
 static assert(typeof(0 ? short : ubyte) == ubyte);
+
+//
+enum typemap = [int: uint, short: ushort, byte: ubyte, long: ulong];
+static assert(typemap[int] == uint);
+static assert(typemap[short] == ushort);

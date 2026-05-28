@@ -1016,6 +1016,9 @@ private extern(C++) final class StaticAAVisitor : SemanticTimeTransitiveVisitor
     {
         if (!aaExp.lowering)
             expressionSemantic(aaExp, sc);
+        // First-class types: type_t AA literals are not lowered to a runtime struct.
+        if (!aaExp.lowering)
+            return;
         assert(aaExp.lowering);
         if (!(storage_class & STC.manifest)) // manifest constants create runtime copies
             if (!aaExp.loweringCtfe)
