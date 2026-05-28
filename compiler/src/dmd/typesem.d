@@ -267,6 +267,19 @@ Type nextOf(Type _this)
     return null;
 }
 
+/*************************************
+ * Returns: whether a type is `type_t`, or a pointer / enum / array thereof
+ */
+bool usesTtype(Type t)
+{
+    if (!t)
+        return false;
+    Type tt = t.toBasetype();
+    while (tt.nextOf())
+        tt = tt.nextOf().toBasetype();
+    return tt.ty == Ttype;
+}
+
 /***************************
  * Look for bugs in constructing types.
  */
@@ -7813,7 +7826,7 @@ Expression defaultInit(Type mt, Loc loc, const bool isCfile = false)
         case Tdelegate:
         case Tclass:    return new NullExp(loc, mt);
         case Tnoreturn: return visitNoreturn(mt.isTypeNoreturn());
-        case Ttype:     return new TypeExp(loc, Type.ttype);
+        case Ttype:     return new TypeExp(loc, Type.tvoid); // type_t.init == void
 
         default:        return mt.isTypeBasic() ?
                                 visitBasic(cast(TypeBasic)mt) :

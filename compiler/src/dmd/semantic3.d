@@ -309,8 +309,8 @@ private extern(C++) final class Semantic3Visitor : Visitor
         if (!funcdecl.inferRetType && f.next.ty == Terror)
             return;
 
-        // `type_t` functions skip codegen
-        if (sc.previews.firstClassTypes && f.next && f.next.toBasetype().ty == Ttype)
+        // Functions returning type_t have no runtime code
+        if (sc.previews.firstClassTypes && usesTtype(f.next))
             funcdecl.skipCodegen = true;
 
         if (!funcdecl.fbody && funcdecl.inferRetType && !f.next)

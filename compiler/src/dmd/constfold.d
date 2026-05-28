@@ -1628,7 +1628,10 @@ UnionExp Cat(Loc loc, Type type, Expression e1, Expression e2)
         assert(ue.exp().type);
         return ue;
     }
-    else if ((e1.op == EXP.arrayLiteral || e1.op == EXP.null_) && e1.type.toBasetype().nextOf() && e1.type.toBasetype().nextOf().equals(e2.type))
+    else if ((e1.op == EXP.arrayLiteral || e1.op == EXP.null_) && e1.type.toBasetype().nextOf() &&
+        (e1.type.toBasetype().nextOf().equals(e2.type) ||
+         // A `type_t` element is a TypeExp whose `.type` is the type value, not `type_t`
+         (e1.type.toBasetype().nextOf().ty == Ttype && e2.op == EXP.type)))
     {
         auto elems = (e1.op == EXP.arrayLiteral)
                 ? copyElements(e1) : new Expressions();

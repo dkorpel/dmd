@@ -840,6 +840,16 @@ void runDeferredSemantic3()
     a.setDim(0);
 }
 
+/*************************************
+ * Returns: Whether a variable has no runtime code
+ *
+ * `type_t` variables are CTFE-only
+ */
+bool skipCodeGen(VarDeclaration v)
+{
+    return usesTtype(v.type);
+}
+
 bool isOverlappedWith(VarDeclaration _this, VarDeclaration v)
 {
     import dmd.typesem : size;
@@ -3470,14 +3480,8 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
         }
 
         // Functions using type_t are CTFE only
-        if (dsym.type.toBasetype().ty == Ttype)
-        {
-            if (sc.func)
-            {
-                // printf("skip func = %s\n", sc.func.toChars);
-                sc.func.skipCodegen = true;
-            }
-        }
+        if (sc.func && usesTtype(dsym.type))
+            sc.func.skipCodegen = true;
 
         dsym.semanticRun = PASS.semanticdone;
 

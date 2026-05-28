@@ -43,7 +43,7 @@ import dmd.dscope;
 import dmd.dstruct;
 import dmd.dsymbol;
 import dmd.dsymbolsem : hasPointers, hasStaticCtorOrDtor, include, isFuncHidden,
-                        isAbstract, toAlias, fillVtbl;
+                        isAbstract, toAlias, fillVtbl, skipCodeGen;
 import dmd.dtemplate;
 import dmd.errors;
 import dmd.errorsink;
@@ -462,13 +462,8 @@ void toObjFile(Dsymbol ds, bool multiobj)
             }
 
             // `type_t` variables skip codegen
-            {
-                Type tt = vd.type.toBasetype();
-                while (tt.nextOf())
-                    tt = tt.nextOf().toBasetype();
-                if (tt.ty == Ttype)
-                    return;
-            }
+            if (skipCodeGen(vd))
+                return;
 
             if (vd.aliasTuple)
             {

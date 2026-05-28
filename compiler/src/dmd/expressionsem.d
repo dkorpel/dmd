@@ -13574,7 +13574,10 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
             if (checkNewEscape(*sc, exp.e2, false))
                 return setError();
 
-            auto ecast = exp.e2.castTo(sc, tb1next);
+            // A `type_t` element is a TypeExp value; keep it raw rather than
+            // casting (which would lose the wrapped type identity).
+            auto ecast = (sc.previews.firstClassTypes && tb1next.ty == Ttype)
+                ? exp.e2 : exp.e2.castTo(sc, tb1next);
             if (auto ce = ecast.isCastExp())
                 ce.trusted = true;
 
@@ -13608,7 +13611,8 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
             return setError();
         }
 
-        if (exp.e2.checkValue() || exp.e2.checkSharedAccess(sc))
+        if ((!(sc.previews.firstClassTypes && tb1next.ty == Ttype) && exp.e2.checkValue()) ||
+            exp.e2.checkSharedAccess(sc))
             return setError();
 
         exp.type = exp.e1.type;
