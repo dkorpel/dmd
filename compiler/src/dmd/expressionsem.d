@@ -14978,22 +14978,33 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
         }
         // First-class types: `==`/`!=` between two `type_t` values compares
         // wrapped types by mangle identity.
-        if (global.params.firstClassTypes &&
-            (exp.e1.op == EXP.type || exp.e2.op == EXP.type ||
-             exp.e1.type && exp.e1.type.ty == Ttype ||
-             exp.e2.type && exp.e2.type.ty == Ttype))
+        // Only intercept when both sides are type_t values (non-tuple TypeExp, or
+        // a variable of type type_t).  Mixed comparisons fall through to the
+        // normal "incompatible types" error.  Empty-tuple TypeExps (Seq!()) also
+        // fall through so the existing issue-12520 handler works.
+        if (global.params.firstClassTypes)
         {
-            auto t1 = exp.e1.isTypeExp();
-            auto t2 = exp.e2.isTypeExp();
-            if (t1 && t2)
+            static bool isTypeTval(Expression e)
             {
-                bool eq = t1.type == t2.type;
-                result = IntegerExp.createBool(eq == (exp.op == EXP.equal));
+                if (auto te = e.isTypeExp())
+                    return te.type !is null && !te.type.isTypeTuple();
+                return e.type !is null && e.type.ty == Ttype;
+            }
+            if (isTypeTval(exp.e1) && isTypeTval(exp.e2))
+            {
+                auto t1 = exp.e1.isTypeExp();
+                auto t2 = exp.e2.isTypeExp();
+                if (t1 && t2)
+                {
+                    bool eq = t1.type == t2.type;
+                    result = IntegerExp.createBool(eq == (exp.op == EXP.equal));
+                    return;
+                }
+                // At least one side is a runtime type_t variable — leave for CTFE
+                exp.type = Type.tbool;
+                result = exp;
                 return;
             }
-            exp.type = Type.tbool;
-            result = exp;
-            return;
         }
         if (exp.e1.op == EXP.type || exp.e2.op == EXP.type)
         {

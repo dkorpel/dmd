@@ -286,9 +286,17 @@ Expression implicitCastTo(Expression e, Scope* sc, Type t)
 
     Expression visitType(TypeExp e)
     {
-        // First-class types: a TypeExp is a value of `type_t`
-        if (global.params.firstClassTypes && t.ty == Ttype)
-            return e;
+        // Only apply first-class-type rules for non-tuple TypeExps (i.e. actual type values).
+        // Empty-tuple TypeExps (e.g. from AliasSeq!()) are not type_t values.
+        if (global.params.firstClassTypes && !e.type.isTypeTuple())
+        {
+            if (t.ty == Ttype)
+                return e;
+            // TypeExp cannot implicitly convert to any non-type_t type
+            error(e.loc, "`type_t` value `%s` cannot be implicitly converted to `%s`",
+                e.type.toChars(), t.toChars());
+            return ErrorExp.get();
+        }
         return visit(e);
     }
 
@@ -1531,9 +1539,8 @@ MATCH implicitConvTo(Expression e, Type t)
 
     MATCH visitType(TypeExp e)
     {
-        // First-class types: a TypeExp is a value of `type_t`
-        if (global.params.firstClassTypes && t.ty == Ttype)
-            return MATCH.exact;
+        if (global.params.firstClassTypes && !e.type.isTypeTuple())
+            return t.ty == Ttype ? MATCH.exact : MATCH.nomatch;
         return visit(e);
     }
 
