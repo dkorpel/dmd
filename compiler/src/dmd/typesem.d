@@ -7535,6 +7535,8 @@ Expression dotExp(Type mt, Scope* sc, Expression e, Identifier ident, DotExpFlag
                     resTy = Type.tsize_t;
                 else if (ident == Id.stringof || ident == Id._mangleof)
                     resTy = Type.tstring;
+                else if (ident == Id._init)
+                    resTy = Type.ttype;
                 if (resTy)
                 {
                     auto die = new DotIdExp(e.loc, e, ident);
@@ -7811,6 +7813,7 @@ Expression defaultInit(Type mt, Loc loc, const bool isCfile = false)
         case Tdelegate:
         case Tclass:    return new NullExp(loc, mt);
         case Tnoreturn: return visitNoreturn(mt.isTypeNoreturn());
+        case Ttype:     return new TypeExp(loc, Type.ttype);
 
         default:        return mt.isTypeBasic() ?
                                 visitBasic(cast(TypeBasic)mt) :

@@ -358,9 +358,9 @@ extern (C++) final class ToClassesVisitor : Visitor
                 classifyStructFields(foffset, ts);
             else if (auto tsa = ftype.isTypeSArray())
                 classifyStaticArrayElements(foffset, tsa);
-            else if (ftype.toBasetype().isTypeNoreturn())
+            else if (ftype.toBasetype().isTypeNoreturn() || ftype.toBasetype().ty == Ttype)
             {
-                // Ignore noreturn members with sizeof = 0
+                // Ignore sizeof=0 members (noreturn, type_t)
                 // Potential custom alignment changes are factored in above
                 nfields--;
                 continue;

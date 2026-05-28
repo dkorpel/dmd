@@ -12286,8 +12286,8 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
             if (e2x.op == EXP.error)
                 return setResult(e2x);
             // We delay checking the value for structs/classes as these might have
-            // an opAssign defined.
-            if ((t1.ty != Tstruct && t1.ty != Tclass && e2x.checkValue()) ||
+            // an opAssign defined. type_t accepts TypeExp values directly.
+            if ((t1.ty != Tstruct && t1.ty != Tclass && t1.ty != Ttype && e2x.checkValue()) ||
                 e2x.checkSharedAccess(sc))
                 return setError();
 
@@ -12929,7 +12929,8 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
                 return setResult(res);
             }
 
-            if (!sc.needsCodegen()) // Compile-time only case
+            if (!sc.needsCodegen() || // Compile-time only case
+                (sc.previews.firstClassTypes && tn.ty == Ttype)) // type_t is CTFE-only
             {
                 exp.type = Type.tsize_t;
                 return setResult(exp);
@@ -13690,7 +13691,8 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
 
                 Expression eValue2;
                 Expression value2 = exp.e2;
-                if (!value2.isVarExp() && !value2.isConst())
+                if (!value2.isVarExp() && !value2.isConst() &&
+                    !(sc.previews.firstClassTypes && value2.isTypeExp()))
                 {
                     /* Before the template hook, this check was performed in e2ir.d
                      * for expressions like `a ~= a[$-1]`. Here, $ will be modified
