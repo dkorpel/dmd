@@ -1923,8 +1923,8 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
             // preserve enum type for final switches
             if (auto tenum = ss.condition.type.isTypeEnum())
                 te = tenum;
-            // First-class types: a `type_t` value is a valid switch condition;
-            // cases are matched via type identity under CTFE.
+
+            // Allow `switch (type_t)` for CTFE type_t functions
             if (sc.previews.firstClassTypes && ss.condition.type.ty == Ttype)
                 break;
             if (ss.condition.type.isString())
@@ -2316,8 +2316,7 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
                 cs.exp = se;
             else if (sc.previews.firstClassTypes && cs.exp.isTypeExp())
             {
-                // First-class types: a `type_t` case label, matched by type
-                // identity under CTFE.
+                // Allow `case int:` for `type_t` CTFE functions
             }
             else if (!cs.exp.isIntegerExp() && !cs.exp.isErrorExp())
             {
@@ -2702,9 +2701,8 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
                 rs.exp = resolveAliasThis(sc, rs.exp);
 
             rs.exp = resolveProperties(sc, rs.exp);
-            // First-class types: a TypeExp returned from a `type_t`-returning
-            // function is a value, not a type-as-symbol — skip the
-            // "type is not an expression" check.
+
+            // Skip the "type is not an expression" check for `type_t`
             const ttypeReturn = sc.previews.firstClassTypes
                 && tret && tret.ty == Ttype && rs.exp.isTypeExp();
             if (!ttypeReturn && !rs.exp.hasValidType())

@@ -134,7 +134,7 @@ private struct Previews
         this.noSharedAccess = params.noSharedAccess == FeatureState.enabled;
         this.rvalueRefParam = params.rvalueRefParam == FeatureState.enabled;
         this.safer = params.safer == FeatureState.enabled;
-        this.firstClassTypes = params.firstClassTypes == FeatureState.enabled;
+        this.firstClassTypes = params.firstClassTypes;
         this.systemVariables = params.systemVariables;
         this.fieldwise = params.fieldwise == FeatureState.enabled;
     }

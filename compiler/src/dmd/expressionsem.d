@@ -3890,9 +3890,7 @@ private Type arrayExpressionToCommonType(Scope* sc, ref Expressions exps)
         {
             if (sc.previews.firstClassTypes)
             {
-                // First-class types: a TypeExp element is a `type_t` value.
-                // Don't overwrite e.type (TypeExp uses it for the wrapped
-                // type); record the common type and skip combine.
+                // TypeExp uses .type for wrapped type
                 if (t0 && !t0.equals(Type.ttype))
                     t0 = Type.terror;
                 else
@@ -6115,8 +6113,8 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
 
         auto aaType = aaExp.type.toBasetype().isTypeAArray();
         assert(aaType);
-        // First-class types: type_t has no runtime representation; keep AA as a
-        // compile-time literal so CTFE can handle it directly.
+
+        // type_t literal is CTFE only
         if (sc.previews.firstClassTypes &&
             (aaType.index.ty == Ttype || aaType.nextOf().ty == Ttype))
             return;
@@ -9894,7 +9892,7 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
         // First-class types: a deferred property lookup on a non-foldable
         // `type_t` value (e.g. a parameter) is already typed; resolution
         // happens at CTFE call site once the value substitutes to a TypeExp.
-        if (exp.ttypeDeferred)
+        if (exp.type && exp.e1.type && exp.e1.type.toBasetype().ty == Ttype)
         {
             result = exp;
             return;

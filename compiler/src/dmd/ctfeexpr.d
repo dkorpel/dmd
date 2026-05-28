@@ -401,8 +401,7 @@ private UnionExp paintTypeOntoLiteralCopy(Type type, Expression lit)
         emplaceExp!(UnionExp)(&ue, lit);
         return ue;
     }
-    // First-class types: a TypeExp keeps its wrapped type as `.type`.
-    // Painting `type_t` over it would destroy the wrapped type.
+    // A TypeExp keeps its wrapped type as `.type`, don't paint over it
     if (lit.op == EXP.type)
     {
         emplaceExp!(UnionExp)(&ue, lit);
@@ -990,7 +989,7 @@ bool isCtfeComparable(Expression e)
         // TypeInfo object is comparable in CTFE
         if (e.op == EXP.typeid_)
             return true;
-        // First-class types: `type_t` values are comparable via mangle identity.
+
         if (e.op == EXP.type)
             return true;
         return false;
@@ -1171,8 +1170,7 @@ private int ctfeRawCmp(Loc loc, Expression e1, Expression e2, bool identity = fa
         assert(t2);
         return t1 != t2;
     }
-    // First-class types: compare wrapped types of two `type_t` values
-    // by mangle identity.
+
     if (e1.op == EXP.type && e2.op == EXP.type)
     {
         return e1.isTypeExp().type != e2.isTypeExp().type;

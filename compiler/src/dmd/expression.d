@@ -2180,7 +2180,6 @@ extern (C++) final class DotIdExp : UnaExp
     bool noderef;       // true if the result of the expression will never be dereferenced
     bool wantsym;       // do not replace Symbol with its initializer during semantic()
     bool arrow;         // ImportC: if -> instead of .
-    bool ttypeDeferred; // first-class types: defer property lookup until CTFE substitutes e1
 
     extern (D) this(Loc loc, Expression e, Identifier ident) @safe
     {

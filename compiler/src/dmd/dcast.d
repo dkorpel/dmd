@@ -3459,7 +3459,6 @@ Type typeMerge(Scope* sc, EXP op, ref Expression pe1, ref Expression pe2)
         return Lret(towards);
     }
 
-    // First-class types: ternary between two `type_t` values yields a `type_t` value
     if (sc.previews.firstClassTypes &&
         (e1.isTypeExp() || e1.type.ty == Ttype) &&
         (e2.isTypeExp() || e2.type.ty == Ttype))

@@ -1743,10 +1743,8 @@ public:
         {
             printf("%s DotIdExp.interpret() %s\n", e.loc.toChars(), e.toChars());
         }
-        // First-class types: a deferred property lookup on a `type_t`-typed
-        // expression — interpret e1 to a TypeExp, then forward to the
-        // wrapped type's getProperty.
-        if (!e.ttypeDeferred)
+
+        if (!e.e1.type || e.e1.type.toBasetype().ty != Ttype)
         {
             error(e.loc, "cannot interpret `%s` at compile time", e.toErrMsg());
             result = CTFEExp.cantexp;
@@ -5275,7 +5273,7 @@ public:
 
         if (e.e1.type.toBasetype().ty == Taarray)
         {
-            // First-class types: type_t AA literals are not lowered; handle directly.
+            // type_t AA literals are not lowered; handle directly
             auto taa = e.e1.type.toBasetype().isTypeAArray();
             if (taa.index.ty == Ttype || taa.nextOf().ty == Ttype)
             {

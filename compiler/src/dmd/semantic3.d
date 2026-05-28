@@ -309,8 +309,7 @@ private extern(C++) final class Semantic3Visitor : Visitor
         if (!funcdecl.inferRetType && f.next.ty == Terror)
             return;
 
-        // First-class types: a function returning `type_t` is CTFE-only and
-        // skips codegen (its body may contain types-as-values).
+        // `type_t` functions skip codegen
         if (sc.previews.firstClassTypes && f.next && f.next.toBasetype().ty == Ttype)
             funcdecl.skipCodegen = true;
 

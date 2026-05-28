@@ -5879,10 +5879,7 @@ void resolve(Type mt, Loc loc, Scope* sc, out Expression pe, out Type pt, out Ds
             error(loc, "forward reference to `%s`", mt.toErrMsg());
             goto Lerr;
         }
-        // First-class types: typeof(type_t_expr) unwraps to the contained type via CTFE.
-        // typeof(int) already works because TypeExp.type == int (not TypeTtype).
-        // This handles non-trivial expressions like typeof(cond ? A : B) or typeof(arr[i]).
-        // If the expression is not a compile-time constant, fall back to type_t.
+        // typeof(<type_t expr>) unwraps to the contained type via CTFE.
         if (t.ty == Ttype)
         {
             const errors = global.startGagging();
@@ -7516,8 +7513,8 @@ Expression dotExp(Type mt, Scope* sc, Expression e, Identifier ident, DotExpFlag
 
     Expression visitTtype(TypeTtype mt)
     {
-        // First-class types: try to constant-fold `e` to a TypeExp,
-        // then forward the property to the wrapped Type.
+        // Example: (b ? int : bool).sizeof
+        // Try to constant-fold to TypeExp, then forward the property to the wrapped Type
         if (e.op != EXP.type)
         {
             const errors = global.startGagging();
@@ -7542,7 +7539,6 @@ Expression dotExp(Type mt, Scope* sc, Expression e, Identifier ident, DotExpFlag
                 {
                     auto die = new DotIdExp(e.loc, e, ident);
                     die.type = resTy;
-                    die.ttypeDeferred = true;
                     return die;
                 }
                 error(e.loc, "expression `%s` of type `type_t` must be a compile-time constant", e.toChars());

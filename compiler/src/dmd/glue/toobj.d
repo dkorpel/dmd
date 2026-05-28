@@ -461,7 +461,7 @@ void toObjFile(Dsymbol ds, bool multiobj)
                 return;
             }
 
-            // First-class types: `type_t` variables (including arrays of `type_t`) exist only at compile-time
+            // `type_t` variables skip codegen
             {
                 Type tt = vd.type.toBasetype();
                 while (tt.nextOf())

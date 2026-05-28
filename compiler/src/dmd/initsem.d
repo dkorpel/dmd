@@ -421,7 +421,6 @@ Initializer initializerSemantic(Initializer init, Scope* sc, ref Type tx, NeedIn
         }
         if (i.exp.op == EXP.type && sc.previews.firstClassTypes && t.ty == Ttype)
         {
-            // First-class types: a TypeExp is a value of `type_t`
             return i;
         }
         if (i.exp.op == EXP.type)
