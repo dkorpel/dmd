@@ -1923,6 +1923,10 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
             // preserve enum type for final switches
             if (auto tenum = ss.condition.type.isTypeEnum())
                 te = tenum;
+            // First-class types: a `type_t` value is a valid switch condition;
+            // cases are matched via type identity under CTFE.
+            if (global.params.firstClassTypes && ss.condition.type.ty == Ttype)
+                break;
             if (ss.condition.type.isString())
             {
                 // If it's not an array, cast it to one
@@ -2310,6 +2314,11 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
 
             if (StringExp se = cs.exp.toStringExp())
                 cs.exp = se;
+            else if (global.params.firstClassTypes && cs.exp.isTypeExp())
+            {
+                // First-class types: a `type_t` case label, matched by type
+                // identity under CTFE.
+            }
             else if (!cs.exp.isIntegerExp() && !cs.exp.isErrorExp())
             {
                 error(cs.loc, "`case` expression must be a compile-time `string` or an integral constant, not `%s`", cs.exp.toErrMsg());
