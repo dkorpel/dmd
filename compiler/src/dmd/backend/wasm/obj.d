@@ -433,7 +433,7 @@ public WasmFuncType buildFuncType(type* t, Symbol* sfunc)
         {
             int paramCount = 0;
             bool allI32 = true;
-            for (param_t* p = t.Tparamtypes; p; p = p.Pnext)
+            foreach (param_t p; *t.Tparamtypes)
             {
                 if (!p.Ptype || !typeHasValue(p.Ptype.Tty))
                     continue;
@@ -473,7 +473,7 @@ public WasmFuncType buildFuncType(type* t, Symbol* sfunc)
 
     const tym_t fty = tybasic(t.Tty);
 
-    for (param_t* p = t.Tparamtypes; p; p = p.Pnext)
+    foreach (param_t p; *t.Tparamtypes)
     {
         if (!p.Ptype || !typeHasValue(p.Ptype.Tty))
             continue;
@@ -1248,6 +1248,7 @@ void WasmObj_term(const(char)[] objfilename)
 }
 
 import dmd.backend.el;
+import dmd.backend.mem;
 import dmd.backend.oper;
 
 // RTLSYMs like _d_arraybounds_indexp and libc functions like memcmp are
@@ -1270,21 +1271,34 @@ void guessTypeFromCall(ref Symbol s, ref elem e)
     s.Stype.Tcount++;
     if (e.E2)
     {
-        void appendArgTypes(elem* p)
+        int countArgs(elem* p)
         {
-            if (!p)
-                return;
-            if (p.Eoper == OPparam)
-            {
-                // Match consumeCallArg walk order (E2 then E1) so the
-                // synthesised param types line up with the actual push order.
-                appendArgTypes(p.E2);
-                appendArgTypes(p.E1);
-                return;
-            }
-            param_append_type(&s.Stype.Tparamtypes, type_fake(tybasic(p.Ety)));
+            if (!p) return 0;
+            if (p.Eoper == OPparam) return countArgs(p.E2) + countArgs(p.E1);
+            return 1;
         }
-        appendArgTypes(e.E2);
+        const nargs = countArgs(e.E2);
+        if (nargs)
+        {
+            param_t* paramtypes = cast(param_t*)mem_calloc(nargs * param_t.sizeof);
+            int idx = 0;
+            void fillArgTypes(elem* p)
+            {
+                if (!p) return;
+                if (p.Eoper == OPparam)
+                {
+                    // Match consumeCallArg walk order (E2 then E1) so the
+                    // synthesised param types line up with the actual push order.
+                    fillArgTypes(p.E2);
+                    fillArgTypes(p.E1);
+                    return;
+                }
+                paramtypes[idx++].Ptype = type_fake(tybasic(p.Ety));
+            }
+            fillArgTypes(e.E2);
+            s.Stype.Tparamtypes = cast(param_t[]*)mem_malloc(param_t[].sizeof);
+            *s.Stype.Tparamtypes = paramtypes[0 .. nargs];
+        }
         // Synthesised arity is full and fixed — flag so variadic() returns false
         // and we don't emit a spurious trailing varargs i32 pointer.
         s.Stype.Tflags |= TF.fixed;

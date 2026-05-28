@@ -133,11 +133,11 @@ bool typeHasValue(tym_t ty)
 /// after the recursion completes).
 struct CallCtx
 {
-    param_t* nextParam;  /// next declared param (null when out of declared)
-    uint skipCount;      /// number of ABI-prepended leaves (hidden ret ptr, ethis,
-                         /// nested-link) consumed before nextParam advances
-    bool isCVariadic;    /// true when callee takes `...`
-    elem*[] varArgs;     /// args collected for the variadic shadow-frame spill
+    param_t[] remainingParams;  /// remaining declared params (empty when out of declared)
+    uint skipCount;             /// number of ABI-prepended leaves (hidden ret ptr, ethis,
+                                /// nested-link) consumed before remainingParams advances
+    bool isCVariadic;           /// true when callee takes `...`
+    elem*[] varArgs;            /// args collected for the variadic shadow-frame spill
 }
 
 /// Per-function code-generation state
@@ -926,10 +926,10 @@ private void consumeCallArg(ref WasmCG cg, elem* e)
         cg.genElem(e);
         return;
     }
-    param_t* p = ctx.nextParam;
-    if (p)
+    if (ctx.remainingParams.length > 0)
     {
-        ctx.nextParam = p.Pnext;
+        param_t* p = &ctx.remainingParams[0];
+        ctx.remainingParams = ctx.remainingParams[1 .. $];
         if (paramIsSlice(p))
         {
             emitSliceArg(cg, e);
@@ -981,7 +981,7 @@ private bool genCall(ref WasmCG cg, elem* e)
     // C variadic requires Tparamtypes set (bare TYnfunc/TYjfunc with no
     // params is an unprototyped RTL decl, not a real variadic).
     CallCtx ctx;
-    ctx.nextParam = fty ? fty.Tparamtypes : null;
+    ctx.remainingParams = (fty && fty.Tparamtypes) ? *fty.Tparamtypes : null;
     ctx.isCVariadic = fty !is null && fty.Tparamtypes !is null && variadic(fty);
 
     // Hidden-ret pointer (struct/array return) and ethis/nested static link
