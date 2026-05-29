@@ -433,7 +433,8 @@ public WasmFuncType buildFuncType(type* t, Symbol* sfunc)
         {
             int paramCount = 0;
             bool allI32 = true;
-            foreach (param_t p; *t.Tparamtypes)
+            // Tparamtypes is null for a zero-parameter function.
+            foreach (param_t p; t.Tparamtypes ? *t.Tparamtypes : null)
             {
                 if (!p.Ptype || !typeHasValue(p.Ptype.Tty))
                     continue;
@@ -473,7 +474,8 @@ public WasmFuncType buildFuncType(type* t, Symbol* sfunc)
 
     const tym_t fty = tybasic(t.Tty);
 
-    foreach (param_t p; *t.Tparamtypes)
+    // Tparamtypes is null for a zero-parameter function.
+    foreach (param_t p; t.Tparamtypes ? *t.Tparamtypes : null)
     {
         if (!p.Ptype || !typeHasValue(p.Ptype.Tty))
             continue;
@@ -735,7 +737,7 @@ private bool emitDataSection(ref OutBuffer out_, ref WasmModule wmod)
         s.writeByte(0x00); // active segment, memory 0
         // offset initializer: i32.const <offset> end
         s.writeByte(OP_I32_CONST); // i32.const
-        s.writeuLEB128(ds.offset);
+        s.writesLEB128(cast(int) ds.offset); // i32.const immediate is signed LEB128
         s.writeByte(OP_END);
         s.writeuLEB128(cast(uint) ds.data.length());
         s.write(ds.data.peekSlice());
@@ -1264,7 +1266,7 @@ void guessTypeFromCall(ref Symbol s, ref elem e)
     if (!s.Stype || !tyfunc(s.Stype.Tty))
         return;
 
-    if (s.Stype.Tparamtypes.length != 0)
+    if (s.Stype.Tparamtypes && s.Stype.Tparamtypes.length != 0)
         return;
 
     s.Stype = type_copy(s.Stype);

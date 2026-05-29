@@ -836,7 +836,7 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
         BlockState* blx = irs.blx;
 
         incUsage(irs, s.loc);
-        if (config.ehmethod == EHmethod.EH_NONE)
+        if (target.isWasm && config.ehmethod == EHmethod.EH_NONE)
         {
             // No exception runtime; evaluate expression for side effects, then halt.
             elem* e2 = toElemDtor(s.exp, irs);
@@ -869,7 +869,7 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
     {
         BlockState* blx = irs.blx;
 
-        if (config.ehmethod == EHmethod.EH_NONE)
+        if (target.isWasm && config.ehmethod == EHmethod.EH_NONE)
         {
             // No exception runtime. Emit just the try body; catch blocks are
             // unreachable (throw generates halt). Skip all EH block machinery.
@@ -1175,7 +1175,7 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
 
         BlockState* blx = irs.blx;
 
-        if (config.ehmethod == EHmethod.EH_NONE)
+        if (target.isWasm && config.ehmethod == EHmethod.EH_NONE)
         {
             // No exception unwinding. Emit try body, then finally body sequentially.
             StmtState mystate = StmtState(stmtstate, s);
