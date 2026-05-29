@@ -282,13 +282,18 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
             // sparse (table would exceed 1024 entries).
             enum maxJumpTableSize = 1024;
 
-            const ulong tableLen64 = cast(ulong)(vmax - vmin) + 1;
-            const bool useBrTable = tableLen64 <= maxJumpTableSize && tableLen64 <= b.Bswitch.length * 4UL + 4;
+            const condType = b.Belem.wasmType;
+            // Compute the span as unsigned to avoid signed overflow when the
+            // case values straddle the full long range. br_table requires an
+            // i32 index, so it is only usable when the switch value is i32.
+            const ulong span = cast(ulong) vmax - cast(ulong) vmin;
+            const bool useBrTable = condType == WASM_I32
+                && span < maxJumpTableSize
+                && span < b.Bswitch.length * 4UL + 4;
 
             if (!useBrTable)
             {
                 // If-else chain: store condition in a local, compare each case.
-                const condType = b.Belem.wasmType;
                 uint condLocal = cg.allocTemp(condType);
                 cg.emit(OP_LOCAL_SET);
                 cg.emitULEB(condLocal);
@@ -327,7 +332,7 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
             }
 
             // Table entries: for each integer value vmin..vmax, find its dest
-            const size_t tableLen = cast(size_t) tableLen64;
+            const size_t tableLen = cast(size_t)(span + 1);
             cg.emit(OP_BR_TABLE);
             cg.emitULEB(cast(uint) tableLen);
             foreach (long v; vmin .. vmax + 1)

@@ -62,7 +62,11 @@ void scanWasmObjModule(void delegate(const(char)[] name, int pickAny) nothrow pA
         while (p < base.length)
         {
             ubyte b = base[p++];
-            result |= (b & 0x7F) << shift;
+            // Bound the shift to the width of `result`; shifting a uint by >= 32
+            // is undefined. Over-long encodings still consume their bytes so the
+            // cursor stays in sync, but bits past bit 31 are dropped.
+            if (shift < 32)
+                result |= cast(uint)(b & 0x7F) << shift;
             if (!(b & 0x80))
                 break;
             shift += 7;
@@ -148,9 +152,10 @@ void scanWasmObjModule(void delegate(const(char)[] name, int pickAny) nothrow pA
                 if (kind == WASM_SYMTAB.FUNCTION || kind == WASM_SYMTAB.GLOBAL ||
                     kind == WASM_SYMTAB.TAG || kind == WASM_SYMTAB.TABLE)
                 {
-                    if (!isUndefined)
-                        readULEB(pos); // index — consume but don't use
-                    if (hasName || isUndefined)
+                    readULEB(pos); // index — always present, consume but don't use
+                    // Name is present for defined symbols, or when the symbol
+                    // carries an explicit name (e.g. a named import).
+                    if (hasName || !isUndefined)
                         symName = readName(pos);
                 }
                 else if (kind == WASM_SYMTAB.DATA)

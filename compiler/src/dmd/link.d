@@ -1185,11 +1185,18 @@ public int runProgram(const char[] exefile, const char*[] runargs, bool verbose,
         if (childpid == 0)
         {
             const(char)[] fn = argv[0].toDString();
+            // For native targets, make it "./fn" so the freshly built
+            // executable in the current directory is run. For WASM, argv[0] is
+            // the wasmtime launcher, which must be located via PATH, so leave
+            // it unprefixed and let execvp search PATH.
+            if (!target.isWasm && !FileName.absolute(fn))
+                fn = FileName.combine(".", fn);
             fn.toCStringThen!((fnp) {
-                    // Use execvp so PATH is searched for the executable.
+                    // Use execvp so PATH is searched for the launcher; a name
+                    // containing a slash (e.g. "./prog") is executed directly.
                     import core.sys.posix.unistd : execvp;
                     execvp(fnp.ptr, argv.tdata());
-                    // If execv returns, it failed to execute
+                    // If execvp returns, it failed to execute
                     perror(fnp.ptr);
                 });
             _exit(-1);
