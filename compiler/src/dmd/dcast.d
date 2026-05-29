@@ -1539,9 +1539,10 @@ MATCH implicitConvTo(Expression e, Type t)
 
     MATCH visitType(TypeExp e)
     {
-        if (!e.type.isTypeTuple())
-            return t.ty == Ttype ? MATCH.exact : MATCH.nomatch;
-        return visit(e);
+        if (e.type.isTypeTuple())
+            return visit(e);
+
+        return t.ty == Ttype ? MATCH.exact : MATCH.nomatch;
     }
 
     switch (e.op)
@@ -3459,9 +3460,7 @@ Type typeMerge(Scope* sc, EXP op, ref Expression pe1, ref Expression pe2)
         return Lret(towards);
     }
 
-    if (sc && sc.previews.firstClassTypes &&
-        (e1.isTypeExp() || e1.type.ty == Ttype) &&
-        (e2.isTypeExp() || e2.type.ty == Ttype))
+    if (sc && sc.previews.firstClassTypes && isTypeTval(e1) && isTypeTval(e2))
     {
         pe1 = e1;
         pe2 = e2;

@@ -10263,32 +10263,6 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
             return;
         }
 
-        // First-class types: functions taking or returning `type_t` are
-        // CTFE-only (no codegen), so they have no runtime address.
-        if (sc.previews.firstClassTypes)
-        {
-            FuncDeclaration fd;
-            if (auto ve = exp.e1.isVarExp())
-                fd = ve.var.isFuncDeclaration();
-            else if (auto dve = exp.e1.isDotVarExp())
-                fd = dve.var.isFuncDeclaration();
-            if (fd)
-            {
-                if (auto tf = fd.type ? fd.type.isTypeFunction() : null)
-                {
-                    bool anyTtype = tf.next && tf.next.ty == Ttype;
-                    if (!anyTtype && tf.parameterList.parameters)
-                        foreach (p; *tf.parameterList.parameters)
-                            if (p.type && p.type.ty == Ttype) { anyTtype = true; break; }
-                    if (anyTtype)
-                    {
-                        error(exp.loc, "cannot take address of CTFE-only function `%s` (signature uses `type_t`)", fd.toChars());
-                        return setError();
-                    }
-                }
-            }
-        }
-
         if (sc.inCfile)
         {
             /* Special handling for &"string"/&(T[]){0, 1}
@@ -15013,12 +14987,6 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
         // fall through so the existing issue-12520 handler works.
         if (sc.previews.firstClassTypes)
         {
-            static bool isTypeTval(Expression e)
-            {
-                if (auto te = e.isTypeExp())
-                    return te.type !is null && !te.type.isTypeTuple();
-                return e.type !is null && e.type.ty == Ttype;
-            }
             if (isTypeTval(exp.e1) && isTypeTval(exp.e2))
             {
                 auto t1 = exp.e1.isTypeExp();
@@ -15485,10 +15453,8 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
             rewriteCNull(exp.e2, t2);
         }
 
-        // First-class types: ternary between two `type_t` values yields `type_t`
         if (sc.previews.firstClassTypes &&
-            (exp.e1.isTypeExp() || t1.ty == Ttype) &&
-            (exp.e2.isTypeExp() || t2.ty == Ttype))
+            isTypeTval(exp.e1) && isTypeTval(exp.e2))
         {
             exp.type = Type.ttype;
         }
@@ -20071,4 +20037,14 @@ BitFieldDeclaration isBitField(Expression e)
         return dve.var.isBitFieldDeclaration();
 
     return null;
+}
+
+/// Returns whether `e` is a first-class types
+/// A tuple-valued TypeExp (e.g. AliasSeq!()) is not a type_t value
+bool isTypeTval(Expression e)
+{
+    if (auto te = e.isTypeExp())
+        return te.type !is null && !te.type.isTypeTuple();
+
+    return e.type.ty == Ttype;
 }

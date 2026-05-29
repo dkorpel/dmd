@@ -2,13 +2,15 @@
 REQUIRED_ARGS: -preview=firstClassTypes
 TEST_OUTPUT:
 ---
-fail_compilation/firstclasstypes.d(19): Error: cannot take address of CTFE-only function `firstIf` (signature uses `type_t`)
-fail_compilation/firstclasstypes.d(20): Error: cannot take address of CTFE-only function `alwaysInt` (signature uses `type_t`)
-fail_compilation/firstclasstypes.d(23): Error: `type_t` value `int` cannot be used in arithmetic
-fail_compilation/firstclasstypes.d(24): Error: `type_t` value `int` cannot be used in arithmetic
+fail_compilation/firstclasstypes.d(25): Error: `type_t` value `int` cannot be used in arithmetic
 fail_compilation/firstclasstypes.d(26): Error: `type_t` value `int` cannot be used in arithmetic
+fail_compilation/firstclasstypes.d(28): Error: `type_t` value `int` cannot be used in arithmetic
 ---
 */
+
+
+
+
 
 type_t firstIf(bool b, type_t a, type_t c) { return b ? a : c; }
 type_t alwaysInt() { return int; }

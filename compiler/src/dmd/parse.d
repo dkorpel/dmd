@@ -8929,6 +8929,9 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
                     e = new AST.TypeExp(loc, t);
                     if (token.value != TOK.leftParenthesis)
                     {
+                        if (!compileEnv.firstClassTypes)
+                            error("`(arguments)` expected following `%s`, not `%s`",
+                                t.toChars(), token.toChars());
                         return e;
                     }
                     auto args = new AST.Expressions();

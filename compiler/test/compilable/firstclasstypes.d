@@ -139,3 +139,12 @@ void testTemplate()
 {
     test!type_t();
 }
+
+// Applying a qualifier to a runtime type_t value (not just a literal)
+type_t addConst(type_t t)     { return const(t); }
+type_t addShared(type_t t)    { return shared(t); }
+type_t addImmutable(type_t t) { return immutable(t); }
+
+static assert(addImmutable(int) == immutable(int));
+static assert(addConst(addShared(int)) == const(shared(int)));
+

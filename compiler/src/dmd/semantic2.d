@@ -1017,9 +1017,16 @@ private extern(C++) final class StaticAAVisitor : SemanticTimeTransitiveVisitor
         if (!aaExp.lowering)
             expressionSemantic(aaExp, sc);
 
-        // type_t AA are CTFE only
+        // A `type_t`-keyed/valued AA is CTFE-only and is never lowered to a
+        // runtime hook. Only skip for that case; a null lowering for any other
+        // reason should still trip the assert below.
         if (!aaExp.lowering)
-            return;
+        {
+            auto taa = aaExp.type ? aaExp.type.toBasetype().isTypeAArray() : null;
+            if (sc.previews.firstClassTypes && taa &&
+                (taa.index.ty == Ttype || taa.nextOf().ty == Ttype))
+                return;
+        }
 
         assert(aaExp.lowering);
         if (!(storage_class & STC.manifest)) // manifest constants create runtime copies

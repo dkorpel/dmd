@@ -5892,7 +5892,9 @@ void resolve(Type mt, Loc loc, Scope* sc, out Expression pe, out Type pt, out Ds
             error(loc, "forward reference to `%s`", mt.toErrMsg());
             goto Lerr;
         }
-        // typeof(<type_t expr>) unwraps to the contained type via CTFE.
+        // typeof(<type_t expr>) unwraps to the contained type via CTFE when the
+        // expression is a compile-time constant; otherwise it stays `type_t`
+        // (e.g. `typeof(arr[i])` for a `type_t[]` element resolves to `type_t`).
         if (t.ty == Ttype)
         {
             const errors = global.startGagging();
