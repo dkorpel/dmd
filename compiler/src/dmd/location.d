@@ -288,23 +288,9 @@ struct SourceLoc
 /// Given the `index` of a `Loc`, find the index in `locFileTable` of the corresponding `BaseLoc`
 private size_t fileTableIndex(uint index) nothrow @nogc
 {
-    // To speed up linear find, we cache the last hit and compare that first,
-    // since usually we stay in the same file for some time when resolving source locations.
-    // If it's a different file now, either scan forwards / backwards
-    size_t i = lastFileTableIndex;
-    if (index >= locFileTable[i].startIndex)
-    {
-        while (i + 1 < locFileTable.length && index >= locFileTable[i+1].startIndex)
-            i++;
-    }
-    else
-    {
-        while (index < locFileTable[i].startIndex)
-            i--;
-    }
-
-    lastFileTableIndex = i;
-    return i;
+    // lastFileTableIndex caches the last hit; usually we stay in the same file for a
+    // while when resolving source locations, so the cached/adjacent entry is the answer.
+    return findInterval!(i => locFileTable[i].startIndex)(locFileTable.length, index, lastFileTableIndex);
 }
 
 /**
@@ -449,11 +435,11 @@ struct BaseLoc
 }
 
 /**
- * In a sorted sequence of `length` interval-start offsets (where `start(0) == 0`),
- * find the largest index `i` such that `start(i) <= offset`, i.e. the interval that
- * `offset` falls into. A valid index always exists since `start(0) == 0 <= offset`.
+ * In a sorted sequence of `length` interval-start offsets, find the largest index `i`
+ * such that `start(i) <= offset`, i.e. the interval that `offset` falls into. The caller
+ * must ensure `start(0) <= offset` so that a valid index always exists.
  *
- * Used for both the line table and the #line/#file substitution table.
+ * Used for the line table, the #line/#file substitution table, and the global file table.
  *
  * Params:
  *   start = accessor returning the start offset of interval `i`
@@ -463,7 +449,7 @@ struct BaseLoc
  *           makes sequential (forward or backward) access O(1) amortized
  * Returns: index of the interval containing `offset`
  */
-private size_t findInterval(alias start)(size_t length, uint offset, ref size_t cache) @nogc nothrow @safe
+private size_t findInterval(alias start)(size_t length, uint offset, ref size_t cache) @nogc nothrow
 {
     size_t i = cache;
 
