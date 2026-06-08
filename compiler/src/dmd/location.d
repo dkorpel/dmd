@@ -431,152 +431,68 @@ struct BaseLoc
         return substitute(sl);
     }
 
+    /// Find the substitution (#file / #line directive) active at file `offset`
     private size_t getSubstitutionIndex(uint offset) @nogc
     {
         if (substitutions.length <= 1)
             return 0;
-
-        // Check if the offset falls within the current cached substitution or the next one
-        if (lastSubstIndex < substitutions.length - 1)
-        {
-            // For the current substitution's range
-            if (substitutions[lastSubstIndex].startIndex <= offset &&
-                (lastSubstIndex == substitutions.length - 1 ||
-                 substitutions[lastSubstIndex + 1].startIndex > offset))
-                return lastSubstIndex;
-
-            // For the next substitution's range
-            if (lastSubstIndex + 1 < substitutions.length - 1 &&
-                substitutions[lastSubstIndex + 1].startIndex <= offset &&
-                substitutions[lastSubstIndex + 2].startIndex > offset)
-            {
-                lastSubstIndex++;
-                return lastSubstIndex;
-            }
-
-            // For the previous substitution's range
-            if (lastSubstIndex > 0 &&
-                substitutions[lastSubstIndex - 1].startIndex <= offset &&
-                substitutions[lastSubstIndex].startIndex > offset)
-            {
-                lastSubstIndex--;
-                return lastSubstIndex;
-            }
-        }
-        else if (lastSubstIndex == substitutions.length - 1 &&
-                 substitutions[lastSubstIndex].startIndex <= offset)
-        {
-            // Last substitution case
-            return lastSubstIndex;
-        }
-
-        // Fall back to binary search, but start near
-        size_t lo = 0;
-        size_t hi = substitutions.length - 1;
-
-        // Adjust the range based on the offset relative to lastSubstIndex
-        if (offset < substitutions[lastSubstIndex].startIndex)
-        {
-            // Search backward
-            lo = 0;
-            hi = lastSubstIndex;
-        }
-        else
-        {
-            // Search forward
-            lo = lastSubstIndex;
-            hi = substitutions.length - 1;
-        }
-
-        size_t mid = 0;
-        while (lo <= hi)
-        {
-            mid = lo + (hi - lo) / 2;
-            if (substitutions[mid].startIndex <= offset)
-            {
-                if (mid == substitutions.length - 1 || substitutions[mid + 1].startIndex > offset)
-                {
-                    lastSubstIndex = mid; // Update cache
-                    return mid;
-                }
-
-                lo = mid + 1;
-            }
-            else
-            {
-                hi = mid - 1;
-            }
-        }
-        assert(0);
+        return findInterval!(i => substitutions[i].startIndex)(substitutions.length, offset, lastSubstIndex);
     }
 
-    /// Binary search the index in `this.lines` corresponding to `offset`
-    /// lastLineIndex cache to avoid full binary search when possible
+    /// Find the index in `this.lines` of the line containing file `offset`
     private size_t getLineIndex(uint offset) @nogc
     {
         if (lines.length <= 1)
             return 0;
-
-        if (lastLineIndex < lines.length - 1)
-        {
-            if (lines[lastLineIndex] <= offset && offset < lines[lastLineIndex + 1])
-                return lastLineIndex;
-
-            if (lastLineIndex + 1 < lines.length - 1 &&
-                lines[lastLineIndex + 1] <= offset && offset < lines[lastLineIndex + 2])
-            {
-                lastLineIndex++;
-                return lastLineIndex;
-            }
-
-            if (lastLineIndex > 0 &&
-                lines[lastLineIndex - 1] <= offset && offset < lines[lastLineIndex])
-            {
-                lastLineIndex--;
-                return lastLineIndex;
-            }
-        }
-        else if (lastLineIndex == lines.length - 1 && lines[lastLineIndex] <= offset)
-        {
-            return lastLineIndex;
-        }
-
-        // Fall back to binary search
-        size_t lo = 0;
-        size_t hi = lines.length - 1;
-
-        if (offset < lines[lastLineIndex])
-        {
-            lo = 0;
-            hi = lastLineIndex;
-        }
-        else
-        {
-            lo = lastLineIndex;
-            hi = lines.length - 1;
-        }
-
-        size_t mid = 0;
-        while (lo <= hi)
-        {
-            mid = lo + (hi - lo) / 2;
-            if (lines[mid] <= offset)
-            {
-                if (mid == lines.length - 1 || lines[mid + 1] > offset)
-                {
-                    lastLineIndex = mid; // Update cache
-                    return mid;
-                }
-
-                lo = mid + 1;
-            }
-            else
-            {
-                hi = mid - 1;
-            }
-        }
-        assert(0);
+        return findInterval!(i => lines[i])(lines.length, offset, lastLineIndex);
     }
+}
+
+/**
+ * In a sorted sequence of `length` interval-start offsets (where `start(0) == 0`),
+ * find the largest index `i` such that `start(i) <= offset`, i.e. the interval that
+ * `offset` falls into. A valid index always exists since `start(0) == 0 <= offset`.
+ *
+ * Used for both the line table and the #line/#file substitution table.
+ *
+ * Params:
+ *   start = accessor returning the start offset of interval `i`
+ *   length = number of intervals
+ *   offset = byte offset to locate
+ *   cache = result of the previous call, used as a search hint and updated in place;
+ *           makes sequential (forward or backward) access O(1) amortized
+ * Returns: index of the interval containing `offset`
+ */
+private size_t findInterval(alias start)(size_t length, uint offset, ref size_t cache) @nogc nothrow @safe
+{
+    size_t i = cache;
+
+    // Fast path: sequential access lands in the cached interval or one adjacent to it
+    if (start(i) <= offset)
+    {
+        if (i + 1 == length || start(i + 1) > offset)
+            return i;
+        if (i + 2 == length || start(i + 2) > offset)
+            return cache = i + 1;
+    }
+    else if (i > 0 && start(i - 1) <= offset)
+        return cache = i - 1;
+
+    // Binary search the largest index with `start(i) <= offset`, narrowed using the cache.
+    // The fast path above already proved the adjacent intervals don't contain `offset`,
+    // so exclude them from the range (saves an iteration on near jumps).
+    const backward = offset < start(i);
+    size_t lo = backward ? 0 : i + 1;
+    size_t hi = backward ? i - 1 : length - 1;
+    while (lo < hi)
+    {
+        const mid = (lo + hi + 1) / 2; // bias up so mid > lo, guaranteeing progress
+        if (start(mid) <= offset)
+            lo = mid;
+        else
+            hi = mid - 1;
+    }
+    return cache = lo;
 }
 
 // Whenever a new source file is parsed, start the `Loc` from this index (0 is reserved for Loc.init)
