@@ -12,6 +12,14 @@ import dmd.backend.wasm.codgen;
 
 nothrow:
 
+alias _compare_fp_t = extern(C) nothrow int function(const void*, const void*);
+extern(C) void qsort(void* base, size_t nmemb, size_t size, _compare_fp_t compar);
+
+private extern(C) int cmpInt(scope const void* p1, scope const void* p2)
+{
+    return *cast(const(int)*)p1 - *cast(const(int)*)p2;
+}
+
 // Per-block metadata computed during analysis
 private struct BlkInfo
 {
@@ -147,9 +155,8 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
                     dests ~= idx;
             }
 
-            import std.algorithm : sort; // TODO: don't import Phobos
-
-            sort(dests);
+            if (dests.length > 1)
+                qsort(dests.ptr, dests.length, int.sizeof, &cmpInt);
 
             // Open one wrapper block per unique dest, outermost (highest idx) first.
             // Frame closeAfter = destIdx - 1 so the block ends just before that block.

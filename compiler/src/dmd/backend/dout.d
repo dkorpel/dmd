@@ -561,9 +561,6 @@ Symbol* out_string_literal(const(char)* str, uint len, uint sz)
     {
         case OBJ_ELF:
         case OBJ_MACH:
-            s.Sseg = objmod.string_literal_segment(sz);
-            break;
-
         case OBJ_WASM:
             s.Sseg = objmod.string_literal_segment(sz);
             break;
