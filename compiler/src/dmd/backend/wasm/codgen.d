@@ -1706,8 +1706,6 @@ bool genElem(ref WasmCG cg, elem* e)
             else
             {
                 emitCondToI32(cg, e.E2);
-                cg.emitConst(OP_I32_CONST, 0);
-                cg.emit(OP_I32_NE);
             }
             cg.emit(OP_ELSE);
             cg.emitConst(OP_I32_CONST, 0);
