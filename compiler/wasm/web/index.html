@@ -91,6 +91,10 @@ int[] squares()
 </textarea>
     <div class="bar"><button class="run" id="run" title="Run (Ctrl+Enter / ⌘+Enter)">Go ▶</button></div>
   </div>
+  <div class="pane" data-pane="lex" data-title="Tokens">
+    <h2 draggable="true" title="Internal lexer output: one line per source line, listing that line's TOK enum member names (e.g. int32, identifier, add). Tokens carrying a value get it as a parenthesized postfix, e.g. float32Literal(3.5).">Tokens (lexer)</h2>
+    <pre id="lex"></pre>
+  </div>
   <div class="pane" data-pane="parse" data-title="Parse tree">
     <h2 draggable="true">Parse tree (printAST)</h2>
     <pre id="parse"></pre>
@@ -102,6 +106,10 @@ int[] squares()
   <div class="pane" data-pane="ast" data-title="Lowered AST">
     <h2 draggable="true">Lowered AST (-vcg-ast)</h2>
     <pre id="ast"></pre>
+  </div>
+  <div class="pane" data-pane="ir" data-title="Backend IR">
+    <h2 draggable="true" title="Backend intermediate representation: the block/elem graph of each function just after lowering, before code generation. Nodes are labelled with the backend enum member names (OPadd, TYint, BC.goto_).">Backend IR (block/elem graph)</h2>
+    <pre id="ir"></pre>
   </div>
   <div class="pane" data-pane="asm" data-title="Disassembly">
     <h2 draggable="true">x86-64 disassembly (-vasm)</h2>
@@ -251,11 +259,13 @@ function ansiToHtml(text) {
 
 function run() {
     const t0 = performance.now();
-    const { parse, sema, ast, asm, errors, diagnostics } = compile($("src").value);
+    const { lex, parse, sema, ast, ir, asm, errors, diagnostics } = compile($("src").value);
     const ms = (performance.now() - t0).toFixed(1);
+    $("lex").textContent = lex || "(no output)";
     $("parse").textContent = parse || "(no output)";
     $("sema").textContent = sema || "(no output)";
     $("ast").textContent = ast || "(no output)";
+    $("ir").textContent = ir || "(no code generated)";
     $("asm").textContent = asm || "(no code generated)";
     $("diag").innerHTML = diagnostics ? ansiToHtml(diagnostics) : "(no diagnostics)";
     $("status").textContent = `errors: ${errors} · ${ms} ms`;
@@ -268,7 +278,15 @@ function run() {
         $("run").addEventListener("click", run);
         // Ctrl+Enter (or ⌘+Enter on macOS) runs from anywhere, incl. the editor.
         document.addEventListener("keydown", (e) => {
-            if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); run(); }
+            if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); runNow(); }
+        });
+        // Auto-recompile shortly after the user stops typing (or pastes — paste
+        // fires `input` too). 500 ms debounce keeps fast keystrokes from thrashing.
+        let timer = null;
+        const runNow = () => { clearTimeout(timer); run(); };
+        $("src").addEventListener("input", () => {
+            clearTimeout(timer);
+            timer = setTimeout(run, 500);
         });
         run();
     } catch (e) {

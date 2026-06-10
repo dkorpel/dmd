@@ -80,6 +80,14 @@ import dmd.funcsem : genCfunc;
 import dmd.utils;
 
 /**
+ * Optional hook invoked for each function right after its backend IR (the
+ * `block`/`elem` graph) is built and before it is handed to the code generator,
+ * which mutates the graph. Used by the WebAssembly playground to dump the IR;
+ * `null` (the default) in normal builds, so this costs nothing.
+ */
+public __gshared void function(Symbol* sfunc, block* startblock) nothrow backendIRDumpHook;
+
+/**
  * Generate code for `modules` and write objects/libraries
  *
  * Params:
@@ -998,6 +1006,9 @@ void FuncDeclaration_toObjFile(FuncDeclaration fd, bool multiobj)
         cstate.CSpsymtab = symtabsave;
         return;
     }
+
+    if (backendIRDumpHook)
+        backendIRDumpHook(s, f.Fstartblock);
 
     writefunc(s); // hand off to backend
 
