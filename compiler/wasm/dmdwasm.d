@@ -17,6 +17,10 @@ __gshared OutBuffer astBuf;
 // Parser AST dump (printAST of the module, before semantic), read back by JS.
 __gshared OutBuffer parseBuf;
 
+// printAST dump of the module *after* semantic analysis, read back by JS.
+// Same internal-class-name format as parseBuf, but with types/lowerings filled in.
+__gshared OutBuffer semaBuf;
+
 extern (C):
 
 // JS writes the source here (NUL-terminated not required); returns the buffer.
@@ -38,6 +42,8 @@ const(char)* dmdwasm_ast_ptr() => cast(const(char)*) astBuf[].ptr;
 size_t       dmdwasm_ast_len() => astBuf[].length;
 const(char)* dmdwasm_parse_ptr() => cast(const(char)*) parseBuf[].ptr;
 size_t       dmdwasm_parse_len() => parseBuf[].length;
+const(char)* dmdwasm_sema_ptr() => cast(const(char)*) semaBuf[].ptr;
+size_t       dmdwasm_sema_len() => semaBuf[].length;
 uint         dmdwasm_errors()  => global.errors;
 
 /// Initialize global DMD state (subset of frontend.initDMD, Phobos-free).
@@ -54,9 +60,13 @@ private void initFrontend()
     import dmd.root.ctfloat : CTFloat;
     import dmd.tokens : initTokens;
     import dmd.imphint : initImportHints;
+    import dmd.console : createConsole;
+    import core.stdc.stdio : stderr;
 
     global._init();
     global.params.useUnitTests = false;
+    global.params.v.color = true;
+    global.console = cast(void*) createConsole(stderr);
 
     global.errors = 0;
     global.warnings = 0;
@@ -113,6 +123,7 @@ void dmdwasm_run(const(char)* src, size_t len)
     astBuf.reset();
     astBuf.doindent = 1;
     parseBuf.reset();
+    semaBuf.reset();
 
     initFrontend();
 
@@ -142,6 +153,10 @@ void dmdwasm_run(const(char)* src, size_t len)
         m.semantic2(null);
         m.semantic3(null);
     }
+
+    // Dump the AST again after semantic analysis: same internal-class-name
+    // format as the parse tree, but now with types resolved and lowerings applied.
+    printAST(m, semaBuf);
 
     moduleToBuffer(astBuf, /*vcg_ast*/ true, m);
 

@@ -18,6 +18,7 @@ import dmd.dsymbol;
 import dmd.declaration;
 import dmd.func;
 import dmd.attrib;
+import dmd.init;
 import dmd.statement;
 import dmd.expression;
 import dmd.expressionsem : toInteger;
@@ -25,6 +26,7 @@ import dmd.ctfeexpr;
 import dmd.tokens;
 import dmd.visitor;
 import dmd.hdrgen;
+import dmd.asttypename : astTypeName;
 
 /********************
  * Print expression AST data structure to stdout in a nice format.
@@ -68,15 +70,21 @@ void printAST(Dsymbol s, ref OutBuffer buf, int indent = 0)
     if (!s)
         return;
     printIndent(buf, indent);
-    buf.printf("%s `%s`\n", s.kind(), s.toChars());
+    buf.writestring(s.astTypeName());
 
     if (auto ad = s.isAttribDeclaration())
     {
+        printAttribDetail(ad, buf);
+        buf.writeByte('\n');
         if (ad.decl)
             foreach (m; (*ad.decl)[])
                 printAST(m, buf, indent + 2);
+        return;
     }
-    else if (auto fd = s.isFuncDeclaration())
+
+    buf.printf(" `%s`\n", s.toChars());
+
+    if (auto fd = s.isFuncDeclaration())
     {
         if (fd.fbody)
             printAST(fd.fbody, buf, indent + 2);
@@ -85,8 +93,12 @@ void printAST(Dsymbol s, ref OutBuffer buf, int indent = 0)
     {
         if (vd._init)
         {
-            printIndent(buf, indent + 2);
-            buf.printf(".init: %s\n", vd._init.toChars());
+            if (auto ei = vd._init.isExpInitializer())
+            {
+                printIndent(buf, indent + 2);
+                buf.writestring(".init:\n");
+                printAST(ei.exp, buf, indent + 4);
+            }
         }
     }
     else if (auto sds = s.isScopeDsymbol())     // Module, aggregates, enums, templates
@@ -110,57 +122,57 @@ void printAST(Statement s, ref OutBuffer buf, int indent = 0)
     if (!s)
         return;
 
-    void head(string name)
+    void head()
     {
         printIndent(buf, indent);
-        buf.writestring(name);
+        buf.writestring(s.astTypeName());
         buf.writeByte('\n');
     }
 
     if (auto cs = s.isCompoundStatement())
     {
-        head("Compound");
+        head();
         if (cs.statements)
             foreach (st; (*cs.statements)[])
                 printAST(st, buf, indent + 2);
     }
     else if (auto es = s.isExpStatement())
     {
-        head("Exp");
+        head();
         printAST(es.exp, buf, indent + 2);
     }
     else if (auto rs = s.isReturnStatement())
     {
-        head("Return");
+        head();
         printAST(rs.exp, buf, indent + 2);
     }
     else if (auto ifs = s.isIfStatement())
     {
-        head("If");
+        head();
         printAST(ifs.condition, buf, indent + 2);
         printAST(ifs.ifbody, buf, indent + 2);
         printAST(ifs.elsebody, buf, indent + 2);
     }
     else if (auto scs = s.isScopeStatement())
     {
-        head("Scope");
+        head();
         printAST(scs.statement, buf, indent + 2);
     }
     else if (auto ws = s.isWhileStatement())
     {
-        head("While");
+        head();
         printAST(ws.condition, buf, indent + 2);
         printAST(ws._body, buf, indent + 2);
     }
     else if (auto ds = s.isDoStatement())
     {
-        head("Do");
+        head();
         printAST(ds._body, buf, indent + 2);
         printAST(ds.condition, buf, indent + 2);
     }
     else if (auto fs = s.isForStatement())
     {
-        head("For");
+        head();
         printAST(fs._init, buf, indent + 2);
         printAST(fs.condition, buf, indent + 2);
         printAST(fs.increment, buf, indent + 2);
@@ -168,40 +180,40 @@ void printAST(Statement s, ref OutBuffer buf, int indent = 0)
     }
     else if (auto fe = s.isForeachStatement())
     {
-        head("Foreach");
+        head();
         printAST(fe.aggr, buf, indent + 2);
         printAST(fe._body, buf, indent + 2);
     }
     else if (auto fr = s.isForeachRangeStatement())
     {
-        head("ForeachRange");
+        head();
         printAST(fr.lwr, buf, indent + 2);
         printAST(fr.upr, buf, indent + 2);
         printAST(fr._body, buf, indent + 2);
     }
     else if (auto sw = s.isSwitchStatement())
     {
-        head("Switch");
+        head();
         printAST(sw.condition, buf, indent + 2);
         printAST(sw._body, buf, indent + 2);
     }
     else if (auto cas = s.isCaseStatement())
     {
-        head("Case");
+        head();
         printAST(cas.exp, buf, indent + 2);
         printAST(cas.statement, buf, indent + 2);
     }
     else if (auto def = s.isDefaultStatement())
     {
-        head("Default");
+        head();
         printAST(def.statement, buf, indent + 2);
     }
     else
     {
-        // Fall back to the regenerated source for statement kinds without a
-        // dedicated tree dump above.
+        // Statement kinds without a dedicated tree dump above: show the AST
+        // class name plus the regenerated source.
         printIndent(buf, indent);
-        buf.printf("Statement `%s`\n", s.toChars());
+        buf.printf("%s `%s`\n", s.astTypeName().ptr, s.toChars());
     }
 }
 
@@ -209,6 +221,53 @@ private void printIndent(ref OutBuffer buf, int indent)
 {
     foreach (i; 0 .. indent)
         buf.writeByte(' ');
+}
+
+/********************
+ * Append the distinguishing fields of an `AttribDeclaration` to `buf`, e.g. the
+ * linkage of a `LinkDeclaration` or the storage classes of a
+ * `StorageClassDeclaration`, so the dump shows more than the bare class name.
+ */
+private void printAttribDetail(AttribDeclaration ad, ref OutBuffer buf)
+{
+    // LinkDeclaration / PragmaDeclaration have no dedicated `is*` downcast, so
+    // dispatch on the DSYM tag (the same trick the `is*` helpers use).
+    if (ad.dsym == DSYM.linkDeclaration)
+    {
+        auto ld = cast(LinkDeclaration) cast(void*) ad;
+        buf.printf(" extern(%s)", linkageToString(ld.linkage).ptr);
+    }
+    else if (ad.dsym == DSYM.pragmaDeclaration)
+    {
+        auto pd = cast(PragmaDeclaration) cast(void*) ad;
+        buf.printf(" pragma(%s)", pd.ident ? pd.ident.toChars() : "");
+    }
+    else if (auto vd = ad.isVisibilityDeclaration())
+    {
+        buf.writeByte(' ');
+        visibilityToBuffer(buf, vd.visibility);
+    }
+    else if (auto sd = ad.isStorageClassDeclaration())  // also DeprecatedDeclaration
+    {
+        buf.writeByte(' ');
+        if (!stcToBuffer(buf, sd.stc))
+            buf.writestring("(no STC)");
+    }
+    else if (auto al = ad.isAlignDeclaration())
+    {
+        if (al.exps && al.exps.length)
+            buf.printf(" align(%s)", (*al.exps)[0].toChars());
+        else
+            buf.writestring(" align");
+    }
+    else if (auto an = ad.isAnonDeclaration())
+    {
+        buf.writestring(an.isunion ? " union" : " struct");
+    }
+    else if (ad.ident)
+    {
+        buf.printf(" `%s`", ad.ident.toChars());
+    }
 }
 
 private:
@@ -231,54 +290,69 @@ extern (C++) final class PrintASTVisitor : Visitor
         .printIndent(*buf, indent);
     }
 
-    override void visit(Expression e)
+    // Print "<ClassName> [type: <T>]" for `e` at the current indent (the
+    // `type:` part is omitted when the node has no type yet, e.g. pre-semantic).
+    void head(Expression e)
     {
         printIndent(indent);
-        auto s = EXPtoString(e.op);
-        buf.printf("%.*s %s\n", cast(int)s.length, s.ptr, e.type ? e.type.toChars() : "");
+        if (e.type)
+            buf.printf("%s type: %s\n", e.astTypeName().ptr, e.type.toChars());
+        else
+            buf.printf("%s\n", e.astTypeName().ptr);
+    }
+
+    // Compact one-line form for leaf literals: "<ClassName> <value> [type: <T>]".
+    void leaf(Expression e, const(char)* value)
+    {
+        printIndent(indent);
+        if (e.type)
+            buf.printf("%s %s type: %s\n", e.astTypeName().ptr, value, e.type.toChars());
+        else
+            buf.printf("%s %s\n", e.astTypeName().ptr, value);
+    }
+
+    override void visit(Expression e)
+    {
+        head(e);
     }
 
     override void visit(IdentifierExp e)
     {
-        printIndent(indent);
-        buf.printf("Identifier `%s` %s\n", e.ident.toChars(), e.type ? e.type.toChars() : "");
+        leaf(e, e.ident.toChars());
     }
 
     override void visit(IntegerExp e)
     {
-        printIndent(indent);
-        buf.printf("Integer %lld %s\n", e.toInteger(), e.type ? e.type.toChars() : "");
+        OutBuffer v;
+        v.printf("%lld", e.toInteger());
+        leaf(e, v.peekChars());
     }
 
     override void visit(RealExp e)
     {
-        printIndent(indent);
-
         import dmd.hdrgen : floatToBuffer;
-        OutBuffer floatBuf;
-        floatToBuffer(e.type, e.value, floatBuf, false);
-        buf.printf("Real %s %s\n", floatBuf.peekChars(), e.type ? e.type.toChars() : "");
+        OutBuffer v;
+        floatToBuffer(e.type, e.value, v, false);
+        leaf(e, v.peekChars());
     }
 
     override void visit(StructLiteralExp e)
     {
-        printIndent(indent);
-        auto s = EXPtoString(e.op);
-        buf.printf("%.*s %s, %s\n", cast(int)s.length, s.ptr, e.type ? e.type.toChars() : "", e.toChars());
+        head(e);
+        printIndent(indent + 2);
+        buf.printf(".value: %s\n", e.toChars());
     }
 
     override void visit(SymbolExp e)
     {
-        printIndent(indent);
-        buf.printf("Symbol %s\n", e.type ? e.type.toChars() : "");
+        head(e);
         printIndent(indent + 2);
         buf.printf(".var: %s\n", e.var ? e.var.toChars() : "");
     }
 
     override void visit(SymOffExp e)
     {
-        printIndent(indent);
-        buf.printf("SymOff %s\n", e.type ? e.type.toChars() : "");
+        head(e);
         printIndent(indent + 2);
         buf.printf(".var: %s\n", e.var ? e.var.toChars() : "");
         printIndent(indent + 2);
@@ -287,8 +361,7 @@ extern (C++) final class PrintASTVisitor : Visitor
 
     override void visit(VarExp e)
     {
-        printIndent(indent);
-        buf.printf("Var %s\n", e.type ? e.type.toChars() : "");
+        head(e);
         printIndent(indent + 2);
         buf.printf(".var: %s\n", e.var ? e.var.toChars() : "");
     }
@@ -302,8 +375,7 @@ extern (C++) final class PrintASTVisitor : Visitor
 
     override void visit(DotIdExp e)
     {
-        printIndent(indent);
-        buf.printf("DotId %s\n", e.type ? e.type.toChars() : "");
+        head(e);
         printIndent(indent + 2);
         buf.printf(".ident: %s\n", e.ident.toChars());
         .printAST(e.e1, *buf, indent + 2);
@@ -317,9 +389,7 @@ extern (C++) final class PrintASTVisitor : Visitor
 
     override void visit(CastExp e)
     {
-        printIndent(indent);
-        auto s = EXPtoString(e.op);
-        buf.printf("%.*s %s\n", cast(int)s.length, s.ptr, e.type ? e.type.toChars() : "");
+        head(e);
         printIndent(indent + 2);
         buf.printf(".to: %s\n", e.to.toChars());
         .printAST(e.e1, *buf, indent + 2);
@@ -327,8 +397,7 @@ extern (C++) final class PrintASTVisitor : Visitor
 
     override void visit(VectorExp e)
     {
-        printIndent(indent);
-        buf.printf("Vector %s\n", e.type ? e.type.toChars() : "");
+        head(e);
         printIndent(indent + 2);
         buf.printf(".to: %s\n", e.to.toChars());
         .printAST(e.e1, *buf, indent + 2);
@@ -336,15 +405,13 @@ extern (C++) final class PrintASTVisitor : Visitor
 
     override void visit(VectorArrayExp e)
     {
-        printIndent(indent);
-        buf.printf("VectorArray %s\n", e.type ? e.type.toChars() : "");
+        head(e);
         .printAST(e.e1, *buf, indent + 2);
     }
 
     override void visit(DotVarExp e)
     {
-        printIndent(indent);
-        buf.printf("DotVar %s\n", e.type ? e.type.toChars() : "");
+        head(e);
         printIndent(indent + 2);
         buf.printf(".var: %s\n", e.var.toChars());
         .printAST(e.e1, *buf, indent + 2);
@@ -352,39 +419,7 @@ extern (C++) final class PrintASTVisitor : Visitor
 
     override void visit(BinExp e)
     {
-        visit(cast(Expression)e);
-        .printAST(e.e1, *buf, indent + 2);
-        .printAST(e.e2, *buf, indent + 2);
-    }
-
-    override void visit(AssignExp e)
-    {
-        printIndent(indent);
-        buf.printf("Assign %s\n", e.type ? e.type.toChars() : "");
-        .printAST(e.e1, *buf, indent + 2);
-        .printAST(e.e2, *buf, indent + 2);
-    }
-
-    override void visit(ConstructExp e)
-    {
-        printIndent(indent);
-        buf.printf("Construct %s\n", e.type ? e.type.toChars() : "");
-        .printAST(e.e1, *buf, indent + 2);
-        .printAST(e.e2, *buf, indent + 2);
-    }
-
-    override void visit(BlitExp e)
-    {
-        printIndent(indent);
-        buf.printf("Blit %s\n", e.type ? e.type.toChars() : "");
-        .printAST(e.e1, *buf, indent + 2);
-        .printAST(e.e2, *buf, indent + 2);
-    }
-
-    override void visit(IndexExp e)
-    {
-        printIndent(indent);
-        buf.printf("Index %s\n", e.type ? e.type.toChars() : "");
+        head(e);
         .printAST(e.e1, *buf, indent + 2);
         .printAST(e.e2, *buf, indent + 2);
     }

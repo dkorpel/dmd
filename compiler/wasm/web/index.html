@@ -6,30 +6,75 @@
 <title>DMD in the browser</title>
 <style>
   body { font: 14px/1.4 system-ui, sans-serif; margin: 0; background: #1e1e1e; color: #ddd; }
-  header { padding: 10px 16px; background: #252526; border-bottom: 1px solid #333; }
-  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
-  header span { color: #888; font-size: 12px; }
-  .cols { display: flex; height: calc(100vh - 52px); }
-  .pane { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-  .pane + .pane { border-left: 1px solid #333; }
-  .pane h2 { font-size: 12px; text-transform: uppercase; color: #888; margin: 0; padding: 6px 12px; background: #252526; }
+  header { padding: 8px 16px; background: #252526; border-bottom: 1px solid #333;
+           display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; white-space: nowrap; }
+  #status { color: #888; font-size: 12px; }
+  .toolbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .toolbar .group { display: flex; align-items: center; gap: 4px; }
+  .toolbar .sep { width: 1px; align-self: stretch; background: #3a3a3a; margin: 2px 6px; }
+  .toolbar label { font-size: 11px; color: #888; text-transform: uppercase; }
+  .chip { font: 12px system-ui; padding: 4px 10px; background: #2d2d2d; color: #bbb;
+          border: 1px solid #3a3a3a; border-radius: 3px; cursor: pointer; user-select: none; }
+  .chip[aria-pressed="true"] { background: #0e639c; color: #fff; border-color: #0e639c; }
+  .chip:hover { border-color: #1177bb; }
+
+  /* Pane layout container: columns / rows / grid. */
+  .cols { display: flex; height: calc(100vh - 50px); }
+  .cols.rows { flex-direction: column; }
+  .cols.grid { display: grid; grid-auto-flow: row;
+               grid-template-columns: repeat(2, 1fr); grid-auto-rows: 1fr; }
+  .pane { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  .cols:not(.grid) .pane + .pane { border-left: 1px solid #333; }
+  .cols.rows .pane + .pane { border-left: 0; border-top: 1px solid #333; }
+  .cols.grid .pane { border: 1px solid #333; }
+  .pane[hidden] { display: none; }
+  .pane h2 { font-size: 12px; text-transform: uppercase; color: #888; margin: 0;
+             padding: 6px 12px; background: #252526; cursor: grab;
+             display: flex; align-items: center; gap: 6px; }
+  .pane h2::before { content: "⠿"; color: #555; cursor: grab; }
+  .pane.dragging { opacity: 0.4; }
+  .pane.dragover h2 { box-shadow: inset 3px 0 0 #0e639c; }
   textarea, pre { flex: 1; margin: 0; padding: 12px; border: 0; font: 13px/1.45 ui-monospace, monospace;
                   background: #1e1e1e; color: #d4d4d4; white-space: pre; overflow: auto; tab-size: 4; }
   textarea { resize: none; outline: none; }
+  /* ANSI terminal palette for the diagnostics pane (VS Code dark). */
+  .ansi-1 { font-weight: bold; }
+  .ansi-fg-0 { color: #666; } .ansi-fg-1 { color: #cd3131; }
+  .ansi-fg-2 { color: #0dbc79; } .ansi-fg-3 { color: #e5e510; }
+  .ansi-fg-4 { color: #2472c8; } .ansi-fg-5 { color: #bc3fbc; }
+  .ansi-fg-6 { color: #11a8cd; } .ansi-fg-7 { color: #e5e5e5; }
+  .ansi-1.ansi-fg-0 { color: #888; } .ansi-1.ansi-fg-1 { color: #f14c4c; }
+  .ansi-1.ansi-fg-2 { color: #23d18b; } .ansi-1.ansi-fg-3 { color: #f5f543; }
+  .ansi-1.ansi-fg-4 { color: #3b8eea; } .ansi-1.ansi-fg-5 { color: #d670d6; }
+  .ansi-1.ansi-fg-6 { color: #29b8db; } .ansi-1.ansi-fg-7 { color: #fff; }
   .bar { padding: 8px 12px; background: #252526; border-top: 1px solid #333; }
-  button { font: 13px system-ui; padding: 6px 16px; background: #0e639c; color: #fff; border: 0; border-radius: 3px; cursor: pointer; }
-  button:hover { background: #1177bb; }
-  #diag { flex: 0 0 auto; max-height: 25%; color: #f48771; border-top: 1px solid #333; }
-  #status { color: #888; margin-left: 12px; font-size: 12px; }
+  button.run { font: 13px system-ui; padding: 6px 16px; background: #0e639c; color: #fff;
+               border: 0; border-radius: 3px; cursor: pointer; }
+  button.run:hover { background: #1177bb; }
 </style>
 </head>
 <body>
 <header>
-  <h1>DMD compiled to WebAssembly Demo</h1>
+  <h1>DMD in the Browser</h1>
+  <div class="toolbar">
+    <div class="group" id="paneToggles">
+      <label>Panes</label>
+      <!-- toggle chips injected here -->
+    </div>
+    <div class="sep"></div>
+    <div class="group">
+      <label>Layout</label>
+      <button class="chip" data-layout="cols">Columns</button>
+      <button class="chip" data-layout="rows">Rows</button>
+      <button class="chip" data-layout="grid">Grid</button>
+    </div>
+  </div>
+  <span id="status">loading dmd.wasm…</span>
 </header>
-<div class="cols">
-  <div class="pane">
-    <h2>D source</h2>
+<div class="cols" id="cols">
+  <div class="pane" data-pane="src" data-title="D source" draggable="false">
+    <h2 draggable="true">D source</h2>
     <textarea id="src" spellcheck="false">module test;
 
 int add(int a, int b) { return a + b; }
@@ -44,20 +89,27 @@ int[] squares()
     return r;
 }
 </textarea>
-    <div class="bar"><button id="run" title="Run (Ctrl+Enter / ⌘+Enter)">Run ▶</button><span id="status">loading dmd.wasm…</span></div>
+    <div class="bar"><button class="run" id="run" title="Run (Ctrl+Enter / ⌘+Enter)">Go ▶</button></div>
   </div>
-  <div class="pane">
-    <h2>Parse tree (printAST)</h2>
+  <div class="pane" data-pane="parse" data-title="Parse tree">
+    <h2 draggable="true">Parse tree (printAST)</h2>
     <pre id="parse"></pre>
   </div>
-  <div class="pane">
-    <h2>Lowered AST (-vcg-ast)</h2>
-    <pre id="ast"></pre>
-    <pre id="diag"></pre>
+  <div class="pane" data-pane="sema" data-title="Semantic tree">
+    <h2 draggable="true" title="printAST after semantic analysis: like -vcg-ast, but labels nodes by their internal DMD class name (e.g. AddExp, CompoundStatement) instead of regenerated D syntax">Semantic tree (printAST, post-semantic)</h2>
+    <pre id="sema"></pre>
   </div>
-  <div class="pane">
-    <h2>x86-64 disassembly (-vasm)</h2>
+  <div class="pane" data-pane="ast" data-title="Lowered AST">
+    <h2 draggable="true">Lowered AST (-vcg-ast)</h2>
+    <pre id="ast"></pre>
+  </div>
+  <div class="pane" data-pane="asm" data-title="Disassembly">
+    <h2 draggable="true">x86-64 disassembly (-vasm)</h2>
     <pre id="asm"></pre>
+  </div>
+  <div class="pane" data-pane="diag" data-title="Diagnostics">
+    <h2 draggable="true">Diagnostics</h2>
+    <pre id="diag"></pre>
   </div>
 </div>
 
@@ -65,15 +117,147 @@ int[] squares()
 import { loadDmd, compile } from "./glue.js";
 
 const $ = (id) => document.getElementById(id);
+const cols = $("cols");
+const LS_KEY = "dmdwasm.layout.v1";
+
+// ---- Pane show/hide + order + layout, persisted to localStorage ----------
+
+function paneEls() { return [...cols.querySelectorAll(".pane")]; }
+
+function saveState() {
+    const order = paneEls().map((p) => p.dataset.pane);
+    const hidden = paneEls().filter((p) => p.hidden).map((p) => p.dataset.pane);
+    const layout = cols.classList.contains("rows") ? "rows"
+                 : cols.classList.contains("grid") ? "grid" : "cols";
+    localStorage.setItem(LS_KEY, JSON.stringify({ order, hidden, layout }));
+}
+
+function applyLayout(layout) {
+    cols.classList.toggle("rows", layout === "rows");
+    cols.classList.toggle("grid", layout === "grid");
+    for (const b of document.querySelectorAll("[data-layout]"))
+        b.setAttribute("aria-pressed", String(b.dataset.layout === layout));
+}
+
+function setHidden(pane, hidden) {
+    const el = cols.querySelector(`.pane[data-pane="${pane}"]`);
+    if (el) el.hidden = hidden;
+    const chip = document.querySelector(`.chip[data-toggle="${pane}"]`);
+    if (chip) chip.setAttribute("aria-pressed", String(!hidden));
+}
+
+function loadState() {
+    let s = {};
+    try { s = JSON.parse(localStorage.getItem(LS_KEY)) || {}; } catch {}
+    if (Array.isArray(s.order))            // reorder panes to match saved order
+        for (const pane of s.order) {
+            const el = cols.querySelector(`.pane[data-pane="${pane}"]`);
+            if (el) cols.appendChild(el);
+        }
+    for (const p of (s.hidden || [])) setHidden(p, true);
+    applyLayout(s.layout || "cols");
+}
+
+// Build a toggle chip per pane.
+const toggles = $("paneToggles");
+for (const p of paneEls()) {
+    const chip = document.createElement("button");
+    chip.className = "chip";
+    chip.dataset.toggle = p.dataset.pane;
+    chip.textContent = p.dataset.title;
+    chip.setAttribute("aria-pressed", "true");
+    chip.addEventListener("click", () => {
+        setHidden(p.dataset.pane, !p.hidden);
+        saveState();
+    });
+    toggles.appendChild(chip);
+}
+
+// Layout switch.
+for (const b of document.querySelectorAll("[data-layout]"))
+    b.addEventListener("click", () => { applyLayout(b.dataset.layout); saveState(); });
+
+// Drag-to-reorder via the pane header.
+let dragEl = null;
+cols.addEventListener("dragstart", (e) => {
+    const h2 = e.target.closest("h2");
+    if (!h2) return;
+    dragEl = h2.closest(".pane");
+    dragEl.classList.add("dragging");
+    e.dataTransfer.effectAllowed = "move";
+});
+cols.addEventListener("dragend", () => {
+    if (dragEl) dragEl.classList.remove("dragging");
+    for (const p of paneEls()) p.classList.remove("dragover");
+    dragEl = null;
+});
+cols.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    const over = e.target.closest(".pane");
+    if (!over || over === dragEl) return;
+    for (const p of paneEls()) p.classList.toggle("dragover", p === over);
+});
+cols.addEventListener("drop", (e) => {
+    e.preventDefault();
+    const over = e.target.closest(".pane");
+    if (!over || over === dragEl || !dragEl) return;
+    const rect = over.getBoundingClientRect();
+    const vertical = cols.classList.contains("rows");
+    const before = vertical ? (e.clientY < rect.top + rect.height / 2)
+                            : (e.clientX < rect.left + rect.width / 2);
+    cols.insertBefore(dragEl, before ? over : over.nextSibling);
+    saveState();
+});
+
+loadState();
+
+// ---- ANSI rendering -------------------------------------------------------
+
+const ESC = (s) => s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+
+// Render text containing ANSI SGR escape codes (\x1b[...m) as colored HTML.
+// DMD's ANSIConsole emits: \x1b[1m (bold), \x1b[<0|1>;3Nm (fg color), \x1b[m (reset).
+function ansiToHtml(text) {
+    let html = "", bold = false, fg = null;
+    const open = () => {
+        const cls = [bold && "ansi-1", fg !== null && `ansi-fg-${fg}`].filter(Boolean);
+        return cls.length ? `<span class="${cls.join(" ")}">` : "";
+    };
+    let span = false;
+    const flush = (chunk) => {
+        if (!chunk) return;
+        const wrap = open();
+        html += wrap ? wrap + ESC(chunk) + "</span>" : ESC(chunk);
+    };
+    const re = /\x1b\[([0-9;]*)m/g;
+    let last = 0, m;
+    while ((m = re.exec(text)) !== null) {
+        flush(text.slice(last, m.index));
+        last = re.lastIndex;
+        for (const code of (m[1] === "" ? ["0"] : m[1].split(";"))) {
+            const n = parseInt(code, 10);
+            if (n === 0) { bold = false; fg = null; }
+            else if (n === 1) bold = true;
+            else if (n === 22) bold = false;
+            else if (n >= 30 && n <= 37) fg = n - 30;
+            else if (n === 39) fg = null;
+        }
+    }
+    flush(text.slice(last));
+    return html;
+}
+
+// ---- Compile + render -----------------------------------------------------
 
 function run() {
     const t0 = performance.now();
-    const { parse, ast, asm, errors, diagnostics } = compile($("src").value);
+    const { parse, sema, ast, asm, errors, diagnostics } = compile($("src").value);
     const ms = (performance.now() - t0).toFixed(1);
     $("parse").textContent = parse || "(no output)";
+    $("sema").textContent = sema || "(no output)";
     $("ast").textContent = ast || "(no output)";
     $("asm").textContent = asm || "(no code generated)";
-    $("diag").textContent = diagnostics || "";
+    $("diag").innerHTML = diagnostics ? ansiToHtml(diagnostics) : "(no diagnostics)";
     $("status").textContent = `errors: ${errors} · ${ms} ms`;
 }
 
