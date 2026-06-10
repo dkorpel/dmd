@@ -853,6 +853,15 @@ void out_regcand(Symbol*[] psymtab)
 }
 
 
+/**
+ * Optional hook invoked for each function right after the global optimizer has run
+ * and before `codgen` rewrites the `block`/`elem` graph into machine code. Used by
+ * the WebAssembly playground to dump the optimized IR; `null` (the default) in
+ * normal builds, so it costs nothing. The pre-optimization counterpart is
+ * `dmd.glue.backendIRDumpHook`.
+ */
+public __gshared void function(Symbol* sfunc, block* startblock) nothrow @system backendIROptDumpHook;
+
 /**************************
  * Optimize function,
  * generate code for it,
@@ -1040,6 +1049,9 @@ void writefunc2(Symbol* sfunc, ref GlobalOptimizer go, ref BlockOpt bo)
         cod3_align(cseg);               // align start of function
         objmod.func_start(sfunc);
     }
+
+    if (backendIROptDumpHook)
+        backendIROptDumpHook(sfunc, bo.startblock);
 
     //printf("codgen()\n");
     codgen(sfunc);                  // generate code

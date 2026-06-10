@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>DMD in the browser</title>
+<title>DMD explorer</title>
 <style>
   body { font: 14px/1.4 system-ui, sans-serif; margin: 0; background: #1e1e1e; color: #ddd; }
   header { padding: 8px 16px; background: #252526; border-bottom: 1px solid #333;
@@ -56,7 +56,7 @@
 </head>
 <body>
 <header>
-  <h1>DMD in the Browser</h1>
+  <h1>DMD explorer</h1>
   <div class="toolbar">
     <div class="group" id="paneToggles">
       <label>Panes</label>
@@ -107,9 +107,13 @@ int[] squares()
     <h2 draggable="true">Lowered AST (-vcg-ast)</h2>
     <pre id="ast"></pre>
   </div>
-  <div class="pane" data-pane="ir" data-title="Backend IR">
-    <h2 draggable="true" title="Backend intermediate representation: the block/elem graph of each function just after lowering, before code generation. Nodes are labelled with the backend enum member names (OPadd, TYint, BC.goto_).">Backend IR (block/elem graph)</h2>
+  <div class="pane" data-pane="ir" data-title="Backend IR (pre-opt)">
+    <h2 draggable="true" title="Backend intermediate representation: the block/elem graph of each function just after lowering, before the optimizer runs. Nodes are labelled with the backend enum member names (OPadd, TYint, BC.goto_).">Backend IR — before -O (block/elem graph)</h2>
     <pre id="ir"></pre>
+  </div>
+  <div class="pane" data-pane="iropt" data-title="Backend IR (post-opt)">
+    <h2 draggable="true" title="The same block/elem graph after the -O global optimizer (optfunc) has run, immediately before code generation. Diff against the pre-opt pane to see what the optimizer did.">Backend IR — after -O (block/elem graph)</h2>
+    <pre id="iropt"></pre>
   </div>
   <div class="pane" data-pane="asm" data-title="Disassembly">
     <h2 draggable="true">x86-64 disassembly (-vasm)</h2>
@@ -259,13 +263,14 @@ function ansiToHtml(text) {
 
 function run() {
     const t0 = performance.now();
-    const { lex, parse, sema, ast, ir, asm, errors, diagnostics } = compile($("src").value);
+    const { lex, parse, sema, ast, ir, irOpt, asm, errors, diagnostics } = compile($("src").value);
     const ms = (performance.now() - t0).toFixed(1);
     $("lex").textContent = lex || "(no output)";
     $("parse").textContent = parse || "(no output)";
     $("sema").textContent = sema || "(no output)";
     $("ast").textContent = ast || "(no output)";
     $("ir").textContent = ir || "(no code generated)";
+    $("iropt").textContent = irOpt || "(no code generated)";
     $("asm").textContent = asm || "(no code generated)";
     $("diag").innerHTML = diagnostics ? ansiToHtml(diagnostics) : "(no diagnostics)";
     $("status").textContent = `errors: ${errors} · ${ms} ms`;
