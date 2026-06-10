@@ -98,5 +98,8 @@ export function compile(source) {
     const parsePtr = exports.dmdwasm_parse_ptr();
     const parseLen = exports.dmdwasm_parse_len();
     const parse = parseLen ? td.decode(new Uint8Array(memory.buffer, parsePtr, parseLen)) : "";
-    return { parse, ast, asm: stdoutText, errors: exports.dmdwasm_errors(), diagnostics: stderrText };
+    const semaPtr = exports.dmdwasm_sema_ptr();
+    const semaLen = exports.dmdwasm_sema_len();
+    const sema = semaLen ? td.decode(new Uint8Array(memory.buffer, semaPtr, semaLen)) : "";
+    return { parse, sema, ast, asm: stdoutText, errors: exports.dmdwasm_errors(), diagnostics: stderrText };
 }
