@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>DMD in the browser — AST viewer</title>
+<title>DMD in the browser</title>
 <style>
   body { font: 14px/1.4 system-ui, sans-serif; margin: 0; background: #1e1e1e; color: #ddd; }
   header { padding: 10px 16px; background: #252526; border-bottom: 1px solid #333; }
@@ -25,7 +25,7 @@
 </head>
 <body>
 <header>
-  <h1>DMD frontend in WebAssembly <span>— live <code>-vcg-ast</code> dump</span></h1>
+  <h1>DMD compiled to WebAssembly Demo</h1>
 </header>
 <div class="cols">
   <div class="pane">
@@ -47,9 +47,17 @@ int[] squares()
     <div class="bar"><button id="run" title="Run (Ctrl+Enter / ⌘+Enter)">Run ▶</button><span id="status">loading dmd.wasm…</span></div>
   </div>
   <div class="pane">
+    <h2>Parse tree (printAST)</h2>
+    <pre id="parse"></pre>
+  </div>
+  <div class="pane">
     <h2>Lowered AST (-vcg-ast)</h2>
     <pre id="ast"></pre>
     <pre id="diag"></pre>
+  </div>
+  <div class="pane">
+    <h2>x86-64 disassembly (-vasm)</h2>
+    <pre id="asm"></pre>
   </div>
 </div>
 
@@ -60,9 +68,11 @@ const $ = (id) => document.getElementById(id);
 
 function run() {
     const t0 = performance.now();
-    const { ast, errors, diagnostics } = compile($("src").value);
+    const { parse, ast, asm, errors, diagnostics } = compile($("src").value);
     const ms = (performance.now() - t0).toFixed(1);
+    $("parse").textContent = parse || "(no output)";
     $("ast").textContent = ast || "(no output)";
+    $("asm").textContent = asm || "(no code generated)";
     $("diag").textContent = diagnostics || "";
     $("status").textContent = `errors: ${errors} · ${ms} ms`;
 }

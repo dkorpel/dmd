@@ -109,6 +109,54 @@ TTo[] __ArrayCast(TFrom, TTo)(return scope TFrom[] from) pure @trusted
     return *cast(TTo[]*) a;
 }
 
+// ---------------------------------------------------------------- libc math
+// wasi-libc lacks the long-double classifier that core.stdc.math's musl path
+// uses for isnan/isinf(real); `real` is IEEE binary128 on LDC/wasm. Classify by
+// bit pattern. FP_NAN=0, FP_INFINITE=1, FP_ZERO=2, FP_SUBNORMAL=3, FP_NORMAL=4.
+extern (C) int __fpclassifyf(float x) @trusted nothrow @nogc
+{
+    const uint b = *cast(const uint*) &x;
+    const uint exp = (b >> 23) & 0xFF;
+    const bool mantZero = (b & 0x007F_FFFF) == 0;
+    if (exp == 0xFF) return mantZero ? 1 : 0;        // INF : NAN
+    if (exp == 0)    return mantZero ? 2 : 3;        // ZERO : SUBNORMAL
+    return 4;                                        // NORMAL
+}
+
+extern (C) int __fpclassify(double x) @trusted nothrow @nogc
+{
+    const ulong b = *cast(const ulong*) &x;
+    const uint exp = (b >> 52) & 0x7FF;
+    const bool mantZero = (b & 0x000F_FFFF_FFFF_FFFFUL) == 0;
+    if (exp == 0x7FF) return mantZero ? 1 : 0;       // INF : NAN
+    if (exp == 0)     return mantZero ? 2 : 3;       // ZERO : SUBNORMAL
+    return 4;                                        // NORMAL
+}
+
+extern (C) int __fpclassifyl(real x) @trusted nothrow @nogc
+{
+    const ulong[2] w = *cast(const ulong[2]*) &x;   // little-endian: w[1] = high
+    const uint exp = (w[1] >> 48) & 0x7FFF;
+    const bool mantZero = ((w[1] & 0x0000_FFFF_FFFF_FFFFUL) | w[0]) == 0;
+    if (exp == 0x7FFF) return mantZero ? 1 : 0;      // INF : NAN
+    if (exp == 0)      return mantZero ? 2 : 3;      // ZERO : SUBNORMAL
+    return 4;                                        // NORMAL
+}
+
+extern (C) int __signbitf(float x) @trusted nothrow @nogc
+{
+    return (*cast(const uint*) &x) >> 31;
+}
+extern (C) int __signbit(double x) @trusted nothrow @nogc
+{
+    return cast(int)((*cast(const ulong*) &x) >> 63);
+}
+extern (C) int __signbitl(real x) @trusted nothrow @nogc
+{
+    const ulong[2] w = *cast(const ulong[2]*) &x;
+    return cast(int)(w[1] >> 63);
+}
+
 // ---------------------------------------------------------------- asserts
 extern (C) noreturn _d_assert_msg(string msg, string file, uint line) @trusted pure nothrow @nogc => pabort();
 
@@ -965,6 +1013,18 @@ class TypeInfo_AssociativeArray : TypeInfo
 public import core.internal.newaa : _d_aaIn, _d_aaDel, _d_aaNew, _d_aaEqual, _d_assocarrayliteralTX,
     _d_aaLen, _d_aaGetY, _d_aaGetRvalueX, _d_aaApply, _d_aaApply2;
 public import core.internal.hash : hashOf;
+
+// AA `.keys` / `.values` properties (mirror druntime object.d).
+auto keys(Value, Key)(inout Value[Key] aa) @property
+{
+    import core.internal.newaa : _aaKeys;
+    return _aaKeys!(Key, Value)(aa);
+}
+auto values(Value, Key)(inout Value[Key] aa) @property
+{
+    import core.internal.newaa : _aaValues;
+    return _aaValues!(Key, Value)(aa);
+}
 
 class TypeInfo_Struct : TypeInfo
 {

@@ -56,6 +56,10 @@ else version (Posix)
 {
     import core.sys.posix.unistd : getcwd;
 }
+else version (WebAssembly)
+{
+    import core.sys.posix.unistd : getcwd;
+}
 else
     static assert(0);
 

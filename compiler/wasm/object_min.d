@@ -51,14 +51,33 @@ class TypeInfo_Pointer : TypeInfo { TypeInfo m_next; }
 class TypeInfo_Array : TypeInfo { TypeInfo value; }
 class TypeInfo_StaticArray : TypeInfo { TypeInfo value; size_t len; }
 class TypeInfo_AssociativeArray : TypeInfo { TypeInfo value, key; }
-class TypeInfo_Function : TypeInfo { string deco; }
-class TypeInfo_Delegate : TypeInfo { string deco; }
-class TypeInfo_Enum : TypeInfo { TypeInfo base; string name; }
+class TypeInfo_Function : TypeInfo { TypeInfo next; string deco; }
+class TypeInfo_Delegate : TypeInfo { TypeInfo next; string deco; }
+class TypeInfo_Enum : TypeInfo { TypeInfo base; string name; void[] m_init; }
 class TypeInfo_Const : TypeInfo { TypeInfo base; }
 class TypeInfo_Invariant : TypeInfo_Const {}
 class TypeInfo_Shared : TypeInfo_Const {}
 class TypeInfo_Inout : TypeInfo_Const {}
-class TypeInfo_Struct : TypeInfo { string name; }
+class TypeInfo_Struct : TypeInfo
+{
+    string mangledName;
+    void[] m_init;
+    size_t function(in void*)           xtoHash;
+    bool   function(in void*, in void*) xopEquals;
+    int    function(in void*, in void*) xopCmp;
+    string function(in void*)           xtoString;
+    uint m_flags;
+    union
+    {
+        void function(void*)                              xdtor;
+        void function(void*, const TypeInfo_Struct ti)    xdtorti;
+    }
+    void function(void*)                    xpostblit;
+    uint m_align;
+    TypeInfo m_arg1;        // WithArgTypes (x86-64 System V)
+    TypeInfo m_arg2;
+    immutable(void)* m_RTInfo;
+}
 
 struct Interface { TypeInfo_Class classinfo; void*[] vtbl; size_t offset; }
 struct OffsetTypeInfo { size_t offset; TypeInfo ti; }

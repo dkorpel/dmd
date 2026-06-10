@@ -32,6 +32,9 @@ version (Windows)
 else version (Posix)
 {
 }
+else version (WebAssembly)
+{
+}
 else
     static assert(0, "unsupported version");
 

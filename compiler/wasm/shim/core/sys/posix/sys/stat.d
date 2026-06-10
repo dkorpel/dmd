@@ -15,7 +15,10 @@ struct stat_t
     long   st_size;
     long   st_blksize;
     long   st_blocks;
-    long[6] __reserved;
+    long   st_atime;
+    long   st_mtime;
+    long   st_ctime;
+    long[3] __reserved;
 }
 
 enum S_IFMT  = 0xF000;

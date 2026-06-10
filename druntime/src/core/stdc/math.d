@@ -40,6 +40,12 @@ version (SystemZ) version = IBMZ_Any;
 version (X86)     version = X86_Any;
 version (X86_64)  version = X86_Any;
 
+// wasi-libc is musl-derived; route its <math.h> classification helpers through
+// the self-contained CRuntime_Musl path (inline isnan/isinf/isfinite, no extra
+// libc symbols). Inert on native musl, which already takes that path.
+version (CRuntime_Musl) version = MathMuslLike;
+version (CRuntime_WASI) version = MathMuslLike;
+
 extern (C):
 @trusted: // All functions here operate on floating point and integer values only.
 nothrow:
@@ -612,7 +618,7 @@ else version (CRuntime_Glibc)
     pragma(mangle, real.sizeof == double.sizeof ? "__signbit" : "__signbitl")
     pure int signbit(real x);
 }
-else version (CRuntime_Musl)
+else version (MathMuslLike)
 {
     enum
     {

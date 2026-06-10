@@ -28,6 +28,12 @@ else version (Windows)
     import core.sys.windows.stat;
     alias Statbuf = struct_stat;
 }
+else version (WebAssembly)
+{
+    import core.sys.posix.sys.stat;
+    import core.sys.posix.unistd;
+    alias Statbuf = stat_t;
+}
 else
     static assert(0, "unsupported operating system");
 
@@ -357,6 +363,11 @@ final class LibMSCoff : Library
             {
                 om.user_id = 0;  // meaningless on Windows
                 om.group_id = 0; // meaningless on Windows
+            }
+            else version (WebAssembly)
+            {
+                om.user_id = getuid();
+                om.group_id = getgid();
             }
             else
                 static assert(0, "unsupported operating system");
