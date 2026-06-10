@@ -147,8 +147,12 @@ void dmdwasm_run(const(char)* src, size_t len)
     import dmd.semantic2 : semantic2;
     import dmd.semantic3 : semantic3;
     import dmd.hdrgen : moduleToBuffer;
-    import dmd.printast : printAST;
+    import dmd.printast : printAST, printASTLineMarkers;
     import dmd.astcodegen : ASTCodegen;
+
+    // Emit per-node source-line markers in the printAST dumps so the web app can
+    // synchronize highlighting between the source and the parse/semantic trees.
+    printASTLineMarkers = true;
 
     buffers.ast.reset();
     buffers.ast.doindent = 1;
