@@ -3,6 +3,13 @@ extern (C) nothrow @nogc:
 
 alias off_t = long;
 alias ssize_t = ptrdiff_t;
+alias uid_t = uint;
+alias gid_t = uint;
+
+// wasi-libc has no uid/gid concept; these are only referenced by the
+// (never-executed in wasm) library writer in dmd.lib.*, so they are inert.
+extern (D) uid_t getuid() { return 0; }
+extern (D) gid_t getgid() { return 0; }
 
 enum STDIN_FILENO  = 0;
 enum STDOUT_FILENO = 1;

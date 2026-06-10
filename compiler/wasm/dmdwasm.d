@@ -14,6 +14,9 @@ import dmd.common.outbuffer : OutBuffer;
 // Output buffer (the -vcg-ast dump), read back by JS after dmdwasm_run.
 __gshared OutBuffer astBuf;
 
+// Parser AST dump (printAST of the module, before semantic), read back by JS.
+__gshared OutBuffer parseBuf;
+
 extern (C):
 
 // JS writes the source here (NUL-terminated not required); returns the buffer.
@@ -33,6 +36,8 @@ private void* pureMallocLike(size_t n)
 
 const(char)* dmdwasm_ast_ptr() => cast(const(char)*) astBuf[].ptr;
 size_t       dmdwasm_ast_len() => astBuf[].length;
+const(char)* dmdwasm_parse_ptr() => cast(const(char)*) parseBuf[].ptr;
+size_t       dmdwasm_parse_len() => parseBuf[].length;
 uint         dmdwasm_errors()  => global.errors;
 
 /// Initialize global DMD state (subset of frontend.initDMD, Phobos-free).
@@ -52,6 +57,24 @@ private void initFrontend()
 
     global._init();
     global.params.useUnitTests = false;
+
+    global.errors = 0;
+    global.warnings = 0;
+    global.gag = 0;
+    global.gaggedErrors = 0;
+    global.gaggedDeprecations = 0;
+
+    import dmd.astenums : CHECKENABLE;
+    with (global.params)
+    {
+        useInvariants  = CHECKENABLE.on;
+        useIn          = CHECKENABLE.on;
+        useOut         = CHECKENABLE.on;
+        useArrayBounds = CHECKENABLE.on;
+        useAssert      = CHECKENABLE.on;
+        useSwitchError = CHECKENABLE.on;
+        useNullCheck   = CHECKENABLE.off;
+    }
 
     // D `shared static this` module ctors don't run without _d_run_main; invoke the
     // essential ones directly. initTokens initializes the identifier string table and
@@ -84,10 +107,12 @@ void dmdwasm_run(const(char)* src, size_t len)
     import dmd.semantic2 : semantic2;
     import dmd.semantic3 : semantic3;
     import dmd.hdrgen : moduleToBuffer;
+    import dmd.printast : printAST;
     import dmd.astcodegen : ASTCodegen;
 
     astBuf.reset();
     astBuf.doindent = 1;
+    parseBuf.reset();
 
     initFrontend();
 
@@ -105,6 +130,10 @@ void dmdwasm_run(const(char)* src, size_t len)
     m.importedFrom = m;
     m = m.parseModule!ASTCodegen();
 
+    // Dump the AST exactly as the parser produced it (before any semantic
+    // lowering), so the page can show the raw parse tree alongside -vcg-ast.
+    printAST(m, parseBuf);
+
     if (global.errors == 0)
     {
         m.importAll(null);
@@ -115,6 +144,28 @@ void dmdwasm_run(const(char)* src, size_t len)
     }
 
     moduleToBuffer(astBuf, /*vcg_ast*/ true, m);
+
+    // Backend code generation with -vasm: the x86 disassembly is printed to
+    // stdout as a side effect of codegen. JS captures stdout into the asm pane;
+    // no object file is written.
+    if (global.errors == 0)
+    {
+        import dmd.dmdparams : driverParams;
+        import dmd.dmsc : backend_init, backend_term;
+        import dmd.glue : generateCodeNoWrite, ObjcGlue_initialize;
+        import dmd.target : target;
+
+        driverParams.vasm = true;
+        backend_init(global.params, driverParams, target);
+        ObjcGlue_initialize();
+        generateCodeNoWrite(m);
+        backend_term();
+
+        // The disassembly is printed via printf; flush so the host (JS / wasmtime)
+        // sees the complete stdout, since this entry point never exits the process.
+        import core.stdc.stdio : fflush, stdout;
+        fflush(stdout);
+    }
 }
 
 // Self-test: compile an embedded snippet and print the AST dump to stdout.

@@ -6,7 +6,8 @@ const WASI_ESUCCESS = 0;
 const WASI_EBADF = 8;
 
 let memory = null;
-let stderrText = "";
+let stdoutText = "";   // fd 1: the -vasm disassembly
+let stderrText = "";   // fd 2: diagnostics
 
 const td = new TextDecoder("utf-8");
 const te = new TextEncoder();
@@ -27,7 +28,8 @@ function writeIovs(fd, iovsPtr, iovsLen, nwrittenPtr) {
         written += len;
     }
     const text = chunks.map((c) => td.decode(c)).join("");
-    if (fd === 2 || fd === 1) stderrText += text;
+    if (fd === 1) stdoutText += text;       // -vasm disassembly
+    else stderrText += text;                // diagnostics
     view.setUint32(nwrittenPtr, written, true);
     return WASI_ESUCCESS;
 }
@@ -78,8 +80,10 @@ export async function loadDmd(url = "dmd.wasm") {
     return instance;
 }
 
-// Compile `source`, returning { ast, errors, diagnostics }.
+// Compile `source`, returning { ast, asm, errors, diagnostics }.
+// `asm` is the -vasm x86 disassembly (the backend prints it to stdout).
 export function compile(source) {
+    stdoutText = "";
     stderrText = "";
     const bytes = te.encode(source);
     const ptr = exports.dmdwasm_input_buffer(bytes.length + 1);
@@ -91,5 +95,8 @@ export function compile(source) {
     const astPtr = exports.dmdwasm_ast_ptr();
     const astLen = exports.dmdwasm_ast_len();
     const ast = astLen ? td.decode(new Uint8Array(memory.buffer, astPtr, astLen)) : "";
-    return { ast, errors: exports.dmdwasm_errors(), diagnostics: stderrText };
+    const parsePtr = exports.dmdwasm_parse_ptr();
+    const parseLen = exports.dmdwasm_parse_len();
+    const parse = parseLen ? td.decode(new Uint8Array(memory.buffer, parsePtr, parseLen)) : "";
+    return { parse, ast, asm: stdoutText, errors: exports.dmdwasm_errors(), diagnostics: stderrText };
 }

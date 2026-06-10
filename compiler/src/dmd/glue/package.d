@@ -196,6 +196,23 @@ public void generateCodeAndWrite(Module[] modules, const(char)*[] libmodules,
     }
 }
 
+/**
+ * Generate backend code for a single module without writing an object file.
+ *
+ * Used by freestanding hosts (e.g. the WebAssembly build) that only want the
+ * `-vasm` disassembly side effect of code generation, not an emitted `.o`.
+ * Runs the same obj_start/genObjFile sequence as `generateCodeAndWrite`, but
+ * skips obj_end and the file write.
+ */
+public void generateCodeNoWrite(Module m)
+{
+    OutBuffer objbuf;
+    obj_start(objbuf, m.srcfile.toChars());
+    genObjFile(m, false, false);
+    objmod = null;
+    objbuf.destroy();
+}
+
 // FIXME: does not work on old bootstrap compilers
 //package(dmd.glue):
 
