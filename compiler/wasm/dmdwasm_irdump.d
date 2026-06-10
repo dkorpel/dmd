@@ -130,6 +130,11 @@ private void dumpElem(ref OutBuffer buf, elem* e, int depth)
         default:
             break;
     }
+    // Source-line marker (SOH + decimal line) so the web app can map this elem
+    // back to the source line it came from. Omitted when the elem has no source
+    // position (Slinnum == 0), so child nodes inherit their parent's line.
+    if (e.Esrcpos.Slinnum)
+        buf.printf("\x01%u", e.Esrcpos.Slinnum);
     buf.writeByte('\n');
 
     if (OTbinary(e.Eoper))
@@ -152,7 +157,10 @@ void dumpFunctionIR(ref OutBuffer buf, Symbol* sfunc, block* startblock)
     buf.writestring("function ");
     if (sfunc)
         buf.writestring(sfunc.Sident.ptr);
-    buf.writestring("()\n");
+    // `\x010` resets the web app's source-line carry-forward so the function
+    // header (and block headers, which inherit it) map to no source line,
+    // rather than bleeding the previous function's last elem line.
+    buf.writestring("()\x010\n");
 
     for (block* b = startblock; b; b = b.Bnext)
     {

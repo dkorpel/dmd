@@ -27,6 +27,23 @@ import dmd.tokens;
 import dmd.visitor;
 import dmd.hdrgen;
 import dmd.asttypename : astTypeName;
+import dmd.location : Loc;
+
+/********************
+ * When set, `printAST` appends a source-line marker to the end of each node's
+ * primary line: a SOH byte (0x01) followed by the decimal source line number.
+ * Off by default so normal compiler output is unaffected; the wasm explorer
+ * turns it on to map each printed AST line back to the source line that
+ * produced it. A marker of `0` explicitly means "no source line".
+ */
+__gshared bool printASTLineMarkers = false;
+
+/// Append the SOH line marker for `loc` to `buf` when `printASTLineMarkers` is on.
+private void emitLineMarker(ref OutBuffer buf, Loc loc)
+{
+    if (printASTLineMarkers)
+        buf.printf("\x01%u", loc.linnum);
+}
 
 /********************
  * Print expression AST data structure to stdout in a nice format.
@@ -75,6 +92,7 @@ void printAST(Dsymbol s, ref OutBuffer buf, int indent = 0)
     if (auto ad = s.isAttribDeclaration())
     {
         printAttribDetail(ad, buf);
+        emitLineMarker(buf, s.loc);
         buf.writeByte('\n');
         if (ad.decl)
             foreach (m; (*ad.decl)[])
@@ -82,7 +100,9 @@ void printAST(Dsymbol s, ref OutBuffer buf, int indent = 0)
         return;
     }
 
-    buf.printf(" `%s`\n", s.toChars());
+    buf.printf(" `%s`", s.toChars());
+    emitLineMarker(buf, s.loc);
+    buf.writeByte('\n');
 
     if (auto fd = s.isFuncDeclaration())
     {
@@ -126,6 +146,7 @@ void printAST(Statement s, ref OutBuffer buf, int indent = 0)
     {
         printIndent(buf, indent);
         buf.writestring(s.astTypeName());
+        emitLineMarker(buf, s.loc);
         buf.writeByte('\n');
     }
 
@@ -213,7 +234,9 @@ void printAST(Statement s, ref OutBuffer buf, int indent = 0)
         // Statement kinds without a dedicated tree dump above: show the AST
         // class name plus the regenerated source.
         printIndent(buf, indent);
-        buf.printf("%s `%s`\n", s.astTypeName().ptr, s.toChars());
+        buf.printf("%s `%s`", s.astTypeName().ptr, s.toChars());
+        emitLineMarker(buf, s.loc);
+        buf.writeByte('\n');
     }
 }
 
@@ -296,9 +319,11 @@ extern (C++) final class PrintASTVisitor : Visitor
     {
         printIndent(indent);
         if (e.type)
-            buf.printf("%s type: %s\n", e.astTypeName().ptr, e.type.toChars());
+            buf.printf("%s type: %s", e.astTypeName().ptr, e.type.toChars());
         else
-            buf.printf("%s\n", e.astTypeName().ptr);
+            buf.printf("%s", e.astTypeName().ptr);
+        emitLineMarker(*buf, e.loc);
+        buf.writeByte('\n');
     }
 
     // Compact one-line form for leaf literals: "<ClassName> <value> [type: <T>]".
@@ -306,9 +331,11 @@ extern (C++) final class PrintASTVisitor : Visitor
     {
         printIndent(indent);
         if (e.type)
-            buf.printf("%s %s type: %s\n", e.astTypeName().ptr, value, e.type.toChars());
+            buf.printf("%s %s type: %s", e.astTypeName().ptr, value, e.type.toChars());
         else
-            buf.printf("%s %s\n", e.astTypeName().ptr, value);
+            buf.printf("%s %s", e.astTypeName().ptr, value);
+        emitLineMarker(*buf, e.loc);
+        buf.writeByte('\n');
     }
 
     override void visit(Expression e)
@@ -361,9 +388,7 @@ extern (C++) final class PrintASTVisitor : Visitor
 
     override void visit(VarExp e)
     {
-        head(e);
-        printIndent(indent + 2);
-        buf.printf(".var: %s\n", e.var ? e.var.toChars() : "");
+        leaf(e, e.var ? e.var.toChars() : "");
     }
 
     override void visit(DsymbolExp e)

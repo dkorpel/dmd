@@ -71,6 +71,14 @@
   textarea, pre { flex: 1; margin: 0; padding: 12px; border: 0; font: 13px/1.45 ui-monospace, monospace;
                   background: #1e1e1e; color: #d4d4d4; white-space: pre; overflow: auto; tab-size: 4; }
   textarea { resize: none; outline: none; }
+  /* Each rendered output line is its own block so the synced-line highlight can
+     span the full pane width (and cover horizontally-scrolled content). */
+  .ln { display: block; min-width: 100%; width: max-content; min-height: 1.45em; }
+  .ln[data-line] { cursor: pointer; }
+  /* Subtle translucent highlight with a short fade so moving the cursor between
+     lines doesn't produce hard flashes. */
+  .ln { transition: background-color 80ms ease-out; }
+  .ln.hl { background: rgba(88, 166, 255, 0.15); }
   /* CodeMirror editor host: fill the source pane between header and run bar. */
   #src { flex: 1; min-height: 0; overflow: hidden; }
   #src .cm-editor { height: 100%; }
@@ -181,8 +189,8 @@ int[] squares()
 import { loadDmd, compile } from "./glue.js";
 import { EditorView, keymap, lineNumbers, highlightActiveLineGutter, highlightSpecialChars,
          drawSelection, dropCursor, rectangularSelection, crosshairCursor,
-         highlightActiveLine } from "@codemirror/view";
-import { EditorState } from "@codemirror/state";
+         highlightActiveLine, Decoration } from "@codemirror/view";
+import { EditorState, StateField, StateEffect } from "@codemirror/state";
 import { StreamLanguage, HighlightStyle, syntaxHighlighting, defaultHighlightStyle,
          foldGutter, foldKeymap, indentOnInput, bracketMatching } from "@codemirror/language";
 import { history, historyKeymap, defaultKeymap, indentWithTab } from "@codemirror/commands";
@@ -428,17 +436,39 @@ const dHighlight = HighlightStyle.define([
 const dTheme = EditorView.theme({
     "&":                       { color: "#d4d4d4", backgroundColor: "#1e1e1e", height: "100%", fontSize: "13px" },
     ".cm-content":             { fontFamily: "ui-monospace, monospace", caretColor: "#fff" },
+    ".cm-line":                { transition: "background-color 80ms ease-out" },
     ".cm-gutters":             { backgroundColor: "#1e1e1e", color: "#666", border: "none" },
     ".cm-activeLine":          { backgroundColor: "#2a2a2a" },
     ".cm-activeLineGutter":    { backgroundColor: "#2a2a2a", color: "#999" },
+    ".cm-syncHighlight":       { backgroundColor: "rgba(88, 166, 255, 0.15)", transition: "background-color 80ms ease-out" },
     "&.cm-focused":            { outline: "none" },
     ".cm-cursor":              { borderLeftColor: "#fff" },
     "&.cm-focused .cm-selectionBackground, ::selection": { backgroundColor: "#264f78" },
 }, { dark: true });
 
+// Synced-line highlight in the editor: a StateField holding a single line
+// decoration, driven by `setHlLine` effects from the cross-pane sync below.
+const setHlLine = StateEffect.define();
+const hlLineDeco = Decoration.line({ class: "cm-syncHighlight" });
+const hlField = StateField.define({
+    create: () => Decoration.none,
+    update(deco, tr) {
+        deco = deco.map(tr.changes);
+        for (const e of tr.effects) if (e.is(setHlLine)) {
+            const ln = e.value;
+            deco = (ln == null || ln < 1 || ln > tr.state.doc.lines)
+                ? Decoration.none
+                : Decoration.set([hlLineDeco.range(tr.state.doc.line(ln).from)]);
+        }
+        return deco;
+    },
+    provide: (f) => EditorView.decorations.from(f),
+});
+
 // `onDocChange` is wired up once the wasm compiler is ready (see below).
 let runTimer = null;
 let onDocChange = () => {};
+let onCursor = () => {};
 const editor = new EditorView({
     doc: $("src-init").value,
     parent: $("src"),
@@ -448,7 +478,11 @@ const editor = new EditorView({
         dLanguage,
         syntaxHighlighting(dHighlight),
         dTheme,
-        EditorView.updateListener.of((u) => { if (u.docChanged) onDocChange(); }),
+        hlField,
+        EditorView.updateListener.of((u) => {
+            if (u.docChanged) onDocChange();
+            if (u.selectionSet || u.docChanged) onCursor();
+        }),
     ],
 });
 const getSrc = () => editor.state.doc.toString();
@@ -489,21 +523,96 @@ function ansiToHtml(text) {
     return html;
 }
 
+// ---- Cross-pane source-line synchronization -------------------------------
+
+// Render `text` into the pane `id` as one `<span class="ln">` per line, tagging
+// each with the source line it maps to (data-line) so hovering syncs highlights.
+//
+// Source line comes from a trailing SOH marker (\x01<N>) emitted by the dumpers:
+//   N >= 1  -> this line maps to source line N (and becomes the carry value)
+//   N == 0  -> explicit "no source line" (clears the carry)
+//   no mark -> inherit the previous line's source line (carry-forward; used for
+//              an AST node's detail lines and IR child elems without their own pos)
+// Panes with no markers at all (e.g. the lexer dump) map positionally when
+// `positional` is set: rendered line i corresponds to source line i+1.
+const LINE_MARK = /\x01(\d+)$/;
+function renderLined(id, text, positional = false, emptyMsg = "(no output)") {
+    const pre = $(id);
+    pre.textContent = "";
+    if (!text) { pre.textContent = emptyMsg; return; }
+    const lines = text.split("\n");
+    const frag = document.createDocumentFragment();
+    let carry = null;
+    for (let i = 0; i < lines.length; i++) {
+        let line = lines[i];
+        let srcLine;
+        const m = line.match(LINE_MARK);
+        if (m) {
+            line = line.slice(0, m.index);
+            srcLine = +m[1] || null;        // 0 -> null
+            carry = srcLine;
+        } else {
+            srcLine = positional ? i + 1 : carry;
+        }
+        const span = document.createElement("span");
+        span.className = "ln";
+        if (srcLine) span.dataset.line = srcLine;
+        span.textContent = line;
+        frag.appendChild(span);
+    }
+    pre.appendChild(frag);
+}
+
+// Effective highlighted source line: a hovered line (editor or output) wins over
+// the editor's cursor line, so moving the mouse away falls back to the caret.
+let hoverLine = null, cursorLine = 1, lastApplied, lastEditorHl;
+const effLine = () => hoverLine ?? cursorLine;
+
+function editorSetHl(line) {
+    if (line === lastEditorHl) return;
+    lastEditorHl = line;
+    editor.dispatch({ effects: setHlLine.of(line ?? null) });
+}
+
+function applyHighlight(force) {
+    const line = effLine();
+    if (!force && line === lastApplied) return;
+    lastApplied = line;
+    for (const el of cols.querySelectorAll(".ln.hl")) el.classList.remove("hl");
+    if (line != null)
+        for (const el of cols.querySelectorAll(`.ln[data-line="${line}"]`)) el.classList.add("hl");
+    editorSetHl(line);
+}
+
+onCursor = () => { cursorLine = editor.state.doc.lineAt(editor.state.selection.main.head).number; applyHighlight(); };
+
+// One delegated handler covers every pane (the editor host is inside #cols too):
+// hovering an output line or a source line drives the shared highlight.
+cols.addEventListener("mousemove", (e) => {
+    const ln = e.target.closest(".ln[data-line]");
+    if (ln) { hoverLine = +ln.dataset.line; applyHighlight(); return; }
+    const cmLine = e.target.closest(".cm-line");
+    if (cmLine) { hoverLine = editor.state.doc.lineAt(editor.posAtDOM(cmLine)).number; applyHighlight(); return; }
+    if (hoverLine !== null) { hoverLine = null; applyHighlight(); }
+});
+cols.addEventListener("mouseleave", () => { hoverLine = null; applyHighlight(); });
+
 // ---- Compile + render -----------------------------------------------------
 
 function run() {
     const t0 = performance.now();
     const { lex, parse, sema, ast, ir, irOpt, asm, errors, diagnostics } = compile(getSrc());
     const ms = (performance.now() - t0).toFixed(1);
-    $("lex").textContent = lex || "(no output)";
-    $("parse").textContent = parse || "(no output)";
-    $("sema").textContent = sema || "(no output)";
+    renderLined("lex", lex, /*positional*/ true);
+    renderLined("parse", parse);
+    renderLined("sema", sema);
     $("ast").textContent = ast || "(no output)";
-    $("ir").textContent = ir || "(no code generated)";
-    $("iropt").textContent = irOpt || "(no code generated)";
+    renderLined("ir", ir, false, "(no code generated)");
+    renderLined("iropt", irOpt, false, "(no code generated)");
     $("asm").textContent = asm || "(no code generated)";
     $("diag").innerHTML = diagnostics ? ansiToHtml(diagnostics) : "(no diagnostics)";
     $("status").textContent = `errors: ${errors} · ${ms} ms`;
+    applyHighlight(/*force*/ true);   // DOM was rebuilt; re-apply current highlight
 }
 
 (async () => {
