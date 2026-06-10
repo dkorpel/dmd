@@ -107,5 +107,8 @@ export function compile(source) {
     const irPtr = exports.dmdwasm_ir_ptr();
     const irLen = exports.dmdwasm_ir_len();
     const ir = irLen ? td.decode(new Uint8Array(memory.buffer, irPtr, irLen)) : "";
-    return { lex, parse, sema, ast, ir, asm: stdoutText, errors: exports.dmdwasm_errors(), diagnostics: stderrText };
+    const irOptPtr = exports.dmdwasm_iropt_ptr();
+    const irOptLen = exports.dmdwasm_iropt_len();
+    const irOpt = irOptLen ? td.decode(new Uint8Array(memory.buffer, irOptPtr, irOptLen)) : "";
+    return { lex, parse, sema, ast, ir, irOpt, asm: stdoutText, errors: exports.dmdwasm_errors(), diagnostics: stderrText };
 }

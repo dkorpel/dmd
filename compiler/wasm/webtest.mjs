@@ -20,9 +20,11 @@ function compile(src){ stdoutText=""; stderrText="";
   ex.dmdwasm_run(ptr,b.length);
   const ast=td.decode(new Uint8Array(memory.buffer,ex.dmdwasm_ast_ptr(),ex.dmdwasm_ast_len()));
   const ir=td.decode(new Uint8Array(memory.buffer,ex.dmdwasm_ir_ptr(),ex.dmdwasm_ir_len()));
-  return {ast, ir, asm:stdoutText, errors:ex.dmdwasm_errors(), diag:stderrText}; }
+  const irOpt=td.decode(new Uint8Array(memory.buffer,ex.dmdwasm_iropt_ptr(),ex.dmdwasm_iropt_len()));
+  return {ast, ir, irOpt, asm:stdoutText, errors:ex.dmdwasm_errors(), diag:stderrText}; }
 const r = compile("module web;\nstruct Point { int x, y; }\nint dot(Point a, Point b) => a.x*b.x + a.y*b.y;\nint f(int n) { int s; foreach (i; 0 .. n) s += i*i; return s; }\n");
 console.log("errors:", r.errors, "diag:", r.diag||"(none)");
 console.log("=== AST ===\n" + r.ast);
-console.log("=== IR (block/elem graph) ===\n" + r.ir);
+console.log("=== IR before -O (block/elem graph) ===\n" + r.ir);
+console.log("=== IR after -O (block/elem graph) ===\n" + r.irOpt);
 console.log("=== ASM (-vasm) ===\n" + r.asm);

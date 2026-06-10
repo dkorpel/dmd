@@ -386,104 +386,110 @@ string tyName(tym_t ty)
     return (b < TYMAX && tyNames[b].length) ? tyNames[b] : "TY?";
 }
 
-void irIndent(int depth)
+void irIndent(OutBuffer* buf, int depth)
 {
     foreach (_; 0 .. depth)
-        irBuf.writestring("  ");
+        buf.writestring("  ");
 }
 
 /// Print one `elem` and, recursively, its E1/E2 subtrees (preorder, indented).
-void dumpElem(elem* e, int depth)
+void dumpElem(OutBuffer* buf, elem* e, int depth)
 {
-    irIndent(depth);
+    irIndent(buf, depth);
     if (!e)
     {
-        irBuf.writestring("(null)\n");
+        buf.writestring("(null)\n");
         return;
     }
 
-    irBuf.writestring(operName(e.Eoper));
-    irBuf.writeByte(' ');
-    irBuf.writestring(tyName(e.Ety));
+    buf.writestring(operName(e.Eoper));
+    buf.writeByte(' ');
+    buf.writestring(tyName(e.Ety));
 
     // A few leaf operators carry data worth showing inline.
     switch (e.Eoper)
     {
         case OPconst:
-            irBuf.writeByte(' ');
+            buf.writeByte(' ');
             if (tyfloating(e.Ety))
-                irBuf.printf("%g", e.Vdouble);
+                buf.printf("%g", e.Vdouble);
             else
-                irBuf.printf("%lld", cast(long) e.Vllong);
+                buf.printf("%lld", cast(long) e.Vllong);
             break;
 
         case OPvar:
         case OPrelconst:
             if (e.Vsym)
             {
-                irBuf.writeByte(' ');
-                irBuf.writestring(e.Vsym.Sident.ptr);
+                buf.writeByte(' ');
+                buf.writestring(e.Vsym.Sident.ptr);
             }
             if (e.Voffset)
-                irBuf.printf("+%lld", cast(long) e.Voffset);
+                buf.printf("+%lld", cast(long) e.Voffset);
             break;
 
         case OPstring:
         case OPasm:
             if (e.Vstring)
             {
-                irBuf.writestring(" \"");
-                irBuf.writestring(e.Vstring);
-                irBuf.writeByte('"');
+                buf.writestring(" \"");
+                buf.writestring(e.Vstring);
+                buf.writeByte('"');
             }
             break;
 
         default:
             break;
     }
-    irBuf.writeByte('\n');
+    buf.writeByte('\n');
 
     if (OTbinary(e.Eoper))
     {
-        dumpElem(e.E1, depth + 1);
-        dumpElem(e.E2, depth + 1);
+        dumpElem(buf, e.E1, depth + 1);
+        dumpElem(buf, e.E2, depth + 1);
     }
     else if (OTunary(e.Eoper))
-        dumpElem(e.E1, depth + 1);
+        dumpElem(buf, e.E1, depth + 1);
 }
 
-/// glue.backendIRDumpHook: dump one function's block/elem graph into irBuf.
-void dumpFunctionIR(Symbol* sfunc, block* startblock)
+/// Dump one function's block/elem graph into `buf`.
+void dumpFunctionIR(OutBuffer* buf, Symbol* sfunc, block* startblock)
 {
     // Number the blocks 1..n along the Bnext chain for readable references.
     uint n = 0;
     for (block* b = startblock; b; b = b.Bnext)
         b.Bnumber = ++n;
 
-    irBuf.writestring("function ");
+    buf.writestring("function ");
     if (sfunc)
-        irBuf.writestring(sfunc.Sident.ptr);
-    irBuf.writestring("()\n");
+        buf.writestring(sfunc.Sident.ptr);
+    buf.writestring("()\n");
 
     for (block* b = startblock; b; b = b.Bnext)
     {
-        irBuf.printf("  B%u: BC.", b.Bnumber);
-        irBuf.writestring(b.bc <= BC.max ? bcNames[b.bc] : "?");
+        buf.printf("  B%u: BC.", b.Bnumber);
+        buf.writestring(b.bc <= BC.max ? bcNames[b.bc] : "?");
 
         if (b.Bsucc.length)
         {
-            irBuf.writestring(" -> ");
+            buf.writestring(" -> ");
             foreach (i, s; b.Bsucc[])
             {
                 if (i)
-                    irBuf.writestring(", ");
-                irBuf.printf("B%u", s ? s.Bnumber : 0);
+                    buf.writestring(", ");
+                buf.printf("B%u", s ? s.Bnumber : 0);
             }
         }
-        irBuf.writeByte('\n');
+        buf.writeByte('\n');
 
         if (b.Belem)
-            dumpElem(b.Belem, 2);
+            dumpElem(buf, b.Belem, 2);
     }
-    irBuf.writeByte('\n');
+    buf.writeByte('\n');
 }
+
+/// glue.backendIRDumpHook: pre-optimization graph (as lowered).
+void dumpFunctionIRPre(Symbol* sfunc, block* startblock) => dumpFunctionIR(&irBuf, sfunc, startblock);
+
+/// dout.backendIROptDumpHook: post-optimization graph (after optfunc, before codgen).
+void dumpFunctionIROpt(Symbol* sfunc, block* startblock) => dumpFunctionIR(&irOptBuf, sfunc, startblock);
