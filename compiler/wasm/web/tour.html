@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>A tour of DMD — from source text to machine code</title>
+<style>
+  :root { --src:#9aa0a6; --parse:#3b8eea; --sema:#23d18b; --codegen:#e5a23b; --diag:#f14c4c; }
+  * { box-sizing: border-box; }
+  body { font: 16px/1.6 system-ui, sans-serif; margin: 0; background: #1e1e1e; color: #ddd; }
+  a { color: #4ea1ff; }
+  header { padding: 28px 24px; background: #252526; border-bottom: 1px solid #333; }
+  header .wrap { max-width: 860px; margin: 0 auto; }
+  header h1 { margin: 0 0 6px; font-size: 28px; }
+  header p { margin: 0; color: #aaa; }
+  header .back { font-size: 13px; }
+  main { max-width: 860px; margin: 0 auto; padding: 8px 24px 80px; }
+
+  /* The pipeline ribbon at the top. */
+  .pipe { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 26px 0 8px; }
+  .pipe .step { padding: 6px 12px; border-radius: 20px; font-size: 13px; font-weight: 600;
+                background: #2a2a2a; border: 1px solid #3a3a3a; color: #ddd; text-decoration: none; }
+  .pipe .arrow { color: #555; }
+  .pipe .step.src     { border-color: var(--src); }
+  .pipe .step.parse   { border-color: var(--parse); }
+  .pipe .step.sema    { border-color: var(--sema); }
+  .pipe .step.codegen { border-color: var(--codegen); }
+
+  section { margin: 40px 0; }
+  section h2 { font-size: 22px; margin: 0 0 4px; display: flex; align-items: center; gap: 10px; }
+  section h2 .dot { width: 12px; height: 12px; border-radius: 50%; flex: none; }
+  section .lead { color: #bbb; margin: 4px 0 18px; }
+  .parse   h2 .dot { background: var(--parse); }
+  .sema    h2 .dot { background: var(--sema); }
+  .codegen h2 .dot { background: var(--codegen); }
+
+  /* Data-structure cards. */
+  .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 680px) { .cards { grid-template-columns: 1fr; } }
+  .card { background: #252526; border: 1px solid #333; border-left: 3px solid #555; border-radius: 6px;
+          padding: 12px 14px; }
+  .parse   .card { border-left-color: var(--parse); }
+  .sema    .card { border-left-color: var(--sema); }
+  .codegen .card { border-left-color: var(--codegen); }
+  .card h3 { margin: 0 0 4px; font-size: 15px; }
+  .card h3 code { font: 13px ui-monospace, monospace; background: #1e1e1e; padding: 1px 5px;
+                  border-radius: 3px; color: #d4d4d4; }
+  .card p { margin: 6px 0 8px; font-size: 14px; color: #cfcfcf; }
+  .card .links { font-size: 12.5px; }
+  .card .links a { margin-right: 12px; white-space: nowrap; }
+  .card .links a::before { content: "‹›"; color: #666; margin-right: 4px; letter-spacing: -2px; }
+
+  .aside { background: #20262b; border: 1px solid #2d3942; border-radius: 6px; padding: 12px 16px;
+           margin: 18px 0; font-size: 14px; color: #cdd6df; }
+  .aside b { color: #fff; }
+  code.kw { font: 13px ui-monospace, monospace; color: #ce9178; }
+  footer { color: #888; font-size: 13px; border-top: 1px solid #333; padding-top: 18px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <a class="back" href="index.html">← back to the explorer</a>
+    <h1>A tour of DMD 🧭</h1>
+    <p>How a chunk of D source text becomes machine code — and the data structures it
+       morphs through on the way. Each panel in the explorer is a peek at one of these.</p>
+  </div>
+</header>
+<main>
+
+  <div class="pipe">
+    <a class="step src"     href="#">source text</a><span class="arrow">→</span>
+    <a class="step parse"   href="#parsing">tokens &amp; AST</a><span class="arrow">→</span>
+    <a class="step sema"    href="#semantic">typed AST</a><span class="arrow">→</span>
+    <a class="step codegen" href="#codegen">backend IR</a><span class="arrow">→</span>
+    <a class="step codegen" href="#codegen">machine code</a>
+  </div>
+  <p class="lead">The compiler is a pipeline. Text comes in the left; an object file falls out
+     the right. In between, your program is repeatedly rewritten into ever-lower-level shapes.
+     Every link below points at the actual line in
+     <a href="https://github.com/dlang/dmd" target="_blank" rel="noopener">dlang/dmd</a> where that
+     shape is defined — go read it, it's friendlier than it looks.</p>
+
+  <!-- ============================ PARSING ============================ -->
+  <section class="parse" id="parsing">
+    <h2><span class="dot"></span>1 · Parsing — text becomes a tree</h2>
+    <p class="lead">First the <b>lexer</b> chops the raw bytes into <b>tokens</b> (keywords, numbers,
+       punctuation). Then the <b>parser</b> assembles those tokens into an <b>abstract syntax tree</b>
+       (AST): a literal tree of objects mirroring the grammar — a function holds statements, a statement
+       holds expressions, an <code class="kw">a + b</code> becomes an <code class="kw">AddExp</code> with
+       two children. No meaning is attached yet; it's pure shape.</p>
+    <div class="cards">
+      <div class="card">
+        <h3>Tokens — <code>enum TOK</code></h3>
+        <p>One value per lexeme kind: <code class="kw">int32</code>, <code class="kw">identifier</code>,
+           <code class="kw">plus</code>… The <b>Tokens</b> pane lists these per source line.</p>
+        <div class="links">
+          <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/tokens.d#L26" target="_blank" rel="noopener">tokens.d</a>
+          <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/lexer.d" target="_blank" rel="noopener">lexer.d</a>
+        </div>
+      </div>
+      <div class="card">
+        <h3>The parser</h3>
+        <p>A hand-written recursive-descent parser. Reads tokens, builds AST nodes. The
+           <b>Parse tree</b> pane is its raw output, before any checking.</p>
+        <div class="links">
+          <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/parse.d" target="_blank" rel="noopener">parse.d</a>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Expressions — <code>class Expression</code></h3>
+        <p>Base class for everything that has a value: <code class="kw">AddExp</code>,
+           <code class="kw">CallExp</code>, <code class="kw">VarExp</code>, literals… Each subclass is
+           a node kind.</p>
+        <div class="links">
+          <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/expression.d#L118" target="_blank" rel="noopener">expression.d</a>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Statements &amp; symbols</h3>
+        <p><code class="kw">Statement</code> covers control flow (<code class="kw">IfStatement</code>,
+           loops); <code class="kw">Dsymbol</code> is the base for named things — modules, functions,
+           variables, aggregates.</p>
+        <div class="links">
+          <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/statement.d#L41" target="_blank" rel="noopener">statement.d</a>
+          <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/dsymbol.d#L365" target="_blank" rel="noopener">dsymbol.d</a>
+        </div>
+      </div>
+    </div>
+    <div class="aside">🔎 The <b>Parse tree</b> and <b>Semantic tree</b> panes are both rendered by
+      <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/printast.d#L37" target="_blank" rel="noopener">printast.d</a>,
+      which walks the AST and prints each node by its internal class name — so you see
+      <code class="kw">AddExp</code>, not <code class="kw">a + b</code>.</div>
+  </section>
+
+  <!-- ============================ SEMANTIC ============================ -->
+  <section class="sema" id="semantic">
+    <h2><span class="dot"></span>2 · Semantic — the tree gains meaning</h2>
+    <p class="lead">Now DMD walks the AST in several passes and figures out what everything
+       <i>means</i>: it resolves names to symbols, assigns a <b>type</b> to every expression, runs
+       <code class="kw">static if</code>/templates/CTFE, checks <code class="kw">@safe</code>/
+       <code class="kw">nothrow</code>, and <b>lowers</b> high-level constructs into simpler ones
+       (a <code class="kw">foreach</code> becomes a plain <code class="kw">for</code>, <code class="kw">~=</code>
+       becomes a runtime call). The <b>Lowered AST</b> pane (<code class="kw">-vcg-ast</code>) shows the
+       tree <i>after</i> this rewriting.</p>
+    <div class="cards">
+      <div class="card">
+        <h3>The passes</h3>
+        <p>Roughly: symbols (<code class="kw">dsymbolSemantic</code>), then types
+           (<code class="kw">typeSemantic</code>), then expressions/bodies
+           (<code class="kw">expressionSemantic</code>, <code class="kw">semantic3</code>).</p>
+        <div class="links">
+          <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/dsymbolsem.d" target="_blank" rel="noopener">dsymbolsem.d</a>
+          <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/typesem.d" target="_blank" rel="noopener">typesem.d</a>
+          <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/expressionsem.d" target="_blank" rel="noopener">expressionsem.d</a>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Types — <code>class Type</code></h3>
+        <p>Every typed expression points at a <code class="kw">Type</code>:
+           <code class="kw">TypeBasic</code> (int), <code class="kw">TypePointer</code>,
+           <code class="kw">TypeFunction</code>, <code class="kw">TypeStruct</code>…</p>
+        <div class="links">
+          <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/mtype.d#L390" target="_blank" rel="noopener">mtype.d</a>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Functions &amp; aggregates</h3>
+        <p><code class="kw">FuncDeclaration</code> holds a function's body, signature and analysis
+           flags; <code class="kw">StructDeclaration</code>/<code class="kw">ClassDeclaration</code>
+           hold fields &amp; methods.</p>
+        <div class="links">
+          <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/func.d#L212" target="_blank" rel="noopener">func.d</a>
+          <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/dstruct.d" target="_blank" rel="noopener">dstruct.d</a>
+          <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/dclass.d" target="_blank" rel="noopener">dclass.d</a>
+        </div>
+      </div>
+      <div class="card">
+        <h3>The module — <code>class Module</code></h3>
+        <p>The root of it all: one source file, its members, and the entry point semantic analysis
+           starts from.</p>
+        <div class="links">
+          <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/dmodule.d#L281" target="_blank" rel="noopener">dmodule.d</a>
+        </div>
+      </div>
+    </div>
+    <div class="aside">🧠 <b>Front end vs. back end:</b> everything so far is the <i>front end</i> and is
+      shared by every D compiler (DMD, GDC, LDC). What follows is DMD's own <i>back end</i> — the part
+      that actually emits x86.</div>
+  </section>
+
+  <!-- ============================ CODEGEN ============================ -->
+  <section class="codegen" id="codegen">
+    <h2><span class="dot"></span>3 · Codegen — the back end emits machine code</h2>
+    <p class="lead">The glue layer translates each function's typed AST into the back end's own IR: a
+       graph of <b>basic blocks</b>, each holding a forest of <b>elem</b> expression trees. The
+       optimizer rewrites that graph; then code generation turns it into x86 instructions, which the
+       disassembler prints. The explorer shows the IR <b>before</b> and <b>after</b> the optimizer plus
+       the final <b>disassembly</b> — diff the two IR panes to watch the optimizer work.</p>
+    <div class="cards">
+      <div class="card">
+        <h3>Expression nodes — <code>struct elem</code></h3>
+        <p>The back end's expression tree. <code class="kw">E1</code>/<code class="kw">E2</code> are the
+           child operands. Far leaner than the front-end AST — no types-as-objects, just an operator and
+           operands.</p>
+        <div class="links">
+          <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/backend/el.d#L57" target="_blank" rel="noopener">backend/el.d</a>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Operators — <code>enum OPER</code></h3>
+        <p>What an <code class="kw">elem</code> <i>does</i>: <code class="kw">OPadd</code>,
+           <code class="kw">OPmul</code>, <code class="kw">OPvar</code>, <code class="kw">OPconst</code>,
+           <code class="kw">OPcall</code>… These are the node labels in the IR panes.</p>
+        <div class="links">
+          <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/backend/oper.d#L21" target="_blank" rel="noopener">backend/oper.d</a>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Back-end types — <code>enum TY</code></h3>
+        <p>The back end's own flat type tags — <code class="kw">TYint</code>,
+           <code class="kw">TYdouble</code>, <code class="kw">TYnptr</code> — carried on every
+           <code class="kw">elem</code>. No relation to the front end's <code class="kw">Type</code> classes.</p>
+        <div class="links">
+          <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/backend/ty.d#L36" target="_blank" rel="noopener">backend/ty.d</a>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Basic blocks — <code>struct block</code> / <code>enum BC</code></h3>
+        <p>A function is a graph of blocks chained by <code class="kw">Bnext</code> and linked by
+           successor edges. <code class="kw">BC</code> is how a block exits:
+           <code class="kw">BC.goto_</code>, <code class="kw">BC.iftrue</code>,
+           <code class="kw">BC.retexp</code>…</p>
+        <div class="links">
+          <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/backend/cc.d#L326" target="_blank" rel="noopener">backend/cc.d</a>
+        </div>
+      </div>
+      <div class="card">
+        <h3>The optimizer — <code>optfunc</code></h3>
+        <p>Runs only with <code class="kw">-O</code>: constant folding, common-subexpression elimination,
+           dead-code removal, loop rotation… It rewrites the block/elem graph in place — that's the gap
+           between the two IR panes.</p>
+        <div class="links">
+          <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/backend/go.d#L224" target="_blank" rel="noopener">backend/go.d</a>
+          <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/backend/blockopt.d" target="_blank" rel="noopener">backend/blockopt.d</a>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Code gen &amp; disassembly</h3>
+        <p>The final pass walks the optimized blocks and selects x86 instructions; the disassembler
+           renders them for the <code class="kw">-vasm</code> (<b>Disassembly</b>) pane.</p>
+        <div class="links">
+          <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/backend/x86/cgcod.d" target="_blank" rel="noopener">x86/cgcod.d</a>
+          <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/backend/x86/disasm86.d" target="_blank" rel="noopener">x86/disasm86.d</a>
+        </div>
+      </div>
+    </div>
+    <div class="aside">⚙️ The two IR panes are dumped by this playground itself — a small printer in
+      <code class="kw">compiler/wasm/dmdwasm.d</code> walks the same <code class="kw">block</code>/
+      <code class="kw">elem</code> graph and labels each node with its real
+      <code class="kw">OPER</code>/<code class="kw">TY</code>/<code class="kw">BC</code> name.</div>
+  </section>
+
+  <footer>
+    Built from the DMD frontend <b>and</b> backend compiled to WebAssembly. Want the gory details of
+    how that works? It's all under
+    <a href="https://github.com/dlang/dmd/tree/master/compiler" target="_blank" rel="noopener">compiler/</a>.
+    &nbsp;·&nbsp; <a href="index.html">← back to the explorer</a>
+  </footer>
+
+</main>
+</body>
+</html>

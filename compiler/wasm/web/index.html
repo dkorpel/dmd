@@ -4,6 +4,32 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>DMD explorer</title>
+<!--
+  Import map pinning CodeMirror 6 as ES modules from a CDN (no build step).
+  The `?external=...` flags force every package to import the shared CM packages
+  by bare specifier, so the import map below resolves them to a single copy —
+  avoids the "Unrecognized extension value" error from duplicate @codemirror/state.
+  These scoped packages are pinned at majors (@6/@1) because their npm latest ==
+  highest version. We deliberately avoid the `codemirror` meta-package: a rogue
+  6.65.7 (a CM5 bundle) outranks the real 6.0.2, so `@6` would resolve to it.
+  basicSetup is reconstructed from the individual packages in the script instead.
+-->
+<script type="importmap">
+{
+  "imports": {
+    "@codemirror/state":        "https://esm.sh/@codemirror/state@6?external=@codemirror/state,@codemirror/view,@codemirror/language,@codemirror/commands,@codemirror/autocomplete,@codemirror/search,@codemirror/lint,@lezer/common,@lezer/highlight,@lezer/lr",
+    "@codemirror/view":         "https://esm.sh/@codemirror/view@6?external=@codemirror/state,@codemirror/view,@codemirror/language,@codemirror/commands,@codemirror/autocomplete,@codemirror/search,@codemirror/lint,@lezer/common,@lezer/highlight,@lezer/lr",
+    "@codemirror/language":     "https://esm.sh/@codemirror/language@6?external=@codemirror/state,@codemirror/view,@codemirror/language,@codemirror/commands,@codemirror/autocomplete,@codemirror/search,@codemirror/lint,@lezer/common,@lezer/highlight,@lezer/lr",
+    "@codemirror/commands":     "https://esm.sh/@codemirror/commands@6?external=@codemirror/state,@codemirror/view,@codemirror/language,@codemirror/commands,@codemirror/autocomplete,@codemirror/search,@codemirror/lint,@lezer/common,@lezer/highlight,@lezer/lr",
+    "@codemirror/autocomplete": "https://esm.sh/@codemirror/autocomplete@6?external=@codemirror/state,@codemirror/view,@codemirror/language,@codemirror/commands,@codemirror/autocomplete,@codemirror/search,@codemirror/lint,@lezer/common,@lezer/highlight,@lezer/lr",
+    "@codemirror/search":       "https://esm.sh/@codemirror/search@6?external=@codemirror/state,@codemirror/view,@codemirror/language,@codemirror/commands,@codemirror/autocomplete,@codemirror/search,@codemirror/lint,@lezer/common,@lezer/highlight,@lezer/lr",
+    "@codemirror/lint":         "https://esm.sh/@codemirror/lint@6?external=@codemirror/state,@codemirror/view,@codemirror/language,@codemirror/commands,@codemirror/autocomplete,@codemirror/search,@codemirror/lint,@lezer/common,@lezer/highlight,@lezer/lr",
+    "@lezer/common":            "https://esm.sh/@lezer/common@1",
+    "@lezer/highlight":         "https://esm.sh/@lezer/highlight@1?external=@lezer/common",
+    "@lezer/lr":                "https://esm.sh/@lezer/lr@1?external=@lezer/common"
+  }
+}
+</script>
 <style>
   body { font: 14px/1.4 system-ui, sans-serif; margin: 0; background: #1e1e1e; color: #ddd; }
   header { padding: 8px 16px; background: #252526; border-bottom: 1px solid #333;
@@ -30,14 +56,24 @@
   .cols.grid .pane { border: 1px solid #333; }
   .pane[hidden] { display: none; }
   .pane h2 { font-size: 12px; text-transform: uppercase; color: #888; margin: 0;
-             padding: 6px 12px; background: #252526; cursor: grab;
+             padding: 6px 12px 6px 9px; background: #252526; cursor: grab;
+             border-left: 3px solid transparent;
              display: flex; align-items: center; gap: 6px; }
+  /* Stage accent stripe (matches the toolbar group colors). */
+  .pane[data-stage="source"]   h2 { border-left-color: #888; }
+  .pane[data-stage="parse"]    h2 { border-left-color: #3b8eea; }
+  .pane[data-stage="semantic"] h2 { border-left-color: #23d18b; }
+  .pane[data-stage="codegen"]  h2 { border-left-color: #e5a23b; }
+  .pane[data-stage="diag"]     h2 { border-left-color: #f14c4c; }
   .pane h2::before { content: "⠿"; color: #555; cursor: grab; }
   .pane.dragging { opacity: 0.4; }
   .pane.dragover h2 { box-shadow: inset 3px 0 0 #0e639c; }
   textarea, pre { flex: 1; margin: 0; padding: 12px; border: 0; font: 13px/1.45 ui-monospace, monospace;
                   background: #1e1e1e; color: #d4d4d4; white-space: pre; overflow: auto; tab-size: 4; }
   textarea { resize: none; outline: none; }
+  /* CodeMirror editor host: fill the source pane between header and run bar. */
+  #src { flex: 1; min-height: 0; overflow: hidden; }
+  #src .cm-editor { height: 100%; }
   /* ANSI terminal palette for the diagnostics pane (VS Code dark). */
   .ansi-1 { font-weight: bold; }
   .ansi-fg-0 { color: #666; } .ansi-fg-1 { color: #cd3131; }
@@ -52,15 +88,29 @@
   button.run { font: 13px system-ui; padding: 6px 16px; background: #0e639c; color: #fff;
                border: 0; border-radius: 3px; cursor: pointer; }
   button.run:hover { background: #1177bb; }
+  /* Per-stage group label in the pane toolbar. */
+  .toolbar .stage-label { font-size: 10px; color: #777; text-transform: uppercase;
+                          letter-spacing: .04em; margin: 0 2px 0 6px; }
+  .toolbar .stage-label.source   { color: #aaa; }
+  .toolbar .stage-label.parse    { color: #6fb0f5; }
+  .toolbar .stage-label.semantic { color: #4fd99f; }
+  .toolbar .stage-label.codegen  { color: #ecb45f; }
+  .toolbar .stage-label.diag     { color: #f37070; }
+  .toolbar .stage-label.clickable { cursor: pointer; }
+  .toolbar .stage-label.clickable:hover { text-decoration: underline; }
+  a.tour { font: 12px system-ui; color: #4ea1ff; text-decoration: none;
+           padding: 4px 10px; border: 1px solid #2d4a66; border-radius: 3px; white-space: nowrap; }
+  a.tour:hover { background: #0e639c; color: #fff; border-color: #0e639c; }
 </style>
 </head>
 <body>
 <header>
   <h1>DMD explorer</h1>
+  <a class="tour" href="tour.html" target="_blank" rel="noopener"
+     title="A guided tour of DMD's compiler passes and internal data structures, with links to the source">📖 Tour</a>
   <div class="toolbar">
     <div class="group" id="paneToggles">
-      <label>Panes</label>
-      <!-- toggle chips injected here -->
+      <!-- per-stage labels + toggle chips injected here -->
     </div>
     <div class="sep"></div>
     <div class="group">
@@ -73,9 +123,11 @@
   <span id="status">loading dmd.wasm…</span>
 </header>
 <div class="cols" id="cols">
-  <div class="pane" data-pane="src" data-title="D source" draggable="false">
+  <div class="pane" data-pane="src" data-stage="source" data-title="D source" draggable="false">
     <h2 draggable="true">D source</h2>
-    <textarea id="src" spellcheck="false">module test;
+    <div id="src"></div>
+    <!-- Initial document for the CodeMirror editor (mounted into #src above). -->
+    <textarea id="src-init" hidden>module test;
 
 int add(int a, int b) { return a + b; }
 
@@ -91,35 +143,35 @@ int[] squares()
 </textarea>
     <div class="bar"><button class="run" id="run" title="Run (Ctrl+Enter / ⌘+Enter)">Go ▶</button></div>
   </div>
-  <div class="pane" data-pane="lex" data-title="Tokens">
+  <div class="pane" data-pane="lex" data-stage="parse" data-title="Tokens">
     <h2 draggable="true" title="Internal lexer output: one line per source line, listing that line's TOK enum member names (e.g. int32, identifier, add). Tokens carrying a value get it as a parenthesized postfix, e.g. float32Literal(3.5).">Tokens (lexer)</h2>
     <pre id="lex"></pre>
   </div>
-  <div class="pane" data-pane="parse" data-title="Parse tree">
+  <div class="pane" data-pane="parse" data-stage="parse" data-title="Parse tree">
     <h2 draggable="true">Parse tree (printAST)</h2>
     <pre id="parse"></pre>
   </div>
-  <div class="pane" data-pane="sema" data-title="Semantic tree">
+  <div class="pane" data-pane="sema" data-stage="semantic" data-title="Semantic tree">
     <h2 draggable="true" title="printAST after semantic analysis: like -vcg-ast, but labels nodes by their internal DMD class name (e.g. AddExp, CompoundStatement) instead of regenerated D syntax">Semantic tree (printAST, post-semantic)</h2>
     <pre id="sema"></pre>
   </div>
-  <div class="pane" data-pane="ast" data-title="Lowered AST">
+  <div class="pane" data-pane="ast" data-stage="semantic" data-title="Lowered AST">
     <h2 draggable="true">Lowered AST (-vcg-ast)</h2>
     <pre id="ast"></pre>
   </div>
-  <div class="pane" data-pane="ir" data-title="Backend IR (pre-opt)">
+  <div class="pane" data-pane="ir" data-stage="codegen" data-title="Backend IR (pre-opt)">
     <h2 draggable="true" title="Backend intermediate representation: the block/elem graph of each function just after lowering, before the optimizer runs. Nodes are labelled with the backend enum member names (OPadd, TYint, BC.goto_).">Backend IR — before -O (block/elem graph)</h2>
     <pre id="ir"></pre>
   </div>
-  <div class="pane" data-pane="iropt" data-title="Backend IR (post-opt)">
+  <div class="pane" data-pane="iropt" data-stage="codegen" data-title="Backend IR (post-opt)">
     <h2 draggable="true" title="The same block/elem graph after the -O global optimizer (optfunc) has run, immediately before code generation. Diff against the pre-opt pane to see what the optimizer did.">Backend IR — after -O (block/elem graph)</h2>
     <pre id="iropt"></pre>
   </div>
-  <div class="pane" data-pane="asm" data-title="Disassembly">
+  <div class="pane" data-pane="asm" data-stage="codegen" data-title="Disassembly">
     <h2 draggable="true">x86-64 disassembly (-vasm)</h2>
     <pre id="asm"></pre>
   </div>
-  <div class="pane" data-pane="diag" data-title="Diagnostics">
+  <div class="pane" data-pane="diag" data-stage="diag" data-title="Diagnostics">
     <h2 draggable="true">Diagnostics</h2>
     <pre id="diag"></pre>
   </div>
@@ -127,6 +179,33 @@ int[] squares()
 
 <script type="module">
 import { loadDmd, compile } from "./glue.js";
+import { EditorView, keymap, lineNumbers, highlightActiveLineGutter, highlightSpecialChars,
+         drawSelection, dropCursor, rectangularSelection, crosshairCursor,
+         highlightActiveLine } from "@codemirror/view";
+import { EditorState } from "@codemirror/state";
+import { StreamLanguage, HighlightStyle, syntaxHighlighting, defaultHighlightStyle,
+         foldGutter, foldKeymap, indentOnInput, bracketMatching } from "@codemirror/language";
+import { history, historyKeymap, defaultKeymap, indentWithTab } from "@codemirror/commands";
+import { searchKeymap, highlightSelectionMatches } from "@codemirror/search";
+import { autocompletion, completionKeymap, closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
+import { lintKeymap } from "@codemirror/lint";
+import { tags as t } from "@lezer/highlight";
+
+// basicSetup, reconstructed from the individual packages (see import-map note in
+// <head> for why we don't pull it from the `codemirror` meta-package).
+const basicSetup = [
+    lineNumbers(), highlightActiveLineGutter(), highlightSpecialChars(),
+    history(), foldGutter(), drawSelection(), dropCursor(),
+    EditorState.allowMultipleSelections.of(true), indentOnInput(),
+    syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+    bracketMatching(), closeBrackets(), autocompletion(),
+    rectangularSelection(), crosshairCursor(),
+    highlightActiveLine(), highlightSelectionMatches(),
+    keymap.of([
+        ...closeBracketsKeymap, ...defaultKeymap, ...searchKeymap,
+        ...historyKeymap, ...foldKeymap, ...completionKeymap, ...lintKeymap,
+    ]),
+];
 
 const $ = (id) => document.getElementById(id);
 const cols = $("cols");
@@ -153,7 +232,9 @@ function applyLayout(layout) {
 
 function setHidden(pane, hidden) {
     const el = cols.querySelector(`.pane[data-pane="${pane}"]`);
-    if (el) el.hidden = hidden;
+    if (!el) return;
+    if (el.dataset.stage === "source") hidden = false;   // D source pane is always visible
+    el.hidden = hidden;
     const chip = document.querySelector(`.chip[data-toggle="${pane}"]`);
     if (chip) chip.setAttribute("aria-pressed", String(!hidden));
 }
@@ -170,19 +251,45 @@ function loadState() {
     applyLayout(s.layout || "cols");
 }
 
-// Build a toggle chip per pane.
+// Build the pane toggles, grouped by compiler stage (source → parsing →
+// semantic → codegen → output). Each group gets a colored label.
+const STAGES = [
+    ["source",   "Source"],
+    ["parse",    "Parsing"],
+    ["semantic", "Semantic"],
+    ["codegen",  "Codegen"],
+    ["diag",     "Output"],
+];
 const toggles = $("paneToggles");
-for (const p of paneEls()) {
+const makeChip = (p) => {
     const chip = document.createElement("button");
     chip.className = "chip";
     chip.dataset.toggle = p.dataset.pane;
     chip.textContent = p.dataset.title;
-    chip.setAttribute("aria-pressed", "true");
-    chip.addEventListener("click", () => {
-        setHidden(p.dataset.pane, !p.hidden);
+    chip.setAttribute("aria-pressed", String(!p.hidden));
+    chip.addEventListener("click", () => { setHidden(p.dataset.pane, !p.hidden); saveState(); });
+    return chip;
+};
+for (const [stage, label] of STAGES) {
+    const panes = paneEls().filter((p) => p.dataset.stage === stage);
+    if (!panes.length) continue;
+    const lab = document.createElement("span");
+    lab.className = "stage-label " + stage;
+    lab.textContent = label;
+    toggles.appendChild(lab);
+    // Source is always visible — no toggle chips, label is inert.
+    if (stage === "source") continue;
+    // Clicking the group label toggles every pane in that stage at once:
+    // if all are visible, hide the group; otherwise show the whole group.
+    lab.classList.add("clickable");
+    lab.title = "Toggle all " + label + " panes";
+    lab.addEventListener("click", () => {
+        const ps = paneEls().filter((p) => p.dataset.stage === stage);
+        const anyHidden = ps.some((p) => p.hidden);
+        for (const p of ps) setHidden(p.dataset.pane, !anyHidden);
         saveState();
     });
-    toggles.appendChild(chip);
+    for (const p of panes) toggles.appendChild(makeChip(p));
 }
 
 // Layout switch.
@@ -222,6 +329,129 @@ cols.addEventListener("drop", (e) => {
 });
 
 loadState();
+
+// ---- CodeMirror source editor (replaces the plain textarea) ---------------
+
+// A minimal D mode: enough to color keywords, types, literals and comments.
+// D has no official Lezer grammar, so this is a hand-written StreamLanguage
+// (the CM6 equivalent of a CodeMirror-5 mode) rather than the C/C++ grammar.
+const D_KEYWORDS = new Set(`abstract alias align asm assert auto body break case
+cast catch class const continue debug default delegate delete deprecated do else
+enum export extern false final finally for foreach foreach_reverse function goto
+if immutable import in inout interface invariant is lazy macro mixin module new
+nothrow null out override package pragma private protected public pure ref return
+scope shared static struct super switch synchronized template this throw true try
+typeid typeof union unittest version while with __gshared __traits __vector
+__parameters __FILE__ __LINE__ __MODULE__ __FUNCTION__ __PRETTY_FUNCTION__`.split(/\s+/));
+const D_TYPES = new Set(`bool byte ubyte short ushort int uint long ulong cent ucent
+float double real ifloat idouble ireal cfloat cdouble creal char wchar dchar void
+string wstring dstring size_t ptrdiff_t`.split(/\s+/));
+
+// Consume the body of a string/char literal opened with quote `state.q`.
+// Backtick (WYSIWYG) strings ignore backslash escapes; others honor them.
+function dStringBody(stream, state) {
+    let c;
+    while ((c = stream.next()) != null) {
+        if (c === "\\" && state.q !== "`") { stream.next(); continue; }
+        if (c === state.q) { state.q = null; break; }
+    }
+    return "string";
+}
+
+const dLanguage = StreamLanguage.define({
+    name: "d",
+    startState: () => ({ block: false, nest: 0, q: null }),
+    token(stream, state) {
+        // Continue a multi-line construct started on an earlier line.
+        if (state.block) {                               // /* ... */
+            while (!stream.eol()) { if (stream.match("*/")) { state.block = false; break; } stream.next(); }
+            return "comment";
+        }
+        if (state.nest > 0) {                            // /+ ... +/ (nesting)
+            while (!stream.eol()) {
+                if (stream.match("/+")) { state.nest++; continue; }
+                if (stream.match("+/")) { state.nest--; if (state.nest === 0) break; continue; }
+                stream.next();
+            }
+            return "comment";
+        }
+        if (state.q) return dStringBody(stream, state);  // multi-line string
+
+        if (stream.eatSpace()) return null;
+
+        if (stream.match("//")) { stream.skipToEnd(); return "comment"; }
+        if (stream.match("/*")) {
+            state.block = true;
+            while (!stream.eol()) { if (stream.match("*/")) { state.block = false; break; } stream.next(); }
+            return "comment";
+        }
+        if (stream.match("/+")) {
+            state.nest = 1;
+            while (!stream.eol()) {
+                if (stream.match("/+")) { state.nest++; continue; }
+                if (stream.match("+/")) { state.nest--; if (state.nest === 0) break; continue; }
+                stream.next();
+            }
+            return "comment";
+        }
+
+        const ch = stream.peek();
+        if (ch === '"' || ch === '`' || ch === "'") { stream.next(); state.q = ch; return dStringBody(stream, state); }
+        if (/[0-9]/.test(ch)) {
+            stream.match(/^(0[xX][0-9a-fA-F_]+|0[bB][01_]+|[0-9][0-9_]*\.?[0-9_]*([eE][+\-]?[0-9_]+)?)[fFlLuUiI]*/);
+            return "number";
+        }
+        if (ch === "@") { stream.next(); stream.eatWhile(/\w/); return "meta"; }   // @safe, @nogc, ...
+        if (/[A-Za-z_]/.test(ch)) {
+            stream.eatWhile(/\w/);
+            const w = stream.current();
+            if (D_KEYWORDS.has(w)) return "keyword";
+            if (D_TYPES.has(w)) return "type";
+            return "variable";
+        }
+        stream.next();                                   // punctuation / operators: no highlight
+        return null;
+    },
+});
+
+// Highlight palette tuned to the surrounding VS Code dark theme.
+const dHighlight = HighlightStyle.define([
+    { tag: t.keyword,                      color: "#569cd6" },
+    { tag: t.typeName,                     color: "#4ec9b0" },
+    { tag: t.comment,                      color: "#6a9955", fontStyle: "italic" },
+    { tag: t.string,                       color: "#ce9178" },
+    { tag: t.number,                       color: "#b5cea8" },
+    { tag: t.meta,                         color: "#dcdcaa" },
+    { tag: t.variableName,                 color: "#9cdcfe" },
+]);
+
+const dTheme = EditorView.theme({
+    "&":                       { color: "#d4d4d4", backgroundColor: "#1e1e1e", height: "100%", fontSize: "13px" },
+    ".cm-content":             { fontFamily: "ui-monospace, monospace", caretColor: "#fff" },
+    ".cm-gutters":             { backgroundColor: "#1e1e1e", color: "#666", border: "none" },
+    ".cm-activeLine":          { backgroundColor: "#2a2a2a" },
+    ".cm-activeLineGutter":    { backgroundColor: "#2a2a2a", color: "#999" },
+    "&.cm-focused":            { outline: "none" },
+    ".cm-cursor":              { borderLeftColor: "#fff" },
+    "&.cm-focused .cm-selectionBackground, ::selection": { backgroundColor: "#264f78" },
+}, { dark: true });
+
+// `onDocChange` is wired up once the wasm compiler is ready (see below).
+let runTimer = null;
+let onDocChange = () => {};
+const editor = new EditorView({
+    doc: $("src-init").value,
+    parent: $("src"),
+    extensions: [
+        basicSetup,                                      // line numbers, undo/redo, bracket match, ...
+        keymap.of([indentWithTab]),                      // Tab inserts indentation
+        dLanguage,
+        syntaxHighlighting(dHighlight),
+        dTheme,
+        EditorView.updateListener.of((u) => { if (u.docChanged) onDocChange(); }),
+    ],
+});
+const getSrc = () => editor.state.doc.toString();
 
 // ---- ANSI rendering -------------------------------------------------------
 
@@ -263,7 +493,7 @@ function ansiToHtml(text) {
 
 function run() {
     const t0 = performance.now();
-    const { lex, parse, sema, ast, ir, irOpt, asm, errors, diagnostics } = compile($("src").value);
+    const { lex, parse, sema, ast, ir, irOpt, asm, errors, diagnostics } = compile(getSrc());
     const ms = (performance.now() - t0).toFixed(1);
     $("lex").textContent = lex || "(no output)";
     $("parse").textContent = parse || "(no output)";
@@ -285,14 +515,10 @@ function run() {
         document.addEventListener("keydown", (e) => {
             if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); runNow(); }
         });
-        // Auto-recompile shortly after the user stops typing (or pastes — paste
-        // fires `input` too). 500 ms debounce keeps fast keystrokes from thrashing.
-        let timer = null;
-        const runNow = () => { clearTimeout(timer); run(); };
-        $("src").addEventListener("input", () => {
-            clearTimeout(timer);
-            timer = setTimeout(run, 500);
-        });
+        // Auto-recompile shortly after the user stops typing (or pastes). The
+        // 500 ms debounce keeps fast keystrokes from thrashing the compiler.
+        const runNow = () => { clearTimeout(runTimer); run(); };
+        onDocChange = () => { clearTimeout(runTimer); runTimer = setTimeout(run, 500); };
         run();
     } catch (e) {
         $("status").textContent = "load failed: " + e.message;
