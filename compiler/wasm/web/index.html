@@ -196,7 +196,7 @@ import { StreamLanguage, HighlightStyle, syntaxHighlighting, defaultHighlightSty
 import { history, historyKeymap, defaultKeymap, indentWithTab } from "@codemirror/commands";
 import { searchKeymap, highlightSelectionMatches } from "@codemirror/search";
 import { autocompletion, completionKeymap, closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
-import { lintKeymap } from "@codemirror/lint";
+import { lintKeymap, linter, lintGutter, forceLinting } from "@codemirror/lint";
 import { tags as t } from "@lezer/highlight";
 
 // basicSetup, reconstructed from the individual packages (see import-map note in
@@ -444,6 +444,13 @@ const dTheme = EditorView.theme({
     "&.cm-focused":            { outline: "none" },
     ".cm-cursor":              { borderLeftColor: "#fff" },
     "&.cm-focused .cm-selectionBackground, ::selection": { backgroundColor: "#264f78" },
+    // Inline lint (diagnostics) — dark tooltip + VS Code error/warning colors.
+    ".cm-tooltip-lint":              { backgroundColor: "#252526", border: "1px solid #454545", color: "#d4d4d4" },
+    ".cm-diagnostic":                { padding: "3px 8px", borderLeft: "3px solid #888" },
+    ".cm-diagnostic-error":          { borderLeftColor: "#f14c4c" },
+    ".cm-diagnostic-warning":        { borderLeftColor: "#cca700" },
+    ".cm-lintRange-error":           { backgroundImage: "none", textDecoration: "underline wavy #f14c4c" },
+    ".cm-lintRange-warning":         { backgroundImage: "none", textDecoration: "underline wavy #cca700" },
 }, { dark: true });
 
 // Synced-line highlight in the editor: a StateField holding a single line
@@ -465,6 +472,12 @@ const hlField = StateField.define({
     provide: (f) => EditorView.decorations.from(f),
 });
 
+// Inline diagnostics: DMD's stderr diagnostics, parsed into CodeMirror lint
+// markers shown directly in the editor (gutter icon + underline + hover
+// tooltip). `lintDiags` is refreshed by run() and pushed via forceLinting.
+let lintDiags = [];
+const dLinter = linter(() => lintDiags, { delay: 0 });
+
 // `onDocChange` is wired up once the wasm compiler is ready (see below).
 let runTimer = null;
 let onDocChange = () => {};
@@ -479,6 +492,7 @@ const editor = new EditorView({
         syntaxHighlighting(dHighlight),
         dTheme,
         hlField,
+        lintGutter(), dLinter,                           // inline error/warning markers
         EditorView.updateListener.of((u) => {
             if (u.docChanged) onDocChange();
             if (u.selectionSet || u.docChanged) onCursor();
@@ -490,6 +504,34 @@ const getSrc = () => editor.state.doc.toString();
 // ---- ANSI rendering -------------------------------------------------------
 
 const ESC = (s) => s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+
+// Strip ANSI SGR escapes — the inline editor markers are plain text (color is
+// reserved for the diagnostics pane, rendered via ansiToHtml).
+const stripAnsi = (s) => s.replace(/\x1b\[[0-9;]*m/g, "");
+
+// Parse DMD's stderr diagnostics into CodeMirror lint diagnostics positioned in
+// the source. DMD prints `input.d(line,col): Error: message` (also Warning and
+// Deprecation); supplemental/continuation lines without a location are skipped.
+const DIAG_RE = /^(.+?)\((\d+)(?:,(\d+))?\):\s+(Error|Warning|Deprecation):\s+(.*)$/;
+const DIAG_SEV = { Error: "error", Warning: "warning", Deprecation: "warning" };
+function parseDiagnostics(text, doc) {
+    const out = [];
+    for (const raw of stripAnsi(text || "").split("\n")) {
+        const m = raw.match(DIAG_RE);
+        if (!m || m[1] !== "input.d") continue;
+        const line = doc.line(Math.min(+m[2], doc.lines));
+        const col = m[3] ? +m[3] : 0;
+        let from = line.from, to = line.to;
+        if (col > 0) {
+            from = Math.min(line.from + col - 1, line.to);
+            // Underline the identifier/token at the column; else to line's end.
+            const w = doc.sliceString(from, line.to).match(/^[A-Za-z_]\w*|^\S/);
+            to = w ? from + w[0].length : line.to;
+        }
+        out.push({ from, to, severity: DIAG_SEV[m[4]] || "error", message: m[5] });
+    }
+    return out;
+}
 
 // Render text containing ANSI SGR escape codes (\x1b[...m) as colored HTML.
 // DMD's ANSIConsole emits: \x1b[1m (bold), \x1b[<0|1>;3Nm (fg color), \x1b[m (reset).
@@ -611,6 +653,9 @@ function run() {
     renderLined("iropt", irOpt, false, "(no code generated)");
     $("asm").textContent = asm || "(no code generated)";
     $("diag").innerHTML = diagnostics ? ansiToHtml(diagnostics) : "(no diagnostics)";
+    // Mirror the diagnostics inline in the editor (gutter + underline + tooltip).
+    lintDiags = parseDiagnostics(diagnostics, editor.state.doc);
+    forceLinting(editor);
     $("status").textContent = `errors: ${errors} · ${ms} ms`;
     applyHighlight(/*force*/ true);   // DOM was rebuilt; re-apply current highlight
 }
