@@ -16,6 +16,9 @@ import core.stdc.stdio;
 import core.stdc.stdlib;
 import core.stdc.string;
 
+version (Posix) version = FilePosix;
+version (WASI)  version = FilePosix;
+
 version (Windows)
 {
     import core.sys.windows.winbase;
@@ -24,7 +27,7 @@ version (Windows)
 
     private extern (C) int isatty(int) @trusted @nogc nothrow;
 }
-else version (Posix)
+else version (FilePosix)
 {
     import core.sys.posix.unistd;
 }
@@ -210,7 +213,7 @@ private final class ANSIConsole : Console
  */
 bool detectTerminal() nothrow
 {
-    version (Posix)
+    version (FilePosix)
     {
         const(char)* term = getenv("TERM");
         return isatty(STDERR_FILENO) && term && term[0] && strcmp(term, "dumb") != 0;

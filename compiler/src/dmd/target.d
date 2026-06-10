@@ -67,6 +67,8 @@ Target.OS defaultTargetOS() @safe
         return Target.OS.DragonFlyBSD;
     else version (Hurd)
         return Target.OS.Hurd;
+    else version (WASI)
+        return Target.OS.linux;   // wasm host: treat the default target OS as linux
     else
         static assert(0, "unknown TARGET");
 }

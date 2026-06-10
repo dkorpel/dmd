@@ -11,6 +11,9 @@
 
 module dmd.root.filename;
 
+version (Posix) version = FilePosix;
+version (WASI)  version = FilePosix;
+
 import core.stdc.ctype;
 import core.stdc.errno;
 import core.stdc.stdio;
@@ -25,7 +28,7 @@ import dmd.root.port;
 import dmd.root.rmem;
 import dmd.root.string;
 
-version (Posix)
+version (FilePosix)
 {
     import core.sys.posix.stdlib;
     import core.sys.posix.sys.stat;
@@ -62,7 +65,7 @@ bool isDirSeparator(char c) pure nothrow @nogc @safe
     {
         return c == '\\' || c == '/';
     }
-    else version (Posix)
+    else version (FilePosix)
     {
         return c == '/';
     }
@@ -138,7 +141,7 @@ nothrow:
             return isDirSeparator(name[0])
                 || (name.length >= 2 && name[1] == ':');
         }
-        else version (Posix)
+        else version (FilePosix)
         {
             return isDirSeparator(name[0]);
         }
@@ -200,7 +203,7 @@ nothrow:
             {
             case '.':
                 return str[idx + 1 .. $];
-            version (Posix)
+            version (FilePosix)
             {
             case '/':
                 return null;
@@ -301,7 +304,7 @@ nothrow:
         {
             switch (e)
             {
-                version (Posix)
+                version (FilePosix)
                 {
                 case '/':
                     return str[idx + 1 .. $];
@@ -437,7 +440,7 @@ nothrow:
             length += f.length;
 
             const last = p[length - 1];
-            version (Posix)
+            version (FilePosix)
             {
                 if (!isDirSeparator(last))
                     p[length++] = '/';
@@ -533,7 +536,7 @@ nothrow:
                     {
                     case ';':
                     }
-                    version (Posix)
+                    version (FilePosix)
                     {
                     case ':':
                     }
@@ -547,7 +550,7 @@ nothrow:
                     case '\r':
                         continue;  // ignore carriage returns
 
-                    version (Posix)
+                    version (FilePosix)
                     {
                     case '~':
                         if (!home)
@@ -875,7 +878,7 @@ nothrow:
         if (!name.length)
             return 0;
         //static int count; printf("count: %d %.*s\n", ++count, cast(int)name.length, name.ptr);
-        version (Posix)
+        version (FilePosix)
         {
             stat_t st;
             if (name.toCStringThen!((v) => stat(v.ptr, &st)) < 0)
@@ -950,7 +953,7 @@ nothrow:
 
         version (Windows)
             const r = _mkdir(path);
-        version (Posix)
+        version (FilePosix)
         {
             errno = 0;
             const r = path.toCStringThen!((pathCS) => mkdir(pathCS.ptr, (7 << 6) | (7 << 3) | 7));
@@ -967,7 +970,7 @@ nothrow:
             if (GetLastError() == ERROR_ALREADY_EXISTS)
                 return true;
         }
-        version (Posix)
+        version (FilePosix)
         {
             if (errno == EEXIST)
                 return true;
@@ -994,7 +997,7 @@ nothrow:
     /// Ditto
     extern (D) static const(char)[] canonicalName(const char[] name)
     {
-        version (Posix)
+        version (FilePosix)
         {
             import core.stdc.limits;      // PATH_MAX
             import core.sys.posix.unistd; // _PC_PATH_MAX

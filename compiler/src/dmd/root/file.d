@@ -11,6 +11,9 @@
 
 module dmd.root.file;
 
+version (Posix) version = FilePosix;
+version (WASI)  version = FilePosix;
+
 import core.stdc.errno;
 import core.stdc.stdio;
 import core.stdc.stdlib;
@@ -89,7 +92,7 @@ nothrow:
         enum Success = false;
         enum Failure = true;
 
-        version (Posix)
+        version (FilePosix)
         {
             //printf("File::read('%.*s')\n", cast(int)name.length, name.ptr);
             int fd = name.toCStringThen!(slice => open(slice.ptr, O_RDONLY));
@@ -170,7 +173,7 @@ nothrow:
     /// Delete a file.
     extern (C++) static void remove(const(char)* name)
     {
-        version (Posix)
+        version (FilePosix)
         {
             .remove(name);
         }
@@ -232,7 +235,7 @@ nothrow:
     /// Returns: `ulong.max` on any error, the length otherwise.
     static ulong size(const char* namez)
     {
-        version (Posix)
+        version (FilePosix)
         {
             stat_t buf;
             if (stat(namez, &buf) == 0)

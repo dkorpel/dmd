@@ -52,6 +52,10 @@ else version (Posix)
 {
     enum PathSeparator = '/';
 }
+else version (WASI)
+{
+    enum PathSeparator = '/';
+}
 else
     static assert(0);
 
