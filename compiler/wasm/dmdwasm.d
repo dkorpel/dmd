@@ -21,6 +21,18 @@ __gshared OutBuffer parseBuf;
 // Same internal-class-name format as parseBuf, but with types/lowerings filled in.
 __gshared OutBuffer semaBuf;
 
+// Internal lexer dump: one output line per source line, listing the TOK enum
+// member names of that line's tokens. Tokens carrying a value (literals,
+// identifiers) get that value as a parenthesized postfix, e.g. float32Literal(3.5).
+__gshared OutBuffer lexBuf;
+
+// Backend IR dumps of the `block`/`elem` graph of each function, at two stages:
+//   irBuf    — right after lowering, before the optimizer (glue.backendIRDumpHook)
+//   irOptBuf — after the -O global optimizer, before codegen (dout.backendIROptDumpHook)
+// Comparing the two shows what the optimizer did. See the bottom of this file.
+__gshared OutBuffer irBuf;
+__gshared OutBuffer irOptBuf;
+
 extern (C):
 
 // JS writes the source here (NUL-terminated not required); returns the buffer.
@@ -44,7 +56,77 @@ const(char)* dmdwasm_parse_ptr() => cast(const(char)*) parseBuf[].ptr;
 size_t       dmdwasm_parse_len() => parseBuf[].length;
 const(char)* dmdwasm_sema_ptr() => cast(const(char)*) semaBuf[].ptr;
 size_t       dmdwasm_sema_len() => semaBuf[].length;
+const(char)* dmdwasm_lex_ptr() => cast(const(char)*) lexBuf[].ptr;
+size_t       dmdwasm_lex_len() => lexBuf[].length;
+const(char)* dmdwasm_ir_ptr()  => cast(const(char)*) irBuf[].ptr;
+size_t       dmdwasm_ir_len()  => irBuf[].length;
+const(char)* dmdwasm_iropt_ptr() => cast(const(char)*) irOptBuf[].ptr;
+size_t       dmdwasm_iropt_len() => irOptBuf[].length;
 uint         dmdwasm_errors()  => global.errors;
+
+// TOK value -> enum member name (e.g. TOK.add -> "add"), built at compile time.
+import dmd.tokens : TOK;
+private immutable string[TOK.max + 1] tokNames = () {
+    string[TOK.max + 1] names;
+    static foreach (member; __traits(allMembers, TOK))
+        names[__traits(getMember, TOK, member)] = member;
+    return names;
+}();
+
+// True for tokens that carry user data worth showing as a parenthesized postfix
+// (numeric/char/string literals and identifiers). Keywords/punctuation don't.
+private bool tokenHasValue(TOK v)
+{
+    switch (v)
+    {
+    case TOK.int32Literal, TOK.uns32Literal, TOK.int64Literal, TOK.uns64Literal,
+         TOK.int128Literal, TOK.uns128Literal,
+         TOK.float32Literal, TOK.float64Literal, TOK.float80Literal,
+         TOK.imaginary32Literal, TOK.imaginary64Literal, TOK.imaginary80Literal,
+         TOK.charLiteral, TOK.wcharLiteral, TOK.dcharLiteral, TOK.wchar_tLiteral,
+         TOK.identifier, TOK.string_, TOK.hexadecimalString, TOK.interpolated:
+        return true;
+    default:
+        return false;
+    }
+}
+
+/// Lex `src` (NUL-terminated, `len` bytes before the NUL) and fill lexBuf with
+/// one line per source line listing that line's token enum names.
+private void dumpTokens(const(char)* fileName, const(char)* src, size_t len)
+{
+    import dmd.lexer : Lexer;
+    import dmd.tokens : Token;
+
+    lexBuf.reset();
+    scope lexer = new Lexer(fileName, src, 0, len, false, false, global.errorSinkNull, null);
+
+    uint curLine = 1;
+    bool atLineStart = true;
+    lexer.nextToken();
+    while (lexer.token.value != TOK.endOfFile)
+    {
+        const L = lexer.token.loc.linnum;
+        while (curLine < L)
+        {
+            lexBuf.writeByte('\n');
+            curLine++;
+            atLineStart = true;
+        }
+        if (!atLineStart)
+            lexBuf.writeByte(' ');
+        lexBuf.writestring(tokNames[lexer.token.value]);
+        if (tokenHasValue(lexer.token.value))
+        {
+            lexBuf.writeByte('(');
+            lexer.token.toString((ubyte c) { lexBuf.writeByte(c); });
+            lexBuf.writeByte(')');
+        }
+        atLineStart = false;
+        lexer.nextToken();
+    }
+    lexBuf.writeByte('\n');
+}
 
 /// Initialize global DMD state (subset of frontend.initDMD, Phobos-free).
 private void initFrontend()
@@ -124,6 +206,9 @@ void dmdwasm_run(const(char)* src, size_t len)
     astBuf.doindent = 1;
     parseBuf.reset();
     semaBuf.reset();
+    lexBuf.reset();
+    irBuf.reset();
+    irOptBuf.reset();
 
     initFrontend();
 
@@ -134,6 +219,9 @@ void dmdwasm_run(const(char)* src, size_t len)
     enum fileName = "input.d";
     auto fb = (cast(ubyte*) src)[0 .. len] ~ cast(ubyte) '\0';
     global.fileManager.add(FileName(fileName), fb);
+
+    // Internal lexer dump: token enum names per source line.
+    dumpTokens(fileName.ptr, cast(const(char)*) fb.ptr, len);
 
     auto id = Identifier.idPool("input");
     auto m = new Module(fileName, id, 0, 0);
@@ -171,9 +259,21 @@ void dmdwasm_run(const(char)* src, size_t len)
         import dmd.target : target;
 
         driverParams.vasm = true;
+        driverParams.optimize = true;   // run the -O global optimizer so the two IR panes differ
         backend_init(global.params, driverParams, target);
         ObjcGlue_initialize();
+
+        // Register both per-function IR dumpers, then generate code. The pre-opt hook
+        // fires before the optimizer (block/elem graph as lowered); the post-opt hook
+        // fires after optfunc() and before codgen() rewrites the graph into machine code.
+        import dmd.glue : backendIRDumpHook;
+        import dmd.backend.dout : backendIROptDumpHook;
+        backendIRDumpHook    = &dumpFunctionIRPre;
+        backendIROptDumpHook = &dumpFunctionIROpt;
         generateCodeNoWrite(m);
+        backendIRDumpHook    = null;
+        backendIROptDumpHook = null;
+
         backend_term();
 
         // The disassembly is printed via printf; flush so the host (JS / wasmtime)
@@ -208,4 +308,182 @@ void _start()
 {
     __wasm_call_ctors();   // run C/global ctors (data relocs etc.) before any work
     dmdwasm_selftest();
+}
+
+// ===========================================================================
+// Backend IR (block/elem graph) printer
+//
+// Written from scratch instead of reusing backend/debugprint.d: every node is
+// labelled with the actual backend enum member name (OPadd, TYint, BC.goto_),
+// and those names are derived from the enums themselves by compile-time
+// reflection, so the dump can never drift out of sync with the source.
+//
+// Output is one `function` per codegen'd function; under it the blocks in
+// Bnext order (numbered B1..Bn) with their BC exit condition and successor
+// edges; under each block its `elem` tree as an indented preorder dump showing
+// the full binary-tree structure (E1/E2 children) but not every leaf field.
+// ===========================================================================
+extern (D):
+private:
+nothrow:
+
+import dmd.backend.cc : block, Symbol, BC;
+import dmd.backend.el : elem;
+import dmd.backend.oper;
+import dmd.backend.ty;
+
+/// OPER value -> "OPxxx" enum member name. OPER is an anonymous `enum {}` aliased
+/// to int, so reflect over the module's members and keep the integer constants
+/// whose name starts with "OP" (skipping the OPMAX sentinel).
+immutable string[OPMAX] operNames = () {
+    string[OPMAX] names;
+    static foreach (m; __traits(allMembers, dmd.backend.oper))
+    {{
+        static if (m.length >= 2 && m[0] == 'O' && m[1] == 'P' && m != "OPMAX"
+                && __traits(compiles, { enum int v = __traits(getMember, dmd.backend.oper, m); }))
+        {
+            enum int v = __traits(getMember, dmd.backend.oper, m);
+            static if (v >= 0 && v < OPMAX)
+                if (names[v].length == 0)
+                    names[v] = m;
+        }
+    }}
+    return names;
+}();
+
+/// Basic-type value -> "TYxxx" name, same trick. Excludes the separate TYFLxxx
+/// flag enum (overlapping small values) and the TYMAX sentinel.
+immutable string[TYMAX] tyNames = () {
+    string[TYMAX] names;
+    static foreach (m; __traits(allMembers, dmd.backend.ty))
+    {{
+        static if (m.length >= 2 && m[0] == 'T' && m[1] == 'Y' && m != "TYMAX"
+                && !(m.length >= 4 && m[0 .. 4] == "TYFL")
+                && __traits(compiles, { enum int v = __traits(getMember, dmd.backend.ty, m); }))
+        {
+            enum int v = __traits(getMember, dmd.backend.ty, m);
+            static if (v >= 0 && v < TYMAX)
+                if (names[v].length == 0)
+                    names[v] = m;
+        }
+    }}
+    return names;
+}();
+
+/// BC is a real named enum, so reflect over it directly.
+immutable string[BC.max + 1] bcNames = () {
+    string[BC.max + 1] names;
+    static foreach (m; __traits(allMembers, BC))
+        names[__traits(getMember, BC, m)] = m;
+    return names;
+}();
+
+string operName(uint op) => (op < OPMAX && operNames[op].length) ? operNames[op] : "OP?";
+
+string tyName(tym_t ty)
+{
+    const b = tybasic(ty);
+    return (b < TYMAX && tyNames[b].length) ? tyNames[b] : "TY?";
+}
+
+void irIndent(int depth)
+{
+    foreach (_; 0 .. depth)
+        irBuf.writestring("  ");
+}
+
+/// Print one `elem` and, recursively, its E1/E2 subtrees (preorder, indented).
+void dumpElem(elem* e, int depth)
+{
+    irIndent(depth);
+    if (!e)
+    {
+        irBuf.writestring("(null)\n");
+        return;
+    }
+
+    irBuf.writestring(operName(e.Eoper));
+    irBuf.writeByte(' ');
+    irBuf.writestring(tyName(e.Ety));
+
+    // A few leaf operators carry data worth showing inline.
+    switch (e.Eoper)
+    {
+        case OPconst:
+            irBuf.writeByte(' ');
+            if (tyfloating(e.Ety))
+                irBuf.printf("%g", e.Vdouble);
+            else
+                irBuf.printf("%lld", cast(long) e.Vllong);
+            break;
+
+        case OPvar:
+        case OPrelconst:
+            if (e.Vsym)
+            {
+                irBuf.writeByte(' ');
+                irBuf.writestring(e.Vsym.Sident.ptr);
+            }
+            if (e.Voffset)
+                irBuf.printf("+%lld", cast(long) e.Voffset);
+            break;
+
+        case OPstring:
+        case OPasm:
+            if (e.Vstring)
+            {
+                irBuf.writestring(" \"");
+                irBuf.writestring(e.Vstring);
+                irBuf.writeByte('"');
+            }
+            break;
+
+        default:
+            break;
+    }
+    irBuf.writeByte('\n');
+
+    if (OTbinary(e.Eoper))
+    {
+        dumpElem(e.E1, depth + 1);
+        dumpElem(e.E2, depth + 1);
+    }
+    else if (OTunary(e.Eoper))
+        dumpElem(e.E1, depth + 1);
+}
+
+/// glue.backendIRDumpHook: dump one function's block/elem graph into irBuf.
+void dumpFunctionIR(Symbol* sfunc, block* startblock)
+{
+    // Number the blocks 1..n along the Bnext chain for readable references.
+    uint n = 0;
+    for (block* b = startblock; b; b = b.Bnext)
+        b.Bnumber = ++n;
+
+    irBuf.writestring("function ");
+    if (sfunc)
+        irBuf.writestring(sfunc.Sident.ptr);
+    irBuf.writestring("()\n");
+
+    for (block* b = startblock; b; b = b.Bnext)
+    {
+        irBuf.printf("  B%u: BC.", b.Bnumber);
+        irBuf.writestring(b.bc <= BC.max ? bcNames[b.bc] : "?");
+
+        if (b.Bsucc.length)
+        {
+            irBuf.writestring(" -> ");
+            foreach (i, s; b.Bsucc[])
+            {
+                if (i)
+                    irBuf.writestring(", ");
+                irBuf.printf("B%u", s ? s.Bnumber : 0);
+            }
+        }
+        irBuf.writeByte('\n');
+
+        if (b.Belem)
+            dumpElem(b.Belem, 2);
+    }
+    irBuf.writeByte('\n');
 }

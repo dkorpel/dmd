@@ -175,7 +175,15 @@ extern (C++) struct CTFloat
     static real_t parse(const(char)* literal, out bool isOutOfRange)
     {
         errno = 0;
-        auto r = strtold(literal, null);
+        version (WASI)
+        {
+            // wasi-libc's strtold is a stub (built with no long-double support),
+            // so parse via strtod and widen to real_t. Precision beyond double is
+            // lost, which is acceptable for the in-browser frontend.
+            auto r = cast(real_t) strtod(literal, null);
+        }
+        else
+            auto r = strtold(literal, null);
         isOutOfRange = (errno == ERANGE);
         return r;
     }
@@ -186,6 +194,14 @@ extern (C++) struct CTFloat
         version(CRuntime_Microsoft)
         {
             auto len = cast(int) ld_sprint(str, size, fmt, longdouble_soft(x));
+        }
+        else version (WASI)
+        {
+            // wasi-libc's printf family can't render 80/128-bit long double, so
+            // format the value as a double. Use a hex float ('a') so the value is
+            // exact and unambiguous in the lexer/AST dumps. The trailing ".0"
+            // fixup below is skipped: hex output always contains non-digit chars.
+            auto len = cast(int) snprintf(str, size, "%a".ptr, cast(double) x);
         }
         else
         {

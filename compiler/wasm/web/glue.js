@@ -101,5 +101,11 @@ export function compile(source) {
     const semaPtr = exports.dmdwasm_sema_ptr();
     const semaLen = exports.dmdwasm_sema_len();
     const sema = semaLen ? td.decode(new Uint8Array(memory.buffer, semaPtr, semaLen)) : "";
-    return { parse, sema, ast, asm: stdoutText, errors: exports.dmdwasm_errors(), diagnostics: stderrText };
+    const lexPtr = exports.dmdwasm_lex_ptr();
+    const lexLen = exports.dmdwasm_lex_len();
+    const lex = lexLen ? td.decode(new Uint8Array(memory.buffer, lexPtr, lexLen)) : "";
+    const irPtr = exports.dmdwasm_ir_ptr();
+    const irLen = exports.dmdwasm_ir_len();
+    const ir = irLen ? td.decode(new Uint8Array(memory.buffer, irPtr, irLen)) : "";
+    return { lex, parse, sema, ast, ir, asm: stdoutText, errors: exports.dmdwasm_errors(), diagnostics: stderrText };
 }

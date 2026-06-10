@@ -19,8 +19,10 @@ function compile(src){ stdoutText=""; stderrText="";
   new Uint8Array(memory.buffer,ptr,b.length).set(b);
   ex.dmdwasm_run(ptr,b.length);
   const ast=td.decode(new Uint8Array(memory.buffer,ex.dmdwasm_ast_ptr(),ex.dmdwasm_ast_len()));
-  return {ast, asm:stdoutText, errors:ex.dmdwasm_errors(), diag:stderrText}; }
-const r = compile("module web;\nstruct Point { int x, y; }\nint dot(Point a, Point b) => a.x*b.x + a.y*b.y;\n");
+  const ir=td.decode(new Uint8Array(memory.buffer,ex.dmdwasm_ir_ptr(),ex.dmdwasm_ir_len()));
+  return {ast, ir, asm:stdoutText, errors:ex.dmdwasm_errors(), diag:stderrText}; }
+const r = compile("module web;\nstruct Point { int x, y; }\nint dot(Point a, Point b) => a.x*b.x + a.y*b.y;\nint f(int n) { int s; foreach (i; 0 .. n) s += i*i; return s; }\n");
 console.log("errors:", r.errors, "diag:", r.diag||"(none)");
 console.log("=== AST ===\n" + r.ast);
+console.log("=== IR (block/elem graph) ===\n" + r.ir);
 console.log("=== ASM (-vasm) ===\n" + r.asm);
