@@ -1,0 +1,7 @@
+# build artifacts (regenerate with build.sh)
+*.o
+/dmd.wasm
+
+# but keep the prebuilt fp128 soft-float archive (built separately from
+# compiler-rt, not by build.sh) — the repo-root *.[oa] rule would drop it
+!lib/libcompiler-rt-wasm.a

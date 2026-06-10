@@ -592,8 +592,10 @@ private immutable TOK[] keywords =
     TOK.__attribute__,
 ];
 
-// Initialize the identifier pool
-shared static this() nothrow
+// Initialize the identifier pool and register keywords. Normally run as a module
+// ctor; exposed as a named function so freestanding hosts (e.g. the wasm build,
+// which has no _d_run_main to run module ctors) can invoke it directly.
+void initTokens() nothrow
 {
     Identifier.initTable();
     foreach (kw; keywords)
@@ -601,6 +603,11 @@ shared static this() nothrow
         //printf("keyword[%d] = '%s'\n",kw, Token.tochars[kw].ptr);
         Identifier.idPool(Token.tochars[kw], kw);
     }
+}
+
+shared static this() nothrow
+{
+    initTokens();
 }
 
 /************************************

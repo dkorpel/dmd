@@ -36,10 +36,14 @@ const(char)[] cIncludeHint(const(char)[] s) @safe
 private immutable string[string] hints;
 private immutable string[string] cHints;
 
-shared static this()
+// Build the import-hint tables. Normally run as a module ctor; exposed as a named
+// function so freestanding hosts (the wasm build, which has no _d_run_main to run
+// module ctors) can populate the tables directly. @trusted: a one-time init of the
+// immutable globals before any read, exactly what a `shared static this` performs.
+void initImportHints() @trusted
 {
     // in alphabetic order
-    hints = [
+    *cast(string[string]*)&hints = [
         "AliasSeq": "std.meta",
         "appender": "std.array",
         "array": "std.array",
@@ -90,7 +94,7 @@ shared static this()
         "InterpolationHeader": "core.interpolation",
         "InterpolationFooter": "core.interpolation",
     ];
-    cHints = [
+    *cast(string[string]*)&cHints = [
         "va_list": "<stdarg.h>",
 
         "bool": "<stdbool.h>",
@@ -175,6 +179,11 @@ shared static this()
         "WCHAR_MAX": "<wchar.h>",
         "WCHAR_MIN": "<wchar.h>",
     ];
+}
+
+shared static this()
+{
+    initImportHints();
 }
 
 unittest

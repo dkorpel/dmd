@@ -28,6 +28,11 @@ import dmd.common.smallbuffer;
 import dmd.root.filename;
 import dmd.root.rmem;
 
+// Treat wasm32-wasi like Posix for file I/O: wasi-libc provides the POSIX C API,
+// and the wasm build supplies minimal core.sys.posix.* bindings. Inert on native.
+version (Posix) version = FilePosix;
+version (WASI)  version = FilePosix;
+
 version (Windows)
 {
     import core.stdc.wchar_;
@@ -38,7 +43,7 @@ version (Windows)
     enum CodePage = CP_UTF8; // assume filenames already gone through Windows ANSI code page -> UTF8 conversion
     enum invalidHandle = INVALID_HANDLE_VALUE;
 }
-else version (Posix)
+else version (FilePosix)
 {
     import core.sys.posix.dirent;
     import core.sys.posix.fcntl;
@@ -98,7 +103,7 @@ struct FileMapping(Datum)
     */
     this(const char* filename)
     {
-        version (Posix)
+        version (FilePosix)
         {
             handle = open(filename, is(Datum == const) ? O_RDONLY : (O_CREAT | O_RDWR),
                 S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
@@ -234,7 +239,7 @@ struct FileMapping(Datum)
         if (!active)
             return;
         fakePure({
-            version (Posix)
+            version (FilePosix)
             {
                 // Cannot call fprintf from inside a destructor, so exiting silently.
 
@@ -310,7 +315,7 @@ struct FileMapping(Datum)
         auto deleteme = name;
         close();
         // In-memory resource freed, now get rid of the underlying temp file.
-        version(Posix)
+        version(FilePosix)
         {
             if (unlink(deleteme) != 0)
             {
@@ -366,7 +371,7 @@ struct FileMapping(Datum)
     {
         assert(handle != invalidHandle);
         fakePure({
-            version(Posix)
+            version(FilePosix)
             {
                 if (data.length)
                 {
@@ -440,7 +445,7 @@ struct FileMapping(Datum)
         close();
 
         // Rename the underlying file to the target, no copy necessary.
-        version(Posix)
+        version(FilePosix)
         {
             if (.rename(oldname, filename) != 0)
             {
@@ -467,7 +472,7 @@ struct FileMapping(Datum)
 /// Write a file, returning `true` on success.
 extern(D) static bool writeFile(const(char)* name, const void[] data) nothrow
 {
-    version (Posix)
+    version (FilePosix)
     {
         int fd = open(name, O_CREAT | O_WRONLY | O_TRUNC, (6 << 6) | (4 << 3) | 4);
         if (fd == -1)
@@ -543,7 +548,7 @@ bool touchFile(const char* namez)
 
         return f != 0;
     }
-    else version (Posix)
+    else version (FilePosix)
     {
         return utime(namez, null) == 0;
     }
@@ -557,7 +562,7 @@ Size of a file in bytes.
 Params: fd = file handle
 Returns: file size in bytes, or `ulong.max` on any error.
 */
-version (Posix)
+version (FilePosix)
 {
     private ulong fileSize(int fd)
     {
@@ -687,7 +692,7 @@ bool findFiles(const char* dir_path, const char[][] exts, bool recurse, void del
         if (log) printf("findFiles() exit\n");
         return false;
     }
-    else version (Posix)
+    else version (FilePosix)
     {
         DIR* dir = opendir(dir_path);
         if (!dir)
