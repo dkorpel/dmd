@@ -29,6 +29,7 @@ import dmd.hdrgen;
 import dmd.asttypename : astTypeName;
 import dmd.location : Loc;
 import dmd.mtype : Type;
+import dmd.astenums : TY, TMAX;
 import dmd.typesem : nextOf;
 
 /********************
@@ -103,6 +104,9 @@ void printAST(Dsymbol s, ref OutBuffer buf, int indent = 0)
     }
 
     buf.printf(" `%s`", s.toChars());
+    if (auto dec = s.isDeclaration())   // VarDeclaration, FuncDeclaration, ...
+        if (dec.type)
+            buf.printf(" type: %s", typeName(dec.type));
     emitLineMarker(buf, s.loc);
     buf.writeByte('\n');
 
@@ -316,9 +320,24 @@ private void typeToBuffer(ref OutBuffer buf, Type t)
     else
     {
         // Leaf / named types (TypeBasic, TypeStruct, TypeIdentifier, ...): show the
-        // source spelling so `int` vs `long`, or which aggregate, stays visible.
-        buf.printf(" %s", t.toChars());
+        // `TY` enum tag (`Tint32`, `Tstruct`, ...) in parens rather than the D
+        // keyword, so e.g. `int` vs `long` stays distinguishable by its tag.
+        buf.writeByte('(');
+        buf.writestring(tyToString(t.ty));
+        buf.writeByte(')');
     }
+}
+
+/// The `TY` enum member name (e.g. `Tint32`, `Tstruct`) for `ty`, for debug dumps.
+private string tyToString(TY ty)
+{
+    static immutable string[TMAX] names = () {
+        string[TMAX] n;
+        static foreach (m; __traits(allMembers, TY))
+            n[__traits(getMember, TY, m)] = m;
+        return n;
+    }();
+    return names[ty];
 }
 
 /********************
