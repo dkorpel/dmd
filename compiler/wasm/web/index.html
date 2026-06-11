@@ -68,6 +68,14 @@
   .pane[data-stage="codegen"]  h2 { border-left-color: #e5a23b; }
   .pane[data-stage="diag"]     h2 { border-left-color: #f14c4c; }
   .pane h2::before { content: "⠿"; color: #555; cursor: grab; }
+  /* Per-pane close shortcut (hides the pane; the top-bar toggle still re-shows it). */
+  /* Fill the full bar height and reach to the right edge (negative margins cancel
+     the h2 padding) so the whole right end is the X hitbox — no drag strip around it. */
+  .pane-close { margin: -6px -12px -6px auto; padding: 0 12px; align-self: stretch;
+                display: flex; align-items: center; background: none; border: 0;
+                color: #777; cursor: pointer; font: 14px/1 system-ui; }
+  .pane-close:hover { color: #fff; background: #3a3a3a; }
+  body.embed .pane-close { display: none; }
   .pane.dragging { opacity: 0.4; }
   .pane.dragover h2 { box-shadow: inset 3px 0 0 #0e639c; }
   /* The D source pane is the editable input, not a read-only output — give it a
@@ -372,6 +380,20 @@ for (const [stage, label] of STAGES) {
     for (const p of panes) toggles.appendChild(makeChip(p));
 }
 
+// Per-pane close button: a shortcut that hides the pane, equivalent to turning
+// off its top-bar toggle. The source pane is always visible, so it gets none.
+for (const p of paneEls()) {
+    if (p.dataset.stage === "source") continue;
+    const btn = document.createElement("button");
+    btn.className = "pane-close";
+    btn.type = "button";
+    btn.draggable = false;
+    btn.textContent = "✕";
+    btn.title = "Hide this panel";
+    btn.addEventListener("click", () => { setHidden(p.dataset.pane, true); saveState(); applyAutoLayout(); });
+    p.querySelector("h2").appendChild(btn);
+}
+
 // Re-pick the automatic layout when the window is resized (e.g. a phone rotated
 // between portrait and landscape).
 let layoutTimer = null;
@@ -383,6 +405,7 @@ window.addEventListener("resize", () => {
 // Drag-to-reorder via the pane header.
 let dragEl = null;
 cols.addEventListener("dragstart", (e) => {
+    if (e.target.closest(".pane-close")) return;   // close button, not a drag handle
     const h2 = e.target.closest("h2");
     if (!h2) return;
     dragEl = h2.closest(".pane");
@@ -668,7 +691,7 @@ if (exSel) {
 if (EMBED) {
     const open = document.createElement("a");
     open.className = "embed-open";
-    open.target = "_blank";
+    open.target = "_top";          // break out of the tour's iframe into the full window
     open.rel = "noopener";
     open.textContent = "↗ open in explorer";
     open.title = "Open this snippet in the full DMD explorer";
