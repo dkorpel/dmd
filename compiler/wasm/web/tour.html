@@ -55,6 +55,17 @@
   .aside b { color: #fff; }
   code.kw { font: 13px ui-monospace, monospace; color: #ce9178; }
   footer { color: #888; font-size: 13px; border-top: 1px solid #333; padding-top: 18px; }
+
+  /* Inline interactive demo: an iframe of the explorer in embed mode, showing a
+     focused subset of panes for this stage. Lazy-loaded so each (large) wasm
+     instance only spins up when the reader scrolls it into view. */
+  .demo { margin: 20px 0 6px; border: 1px solid #2d3942; border-radius: 8px;
+          overflow: hidden; background: #181a1f; }
+  .demo iframe { display: block; width: 100%; border: 0; }
+  .demo .cap { font-size: 12.5px; color: #9aa7b3; padding: 8px 12px;
+               background: #20262b; border-top: 1px solid #2d3942; }
+  .demo .cap b { color: #cdd6df; font-weight: 600; }
+  .demo .cap code { font: 12px ui-monospace, monospace; color: #ce9178; }
 </style>
 </head>
 <body>
@@ -89,6 +100,19 @@
        (AST): a literal tree of objects mirroring the grammar — a function holds statements, a statement
        holds expressions, an <code class="kw">a + b</code> becomes an <code class="kw">AddExp</code> with
        two children. No meaning is attached yet; it's pure shape.</p>
+    <div class="demo">
+      <iframe loading="lazy" height="300" title="Tokens demo"
+        src="index.html?embed=1&amp;layout=cols&amp;panes=lex&amp;src=int+add%28int+a%2C+int+b%29%0A%7B%0A++++return+a+%2A+b+%2B+1%3B%0A%7D%0A"></iframe>
+      <div class="cap">▶ <b>Tokens</b> — edit the source on the left; the lexer's token stream rebuilds on the
+        right, one line per source line. Keywords (<code>int</code>), identifiers (<code>add</code>) and
+        operators each become a <code>TOK</code>.</div>
+    </div>
+    <div class="demo">
+      <iframe loading="lazy" height="300" title="Parse tree demo"
+        src="index.html?embed=1&amp;layout=cols&amp;panes=parse&amp;src=int+add%28int+a%2C+int+b%29%0A%7B%0A++++return+a+%2A+b+%2B+1%3B%0A%7D%0A"></iframe>
+      <div class="cap">▶ <b>Parse tree</b> — those same tokens assembled into an AST. Note how
+        <code>a * b + 1</code> nests a <code>MulExp</code> inside an <code>AddExp</code>.</div>
+    </div>
     <div class="cards">
       <div class="card">
         <h3>Tokens — <code>enum TOK</code></h3>
@@ -143,6 +167,13 @@
        (a <code class="kw">foreach</code> becomes a plain <code class="kw">for</code>, <code class="kw">~=</code>
        becomes a runtime call). The <b>Lowered AST</b> pane (<code class="kw">-vcg-ast</code>) shows the
        tree <i>after</i> this rewriting.</p>
+    <div class="demo">
+      <iframe loading="lazy" height="360" title="Semantic demo"
+        src="index.html?embed=1&amp;layout=cols&amp;panes=ast&amp;src=int%5B%5D+squares%28int+n%29%0A%7B%0A++++int%5B%5D+r%3B%0A++++foreach+%28i%3B+0+..+n%29%0A++++++++r+~%3D+i+%2A+i%3B%0A++++return+r%3B%0A%7D%0A"></iframe>
+      <div class="cap">▶ <b>Lowered AST</b> (<code>-vcg-ast</code>) — the tree after semantic analysis, regenerated
+        as D. Watch the rewrite: the <code>foreach</code> becomes a plain <code>for</code>, and
+        <code>r ~= …</code> a runtime call.</div>
+    </div>
     <div class="cards">
       <div class="card">
         <h3>The passes</h3>
@@ -195,8 +226,21 @@
     <p class="lead">The glue layer translates each function's typed AST into the back end's own IR: a
        graph of <b>basic blocks</b>, each holding a forest of <b>elem</b> expression trees. The
        optimizer rewrites that graph; then code generation turns it into x86 instructions, which the
-       disassembler prints. The explorer shows the IR <b>before</b> and <b>after</b> the optimizer plus
-       the final <b>disassembly</b> — diff the two IR panes to watch the optimizer work.</p>
+       disassembler prints. The two demos below show the optimized <b>IR</b> and the final
+       <b>disassembly</b>; open either in the full explorer to also see the pre-optimizer IR and diff them.</p>
+    <div class="demo">
+      <iframe loading="lazy" height="340" title="Backend IR demo"
+        src="index.html?embed=1&amp;layout=cols&amp;panes=iropt&amp;src=int+f%28int+x%29%0A%7B%0A++++int+a+%3D+2+%2B+3%3B%0A++++return+a+%2A+x%3B%0A%7D%0A"></iframe>
+      <div class="cap">▶ <b>Backend IR</b> — each function's block/elem graph after the <code>-O</code> optimizer.
+        Nodes carry backend enums (<code>OPmul</code>, <code>OPvar</code>, <code>TYint</code>); the optimizer
+        has already folded <code>2 + 3</code> to a constant.</div>
+    </div>
+    <div class="demo">
+      <iframe loading="lazy" height="340" title="Assembly demo"
+        src="index.html?embed=1&amp;layout=cols&amp;panes=asm&amp;src=int+f%28int+x%29%0A%7B%0A++++int+a+%3D+2+%2B+3%3B%0A++++return+a+%2A+x%3B%0A%7D%0A"></iframe>
+      <div class="cap">▶ <b>Disassembly</b> (<code>-vasm</code>) — the actual x86-64 instructions the back end
+        emits for that IR. Edit the source and watch the machine code change.</div>
+    </div>
     <div class="cards">
       <div class="card">
         <h3>Expression nodes — <code>struct elem</code></h3>
