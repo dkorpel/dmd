@@ -1,6 +1,8 @@
 # build artifacts (regenerate with build.sh)
 *.o
 /dmd.wasm
+# copied into web/ by build.sh; CI rebuilds it on deploy, so don't track it
+/web/dmd.wasm
 
 # but keep the prebuilt fp128 soft-float archive (built separately from
 # compiler-rt, not by build.sh) — the repo-root *.[oa] rule would drop it
