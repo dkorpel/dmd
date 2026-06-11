@@ -37,6 +37,7 @@
            display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
   header h1 { font-size: 16px; margin: 0; font-weight: 600; white-space: nowrap; }
   #status { color: #888; font-size: 12px; }
+  #updated { color: #666; font-size: 12px; margin-left: auto; white-space: nowrap; }
   .toolbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .toolbar .group { display: flex; align-items: center; gap: 4px; }
   .toolbar .sep { width: 1px; align-self: stretch; background: #3a3a3a; margin: 2px 6px; }
@@ -165,6 +166,7 @@
     </div>
   </div>
   <span id="status">loading dmd.wasm…</span>
+  <span id="updated" title="When the dmd.wasm build on this page was last deployed"></span>
 </header>
 <div class="cols" id="cols">
   <div class="pane" data-pane="src" data-stage="source" data-title="D source" draggable="false">
@@ -225,7 +227,7 @@ int[] squares()
 </div>
 
 <script type="module">
-import { loadDmd, compile } from "./glue.js";
+import { loadDmd, compile, dmdLastModified } from "./glue.js";
 import { EditorView, keymap, lineNumbers, highlightActiveLineGutter, highlightSpecialChars,
          drawSelection, dropCursor, rectangularSelection, crosshairCursor,
          highlightActiveLine, Decoration } from "@codemirror/view";
@@ -885,6 +887,8 @@ function run() {
     try {
         await loadDmd("dmd.wasm");
         $("status").textContent = "ready";
+        const lm = dmdLastModified();
+        if (lm) $("updated").textContent = "updated " + lm.toISOString().slice(0, 10);
         // Ctrl+Enter (or ⌘+Enter on macOS) forces an immediate recompile.
         document.addEventListener("keydown", (e) => {
             if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); runNow(); }
