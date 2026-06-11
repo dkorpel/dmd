@@ -45,6 +45,7 @@
           border: 1px solid #3a3a3a; border-radius: 3px; cursor: pointer; user-select: none; }
   .chip[aria-pressed="true"] { background: #0e639c; color: #fff; border-color: #0e639c; }
   .chip:hover { border-color: #1177bb; }
+  select.chip { cursor: pointer; }
 
   /* Pane layout container: columns / rows / grid. */
   .cols { display: flex; height: calc(100vh - 50px); }
@@ -141,7 +142,7 @@
 <body>
 <header>
   <h1>DMD explorer</h1>
-  <a class="tour" href="tour.html" target="_blank" rel="noopener"
+  <a class="tour" href="tour.html"
      title="A guided tour of DMD's compiler passes and internal data structures, with links to the source">📖 Tour</a>
   <div class="toolbar">
     <div class="group" id="paneToggles">
@@ -149,10 +150,10 @@
     </div>
     <div class="sep"></div>
     <div class="group">
-      <label>Layout</label>
-      <button class="chip" data-layout="cols">Columns</button>
-      <button class="chip" data-layout="rows">Rows</button>
-      <button class="chip" data-layout="grid">Grid</button>
+      <label>Examples</label>
+      <select id="examples" class="chip" title="Load a ready-made snippet">
+        <option value="" selected>Load an example…</option>
+      </select>
     </div>
   </div>
   <span id="status">loading dmd.wasm…</span>
@@ -265,9 +266,18 @@ function saveState() {
     if (EMBED) return;   // embed layout is fixed by URL params, never persisted
     const order = paneEls().map((p) => p.dataset.pane);
     const hidden = paneEls().filter((p) => p.hidden).map((p) => p.dataset.pane);
-    const layout = cols.classList.contains("rows") ? "rows"
-                 : cols.classList.contains("grid") ? "grid" : "cols";
-    localStorage.setItem(LS_KEY, JSON.stringify({ order, hidden, layout }));
+    localStorage.setItem(LS_KEY, JSON.stringify({ order, hidden }));
+}
+
+// Pick the best layout for the current viewport + visible pane count: stack into
+// rows on a narrow/portrait screen (e.g. a phone held upright), spread into a
+// grid when many panes are open, otherwise side-by-side columns. Embedded demos
+// keep the fixed layout from their URL params, so this is a no-op there.
+function applyAutoLayout() {
+    if (EMBED) return;
+    const visible = paneEls().filter((p) => !p.hidden).length;
+    const narrow = window.matchMedia("(max-width: 820px), (orientation: portrait)").matches;
+    applyLayout(narrow ? "rows" : visible > 3 ? "grid" : "cols");
 }
 
 function applyLayout(layout) {
@@ -295,7 +305,7 @@ function loadState() {
             if (el) cols.appendChild(el);
         }
     for (const p of (s.hidden || [])) setHidden(p, true);
-    applyLayout(s.layout || "cols");
+    applyAutoLayout();
 }
 
 // Embed mode: show only the panes named in ?panes= (plus the always-on source
@@ -329,7 +339,7 @@ const makeChip = (p) => {
     chip.textContent = p.dataset.title;
     if (p.dataset.tip) chip.title = p.dataset.tip;
     chip.setAttribute("aria-pressed", String(!p.hidden));
-    chip.addEventListener("click", () => { setHidden(p.dataset.pane, !p.hidden); saveState(); });
+    chip.addEventListener("click", () => { setHidden(p.dataset.pane, !p.hidden); saveState(); applyAutoLayout(); });
     return chip;
 };
 for (const [stage, label] of STAGES) {
@@ -350,13 +360,18 @@ for (const [stage, label] of STAGES) {
         const anyHidden = ps.some((p) => p.hidden);
         for (const p of ps) setHidden(p.dataset.pane, !anyHidden);
         saveState();
+        applyAutoLayout();
     });
     for (const p of panes) toggles.appendChild(makeChip(p));
 }
 
-// Layout switch.
-for (const b of document.querySelectorAll("[data-layout]"))
-    b.addEventListener("click", () => { applyLayout(b.dataset.layout); saveState(); });
+// Re-pick the automatic layout when the window is resized (e.g. a phone rotated
+// between portrait and landscape).
+let layoutTimer = null;
+window.addEventListener("resize", () => {
+    clearTimeout(layoutTimer);
+    layoutTimer = setTimeout(applyAutoLayout, 150);
+});
 
 // Drag-to-reorder via the pane header.
 let dragEl = null;
@@ -553,6 +568,93 @@ const editor = new EditorView({
     ],
 });
 const getSrc = () => editor.state.doc.toString();
+
+// ---- Example snippets dropdown --------------------------------------------
+// Ready-made programs — the ones the tour walks through, plus a couple more —
+// each chosen to make one pass visible. Selecting one replaces the editor
+// contents; the doc-change listener then auto-recompiles.
+const EXAMPLES = [
+  ["Token kinds (lexer)",
+`enum hex = 0xDEAD_BEEF;
+double pi = 3.14e2;
+string s = "a\\tb";
+`],
+  ["Operator precedence (parser)",
+`int f(int a, int b)
+{
+    return a + b * 2;
+}
+`],
+  ["Implicit conversions (semantic)",
+`long sum(int a, int b)
+{
+    return a + b;
+}
+`],
+  ["foreach + append lowering",
+`int[] squares(int n)
+{
+    int[] r;
+    foreach (i; 0 .. n)
+        r ~= i * i;
+    return r;
+}
+`],
+  ["Array slices",
+`int tail(int[] a)
+{
+    int s;
+    foreach (x; a[1 .. $])
+        s += x;
+    return s;
+}
+`],
+  ["try / catch / finally",
+`void risky(int x)
+{
+    try
+    {
+        if (x < 0)
+            throw new Exception("negative");
+    }
+    catch (Exception e)
+    {
+    }
+    finally
+    {
+    }
+}
+`],
+  ["Constant folding (-O)",
+`int f(int x)
+{
+    int a = 2 + 3;
+    return a * x;
+}
+`],
+  ["Strength reduction (x * 3)",
+`int triple(int x)
+{
+    return x * 3;
+}
+`],
+];
+const exSel = $("examples");
+if (exSel) {
+    EXAMPLES.forEach(([name], i) => {
+        const o = document.createElement("option");
+        o.value = String(i);
+        o.textContent = name;
+        exSel.appendChild(o);
+    });
+    exSel.addEventListener("change", () => {
+        const ex = EXAMPLES[+exSel.value];
+        exSel.selectedIndex = 0;          // reset to the placeholder
+        if (!ex) return;
+        editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: ex[1] } });
+        editor.focus();
+    });
+}
 
 // In an embedded demo, offer a one-click jump to the full explorer carrying the
 // reader's current edits (href is refreshed at click time so it stays current).
