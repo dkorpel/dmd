@@ -234,7 +234,11 @@ void printAST(Statement s, ref OutBuffer buf, int indent = 0)
         // Statement kinds without a dedicated tree dump above: show the AST
         // class name plus the regenerated source.
         printIndent(buf, indent);
-        buf.printf("%s `%s`", s.astTypeName().ptr, s.toChars());
+        // Call hdrgen's free `toChars(const Statement)` explicitly: `s.toChars()`
+        // would bind to the virtual `RootObject.toChars` (an `assert(0)` stub) since
+        // a member always beats a UFCS free function, crashing on any statement kind
+        // without an override (goto, labels, ErrorStatement from error recovery, ...).
+        buf.printf("%s `%s`", s.astTypeName().ptr, toChars(s));
         emitLineMarker(buf, s.loc);
         buf.writeByte('\n');
     }
