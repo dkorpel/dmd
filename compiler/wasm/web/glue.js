@@ -67,9 +67,15 @@ const wasi = {
 };
 
 let exports = null;
+let lastModified = null;   // dmd.wasm's Last-Modified header, as a Date (or null)
+
+// When dmd.wasm was last built/deployed, per its Last-Modified header.
+export function dmdLastModified() { return lastModified; }
 
 export async function loadDmd(url = "dmd.wasm") {
     const resp = await fetch(url);
+    const lm = resp.headers.get("last-modified");
+    if (lm) { const d = new Date(lm); if (!isNaN(d)) lastModified = d; }
     const { instance } = await WebAssembly.instantiateStreaming(resp, {
         wasi_snapshot_preview1: wasi,
         env: {},
