@@ -72,7 +72,6 @@
      distinct surface, header and "editable" badge so it reads as primary. */
   .pane[data-stage="source"] { box-shadow: inset 0 0 0 1px #2b3a48; }
   .pane[data-stage="source"] h2 { color: #cdd6df; background: #1b2129; }
-  .pane[data-stage="source"] .bar { background: #1b2129; border-top-color: #2b3a48; }
   .pane[data-stage="source"] h2 .badge {
       margin-left: auto; font-size: 10px; letter-spacing: .03em; text-transform: none;
       color: #6cb6ff; border: 1px solid #2d4a66; border-radius: 10px; padding: 1px 8px; }
@@ -110,10 +109,6 @@
   .ansi-1.ansi-fg-2 { color: #23d18b; } .ansi-1.ansi-fg-3 { color: #f5f543; }
   .ansi-1.ansi-fg-4 { color: #3b8eea; } .ansi-1.ansi-fg-5 { color: #d670d6; }
   .ansi-1.ansi-fg-6 { color: #29b8db; } .ansi-1.ansi-fg-7 { color: #fff; }
-  .bar { padding: 8px 12px; background: #252526; border-top: 1px solid #333; }
-  button.run { font: 13px system-ui; padding: 6px 16px; background: #0e639c; color: #fff;
-               border: 0; border-radius: 3px; cursor: pointer; }
-  button.run:hover { background: #1177bb; }
   /* Per-stage group label in the pane toolbar. */
   .toolbar .stage-label { font-size: 10px; color: #777; text-transform: uppercase;
                           letter-spacing: .04em; margin: 0 2px 0 6px; }
@@ -127,6 +122,19 @@
   a.tour { font: 12px system-ui; color: #4ea1ff; text-decoration: none;
            padding: 4px 10px; border: 1px solid #2d4a66; border-radius: 3px; white-space: nowrap; }
   a.tour:hover { background: #0e639c; color: #fff; border-color: #0e639c; }
+  /* Embedded mode: when the explorer is hosted in an <iframe> on the tour page
+     (index.html?embed=1&panes=…), drop the page chrome and let the chosen panes
+     fill the frame so a focused subset can sit inline next to the prose. */
+  body.embed header { display: none; }
+  body.embed .cols { height: 100vh; }
+  .embed-open { position: fixed; top: 6px; right: 8px; z-index: 5;
+      font: 11px system-ui; color: #6cb6ff; text-decoration: none;
+      background: rgba(30, 35, 41, .85); border: 1px solid #2d4a66;
+      border-radius: 4px; padding: 2px 8px; }
+  .embed-open:hover { background: #0e639c; color: #fff; border-color: #0e639c; }
+  /* Embedded demos are fixed two-pane slices — drop the drag-to-reorder chrome. */
+  body.embed .pane h2 { cursor: default; }
+  body.embed .pane h2::before { content: none; }
 </style>
 </head>
 <body>
@@ -152,10 +160,14 @@
   <div class="pane" data-pane="src" data-stage="source" data-title="D source" draggable="false">
     <h2 draggable="true">D source <span class="badge">✎ editable</span></h2>
     <div id="src"></div>
-    <!-- Initial document for the CodeMirror editor (mounted into #src above). -->
+    <!-- Initial document for the CodeMirror editor (mounted into #src above).
+         Edits auto-recompile (debounced); there's no manual run button. -->
     <textarea id="src-init" hidden>module test;
 
-int add(int a, int b) { return a + b; }
+int add(int a, int b)
+{
+    return a + b;
+}
 
 enum N = 3;
 
@@ -167,7 +179,6 @@ int[] squares()
     return r;
 }
 </textarea>
-    <div class="bar"><button class="run" id="run" title="Run (Ctrl+Enter / ⌘+Enter)">Go ▶</button></div>
   </div>
   <div class="pane" data-pane="lex" data-stage="parse" data-title="Tokens" data-tip="The token stream produced by the lexer, before parsing">
     <h2 draggable="true" title="Internal lexer output: one line per source line, listing that line's TOK enum member names (e.g. int32, identifier, add). Tokens carrying a value get it as a parenthesized postfix, e.g. float32Literal(3.5).">Tokens (lexer)</h2>
@@ -237,11 +248,20 @@ const $ = (id) => document.getElementById(id);
 const cols = $("cols");
 const LS_KEY = "dmdwasm.layout.v1";
 
+// Embedded subset mode (index.html?embed=1&panes=lex,parse&layout=cols&src=…),
+// used by the tour page to inline a focused slice of the explorer in an iframe:
+// the page chrome is hidden, only the requested panes (plus the source input)
+// are shown, and layout is fixed rather than persisted to localStorage.
+const params = new URLSearchParams(location.search);
+const EMBED = params.has("embed");
+if (EMBED) document.body.classList.add("embed");
+
 // ---- Pane show/hide + order + layout, persisted to localStorage ----------
 
 function paneEls() { return [...cols.querySelectorAll(".pane")]; }
 
 function saveState() {
+    if (EMBED) return;   // embed layout is fixed by URL params, never persisted
     const order = paneEls().map((p) => p.dataset.pane);
     const hidden = paneEls().filter((p) => p.hidden).map((p) => p.dataset.pane);
     const layout = cols.classList.contains("rows") ? "rows"
@@ -275,6 +295,20 @@ function loadState() {
         }
     for (const p of (s.hidden || [])) setHidden(p, true);
     applyLayout(s.layout || "cols");
+}
+
+// Embed mode: show only the panes named in ?panes= (plus the always-on source
+// input), in that order, with the layout fixed by ?layout=. No persistence.
+function applyEmbed() {
+    const want = (params.get("panes") || "").split(",").map((s) => s.trim()).filter(Boolean);
+    const keep = new Set(["src", ...want]);            // source input is always shown
+    for (const p of paneEls()) setHidden(p.dataset.pane, !keep.has(p.dataset.pane));
+    for (const pane of ["src", ...want]) {             // honor the requested order
+        const el = cols.querySelector(`.pane[data-pane="${pane}"]`);
+        if (el) cols.appendChild(el);
+    }
+    for (const h of cols.querySelectorAll(".pane h2")) h.draggable = false;  // fixed slice, not reorderable
+    applyLayout(params.get("layout") || "cols");
 }
 
 // Build the pane toggles, grouped by compiler stage (source → parsing →
@@ -355,7 +389,7 @@ cols.addEventListener("drop", (e) => {
     saveState();
 });
 
-loadState();
+if (EMBED) applyEmbed(); else loadState();
 
 // ---- CodeMirror source editor (replaces the plain textarea) ---------------
 
@@ -501,7 +535,7 @@ let runTimer = null;
 let onDocChange = () => {};
 let onCursor = () => {};
 const editor = new EditorView({
-    doc: $("src-init").value,
+    doc: params.get("src") ?? $("src-init").value,   // ?src= seeds embedded demos
     parent: $("src"),
     extensions: [
         basicSetup,                                      // line numbers, undo/redo, bracket match, ...
@@ -518,6 +552,19 @@ const editor = new EditorView({
     ],
 });
 const getSrc = () => editor.state.doc.toString();
+
+// In an embedded demo, offer a one-click jump to the full explorer carrying the
+// reader's current edits (href is refreshed at click time so it stays current).
+if (EMBED) {
+    const open = document.createElement("a");
+    open.className = "embed-open";
+    open.target = "_blank";
+    open.rel = "noopener";
+    open.textContent = "↗ open in explorer";
+    open.title = "Open this snippet in the full DMD explorer";
+    open.addEventListener("mousedown", () => { open.href = "index.html?src=" + encodeURIComponent(getSrc()); });
+    document.body.appendChild(open);
+}
 
 // ---- ANSI rendering -------------------------------------------------------
 
@@ -705,8 +752,7 @@ function run() {
     try {
         await loadDmd("dmd.wasm");
         $("status").textContent = "ready";
-        $("run").addEventListener("click", run);
-        // Ctrl+Enter (or ⌘+Enter on macOS) runs from anywhere, incl. the editor.
+        // Ctrl+Enter (or ⌘+Enter on macOS) forces an immediate recompile.
         document.addEventListener("keydown", (e) => {
             if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); runNow(); }
         });
