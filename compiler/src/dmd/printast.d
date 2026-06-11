@@ -28,6 +28,8 @@ import dmd.visitor;
 import dmd.hdrgen;
 import dmd.asttypename : astTypeName;
 import dmd.location : Loc;
+import dmd.mtype : Type;
+import dmd.typesem : nextOf;
 
 /********************
  * When set, `printAST` appends a source-line marker to the end of each node's
@@ -251,6 +253,75 @@ private void printIndent(ref OutBuffer buf, int indent)
 }
 
 /********************
+ * Render a type by its AST class name (e.g. `TypeBasic`, `TypeDArray`) rather
+ * than as D source syntax, matching how expressions/statements are shown, and
+ * recursing into the wrapped types so the full structure is visible.
+ * Returns a pointer into a reused scratch buffer, valid only until the next
+ * call — use it immediately (as `head`/`leaf` do, in a single `printf`).
+ */
+private const(char)* typeName(Type t)
+{
+    static __gshared OutBuffer scratch;
+    scratch.setsize(0);
+    typeToBuffer(scratch, t);
+    return scratch.peekChars();
+}
+
+/// Append `t` to `buf` as `TypeClass(<wrapped...>)`, recursing into element,
+/// key, return and parameter types. Leaf/named types append their source name.
+private void typeToBuffer(ref OutBuffer buf, Type t)
+{
+    if (!t)
+    {
+        buf.writestring("null");
+        return;
+    }
+    buf.writestring(astTypeName(t));
+    if (auto tf = t.isTypeFunction())
+    {
+        buf.writeByte('(');
+        typeToBuffer(buf, tf.next);             // return type
+        buf.writestring(" function(");
+        foreach (i, p; tf.parameterList)
+        {
+            if (i)
+                buf.writestring(", ");
+            typeToBuffer(buf, p.type);
+        }
+        buf.writestring("))");
+    }
+    else if (auto tsa = t.isTypeSArray())
+    {
+        buf.writeByte('(');
+        typeToBuffer(buf, tsa.next);            // element type
+        buf.printf("[%s])", tsa.dim ? tsa.dim.toChars() : "?");
+    }
+    else if (auto taa = t.isTypeAArray())
+    {
+        buf.writeByte('(');
+        typeToBuffer(buf, taa.next);            // value type
+        buf.writeByte('[');
+        typeToBuffer(buf, taa.index);           // key type
+        buf.writestring("])");
+    }
+    else if (auto n = t.nextOf())               // pointer, ref, slice, dynamic array, delegate
+    {
+        // `nextOf` uses checked `ty`-based downcasts; a plain `cast(TypeNext)`
+        // would not, since extern(C++) classes have no D RTTI and the cast just
+        // reinterprets the pointer, reading garbage for non-`TypeNext` types.
+        buf.writeByte('(');
+        typeToBuffer(buf, n);
+        buf.writeByte(')');
+    }
+    else
+    {
+        // Leaf / named types (TypeBasic, TypeStruct, TypeIdentifier, ...): show the
+        // source spelling so `int` vs `long`, or which aggregate, stays visible.
+        buf.printf(" %s", t.toChars());
+    }
+}
+
+/********************
  * Append the distinguishing fields of an `AttribDeclaration` to `buf`, e.g. the
  * linkage of a `LinkDeclaration` or the storage classes of a
  * `StorageClassDeclaration`, so the dump shows more than the bare class name.
@@ -317,25 +388,25 @@ extern (C++) final class PrintASTVisitor : Visitor
         .printIndent(*buf, indent);
     }
 
-    // Print "<ClassName> [type: <T>]" for `e` at the current indent (the
+    // Print "<ClassName> [type: <TypeClass>]" for `e` at the current indent (the
     // `type:` part is omitted when the node has no type yet, e.g. pre-semantic).
     void head(Expression e)
     {
         printIndent(indent);
         if (e.type)
-            buf.printf("%s type: %s", e.astTypeName().ptr, e.type.toChars());
+            buf.printf("%s type: %s", e.astTypeName().ptr, typeName(e.type));
         else
             buf.printf("%s", e.astTypeName().ptr);
         emitLineMarker(*buf, e.loc);
         buf.writeByte('\n');
     }
 
-    // Compact one-line form for leaf literals: "<ClassName> <value> [type: <T>]".
+    // Compact one-line form for leaf literals: "<ClassName> <value> [type: <TypeClass>]".
     void leaf(Expression e, const(char)* value)
     {
         printIndent(indent);
         if (e.type)
-            buf.printf("%s %s type: %s", e.astTypeName().ptr, value, e.type.toChars());
+            buf.printf("%s %s type: %s", e.astTypeName().ptr, value, typeName(e.type));
         else
             buf.printf("%s %s", e.astTypeName().ptr, value);
         emitLineMarker(*buf, e.loc);
@@ -420,7 +491,9 @@ extern (C++) final class PrintASTVisitor : Visitor
     {
         head(e);
         printIndent(indent + 2);
-        buf.printf(".to: %s\n", e.to.toChars());
+        // `e.to` is null for modifier-only casts (`cast()`, `cast(const)`, …) until
+        // semantic infers the target; don't dereference it in the raw parse tree.
+        buf.printf(".to: %s\n", e.to ? typeName(e.to) : "(inferred)");
         .printAST(e.e1, *buf, indent + 2);
     }
 
@@ -428,7 +501,7 @@ extern (C++) final class PrintASTVisitor : Visitor
     {
         head(e);
         printIndent(indent + 2);
-        buf.printf(".to: %s\n", e.to.toChars());
+        buf.printf(".to: %s\n", typeName(e.to));
         .printAST(e.e1, *buf, indent + 2);
     }
 
