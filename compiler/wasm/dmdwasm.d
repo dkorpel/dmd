@@ -262,6 +262,37 @@ void _start()
     dmdwasm_selftest();
 }
 
+// Fuzz entry point: read a whole D source from stdin, run the frontend+backend on
+// it, and print a one-line summary. Used by the fuzz harness, which launches one
+// `wasmtime --invoke dmdwasm_run_stdin` process per test file under a wall-clock
+// timeout so traps (nonzero exit) and infinite loops (timeout kill) are both caught.
+void dmdwasm_run_stdin()
+{
+    import core.stdc.stdio : fread, stdin, stdout, printf, fflush;
+    import core.stdc.stdlib : malloc, realloc;
+
+    __wasm_call_ctors();
+
+    size_t cap = 1 << 16, len = 0;
+    char* buf = cast(char*) malloc(cap);
+    while (true)
+    {
+        if (len == cap)
+        {
+            cap *= 2;
+            buf = cast(char*) realloc(buf, cap);
+        }
+        const n = fread(buf + len, 1, cap - len, stdin);
+        if (n == 0)
+            break;
+        len += n;
+    }
+
+    dmdwasm_run(buf, len);
+    printf("errors=%u astlen=%zu\n", global.errors, cast(size_t) buffers.ast[].length);
+    fflush(stdout);
+}
+
 extern (D) nothrow:
 
 /// glue.backendIRDumpHook: pre-optimization graph (as lowered).
