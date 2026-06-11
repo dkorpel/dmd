@@ -200,6 +200,42 @@
        <code class="kw">static if</code>/templates/CTFE, and checks attributes.</p>
 
     <div class="sub">
+      <h3>Before &amp; after typing<span class="tag">Parse + Semantic panes</span></h3>
+      <p>The parser leaves an <i>untyped</i> tree; semantic analysis resolves every name to a symbol and
+         pins a <b>type</b> on every expression — inserting the implicit conversions the source left
+         unwritten. The two right-hand panes are the same function: the <b>Parse tree</b> straight from the
+         parser, and the <b>Semantic tree</b> after analysis. Returning an <code class="kw">int</code> sum
+         as a <code class="kw">long</code> makes a <code class="kw">CastExp</code> appear out of nowhere.</p>
+      <div class="demo">
+        <iframe loading="lazy" height="360" title="Parse vs semantic demo"
+          src="index.html?embed=1&amp;layout=cols&amp;panes=parse,sema&amp;src=long+sum%28int+a%2C+int+b%29%0A%7B%0A++++return+a+%2B+b%3B%0A%7D%0A"></iframe>
+        <div class="cap">▶ <b>Parse tree</b> vs <b>Semantic tree</b> for the same source. After analysis the return
+          expression is wrapped in a <code>CastExp</code> to <code>long</code> — the implicit
+          <code>int</code>→<code>long</code> conversion the parser had no way to know about.</div>
+      </div>
+      <div class="cards">
+        <div class="card">
+          <h4>Name lookup — <code>Scope</code></h4>
+          <p>Analysis threads a <code class="kw">Scope</code> chain through the tree; each identifier is
+             resolved against it to the <code class="kw">Dsymbol</code> it names — a parameter, a local, a
+             function.</p>
+          <div class="links">
+            <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/dscope.d" target="_blank" rel="noopener">dscope.d</a>
+          </div>
+        </div>
+        <div class="card">
+          <h4>Implicit conversions — <code>implicitCastTo</code></h4>
+          <p>When an expression's type doesn't match where it's used, the analyzer inserts a
+             <code class="kw">CastExp</code> — the <code class="kw">int</code>→<code class="kw">long</code>
+             you can watch appear between the two panes.</p>
+          <div class="links">
+            <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/dcast.d" target="_blank" rel="noopener">dcast.d</a>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="sub">
       <h3>Lowering<span class="tag">Lowered AST pane</span></h3>
       <p>Beyond type-checking, semantic analysis <b>lowers</b> high-level constructs into simpler ones the
          back end already knows how to emit. A <code class="kw">foreach</code> over a range becomes a plain
