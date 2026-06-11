@@ -39,8 +39,8 @@ private int blockIdx(block* b)
 // Successor index in Bsucc list
 private block* succ(block* b, int n)
 {
-    if (n < b.numSucc())
-        return b.nthSucc(n);
+    if (n < b.Bsucc.length)
+        return b.Bsucc[n];
     return null;
 }
 
@@ -72,9 +72,9 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         info[i].idx = cast(int) i;
         if (b.bc == BC.goto_ || b.bc == BC.iftrue)
         {
-            foreach (int si; 0 .. b.numSucc())
+            foreach (int si; 0 .. cast(int) b.Bsucc.length)
             {
-                block* s = b.nthSucc(si);
+                block* s = b.Bsucc[si];
                 if (s && s.Bdfoidx <= cast(int) i) // back edge
                 {
                     info[s.Bdfoidx].isLoopHeader = true;
@@ -141,9 +141,9 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
             // Collect unique destination block indices, sorted ascending.
             // Bsucc[0] = default; Bsucc[1..n] = cases in Bswitch order.
             int[] dests;
-            foreach (int si; 0 .. b.numSucc())
+            foreach (int si; 0 .. cast(int) b.Bsucc.length)
             {
-                int idx = blockIdx(b.nthSucc(si));
+                int idx = blockIdx(b.Bsucc[si]);
                 bool found = false;
                 foreach (d; dests)
                     if (d == idx)
@@ -281,7 +281,7 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
             }
 
             // Default block: Bsucc[0]
-            int defaultIdx = blockIdx(b.nthSucc(0));
+            int defaultIdx = blockIdx(b.Bsucc[0]);
             uint defaultDepth = depthOf(defaultIdx);
 
             // br_table is only valid for i32 indices and dense ranges.
@@ -306,7 +306,7 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
                 cg.emitULEB(condLocal);
                 foreach (size_t ci, long cv; b.Bswitch)
                 {
-                    int caseIdx = blockIdx(b.nthSucc(cast(int)(ci + 1)));
+                    int caseIdx = blockIdx(b.Bsucc[cast(int)(ci + 1)]);
                     cg.emitLocal(OP_LOCAL_GET, condLocal);
                     if (condType == WASM_I64)
                     {
@@ -349,7 +349,7 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
                 foreach (size_t ci, long cv; b.Bswitch)
                     if (cv == v)
                     {
-                        destIdx = blockIdx(b.nthSucc(cast(int)(ci + 1)));
+                        destIdx = blockIdx(b.Bsucc[cast(int)(ci + 1)]);
                         break;
                     }
                 cg.emitULEB(depthOf(destIdx));
@@ -462,9 +462,9 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
                     if (bi + 1 < N)
                     {
                         block* takenBlock = blocks[bi + 1];
-                        if (takenBlock.bc == BC.goto_ && takenBlock.numSucc() > 0)
+                        if (takenBlock.bc == BC.goto_ && takenBlock.Bsucc.length > 0)
                         {
-                            block* mergeBlock = takenBlock.nthSucc(0);
+                            block* mergeBlock = takenBlock.Bsucc[0];
                             if (mergeBlock)
                             {
                                 int midx = blockIdx(mergeBlock);
