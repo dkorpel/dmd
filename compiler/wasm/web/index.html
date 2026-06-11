@@ -60,7 +60,7 @@
              border-left: 3px solid transparent;
              display: flex; align-items: center; gap: 6px; }
   /* Stage accent stripe (matches the toolbar group colors). */
-  .pane[data-stage="source"]   h2 { border-left-color: #888; }
+  .pane[data-stage="source"]   h2 { border-left-color: #4ea1ff; }
   .pane[data-stage="parse"]    h2 { border-left-color: #3b8eea; }
   .pane[data-stage="semantic"] h2 { border-left-color: #23d18b; }
   .pane[data-stage="codegen"]  h2 { border-left-color: #e5a23b; }
@@ -68,6 +68,14 @@
   .pane h2::before { content: "⠿"; color: #555; cursor: grab; }
   .pane.dragging { opacity: 0.4; }
   .pane.dragover h2 { box-shadow: inset 3px 0 0 #0e639c; }
+  /* The D source pane is the editable input, not a read-only output — give it a
+     distinct surface, header and "editable" badge so it reads as primary. */
+  .pane[data-stage="source"] { box-shadow: inset 0 0 0 1px #2b3a48; }
+  .pane[data-stage="source"] h2 { color: #cdd6df; background: #1b2129; }
+  .pane[data-stage="source"] .bar { background: #1b2129; border-top-color: #2b3a48; }
+  .pane[data-stage="source"] h2 .badge {
+      margin-left: auto; font-size: 10px; letter-spacing: .03em; text-transform: none;
+      color: #6cb6ff; border: 1px solid #2d4a66; border-radius: 10px; padding: 1px 8px; }
   textarea, pre { flex: 1; margin: 0; padding: 12px; border: 0; font: 13px/1.45 ui-monospace, monospace;
                   background: #1e1e1e; color: #d4d4d4; white-space: pre; overflow: auto; tab-size: 4; }
   textarea { resize: none; outline: none; }
@@ -79,6 +87,16 @@
      lines doesn't produce hard flashes. */
   .ln { transition: background-color 80ms ease-out; }
   .ln.hl { background: rgba(88, 166, 255, 0.15); }
+  /* Read-only syntax highlight for the lowered-AST pane: same palette as the
+     editor, rendered as plain colored spans in a <pre> (no cursor/gutter) so it
+     stays clearly an output, not an editable field. */
+  #ast .tok-keyword  { color: #569cd6; }
+  #ast .tok-type     { color: #4ec9b0; }
+  #ast .tok-comment  { color: #6a9955; font-style: italic; }
+  #ast .tok-string   { color: #ce9178; }
+  #ast .tok-number   { color: #b5cea8; }
+  #ast .tok-meta     { color: #dcdcaa; }
+  #ast .tok-variable { color: #9cdcfe; }
   /* CodeMirror editor host: fill the source pane between header and run bar. */
   #src { flex: 1; min-height: 0; overflow: hidden; }
   #src .cm-editor { height: 100%; }
@@ -132,7 +150,7 @@
 </header>
 <div class="cols" id="cols">
   <div class="pane" data-pane="src" data-stage="source" data-title="D source" draggable="false">
-    <h2 draggable="true">D source</h2>
+    <h2 draggable="true">D source <span class="badge">✎ editable</span></h2>
     <div id="src"></div>
     <!-- Initial document for the CodeMirror editor (mounted into #src above). -->
     <textarea id="src-init" hidden>module test;
@@ -151,35 +169,35 @@ int[] squares()
 </textarea>
     <div class="bar"><button class="run" id="run" title="Run (Ctrl+Enter / ⌘+Enter)">Go ▶</button></div>
   </div>
-  <div class="pane" data-pane="lex" data-stage="parse" data-title="Tokens">
+  <div class="pane" data-pane="lex" data-stage="parse" data-title="Tokens" data-tip="The token stream produced by the lexer, before parsing">
     <h2 draggable="true" title="Internal lexer output: one line per source line, listing that line's TOK enum member names (e.g. int32, identifier, add). Tokens carrying a value get it as a parenthesized postfix, e.g. float32Literal(3.5).">Tokens (lexer)</h2>
     <pre id="lex"></pre>
   </div>
-  <div class="pane" data-pane="parse" data-stage="parse" data-title="Parse tree">
+  <div class="pane" data-pane="parse" data-stage="parse" data-title="Parse tree" data-tip="The Abstract Syntax Tree as parsed, before semantic analysis">
     <h2 draggable="true">Parse tree (printAST)</h2>
     <pre id="parse"></pre>
   </div>
-  <div class="pane" data-pane="sema" data-stage="semantic" data-title="Semantic tree">
+  <div class="pane" data-pane="sema" data-stage="semantic" data-title="Semantic tree" data-tip="The Abstract Syntax Tree after semantic analysis, labelled by internal DMD class names">
     <h2 draggable="true" title="printAST after semantic analysis: like -vcg-ast, but labels nodes by their internal DMD class name (e.g. AddExp, CompoundStatement) instead of regenerated D syntax">Semantic tree (printAST, post-semantic)</h2>
     <pre id="sema"></pre>
   </div>
-  <div class="pane" data-pane="ast" data-stage="semantic" data-title="Lowered AST">
+  <div class="pane" data-pane="ast" data-stage="semantic" data-title="Lowered AST" data-tip="The Abstract Syntax Tree after lowering, regenerated as D source (-vcg-ast)">
     <h2 draggable="true">Lowered AST (-vcg-ast)</h2>
     <pre id="ast"></pre>
   </div>
-  <div class="pane" data-pane="ir" data-stage="codegen" data-title="Backend IR (pre-opt)">
+  <div class="pane" data-pane="ir" data-stage="codegen" data-title="Backend IR (pre-opt)" data-tip="Backend Intermediate Representation before optimizations have been performed">
     <h2 draggable="true" title="Backend intermediate representation: the block/elem graph of each function just after lowering, before the optimizer runs. Nodes are labelled with the backend enum member names (OPadd, TYint, BC.goto_).">Backend IR — before -O (block/elem graph)</h2>
     <pre id="ir"></pre>
   </div>
-  <div class="pane" data-pane="iropt" data-stage="codegen" data-title="Backend IR (post-opt)">
+  <div class="pane" data-pane="iropt" data-stage="codegen" data-title="Backend IR (post-opt)" data-tip="Backend Intermediate Representation after optimizations have been performed">
     <h2 draggable="true" title="The same block/elem graph after the -O global optimizer (optfunc) has run, immediately before code generation. Diff against the pre-opt pane to see what the optimizer did.">Backend IR — after -O (block/elem graph)</h2>
     <pre id="iropt"></pre>
   </div>
-  <div class="pane" data-pane="asm" data-stage="codegen" data-title="Disassembly">
+  <div class="pane" data-pane="asm" data-stage="codegen" data-title="Disassembly" data-tip="The generated x86-64 machine code, disassembled (-vasm)">
     <h2 draggable="true">x86-64 disassembly (-vasm)</h2>
     <pre id="asm"></pre>
   </div>
-  <div class="pane" data-pane="diag" data-stage="diag" data-title="Diagnostics">
+  <div class="pane" data-pane="diag" data-stage="diag" data-title="Diagnostics" data-tip="Compiler errors, warnings and deprecation messages">
     <h2 draggable="true">Diagnostics</h2>
     <pre id="diag"></pre>
   </div>
@@ -191,12 +209,12 @@ import { EditorView, keymap, lineNumbers, highlightActiveLineGutter, highlightSp
          drawSelection, dropCursor, rectangularSelection, crosshairCursor,
          highlightActiveLine, Decoration } from "@codemirror/view";
 import { EditorState, StateField, StateEffect } from "@codemirror/state";
-import { StreamLanguage, HighlightStyle, syntaxHighlighting, defaultHighlightStyle,
+import { StreamLanguage, StringStream, HighlightStyle, syntaxHighlighting, defaultHighlightStyle,
          foldGutter, foldKeymap, indentOnInput, bracketMatching } from "@codemirror/language";
 import { history, historyKeymap, defaultKeymap, indentWithTab } from "@codemirror/commands";
 import { searchKeymap, highlightSelectionMatches } from "@codemirror/search";
 import { autocompletion, completionKeymap, closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
-import { lintKeymap, linter, lintGutter, forceLinting } from "@codemirror/lint";
+import { lintKeymap, lintGutter, setDiagnostics } from "@codemirror/lint";
 import { tags as t } from "@lezer/highlight";
 
 // basicSetup, reconstructed from the individual packages (see import-map note in
@@ -274,6 +292,7 @@ const makeChip = (p) => {
     chip.className = "chip";
     chip.dataset.toggle = p.dataset.pane;
     chip.textContent = p.dataset.title;
+    if (p.dataset.tip) chip.title = p.dataset.tip;
     chip.setAttribute("aria-pressed", String(!p.hidden));
     chip.addEventListener("click", () => { setHidden(p.dataset.pane, !p.hidden); saveState(); });
     return chip;
@@ -366,7 +385,7 @@ function dStringBody(stream, state) {
     return "string";
 }
 
-const dLanguage = StreamLanguage.define({
+const dStreamParser = {
     name: "d",
     startState: () => ({ block: false, nest: 0, q: null }),
     token(stream, state) {
@@ -420,7 +439,8 @@ const dLanguage = StreamLanguage.define({
         stream.next();                                   // punctuation / operators: no highlight
         return null;
     },
-});
+};
+const dLanguage = StreamLanguage.define(dStreamParser);
 
 // Highlight palette tuned to the surrounding VS Code dark theme.
 const dHighlight = HighlightStyle.define([
@@ -434,10 +454,10 @@ const dHighlight = HighlightStyle.define([
 ]);
 
 const dTheme = EditorView.theme({
-    "&":                       { color: "#d4d4d4", backgroundColor: "#1e1e1e", height: "100%", fontSize: "13px" },
+    "&":                       { color: "#d4d4d4", backgroundColor: "#202329", height: "100%", fontSize: "13px" },
     ".cm-content":             { fontFamily: "ui-monospace, monospace", caretColor: "#fff" },
     ".cm-line":                { transition: "background-color 80ms ease-out" },
-    ".cm-gutters":             { backgroundColor: "#1e1e1e", color: "#666", border: "none" },
+    ".cm-gutters":             { backgroundColor: "#202329", color: "#666", border: "none" },
     ".cm-activeLine":          { backgroundColor: "#2a2a2a" },
     ".cm-activeLineGutter":    { backgroundColor: "#2a2a2a", color: "#999" },
     ".cm-syncHighlight":       { backgroundColor: "rgba(88, 166, 255, 0.15)", transition: "background-color 80ms ease-out" },
@@ -472,11 +492,9 @@ const hlField = StateField.define({
     provide: (f) => EditorView.decorations.from(f),
 });
 
-// Inline diagnostics: DMD's stderr diagnostics, parsed into CodeMirror lint
-// markers shown directly in the editor (gutter icon + underline + hover
-// tooltip). `lintDiags` is refreshed by run() and pushed via forceLinting.
-let lintDiags = [];
-const dLinter = linter(() => lintDiags, { delay: 0 });
+// Inline diagnostics are pushed imperatively from run() via setDiagnostics (see
+// below) — not through a linter() source, whose auto-scheduled runs would read a
+// stale diagnostic set (compile is debounced) and lag the markers by one compile.
 
 // `onDocChange` is wired up once the wasm compiler is ready (see below).
 let runTimer = null;
@@ -492,7 +510,7 @@ const editor = new EditorView({
         syntaxHighlighting(dHighlight),
         dTheme,
         hlField,
-        lintGutter(), dLinter,                           // inline error/warning markers
+        lintGutter(),                                    // inline error/warning markers (gutter + lint field)
         EditorView.updateListener.of((u) => {
             if (u.docChanged) onDocChange();
             if (u.selectionSet || u.docChanged) onCursor();
@@ -508,6 +526,29 @@ const ESC = (s) => s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">":
 // Strip ANSI SGR escapes — the inline editor markers are plain text (color is
 // reserved for the diagnostics pane, rendered via ansiToHtml).
 const stripAnsi = (s) => s.replace(/\x1b\[[0-9;]*m/g, "");
+
+// Read-only D syntax highlight for the lowered-AST pane. Reuses the editor's
+// StreamLanguage tokenizer (dStreamParser) directly over a StringStream, emitting
+// colored <span>s into a <pre> — highlighted like source, but with no cursor,
+// gutter or editing, so it stays clearly an output rather than an input field.
+function highlightD(text) {
+    const state = dStreamParser.startState();
+    const out = [];
+    for (const raw of text.split("\n")) {
+        if (raw === "") { out.push(""); continue; }
+        const stream = new StringStream(raw, 4, 4);
+        let line = "";
+        while (!stream.eol()) {
+            stream.start = stream.pos;
+            const tag = dStreamParser.token(stream, state);
+            if (stream.pos <= stream.start) stream.pos = stream.start + 1;   // guarantee progress
+            const chunk = ESC(raw.slice(stream.start, stream.pos));
+            line += tag ? `<span class="tok-${tag}">${chunk}</span>` : chunk;
+        }
+        out.push(line);
+    }
+    return out.join("\n");
+}
 
 // Parse DMD's stderr diagnostics into CodeMirror lint diagnostics positioned in
 // the source. DMD prints `input.d(line,col): Error: message` (also Warning and
@@ -648,14 +689,14 @@ function run() {
     renderLined("lex", lex, /*positional*/ true);
     renderLined("parse", parse);
     renderLined("sema", sema);
-    $("ast").textContent = ast || "(no output)";
+    if (ast) $("ast").innerHTML = highlightD(ast); else $("ast").textContent = "(no output)";
     renderLined("ir", ir, false, "(no code generated)");
     renderLined("iropt", irOpt, false, "(no code generated)");
     $("asm").textContent = asm || "(no code generated)";
     $("diag").innerHTML = diagnostics ? ansiToHtml(diagnostics) : "(no diagnostics)";
-    // Mirror the diagnostics inline in the editor (gutter + underline + tooltip).
-    lintDiags = parseDiagnostics(diagnostics, editor.state.doc);
-    forceLinting(editor);
+    // Mirror the diagnostics inline in the editor (gutter + underline + tooltip),
+    // pushed synchronously now that this compile's results are in hand.
+    editor.dispatch(setDiagnostics(editor.state, parseDiagnostics(diagnostics, editor.state.doc)));
     $("status").textContent = `errors: ${errors} · ${ms} ms`;
     applyHighlight(/*force*/ true);   // DOM was rebuilt; re-apply current highlight
 }
