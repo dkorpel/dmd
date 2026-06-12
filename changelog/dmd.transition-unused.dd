@@ -1,0 +1,32 @@
+Added `-transition=unused` to warn about unused declarations
+
+The new `-transition=unused` switch makes the compiler emit a warning for every
+enum, variable and function that is declared but never referenced. It is intended
+to help locate dead code.
+
+---
+int unused;             // Warning: unused variable
+void helper() {}        // Warning: unused function
+enum Color { red }      // Warning: unused enum
+
+void f(int x)           // `x` is a parameter, never warned
+{
+    int local;          // Warning: unused variable
+}
+---
+
+To avoid false positives, the following declarations are never reported:
+
+$(LIST
+    * Symbols meant for export: those marked `export`, given a non-D linkage such
+      as `extern(C)`, or renamed with `pragma(mangle, ...)`.
+    * Generic and documentation symbols: anything declared inside a `template`,
+      `mixin template` or `unittest`.
+    * Function parameters, since a function may have to honor a specific API.
+    * `foreach` loop variables, e.g. `i` in `foreach (i; 0 .. 2)`.
+    * Struct padding fields, recognised by a name that starts with an underscore
+      or contains `pad`.
+)
+
+The diagnostics are warnings, so passing `-w` together with `-transition=unused`
+turns them into errors.

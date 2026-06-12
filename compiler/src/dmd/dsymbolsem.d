@@ -427,6 +427,33 @@ void makeNested2(AggregateDeclaration _this)
  */
 Dsymbol search(Scope* _this, Loc loc, Identifier ident, out Dsymbol pscopesym, SearchOptFlags flags = SearchOpt.all)
 {
+    if (auto s = searchImpl(_this, loc, ident, pscopesym, flags))
+    {
+        markUsed(s);
+        return s;
+    }
+    return null;
+}
+
+/**
+ * Mark a symbol as referenced, so it isn't flagged as an unused declaration.
+ *
+ * Called from the name resolution chokepoints. Skipped entirely when warnings
+ * are disabled, so it adds no overhead to a normal compile. Overloaded functions
+ * share a single symbol table entry, so the whole overload set is marked to avoid
+ * false positives on sibling overloads that weren't the resolved candidate.
+ */
+private void markUsed(Dsymbol s)
+{
+    if (!global.params.v.unused)
+        return;
+    s.used = true;
+    if (s.isFuncDeclaration())
+        overloadApply(s, (Dsymbol os) { os.used = true; return 0; });
+}
+
+private Dsymbol searchImpl(Scope* _this, Loc loc, Identifier ident, out Dsymbol pscopesym, SearchOptFlags flags = SearchOpt.all)
+{
     version (LOGSEARCH)
     {
         printf("Scope.search(%p, '%s' flags=x%x)\n", _this, ident.toChars(), flags);
@@ -7679,6 +7706,8 @@ Dsymbol search(Dsymbol d, Loc loc, Identifier ident, SearchOptFlags flags = Sear
 {
     scope v = new SearchVisitor(loc, ident, flags);
     d.accept(v);
+    if (v.result)
+        markUsed(v.result);
     return v.result;
 }
 

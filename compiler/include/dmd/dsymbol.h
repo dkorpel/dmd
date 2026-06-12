@@ -193,7 +193,7 @@ public:
     PASS semanticRun() const;
     PASS semanticRun(PASS v);
 private:
-    unsigned char bitfields;
+    unsigned short bitfields;
     unsigned char dsym;
 public:
     static Dsymbol *create(Identifier *);

@@ -685,6 +685,13 @@ private int tryMain(const(char)[][] argv, out Param params)
     if (global.errors)
         removeHdrFilesAndFail(params.dihdr.doOutput, modules);
 
+    // Warn about declarations that were never referenced
+    {
+        import dmd.unused : checkUnused;
+        foreach (m; modules)
+            checkUnused(m);
+    }
+
     {
     timeTraceBeginEvent(TimeTraceEventType.inlineGeneral);
     scope (exit) timeTraceEndEvent(TimeTraceEventType.inlineGeneral);

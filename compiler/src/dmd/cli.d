@@ -1047,6 +1047,8 @@ dmd -cov -unittest myprog.d
             "list all variables going into thread local storage"),
         Feature("in", "v.vin",
             "list all usages of 'in' on parameter"),
+        Feature("unused", "v.unused",
+            "warn about unused declarations (enums, variables, functions)"),
     ];
 
     /// Returns all available reverts

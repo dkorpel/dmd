@@ -151,6 +151,7 @@ struct Verbose
     d_bool field;              // identify non-mutable field variables
     d_bool complex = true;     // identify complex/imaginary type usage
     d_bool vin;                // identify 'in' parameters
+    d_bool unused;             // warn about unused declarations (enums, variables, functions)
     d_bool logo;               // print compiler logo
     d_bool color;              // use ANSI colors in console output
     d_bool cov;                // generate code coverage data

@@ -380,9 +380,11 @@ extern (C++) class Dsymbol : ASTNode
         bool deferred;  // In Module.deferred
         bool deferred2; // In Module.deferred2
         bool deferred3; // In Module.deferred3
+
+        bool used;      // set when this symbol is referenced, for unused declaration warnings
     }
     import dmd.common.bitfields;
-    mixin(generateBitFields!(BitFields, ubyte));
+    mixin(generateBitFields!(BitFields, ushort));
     DSYM dsym;
 
     final extern (D) this(DSYM tag) nothrow @safe

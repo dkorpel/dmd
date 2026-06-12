@@ -130,6 +130,7 @@ extern(C++) struct Verbose
     bool field;             // identify non-mutable field variables
     bool complex = true;    // identify complex/imaginary type usage
     bool vin;               // identify 'in' parameters
+    bool unused;            // warn about unused declarations (enums, variables, functions)
     bool logo;              // print compiler logo
     bool color;             // use ANSI colors in console output
     bool cov;               // generate code coverage data
