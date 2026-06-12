@@ -85,19 +85,11 @@
   /* Per-pane close shortcut (hides the pane; the top-bar toggle still re-shows it). */
   /* Fill the full bar height and reach to the right edge (negative margins cancel
      the h2 padding) so the whole right end is the X hitbox — no drag strip around it. */
-  .pane-close { margin: -6px -12px -6px 0; padding: 0 12px; align-self: stretch;
+  .pane-close { margin: -6px -12px -6px auto; padding: 0 12px; align-self: stretch;
                 display: flex; align-items: center; background: none; border: 0;
                 color: #888; cursor: pointer; font: 14px/1 system-ui; }
   .pane-close:hover { color: #b03931; background: rgba(176,57,49,.15); }
   body.embed .pane-close { display: none; }
-  /* Solo: collapse to just this pane (hide all others); click again to restore.
-     Sits immediately left of the close button at the right end of the header. */
-  .pane-solo { margin: -6px 0 -6px auto; padding: 0 9px; align-self: stretch;
-               display: flex; align-items: center; background: none; border: 0;
-               color: #888; cursor: pointer; font: 13px/1 system-ui; }
-  .pane-solo:hover { color: var(--code-kw); background: rgba(64,64,220,.12); }
-  .pane[data-solo="true"] .pane-solo { color: var(--codegen); }
-  body.embed .pane-solo { display: none; }
   .pane.dragging { opacity: 0.4; }
   .pane.dragover h2 { box-shadow: inset 3px 0 0 #4040dc; }
   /* The D source pane is the editable input, not a read-only output — give it a
@@ -378,9 +370,17 @@ const makeChip = (p) => {
     chip.className = "chip";
     chip.dataset.toggle = p.dataset.pane;
     chip.textContent = p.dataset.title;
-    if (p.dataset.tip) chip.title = p.dataset.tip;
+    chip.title = (p.dataset.tip ? p.dataset.tip + "\n\n" : "") +
+                 "Click: show only this panel · Ctrl+click: toggle it on/off";
     chip.setAttribute("aria-pressed", String(!p.hidden));
-    chip.addEventListener("click", () => { setHidden(p.dataset.pane, !p.hidden); saveState(); applyAutoLayout(); });
+    // Default click solos this output (hides every other non-source pane);
+    // Ctrl/⌘+click instead toggles just this pane on/off without disturbing the rest.
+    chip.addEventListener("click", (e) => {
+        if (e.ctrlKey || e.metaKey) setHidden(p.dataset.pane, !p.hidden);
+        else soloPane(p.dataset.pane);
+        saveState();
+        applyAutoLayout();
+    });
     return chip;
 };
 for (const [stage, label] of STAGES) {
@@ -406,45 +406,21 @@ for (const [stage, label] of STAGES) {
     for (const p of panes) toggles.appendChild(makeChip(p));
 }
 
-// "Solo" a pane: hide every other (non-source) pane so only this one — plus the
-// always-on D source input — is shown. Clicking solo again on a pane that's
-// already soloed restores the visibility that was in effect beforehand. The gold
-// marker (data-solo) shows which pane is currently soloed.
-let preSolo = null;
+// "Solo" a pane: show only this output (plus the always-on D source input) by
+// hiding every other non-source pane. This is the default action of a pane's
+// top-bar toggle chip (Ctrl+click toggles a single pane instead).
 function soloPane(pane) {
-    const others = paneEls().filter((p) => p.dataset.stage !== "source" && p.dataset.pane !== pane);
-    const alreadySolo = others.length > 0 && others.every((p) => p.hidden);
-    for (const p of paneEls()) p.dataset.solo = "false";
-    if (alreadySolo && preSolo) {
-        // Toggle off: restore the pre-solo visibility snapshot.
-        for (const p of paneEls()) setHidden(p.dataset.pane, preSolo.has(p.dataset.pane));
-        preSolo = null;
-    } else {
-        // Toggle on: remember what was hidden, then collapse to just this pane.
-        preSolo = new Set(paneEls().filter((p) => p.hidden).map((p) => p.dataset.pane));
-        for (const p of others) setHidden(p.dataset.pane, true);
-        setHidden(pane, false);
-        cols.querySelector(`.pane[data-pane="${pane}"]`).dataset.solo = "true";
+    for (const p of paneEls()) {
+        if (p.dataset.stage === "source") continue;
+        setHidden(p.dataset.pane, p.dataset.pane !== pane);
     }
-    saveState();
-    applyAutoLayout();
 }
 
-// Per-pane header buttons: "solo" (show only this pane) and "close" (hide it,
-// equivalent to turning off its top-bar toggle). The source pane is always
-// visible, so it gets neither.
+// Per-pane header "close" button: hide this pane (equivalent to Ctrl+clicking
+// its top-bar toggle off). The source pane is always visible, so it gets none.
 for (const p of paneEls()) {
     if (p.dataset.stage === "source") continue;
     const h2 = p.querySelector("h2");
-
-    const solo = document.createElement("button");
-    solo.className = "pane-solo";
-    solo.type = "button";
-    solo.draggable = false;
-    solo.textContent = "⛶";
-    solo.title = "Solo — show only this panel (click again to restore)";
-    solo.addEventListener("click", () => soloPane(p.dataset.pane));
-    h2.appendChild(solo);
 
     const btn = document.createElement("button");
     btn.className = "pane-close";
@@ -664,26 +640,11 @@ const editor = new EditorView({
 const getSrc = () => editor.state.doc.toString();
 
 // ---- Example snippets dropdown --------------------------------------------
-// Ready-made programs — the ones the tour walks through, plus a couple more —
-// each chosen to make one pass visible. Selecting one replaces the editor
-// contents; the doc-change listener then auto-recompiles.
 const EXAMPLES = [
   ["Token kinds (lexer)",
 `enum hex = 0xDEAD_BEEF;
 double pi = 3.14e2;
 string s = "a\\tb";
-`],
-  ["Operator precedence (parser)",
-`int f(int a, int b)
-{
-    return a + b * 2;
-}
-`],
-  ["Implicit conversions (semantic)",
-`long sum(int a, int b)
-{
-    return a + b;
-}
 `],
   ["foreach + append lowering",
 `int[] squares(int n)
@@ -718,20 +679,7 @@ string s = "a\\tb";
     {
     }
 }
-`],
-  ["Constant folding (-O)",
-`int f(int x)
-{
-    int a = 2 + 3;
-    return a * x;
-}
-`],
-  ["Strength reduction (x * 3)",
-`int triple(int x)
-{
-    return x * 3;
-}
-`],
+`]
 ];
 const exSel = $("examples");
 if (exSel) {

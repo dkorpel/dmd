@@ -135,7 +135,7 @@ void printAST(Dsymbol s, ref OutBuffer buf, int indent = 0)
             if (auto ei = vd._init.isExpInitializer())
             {
                 printIndent(buf, indent + 2);
-                buf.writestring(".init:\n");
+                buf.writestring("exp:\n");
                 printAST(ei.exp, buf, indent + 4);
             }
         }
