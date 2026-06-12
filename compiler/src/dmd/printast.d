@@ -70,11 +70,11 @@ void printAST(Expression e, int indent = 0)
  *  buf = sink the formatted tree is written to
  *  indent = indentation level
  */
-void printAST(Expression e, ref OutBuffer buf, int indent = 0)
+void printAST(Expression e, ref OutBuffer buf, int indent = 0, string prefix = null)
 {
     if (!e)
         return;
-    scope PrintASTVisitor pav = new PrintASTVisitor(&buf, indent);
+    scope PrintASTVisitor pav = new PrintASTVisitor(&buf, indent, prefix);
     e.accept(pav);
 }
 
@@ -87,11 +87,13 @@ void printAST(Expression e, ref OutBuffer buf, int indent = 0)
  *  buf = sink the formatted tree is written to
  *  indent = indentation level
  */
-void printAST(Dsymbol s, ref OutBuffer buf, int indent = 0)
+void printAST(Dsymbol s, ref OutBuffer buf, int indent = 0, string prefix = null)
 {
     if (!s)
         return;
     printIndent(buf, indent);
+    if (prefix.length)
+        buf.writestring(prefix);
     buf.writestring(s.astTypeName());
 
     if (auto ad = s.isAttribDeclaration())
@@ -131,14 +133,7 @@ void printAST(Dsymbol s, ref OutBuffer buf, int indent = 0)
     else if (auto vd = s.isVarDeclaration())
     {
         if (vd._init)
-        {
-            if (auto ei = vd._init.isExpInitializer())
-            {
-                printIndent(buf, indent + 2);
-                buf.writestring("exp:\n");
-                printAST(ei.exp, buf, indent + 4);
-            }
-        }
+            printAST(vd._init, buf, indent + 2);
     }
     else if (auto sds = s.isScopeDsymbol())     // Module, aggregates, enums, templates
     {
@@ -156,7 +151,7 @@ void printAST(Dsymbol s, ref OutBuffer buf, int indent = 0)
  *  buf = sink the formatted tree is written to
  *  indent = indentation level
  */
-void printAST(Statement s, ref OutBuffer buf, int indent = 0)
+void printAST(Statement s, ref OutBuffer buf, int indent = 0, string prefix = null)
 {
     if (!s)
         return;
@@ -164,6 +159,8 @@ void printAST(Statement s, ref OutBuffer buf, int indent = 0)
     void head()
     {
         printIndent(buf, indent);
+        if (prefix.length)
+            buf.writestring(prefix);
         buf.writestring(s.astTypeName());
         emitLineMarker(buf, s.loc);
         buf.writeByte('\n');
@@ -254,10 +251,82 @@ void printAST(Statement s, ref OutBuffer buf, int indent = 0)
         // class name. Avoid hdrgen's `toChars` so this stays self-contained; the
         // bare class name is enough to identify the node in the tree.
         printIndent(buf, indent);
+        if (prefix.length)
+            buf.writestring(prefix);
         buf.printf("%s", s.astTypeName().ptr);
         emitLineMarker(buf, s.loc);
         buf.writeByte('\n');
     }
+}
+
+/********************
+ * Print a variable (or compound-literal) initializer AST into `buf`, recursing
+ * into the expressions and nested initializers it holds.
+ * Params:
+ *  init = initializer AST to print
+ *  buf = sink the formatted tree is written to
+ *  indent = indentation level
+ */
+void printAST(Initializer init, ref OutBuffer buf, int indent = 0, string prefix = null)
+{
+    if (!init)
+        return;
+
+    // An ExpInitializer is just a wrapper around an expression; print the
+    // expression directly so the common `int x = 1;` case stays uncluttered.
+    if (auto ei = init.isExpInitializer())
+    {
+        printAST(ei.exp, buf, indent, prefix);
+        return;
+    }
+
+    printIndent(buf, indent);
+    if (prefix.length)
+        buf.writestring(prefix);
+    buf.writestring(init.astTypeName());
+    emitLineMarker(buf, init.loc);
+    buf.writeByte('\n');
+
+    if (auto si = init.isStructInitializer())
+    {
+        foreach (j, val; si.value[])
+        {
+            OutBuffer p;
+            if (auto id = si.field[j])
+                p.printf(".%s: ", id.toChars());
+            else
+                p.writestring("(positional): ");
+            printAST(val, buf, indent + 2, cast(string) p[]);
+        }
+    }
+    else if (auto ai = init.isArrayInitializer())
+    {
+        foreach (j, val; ai.value[])
+        {
+            if (auto idx = ai.index[j])
+                printAST(idx, buf, indent + 2, "[index]: ");
+            printAST(val, buf, indent + 2);
+        }
+    }
+    else if (auto ci = init.isCInitializer())
+    {
+        foreach (ref di; ci.initializerList[])
+        {
+            if (di.designatorList)
+                foreach (ref des; (*di.designatorList)[])
+                {
+                    if (des.ident)
+                    {
+                        printIndent(buf, indent + 2);
+                        buf.printf(".%s\n", des.ident.toChars());
+                    }
+                    else if (des.exp)
+                        printAST(des.exp, buf, indent + 2, "[index]: ");
+                }
+            printAST(di.initializer, buf, indent + 2);
+        }
+    }
+    // VoidInitializer / DefaultInitializer / ErrorInitializer: name only.
 }
 
 private void printIndent(ref OutBuffer buf, int indent)
@@ -476,11 +545,13 @@ extern (C++) final class PrintASTVisitor : Visitor
 
     OutBuffer* buf;
     int indent;
+    string prefix;
 
-    extern (D) this(OutBuffer* buf, int indent) scope @safe
+    extern (D) this(OutBuffer* buf, int indent, string prefix = null) scope @safe
     {
         this.buf = buf;
         this.indent = indent;
+        this.prefix = prefix;
     }
 
     void printIndent(int indent)
@@ -493,6 +564,8 @@ extern (C++) final class PrintASTVisitor : Visitor
     void head(Expression e)
     {
         printIndent(indent);
+        if (prefix.length)
+            buf.writestring(prefix);
         buf.put(e.astTypeName());
         if (e.type)
             buf.printf(" : %s", typeName(e.type));
@@ -505,6 +578,8 @@ extern (C++) final class PrintASTVisitor : Visitor
     void leaf(Expression e, const(char)* value)
     {
         printIndent(indent);
+        if (prefix.length)
+            buf.writestring(prefix);
         buf.put(e.astTypeName());
         buf.printf("(%s)", value);
         if (e.type)
@@ -637,34 +712,35 @@ extern (C++) final class PrintASTVisitor : Visitor
     override void visit(CompoundLiteralExp e)
     {
         visit(cast(Expression)e);
-        printIndent(indent + 2);
-        buf.printf(".init: %s\n", e.initializer ? e.initializer.toChars() : "");
+        .printAST(e.initializer, *buf, indent + 2, ".init: ");
     }
 
     override void visit(ClassReferenceExp e)
     {
         visit(cast(Expression)e);
-        printIndent(indent + 2);
-        buf.printf(".value: %s\n", e.value ? e.value.toChars() : "");
-        .printAST(e.value, *buf, indent + 2);
+        .printAST(e.value, *buf, indent + 2, ".value: ");
     }
 
     override void visit(ArrayLiteralExp e)
     {
         visit(cast(Expression)e);
-        printIndent(indent + 2);
-        buf.printf(".basis : %s\n", e.basis ? e.basis.toChars() : "");
+        if (e.basis)
+            .printAST(e.basis, *buf, indent + 2, ".basis: ");
         if (e.elements)
+            foreach (element; (*e.elements)[])
+                .printAST(element, *buf, indent + 2);
+    }
+
+    override void visit(AssocArrayLiteralExp e)
+    {
+        visit(cast(Expression)e);
+        if (e.keys)
         {
-            printIndent(indent + 2);
-            buf.writeByte('[');
-            foreach (i, element; (*e.elements)[])
+            foreach (i, key; (*e.keys)[])
             {
-                if (i)
-                    buf.writestring(", ");
-                buf.printf("%s", element.toChars());
+                .printAST(key, *buf, indent + 2, ".key: ");
+                .printAST((*e.values)[i], *buf, indent + 2, ".value: ");
             }
-            buf.writestring("]\n");
         }
     }
 
