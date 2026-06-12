@@ -1,40 +1,135 @@
-/* Frutiger Aero theme shared by the DMD explorer (index.html) and its tour
-   (tour.html): deep teal-to-aqua glass, glossy highlights, soft glows.
-   Tokens live here so the two pages stay in visual sync; page-specific layout
-   stays in each file's own <style>. */
+/* dlang.org-flavored theme shared by the DMD explorer (index.html) and its tour
+   (tour.html). A D-red header sits over neutral surfaces in both a light and a
+   dark variant; subtle gradients, no colored glows. The palette mirrors
+   dlang.org/css (maroon #b03931/#98312a, gray surfaces, blue/red/gray code).
+
+   :root holds the light theme. The dark theme overrides the same tokens under
+   [data-theme="dark"], which theme.js sets on <html> (defaulting to the OS
+   prefers-color-scheme, overridable by the top-bar toggle). All page chrome and
+   code colors are tokens, so toggling re-themes both pages live.
+   Tokens live here; page-specific layout stays in each file's own <style>. */
 :root {
-    /* Stage accent colors (match the explorer's per-stage pane stripes). */
-    --src:     #4ea1ff;
-    --parse:   #3b8eea;
-    --sema:    #23d18b;
+    color-scheme: light;
+
+    /* Stage accent colors (per-stage pane stripes / tour dots). */
+    --src:     #4040dc;
+    --parse:   #3666cc;
+    --sema:    #2e9e5b;
+    --codegen: #c87f1e;
+    --diag:    #b03931;
+
+    /* Page + header chrome — dlang.org's maroon bar over a light gray page. */
+    --aero-page:          linear-gradient(180deg, #fafafa 0%, #ececec 100%);
+    --aero-header:        linear-gradient(180deg, #b03931 0%, #98312a 100%);
+    --aero-header-border: #7e2620;
+    --aero-header-shadow: inset 0 1px 0 rgba(255,255,255,.18), 0 1px 4px rgba(0,0,0,.25);
+
+    /* Reusable surfaces — dlang.org's light button/panel gradients. */
+    --aero-glass:      linear-gradient(180deg, #ededed 0%, #dfdfdf 100%);  /* buttons          */
+    --aero-glass-soft: linear-gradient(180deg, #f6f6f6 0%, #ececec 100%);
+    --aero-glass-on:   linear-gradient(180deg, #8f2c25 0%, #6f1f1a 100%);  /* pressed (maroon) */
+    --aero-panel:      linear-gradient(180deg, #ededed 0%, #e2e2e2 100%);  /* pane headers     */
+    --aero-surface:    linear-gradient(180deg, #fcfcfc 0%, #f5f5f5 100%);  /* code areas       */
+    --aero-srchead:    linear-gradient(180deg, #e8e8e8 0%, #dcdcdc 100%);  /* source pane head */
+
+    /* Lines, edges, glossy highlights (no colored glow). */
+    --aero-line:    #d4d4d4;   /* hairline separators           */
+    --aero-edge:    #c2c2c2;   /* button/panel borders          */
+    --aero-edge-hi: #98312a;   /* hover/active border (maroon)  */
+    --aero-gloss:   inset 0 1px 0 rgba(255,255,255,.7);
+    --aero-glow:    0 1px 3px rgba(0,0,0,.18);   /* subtle lift used on hover     */
+    --aero-h1-glow: 0 1px 1px rgba(0,0,0,.3);    /* legibility on maroon, no glow */
+
+    /* Text. */
+    --aero-text:        #333;       /* body text                       */
+    --aero-text-2:      #555;       /* secondary text / pane labels    */
+    --aero-muted:       #888;       /* captions, footers, drag handles */
+    --aero-text-dim:    #ecd0cd;    /* muted text on the maroon header */
+    --aero-text-hi:     #1a1a1a;    /* emphasis                        */
+    --aero-header-text: #ffffff;    /* title on the maroon header      */
+
+    /* Code syntax (mirrors dlang.org: keyword/type blue, string red, comment gray). */
+    --code-fg:      #333;
+    --code-kw:      #4040dc;
+    --code-type:    #267f99;
+    --code-comment: #999;
+    --code-string:  #dc4040;
+    --code-number:  #116644;
+    --code-meta:    #b8860b;
+    --code-gutter:  #f0f0f0;
+    --code-sel:     #b9d2f5;
+
+    /* Diagnostics pane ANSI palette. */
+    --diag-gray:    #666;
+    --diag-red:     #cd3131;
+    --diag-green:   #0a8f5a;
+    --diag-yellow:  #b58900;
+    --diag-blue:    #2472c8;
+    --diag-magenta: #a833a8;
+    --diag-cyan:    #0e8aa8;
+    --diag-fg:      #333;
+
+    /* Inline code in prose (tour). */
+    --code-inline-bg: #ececec;
+    --code-inline-fg: #4040dc;
+}
+
+:root[data-theme="dark"] {
+    color-scheme: dark;
+
+    --src:     #6fb0f5;
+    --parse:   #5a9bf0;
+    --sema:    #4fd99f;
     --codegen: #e5a23b;
     --diag:    #f14c4c;
 
-    /* Page + header chrome. */
-    --aero-page:     linear-gradient(160deg, #0c1c26 0%, #103039 30%, #0d2531 65%, #0a151e 100%);
-    --aero-header:   linear-gradient(180deg, #234c5d 0%, #173744 52%, #112a36 100%);
-    --aero-header-border: rgba(130,205,235,.28);
-    --aero-header-shadow: inset 0 1px 0 rgba(255,255,255,.16), 0 2px 10px rgba(0,0,0,.4);
+    --aero-page:          linear-gradient(180deg, #1e1e1e 0%, #181818 100%);
+    --aero-header:        linear-gradient(180deg, #98312a 0%, #7e2620 100%);
+    --aero-header-border: #6a1f1a;
+    --aero-header-shadow: inset 0 1px 0 rgba(255,255,255,.12), 0 1px 4px rgba(0,0,0,.5);
 
-    /* Reusable glass/surface fills. */
-    --aero-glass:      linear-gradient(180deg, rgba(96,156,180,.5) 0%, rgba(44,86,106,.45) 100%);
-    --aero-glass-soft: linear-gradient(180deg, rgba(96,156,180,.4), rgba(44,86,106,.35));
-    --aero-glass-on:   linear-gradient(180deg, #4cc3ee 0%, #1f96cb 48%, #1577ad 100%);
-    --aero-panel:      linear-gradient(180deg, rgba(52,86,102,.5) 0%, rgba(24,40,50,.55) 100%);
-    --aero-surface:    linear-gradient(180deg, #1a2228 0%, #141b21 100%);
+    --aero-glass:      linear-gradient(180deg, #3a3a3a 0%, #2e2e2e 100%);
+    --aero-glass-soft: linear-gradient(180deg, #333333 0%, #292929 100%);
+    --aero-glass-on:   linear-gradient(180deg, #b03931 0%, #8f2c25 100%);
+    --aero-panel:      linear-gradient(180deg, #2a2a2a 0%, #232323 100%);
+    --aero-surface:    linear-gradient(180deg, #1f1f1f 0%, #1a1a1a 100%);
+    --aero-srchead:    linear-gradient(180deg, #2f2f2f 0%, #262626 100%);
 
-    /* Lines, edges, glossy highlights, glows. */
-    --aero-line:  rgba(120,195,225,.18);   /* hairline separators            */
-    --aero-edge:  rgba(150,210,235,.32);   /* glass-pill borders             */
-    --aero-edge-hi: rgba(160,228,255,.65); /* hover/active glass border      */
-    --aero-gloss: inset 0 1px 0 rgba(255,255,255,.28);
-    --aero-glow:  0 0 8px rgba(90,195,235,.4);
-    --aero-h1-glow: 0 0 11px rgba(90,200,240,.45), 0 1px 0 rgba(0,0,0,.4);
+    --aero-line:    #3a3a3a;
+    --aero-edge:    #4a4a4a;
+    --aero-edge-hi: #d8645e;
+    --aero-gloss:   inset 0 1px 0 rgba(255,255,255,.08);
+    --aero-glow:    0 1px 3px rgba(0,0,0,.5);
+    --aero-h1-glow: 0 1px 1px rgba(0,0,0,.5);
 
-    /* Text. */
-    --aero-text:     #dfe9ee;
-    --aero-text-dim: #9fc3d2;
-    --aero-text-hi:  #eaf6fb;
+    --aero-text:        #d4d4d4;
+    --aero-text-2:      #b0b0b0;
+    --aero-muted:       #888;
+    --aero-text-dim:    #ecd0cd;
+    --aero-text-hi:     #f0f0f0;
+    --aero-header-text: #ffffff;
+
+    --code-fg:      #d4d4d4;
+    --code-kw:      #6fb0f5;
+    --code-type:    #4ec9b0;
+    --code-comment: #7f9f6f;
+    --code-string:  #ce9178;
+    --code-number:  #b5cea8;
+    --code-meta:    #dcdcaa;
+    --code-gutter:  #181818;
+    --code-sel:     #264f78;
+
+    --diag-gray:    #888;
+    --diag-red:     #f14c4c;
+    --diag-green:   #23d18b;
+    --diag-yellow:  #d7ba00;
+    --diag-blue:    #3b8eea;
+    --diag-magenta: #d670d6;
+    --diag-cyan:    #29b8db;
+    --diag-fg:      #e5e5e5;
+
+    --code-inline-bg: #333333;
+    --code-inline-fg: #6fb0f5;
 }
 
 /* Base chrome shared by both pages (each file adds its own layout on top). */
@@ -49,6 +144,14 @@ header {
     box-shadow: var(--aero-header-shadow);
 }
 header h1 {
-    color: var(--aero-text-hi);
+    color: var(--aero-header-text);
     text-shadow: var(--aero-h1-glow);
 }
+
+/* Light/dark toggle button in the maroon top bar (both pages). */
+.theme-toggle {
+    font: 14px/1 system-ui, sans-serif; width: 30px; height: 26px; flex: none;
+    cursor: pointer; color: var(--aero-header-text);
+    background: rgba(255,255,255,.12); border: 1px solid rgba(255,255,255,.3);
+    border-radius: 6px; box-shadow: inset 0 1px 0 rgba(255,255,255,.15); }
+.theme-toggle:hover { background: rgba(255,255,255,.22); }
