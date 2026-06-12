@@ -13,26 +13,26 @@ module dmd.printast;
 
 import core.stdc.stdio;
 
-import dmd.common.outbuffer;
-import dmd.dsymbol;
-import dmd.declaration;
-import dmd.dtemplate : TemplateInstance;
-import dmd.func;
+import dmd.astenums : TY, TMAX, STC, LINK;
+import dmd.asttypename : astTypeName;
 import dmd.attrib;
-import dmd.init;
-import dmd.statement;
+import dmd.common.outbuffer;
+import dmd.ctfeexpr;
+import dmd.declaration;
+import dmd.dsymbol;
+import dmd.dtemplate : TemplateInstance;
 import dmd.expression;
 import dmd.expressionsem : toInteger;
-import dmd.ctfeexpr;
-import dmd.tokens;
-import dmd.visitor;
-import dmd.hdrgen;
-import dmd.asttypename : astTypeName;
+import dmd.func;
+import dmd.init;
 import dmd.location : Loc;
 import dmd.mtype : Type;
+import dmd.root.string: fTuple;
 import dmd.rootobject : RootObject;
-import dmd.astenums : TY, TMAX;
+import dmd.statement;
+import dmd.tokens;
 import dmd.typesem : nextOf;
+import dmd.visitor;
 
 /********************
  * When set, `printAST` appends a source-line marker to the end of each node's
@@ -250,14 +250,11 @@ void printAST(Statement s, ref OutBuffer buf, int indent = 0)
     }
     else
     {
-        // Statement kinds without a dedicated tree dump above: show the AST
-        // class name plus the regenerated source.
+        // Statement kinds without a dedicated tree dump above: show just the AST
+        // class name. Avoid hdrgen's `toChars` so this stays self-contained; the
+        // bare class name is enough to identify the node in the tree.
         printIndent(buf, indent);
-        // Call hdrgen's free `toChars(const Statement)` explicitly: `s.toChars()`
-        // would bind to the virtual `RootObject.toChars` (an `assert(0)` stub) since
-        // a member always beats a UFCS free function, crashing on any statement kind
-        // without an override (goto, labels, ErrorStatement from error recovery, ...).
-        buf.printf("%s `%s`", s.astTypeName().ptr, toChars(s));
+        buf.printf("%s", s.astTypeName().ptr);
         emitLineMarker(buf, s.loc);
         buf.writeByte('\n');
     }
@@ -395,7 +392,7 @@ private void printAttribDetail(AttribDeclaration ad, ref OutBuffer buf)
     if (ad.dsym == DSYM.linkDeclaration)
     {
         auto ld = cast(LinkDeclaration) cast(void*) ad;
-        buf.printf(" extern(%s)", linkageToString(ld.linkage).ptr);
+        buf.printf(" extern(%.*s)", enumName(ld.linkage).fTuple.expand);
     }
     else if (ad.dsym == DSYM.pragmaDeclaration)
     {
@@ -404,14 +401,13 @@ private void printAttribDetail(AttribDeclaration ad, ref OutBuffer buf)
     }
     else if (auto vd = ad.isVisibilityDeclaration())
     {
-        buf.writeByte(' ');
-        visibilityToBuffer(buf, vd.visibility);
+        buf.put(" ");
+        buf.put(enumName(vd.visibility.kind));
     }
     else if (auto sd = ad.isStorageClassDeclaration())  // also DeprecatedDeclaration
     {
-        buf.writeByte(' ');
-        if (!stcToBuffer(buf, sd.stc))
-            buf.writestring("(no STC)");
+        if (!stcNames(buf, sd.stc))
+            buf.writestring(" (no STC)");
     }
     else if (auto al = ad.isAlignDeclaration())
     {
@@ -428,6 +424,48 @@ private void printAttribDetail(AttribDeclaration ad, ref OutBuffer buf)
     {
         buf.printf(" `%s`", ad.ident.toChars());
     }
+}
+
+/********************
+ * Render an enum value as its internal member name (e.g. `LINK.cpp` -> "cpp"),
+ * stripping a single trailing underscore added to dodge keywords (`default_`).
+ * Avoids hdrgen's pretty-printers so this module stays self-contained. Only
+ * valid for enums whose members have distinct values (LINK, Visibility.Kind).
+ */
+private string enumName(E)(E value) if (is(E == enum))
+{
+    final switch (value)
+    {
+        static foreach (m; __traits(allMembers, E))
+        {
+            case __traits(getMember, E, m):
+                return m;
+        }
+    }
+}
+
+/********************
+ * Append each set storage-class flag of `stc` to `buf` by its internal member
+ * name (` static`, ` const`, ...). Composite STC aliases (multi-bit) are skipped
+ * so only the individual flags show. Returns false if no flag was set.
+ */
+private bool stcNames(ref OutBuffer buf, ulong stc)
+{
+    bool any;
+    static foreach (m; __traits(allMembers, STC))
+    {{
+        enum ulong v = __traits(getMember, STC, m);
+        static if (v != 0 && (v & (v - 1)) == 0) // single-bit flag only
+        {
+            if (stc & v)
+            {
+                buf.put(m);
+                buf.put(" | ");
+                any = true;
+            }
+        }
+    }}
+    return any;
 }
 
 private:
