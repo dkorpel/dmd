@@ -16,6 +16,7 @@ import core.stdc.stdio;
 import dmd.common.outbuffer;
 import dmd.dsymbol;
 import dmd.declaration;
+import dmd.dtemplate : TemplateInstance;
 import dmd.func;
 import dmd.attrib;
 import dmd.init;
@@ -29,6 +30,7 @@ import dmd.hdrgen;
 import dmd.asttypename : astTypeName;
 import dmd.location : Loc;
 import dmd.mtype : Type;
+import dmd.rootobject : RootObject;
 import dmd.astenums : TY, TMAX;
 import dmd.typesem : nextOf;
 
@@ -97,6 +99,17 @@ void printAST(Dsymbol s, ref OutBuffer buf, int indent = 0)
         printAttribDetail(ad, buf);
         emitLineMarker(buf, s.loc);
         buf.writeByte('\n');
+        // UserAttributeDeclaration has no dedicated `is*` downcast; its `atts`
+        // hold the `@(...)` argument expressions (which keep any `!(…)` template
+        // arguments). Recurse into them with printAST rather than flattening to
+        // toChars, so the full sub-tree of each UDA shows up.
+        if (ad.dsym == DSYM.userAttributeDeclaration)
+        {
+            auto uad = cast(UserAttributeDeclaration) cast(void*) ad;
+            if (uad.atts)
+                foreach (att; (*uad.atts)[])
+                    printAST(att, buf, indent + 2);
+        }
         if (ad.decl)
             foreach (m; (*ad.decl)[])
                 printAST(m, buf, indent + 2);
@@ -257,6 +270,36 @@ private void printIndent(ref OutBuffer buf, int indent)
 }
 
 /********************
+ * Print one template argument (an element of a `TemplateInstance.tiargs`).
+ * Prefers the recursive `printAST` overloads for expression and symbol
+ * arguments; type arguments have no AST printer, so fall back to the same
+ * `typeName` class-name rendering used elsewhere. Tuples are expanded.
+ */
+private void printTemplateArg(RootObject o, ref OutBuffer buf, int indent)
+{
+    import dmd.dtemplate : isExpression, isDsymbol, isType, isTuple;
+    if (auto e = isExpression(o))
+        printAST(e, buf, indent);
+    else if (auto s = isDsymbol(o))
+        printAST(s, buf, indent);
+    else if (auto t = isType(o))
+    {
+        printIndent(buf, indent);
+        buf.printf("%s\n", typeName(t));
+    }
+    else if (auto tup = isTuple(o))
+    {
+        foreach (obj; tup.objects[])
+            printTemplateArg(obj, buf, indent);
+    }
+    else
+    {
+        printIndent(buf, indent);
+        buf.writestring("(null arg)\n");
+    }
+}
+
+/********************
  * Render a type by its AST class name (e.g. `TypeBasic`, `TypeDArray`) rather
  * than as D source syntax, matching how expressions/statements are shown, and
  * recursing into the wrapped types so the full structure is visible.
@@ -412,10 +455,10 @@ extern (C++) final class PrintASTVisitor : Visitor
     void head(Expression e)
     {
         printIndent(indent);
+        buf.put(e.astTypeName());
         if (e.type)
-            buf.printf("%s type: %s", e.astTypeName().ptr, typeName(e.type));
-        else
-            buf.printf("%s", e.astTypeName().ptr);
+            buf.printf(" : %s", typeName(e.type));
+
         emitLineMarker(*buf, e.loc);
         buf.writeByte('\n');
     }
@@ -424,10 +467,11 @@ extern (C++) final class PrintASTVisitor : Visitor
     void leaf(Expression e, const(char)* value)
     {
         printIndent(indent);
+        buf.put(e.astTypeName());
+        buf.printf("(%s)", value);
         if (e.type)
-            buf.printf("%s %s type: %s", e.astTypeName().ptr, value, typeName(e.type));
-        else
-            buf.printf("%s %s", e.astTypeName().ptr, value);
+            buf.printf(": %s", typeName(e.type));
+
         emitLineMarker(*buf, e.loc);
         buf.writeByte('\n');
     }
@@ -584,5 +628,30 @@ extern (C++) final class PrintASTVisitor : Visitor
             }
             buf.writestring("]\n");
         }
+    }
+
+    override void visit(ScopeExp e)
+    {
+        head(e);
+        if (auto ti = e.sds ? e.sds.isTemplateInstance() : null)
+        {
+            // Show the instance name and recurse into each template argument
+            // (`Foo!(int, 3)`), which the bare `ScopeExp` head line omits.
+            printIndent(indent + 2);
+            buf.printf(".ti: %s\n", ti.name ? ti.name.toChars() : "");
+            if (ti.tiargs)
+                foreach (arg; (*ti.tiargs)[])
+                    printTemplateArg(arg, *buf, indent + 4);
+        }
+        else if (e.sds)
+            .printAST(cast(Dsymbol) e.sds, *buf, indent + 2);
+    }
+
+    override void visit(DeclarationExp e)
+    {
+        head(e);
+        // Recurse into the wrapped declaration so e.g. a local `VarDeclaration`
+        // and its `.init:` initializer show up under the expression.
+        .printAST(e.declaration, *buf, indent + 2);
     }
 }
