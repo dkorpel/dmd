@@ -16,14 +16,19 @@
   a { color: #4040dc; }
   a:hover { color: #2a2aa0; }
   header { padding: 28px 24px; position: relative; }
-  header .wrap { max-width: 860px; margin: 0 auto; }
+  header .wrap { max-width: 820px; margin: 0 auto; }
   header .theme-toggle { position: absolute; top: 22px; right: 24px; }
-  header h1 { margin: 0 0 6px; font-size: 28px; display: flex; align-items: center; gap: 12px; }
+  header h1 { margin: 0; font-size: 28px; display: flex; align-items: center; gap: 12px; }
   header h1 img { width: 30px; height: 30px; flex: none; image-rendering: -webkit-optimize-contrast; }
-  header p { margin: 0; color: var(--aero-text-dim); }
   header .back { font-size: 13px; color: #f2dedb; }
   header .back:hover { color: #fff; }
-  main { max-width: 860px; margin: 0 auto; padding: 8px 24px 80px; }
+  main { max-width: 820px; margin: 0 auto; padding: 8px 24px 80px; }
+  main > p { color: var(--aero-text); }
+
+  /* Inline code in prose. */
+  p code, li code, h3 code, h4 code { font: 13px ui-monospace, monospace;
+        background: var(--code-inline-bg); color: var(--code-inline-fg);
+        padding: 1px 5px; border-radius: 3px; }
 
   /* The pipeline ribbon at the top — glossy glass pills. */
   .pipe { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 26px 0 8px; }
@@ -40,67 +45,46 @@
   .pipe .step.sema    { border-color: var(--sema); }
   .pipe .step.codegen { border-color: var(--codegen); }
 
-  section { margin: 40px 0; }
+  section { margin: 44px 0; }
   section h2 { font-size: 22px; margin: 0 0 4px; display: flex; align-items: center; gap: 10px;
                color: var(--aero-text-hi); }
   section h2 .dot { width: 12px; height: 12px; border-radius: 50%; flex: none;
                     box-shadow: inset 0 1px 0 rgba(255,255,255,.4); }
-  section .lead { color: var(--aero-text-2); margin: 4px 0 18px; }
-  .parse   h2 .dot { background: var(--parse);   color: var(--parse); }
-  .sema    h2 .dot { background: var(--sema);     color: var(--sema); }
-  .codegen h2 .dot { background: var(--codegen); color: var(--codegen); }
+  .parse   h2 .dot { background: var(--parse); }
+  .sema    h2 .dot { background: var(--sema); }
+  .codegen h2 .dot { background: var(--codegen); }
 
-  /* A sub-stage within a section: its own heading, blurb, demo, and source links. */
+  /* A sub-stage within a section. */
   .sub { margin: 28px 0; padding-left: 14px; border-left: 2px solid var(--aero-line); }
   .parse   .sub { border-left-color: var(--parse); }
   .sema    .sub { border-left-color: var(--sema); }
   .codegen .sub { border-left-color: var(--codegen); }
-  .sub h3 { font-size: 17px; margin: 0 0 4px; color: var(--aero-text-hi); }
-  .sub h3 .tag { font: 11px ui-monospace, monospace; color: var(--aero-text-2);
-                 background: var(--aero-glass-soft);
-                 border: 1px solid var(--aero-edge); border-radius: 4px; padding: 1px 6px; margin-left: 8px;
-                 box-shadow: var(--aero-gloss); vertical-align: 2px; }
-  .sub > p { color: var(--aero-text-2); margin: 4px 0 14px; font-size: 15px; }
+  .sub h3 { font-size: 18px; margin: 0 0 8px; color: var(--aero-text-hi); }
+  .sub h4 { font-size: 16px; margin: 22px 0 8px; color: var(--aero-text-hi); }
+  .sub > p, .sub > ul { color: var(--aero-text); }
 
-  /* Data-structure cards — translucent teal glass with a glossy top edge. */
-  .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 14px; }
-  @media (max-width: 680px) { .cards { grid-template-columns: 1fr; } }
-  .card { border: 1px solid var(--aero-line); border-left: 3px solid var(--aero-edge);
-          border-radius: 8px; padding: 12px 14px;
-          background: var(--aero-panel);
-          box-shadow: var(--aero-gloss), 0 2px 8px rgba(0,0,0,.12); }
-  .parse   .card { border-left-color: var(--parse); }
-  .sema    .card { border-left-color: var(--sema); }
-  .codegen .card { border-left-color: var(--codegen); }
-  .card h4 { margin: 0 0 4px; font-size: 15px; font-weight: 600; color: var(--aero-text-hi); }
-  .card h4 code { font: 13px ui-monospace, monospace;
-                  background: var(--code-inline-bg); padding: 1px 5px;
-                  border-radius: 3px; color: var(--code-inline-fg); }
-  .card p { margin: 6px 0 8px; font-size: 14px; color: var(--aero-text-2); }
-  .card .links { font-size: 12.5px; }
-  .card .links a { margin-right: 12px; white-space: nowrap; }
-  .card .links a::before { content: "‹›"; color: var(--aero-muted); margin-right: 4px; letter-spacing: -2px; }
-
-  .aside { border: 1px solid var(--aero-line); border-radius: 8px; padding: 12px 16px;
-           margin: 18px 0; font-size: 14px; color: var(--aero-text);
-           background: var(--aero-glass-soft);
-           box-shadow: var(--aero-gloss); }
-  .aside b { color: var(--aero-text-hi); }
-  code.kw { font: 13px ui-monospace, monospace; color: var(--code-inline-fg); }
-  footer { color: var(--aero-muted); font-size: 13px; border-top: 1px solid var(--aero-line); padding-top: 18px; }
+  /* A static (non-interactive) code snippet. */
+  pre.codeblock { background: var(--aero-surface); border: 1px solid var(--aero-line);
+        border-radius: 8px; padding: 12px 14px; overflow-x: auto;
+        font: 13px/1.5 ui-monospace, monospace; color: var(--code-inline-fg);
+        box-shadow: var(--aero-gloss); }
+  pre.codeblock code { background: none; padding: 0; }
 
   /* Inline interactive demo: an iframe of the explorer in embed mode, showing a
      focused subset of panes for this stage. Lazy-loaded so each (large) wasm
-     instance only spins up when the reader scrolls it into view. */
-  .demo { margin: 14px 0 6px; border: 1px solid var(--aero-line); border-radius: 8px;
+     instance only spins up when the reader scrolls it into view. A demo with
+     more than one snippet gets a dropdown that swaps the embedded source. */
+  .demo { margin: 14px 0 18px; border: 1px solid var(--aero-line); border-radius: 8px;
           overflow: hidden; background: var(--aero-surface);
           box-shadow: var(--aero-gloss), 0 2px 10px rgba(0,0,0,.18); }
   .demo iframe { display: block; width: 100%; border: 0; }
-  .demo .cap { font-size: 12.5px; color: var(--aero-text-2); padding: 8px 12px;
-               background: var(--aero-panel);
-               border-top: 1px solid var(--aero-line); }
-  .demo .cap b { color: var(--aero-text-hi); font-weight: 600; }
-  .demo .cap code { font: 12px ui-monospace, monospace; color: var(--code-inline-fg); }
+  .demo .demo-select { display: block; margin: 10px 10px 4px; font: inherit; font-size: 13px;
+          padding: 4px 8px; border-radius: 6px; cursor: pointer;
+          border: 1px solid var(--aero-edge); background: var(--aero-glass); color: var(--aero-text);
+          box-shadow: var(--aero-gloss); }
+
+  footer { color: var(--aero-muted); font-size: 13px; border-top: 1px solid var(--aero-line);
+           padding-top: 18px; margin-top: 50px; }
 </style>
 </head>
 <body>
@@ -109,328 +93,355 @@
   <div class="wrap">
     <a class="back" href="index.html">← back to the explorer</a>
     <h1><img src="icon.png" alt="" /> A tour of DMD</h1>
-    <p>How a chunk of D source text becomes machine code — and the data structures it
-       morphs through on the way. Each panel in the explorer is a peek at one of these.</p>
   </div>
 </header>
 <main>
 
   <div class="pipe">
-    <a class="step src"     href="#">source text</a><span class="arrow">→</span>
-    <a class="step parse"   href="#parsing">tokens &amp; AST</a><span class="arrow">→</span>
+    <a class="step src"     href="#lexing">source text</a><span class="arrow">→</span>
+    <a class="step parse"   href="#lexing">tokens &amp; AST</a><span class="arrow">→</span>
     <a class="step sema"    href="#semantic">typed AST</a><span class="arrow">→</span>
     <a class="step codegen" href="#codegen">backend IR</a><span class="arrow">→</span>
     <a class="step codegen" href="#codegen">machine code</a>
   </div>
-  <p class="lead">The compiler is a pipeline. Text comes in the left; an object file falls out
-     the right. In between, your program is repeatedly rewritten into ever-lower-level shapes.
-     Every link below points at the actual line in
-     <a href="https://github.com/dlang/dmd" target="_blank" rel="noopener">dlang/dmd</a> where that
-     shape is defined — go read it, it's friendlier than it looks.</p>
 
-  <!-- ============================ PARSING ============================ -->
-  <section class="parse" id="parsing">
-    <h2><span class="dot"></span>1 · Parsing — text becomes a tree</h2>
-    <p class="lead">No meaning is attached yet; this stage is pure <i>shape</i>. The <b>lexer</b> turns
-       bytes into tokens, and the <b>parser</b> assembles tokens into a tree mirroring the grammar.</p>
+  <p>Hey, my name is Dennis Korpel. I've created this website's code with Claude Code, but all text is
+     written the old fashioned way.</p>
 
+  <p>Since 2022 I'm Pull Request and Issue Manager for the D Language Foundation.
+     This website is meant to help understand the D compiler
+     <a href="https://github.com/dlang/dmd" target="_blank" rel="noopener">dmd</a>', for contributors both
+     old and new.
+     While most D programmers are familiar with D source code, to work on the compiler one must also be
+     aware of the compiler's internal representation of D code.
+     While many names are obvious (<code>IfStatement</code>, <code>StructDeclaration</code>), you'll also
+     find there's plenty of unintuitive things.
+     For example, an integer literal like <code>100</code> constructs a <code>new IntegerExp(100)</code>
+     internally.
+     But what about a boolean literal <code>true</code>, does that create a <code>new BoolExp(true)</code>?
+     Nope! It's also an <code>new IntegerExp(1)</code>, but with the type set to <code>bool</code>, which
+     internally has enum value <code>TY.Tbool</code> in the frontend, and <code>TYbool</code> in the
+     backend.
+     Learning all these minutiae by rote is tedious, and a deterrent for new contributors.</p>
+
+  <p>When I created my <a href="https://github.com/dkorpel/ctod" target="_blank" rel="noopener">C to D</a>
+     tool, I also had to constantly check how the 'tree-sitter' C parser library I used names various C
+     constructs internally.
+     Something I found very useful was the
+     <a href="https://tree-sitter.github.io/tree-sitter/7-playground.html" target="_blank" rel="noopener">Syntax Tree Playground</a>:
+     an interactive website where you type C code, and it shows exactly how it maps to parser nodes.</p>
+
+  <p>Another source of inspiration is of course Matt Godbolt's
+     <a href="https://d.godbolt.org/" target="_blank" rel="noopener">compiler explorer</a>, which
+     interactively shows how C code maps to assembly (or how Rust code maps to LLVM IR).
+     I thought it would be great to have something similar for DMD's internal IR, as well as its internal
+     tokens and Abstract Syntax Tree (AST).</p>
+
+  <p>This tool lets you interactively get familiar with (or debug) DMD's various internal data
+     representations.
+     Feel free to play around, or read on and I'll show you around.</p>
+
+  <!-- ============================ LEXING AND PARSING ============================ -->
+  <section class="parse" id="lexing">
+    <h2><span class="dot"></span>Lexing and parsing</h2>
+
+    <!-- ---------------- Tokenization ---------------- -->
     <div class="sub">
-      <h3>The lexer<span class="tag">Tokens pane</span></h3>
-      <p>The lexer scans raw bytes and emits a flat stream of <b>tokens</b>. Its real work is
-         recognising the <i>kinds</i> of lexeme: a hex integer, a floating-point literal, a string with
-         an escape — each collapses to a single token carrying its decoded value. Try mangling a number
-         or leaving a string unterminated and watch the stream react.</p>
-      <div class="demo">
-        <iframe loading="lazy" height="300" title="Tokens demo"
-          src="index.html?embed=1&amp;layout=cols&amp;panes=lex&amp;src=enum+hex+%3D+0xDEAD_BEEF%3B%0Adouble+pi+%3D+3.14e2%3B%0Astring+s+%3D+%22a%5Ctb%22%3B%0A"></iframe>
-        <div class="cap">▶ <b>Tokens</b> — one line per source line. The literals <code>0xDEAD_BEEF</code>,
-          <code>3.14e2</code> and <code>"a\tb"</code> each become a single <code>TOK</code> with a value
-          attached; keywords and operators get their own.</div>
+      <h3>Tokenization</h3>
+
+      <p>The first thing DMD does with D source code is split it up into 'tokens', which are the individual
+         words, strings, numbers and punctuation.
+         Each token type is identified by a member in <code>enum TOK {}</code>.
+         Every D keyword has their own token type.
+         Unfortunately, the compiler is in an awkward position where it needs to refer to its own reserved
+         keywords a lot, so the enum names always have to be (slightly) different than the source code names.
+         Often an underscore is added (<code>pure</code> becomes <code>pure_</code>), other times a
+         different word is used (<code>int</code> became <code>int32</code>).</p>
+
+      <p>All other names that appear in source code (variables, functions, types, attributes, ...) create an
+         'identifier'.
+         There isn't a hard line between keywords and identifiers though, since the compiler does have a
+         long list of recognized idenfitiers.
+         The main difference is that later in the parse stage, keywords often play an important role in
+         constructs, like how <code>if</code> starts an if-statement and <code>struct</code> begins a struct
+         declaration.</p>
+
+      <p>Interactive demo:</p>
+      <div class="demo" data-panes="lex" data-height="240">
+<script type="text/plain" class="code">int i = -1 + 2L;
+
+pure nothrow @safe @nogc:
+
+extern(C++) string getString() => "abc" ~ `def`c;
+</script>
       </div>
-      <div class="cards">
-        <div class="card">
-          <h4>Tokens — <code>enum TOK</code></h4>
-          <p>One value per lexeme kind: <code class="kw">int32</code>, <code class="kw">float64</code>,
-             <code class="kw">string</code>, <code class="kw">plus</code>… The <b>Tokens</b> pane lists
-             these per source line.</p>
-          <div class="links">
-            <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/tokens.d#L26" target="_blank" rel="noopener">tokens.d</a>
-            <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/lexer.d" target="_blank" rel="noopener">lexer.d</a>
-          </div>
-        </div>
-      </div>
+
+      <p>Some other observations:</p>
+      <ul>
+        <li>Number and string literals store their integer/string payload.</li>
+        <li>There are different types of number literals: <code>int32</code>, <code>int64</code>,
+            <code>uns32</code> etc.</li>
+        <li>The minus for negative numbers is a separate token: -3 is not parsed as <code>int32(-3)</code>,
+            but as <code>minus int32(3)</code></li>
+        <li>All string literals use the same TOK discriminator <code>string_</code></li>
+        <li>Builtin attributes with an @ are 2 tokens. So while nobody does it, you are allowed to write
+            <code>@ /*hello*/ nogc</code> with arbitrary white space and comments inbetween.</li>
+        <li>Similarly, in <code>extern(C++)</code>, C++ is parsed as a <code>C</code> and <code>++</code>
+            token.</li>
+      </ul>
+
+      <p>Tokenization is simple and stable.
+         Personally, I rarely look at it.
+         Most of the interesting stuff happens in the semantic analysis phase.
+         Before we get there, we first arrive at another step: parsing</p>
     </div>
 
+    <!-- ---------------- Parsing ---------------- -->
     <div class="sub">
-      <h3>The parser<span class="tag">Parse tree pane</span></h3>
-      <p>Recursive descent: the parser reads tokens left to right and builds an <b>abstract syntax
-         tree</b> whose nesting encodes precedence. The flat <code class="kw">a + b * 2</code> becomes a
-         tree where the multiply sits <i>below</i> the add — so it binds tighter — without any
-         parentheses in the source.</p>
-      <div class="demo">
-        <iframe loading="lazy" height="300" title="Parse tree demo"
-          src="index.html?embed=1&amp;layout=cols&amp;panes=parse&amp;src=int+f%28int+a%2C+int+b%29%0A%7B%0A++++return+a+%2B+b+%2A+2%3B%0A%7D%0A"></iframe>
-        <div class="cap">▶ <b>Parse tree</b> — the AST straight from the parser, before any checking. Note how
-          <code>a + b * 2</code> nests a <code>MulExp</code> <i>inside</i> an <code>AddExp</code>: the tree,
-          not the text, carries the precedence.</div>
+      <h3>Parsing</h3>
+
+      <p>Groups of tokens form 'constructs', like a class declaration, for loop, or expression.
+         It's the parser's job to recognize these constructs and error on malformed syntax, like mismatched
+         braces or missing semicolons.
+         Type checking happens afterwards in the semantic phase.</p>
+
+      <p>If you ever wonder whether something is a parse error or a semantic error, try compiling the code
+         inside a <code>version (none) {}</code> block.
+         Alternatively, put it in a template that you don't instantiate.</p>
+
+      <h4>Ambiguity</h4>
+
+      <p>D tries to have a
+         <a href="https://en.wikipedia.org/wiki/Context-free_grammar" target="_blank" rel="noopener">context free grammar</a>.
+         This means that theoretically, the parser can be implemented using functions like
+         <code>parseExp()</code>, <code>parseStatement()</code>, <code>parseDeclarations()</code>, that turn
+         the Lexer's token stream into Abstract Syntax Tree (AST) nodes, without any extra parameters or
+         global variables to decide how to do that.</p>
+
+      <p>Contrast this to C, which famously requires keeping a symbol table while parsing.
+         Consider how the tokenizer ignores whitespace, so <code>size_t* i;</code> and <code>x * y;</code>
+         both give the parser <code>identifier mult identifier semicolon</code> as input;
+         It has to decide whether to create a declaration or expression based on what <code>identifier</code>
+         refers to.</p>
+
+      <pre class="codeblock"><code>X *Y;  // If X came from `typedef int X`, declare Y as a pointer to X
+X * Y; // If X and Y are variables, create a multiplication expression</code></pre>
+
+      <p>Since D has forward declarations and parses context-free, how does it handle this case?
+         Well, it arguably cheats a little.
+         When <code>X * Y</code> can be parsed as a declaration, that always has priority over multiplication.
+         This works because if it were a multiplication, it would be discarded, which is an error in D.
+         (Well technically you can have structs with operator overloading and write <code>X * Y</code> for
+         side-effects, but that's such bad style that I haven't ever seen anyone raise a complaint about
+         that)</p>
+
+      <p>But there are also cases where the parser is too eager to parse a type, such as:
+         <code>foo!(X[Y])</code>.
+         That template parameter is assumed to be a static array of type X with dimension Y, but it could
+         also be passing a compile time value computed by indexing X with Y.
+         This is later handled in semantic analysis: if it resolves the TypeIdentifier to an expression, it
+         rewrites the <code>TypeSArray</code> to an <code>ArrayExp</code>.
+         Conversely, if in <code>T[3].init</code> the <code>IdentifierExp</code> resolves to a type, the
+         <code>ArrayExp</code> gets rewritten to <code>TypeSArray</code>.
+         Cheeky!</p>
+
+      <p>Interactive demo:</p>
+      <div class="demo" data-panes="parse,sema" data-height="380">
+<script type="text/plain" class="code">// X and Y could be both types like `int` / `float`
+// or values like `64` / `[20, 30]`
+
+void foo(alias X, alias Y)()
+{
+    X* Y;
+    // 0 + X* Y;
+
+    // foo!(X[Y]);
+    int x = Y[2].init;
+}
+
+alias f = foo!(int, 3);
+</script>
       </div>
-      <div class="cards">
-        <div class="card">
-          <h4>The parser</h4>
-          <p>A hand-written recursive-descent parser. Reads tokens, builds AST nodes. The
-             <b>Parse tree</b> pane is its raw output, before any checking.</p>
-          <div class="links">
-            <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/parse.d" target="_blank" rel="noopener">parse.d</a>
-          </div>
-        </div>
-        <div class="card">
-          <h4>Expressions — <code>class Expression</code></h4>
-          <p>Base class for everything that has a value: <code class="kw">AddExp</code>,
-             <code class="kw">MulExp</code>, <code class="kw">VarExp</code>, literals… Each subclass is
-             a node kind.</p>
-          <div class="links">
-            <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/expression.d#L118" target="_blank" rel="noopener">expression.d</a>
-          </div>
-        </div>
-        <div class="card">
-          <h4>Statements &amp; symbols</h4>
-          <p><code class="kw">Statement</code> covers control flow (<code class="kw">IfStatement</code>,
-             loops); <code class="kw">Dsymbol</code> is the base for named things — modules, functions,
-             variables, aggregates.</p>
-          <div class="links">
-            <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/statement.d#L41" target="_blank" rel="noopener">statement.d</a>
-            <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/dsymbol.d#L365" target="_blank" rel="noopener">dsymbol.d</a>
-          </div>
-        </div>
-        <div class="card">
-          <h4>Printing the tree — <code>printast.d</code></h4>
-          <p>Both the <b>Parse tree</b> and <b>Semantic tree</b> panes are rendered here. It walks the AST
-             and prints each node by its internal class name — so you see <code class="kw">AddExp</code>,
-             not <code class="kw">a + b</code>.</p>
-          <div class="links">
-            <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/printast.d#L37" target="_blank" rel="noopener">printast.d</a>
-          </div>
-        </div>
+
+      <p>Bonus demos (selectable from a dropdown):</p>
+      <div class="demo" data-panes="parse" data-height="320">
+<script type="text/plain" class="code" data-label="Struct vs function literal">// Sometimes the parser needs to look ahead pretty far to
+// disambiguate a struct literal from a function literal
+
+void bar()()
+{
+    auto y = { 1, 2, 3 };
+    auto z = { 1, 2, 3; };
+}
+</script>
+<script type="text/plain" class="code" data-label="Array initializer vs AA literal">// Array initializers and Associative Array literals have the same grammar
+// Yet they are separate AST nodes, and which is created depends on whether
+// we are in a declaration with initializer vs. an assignment expression.
+
+void foo()()
+{
+    int[2] x = [0: 10, 1: 20];
+    x = [0: 10, 1: 20];
+}
+</script>
+<script type="text/plain" class="code" data-label="Parse error vs semantic error" data-panes="parse,diag">// Whether something is a parse error or semantic error can be arbitrary
+
+void foo()()
+{
+	// Redundant attributes are allowed per grammar,
+    // but the parser raises an error
+	shared const shared int x = 0;
+
+	// Cases outside a switch could be disallowed by grammar,
+    // but are a semantic error
+    case 3:
+}
+</script>
       </div>
     </div>
   </section>
 
   <!-- ============================ SEMANTIC ============================ -->
   <section class="sema" id="semantic">
-    <h2><span class="dot"></span>2 · Semantic — the tree gains meaning</h2>
-    <p class="lead">DMD walks the AST in several passes and works out what everything <i>means</i>: it
-       resolves names to symbols, assigns a <b>type</b> to every expression, runs
-       <code class="kw">static if</code>/templates/CTFE, and checks attributes.</p>
+    <h2><span class="dot"></span>Semantic</h2>
 
-    <div class="sub">
-      <h3>Before &amp; after typing<span class="tag">Parse + Semantic panes</span></h3>
-      <p>The parser leaves an <i>untyped</i> tree; semantic analysis resolves every name to a symbol and
-         pins a <b>type</b> on every expression — inserting the implicit conversions the source left
-         unwritten. The two right-hand panes are the same function: the <b>Parse tree</b> straight from the
-         parser, and the <b>Semantic tree</b> after analysis. Returning an <code class="kw">int</code> sum
-         as a <code class="kw">long</code> makes a <code class="kw">CastExp</code> appear out of nowhere.</p>
-      <div class="demo">
-        <iframe loading="lazy" height="360" title="Parse vs semantic demo"
-          src="index.html?embed=1&amp;layout=cols&amp;panes=parse,sema&amp;src=long+sum%28int+a%2C+int+b%29%0A%7B%0A++++return+a+%2B+b%3B%0A%7D%0A"></iframe>
-        <div class="cap">▶ <b>Parse tree</b> vs <b>Semantic tree</b> for the same source. After analysis the return
-          expression is wrapped in a <code>CastExp</code> to <code>long</code> — the implicit
-          <code>int</code>→<code>long</code> conversion the parser had no way to know about.</div>
-      </div>
-      <div class="cards">
-        <div class="card">
-          <h4>Name lookup — <code>Scope</code></h4>
-          <p>Analysis threads a <code class="kw">Scope</code> chain through the tree; each identifier is
-             resolved against it to the <code class="kw">Dsymbol</code> it names — a parameter, a local, a
-             function.</p>
-          <div class="links">
-            <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/dscope.d" target="_blank" rel="noopener">dscope.d</a>
-          </div>
-        </div>
-        <div class="card">
-          <h4>Implicit conversions — <code>implicitCastTo</code></h4>
-          <p>When an expression's type doesn't match where it's used, the analyzer inserts a
-             <code class="kw">CastExp</code> — the <code class="kw">int</code>→<code class="kw">long</code>
-             you can watch appear between the two panes.</p>
-          <div class="links">
-            <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/dcast.d" target="_blank" rel="noopener">dcast.d</a>
-          </div>
-        </div>
-      </div>
+    <p>The parser generates an Abstract Syntax Tree, but a program is actually a graph.
+       To demonstrate this, let's create a cycle!</p>
+
+    <div class="demo" data-panes="sema,diag" data-height="240">
+<script type="text/plain" class="code">immutable x = y;
+immutable y = z;
+immutable z = x;
+</script>
     </div>
 
-    <div class="sub">
-      <h3>Lowering<span class="tag">Lowered AST pane</span></h3>
-      <p>Beyond type-checking, semantic analysis <b>lowers</b> high-level constructs into simpler ones the
-         back end already knows how to emit. A <code class="kw">foreach</code> over a range becomes a plain
-         <code class="kw">for</code>; an append <code class="kw">~=</code> becomes a call into druntime. The
-         <b>Lowered AST</b> pane (<code class="kw">-vcg-ast</code>) regenerates the tree as D <i>after</i>
-         this rewriting, so you can read the desugared form directly.</p>
-      <div class="demo">
-        <iframe loading="lazy" height="360" title="Lowered AST demo"
-          src="index.html?embed=1&amp;layout=cols&amp;panes=ast&amp;src=int%5B%5D+squares%28int+n%29%0A%7B%0A++++int%5B%5D+r%3B%0A++++foreach+%28i%3B+0+..+n%29%0A++++++++r+~%3D+i+%2A+i%3B%0A++++return+r%3B%0A%7D%0A"></iframe>
-        <div class="cap">▶ <b>Lowered AST</b> (<code>-vcg-ast</code>) — the tree after semantic analysis, regenerated
-          as D. Watch the rewrite: the <code>foreach</code> becomes a plain <code>for</code>, and
-          <code>r ~= …</code> a runtime call (<code>_d_arrayappendcTX</code>).</div>
-      </div>
-      <div class="cards">
-        <div class="card">
-          <h4>The passes</h4>
-          <p>Roughly: symbols (<code class="kw">dsymbolSemantic</code>), then types
-             (<code class="kw">typeSemantic</code>), then expressions/bodies
-             (<code class="kw">expressionSemantic</code>, <code class="kw">semantic3</code>).</p>
-          <div class="links">
-            <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/dsymbolsem.d" target="_blank" rel="noopener">dsymbolsem.d</a>
-            <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/typesem.d" target="_blank" rel="noopener">typesem.d</a>
-            <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/expressionsem.d" target="_blank" rel="noopener">expressionsem.d</a>
-          </div>
-        </div>
-        <div class="card">
-          <h4>Types — <code>class Type</code></h4>
-          <p>Every typed expression points at a <code class="kw">Type</code>:
-             <code class="kw">TypeBasic</code> (int), <code class="kw">TypePointer</code>,
-             <code class="kw">TypeFunction</code>, <code class="kw">TypeStruct</code>…</p>
-          <div class="links">
-            <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/mtype.d#L390" target="_blank" rel="noopener">mtype.d</a>
-          </div>
-        </div>
-        <div class="card">
-          <h4>Functions &amp; aggregates</h4>
-          <p><code class="kw">FuncDeclaration</code> holds a function's body, signature and analysis
-             flags; <code class="kw">StructDeclaration</code>/<code class="kw">ClassDeclaration</code>
-             hold fields &amp; methods.</p>
-          <div class="links">
-            <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/func.d#L212" target="_blank" rel="noopener">func.d</a>
-            <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/dstruct.d" target="_blank" rel="noopener">dstruct.d</a>
-            <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/dclass.d" target="_blank" rel="noopener">dclass.d</a>
-          </div>
-        </div>
-        <div class="card">
-          <h4>The module — <code>class Module</code></h4>
-          <p>The root of it all: one source file, its members, and the entry point semantic analysis
-             starts from.</p>
-          <div class="links">
-            <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/dmodule.d#L281" target="_blank" rel="noopener">dmodule.d</a>
-          </div>
-        </div>
-      </div>
+    <p>Identifiers link to each other.</p>
+
+    <div class="demo" data-panes="sema" data-height="240">
+<script type="text/plain" class="code">immutable x = 0; // Now the type = int, and the rest resolves
+immutable y = z;
+immutable z = x;
+</script>
     </div>
 
-    <div class="aside">🧠 <b>Front end vs. back end:</b> everything so far is the <i>front end</i> and is
-      shared by every D compiler (DMD, GDC, LDC). What follows is DMD's own <i>back end</i> — the part
-      that actually emits x86.</div>
+    <p>Unlike other passes which take an input data structure and give back an output data structure, the
+       semantic phase rewrites the AST in place.
+       Parse-time nodes and semantic-time nodes all share the same class hierarchy rootet at
+       <code>class ASTnode</code>.
+       Don't worry, this has never led to any bugs before /s</p>
+
+    <p>Interactive demos:</p>
+    <div class="demo" data-panes="sema" data-height="320">
+<script type="text/plain" class="code" data-label="Constant folding">// Initializers are constant folded
+void f()
+{
+    string x = "abc" ~ "def"; // no GC allocations!
+    int t = 3 * 9; // no runtime computation
+}
+</script>
+<script type="text/plain" class="code" data-label="AddrExp → SymOffExpr">// AddrExp of array gets turned into a `SymOffExpr`
+auto g(ref int[4] b) => &b[2];
+
+struct S { int x, y; }
+
+// But a struct field keeps `AddrExp`
+auto h(ref S s) => &s.y;
+</script>
+<script type="text/plain" class="code" data-label="Array literal basis">// As an optimization, array literals have a 'basis' element to
+// reduce the number of lazy copies of each array element
+immutable int[8] arr = 3;
+</script>
+    </div>
   </section>
 
   <!-- ============================ CODEGEN ============================ -->
   <section class="codegen" id="codegen">
-    <h2><span class="dot"></span>3 · Codegen — the back end emits machine code</h2>
-    <p class="lead">The glue layer translates each function's typed AST into the back end's own IR — a
-       graph of <b>basic blocks</b>, each holding <b>elem</b> expression trees — which the optimizer
-       rewrites and code generation turns into x86.</p>
+    <h2><span class="dot"></span>Codegen</h2>
 
-    <div class="sub">
-      <h3>The back-end IR<span class="tag">Backend IR pane</span></h3>
-      <p>The back end has its own, far leaner representation than the front-end AST: no types-as-objects,
-         just an operator and operands. Here the <code class="kw">-O</code> optimizer earns its keep —
-         constant folding evaluates <code class="kw">2 + 3</code> at compile time, so the runtime multiply
-         is against a literal <code class="kw">5</code>. (Open it in the full explorer to also see the
-         pre-optimizer IR and diff them.)</p>
-      <div class="demo">
-        <iframe loading="lazy" height="340" title="Backend IR demo"
-          src="index.html?embed=1&amp;layout=cols&amp;panes=iropt&amp;src=int+f%28int+x%29%0A%7B%0A++++int+a+%3D+2+%2B+3%3B%0A++++return+a+%2A+x%3B%0A%7D%0A"></iframe>
-        <div class="cap">▶ <b>Backend IR</b> — each function's block/elem graph after the <code>-O</code> optimizer.
-          Nodes carry backend enums (<code>OPmul</code>, <code>OPvar</code>, <code>TYint</code>); the optimizer
-          has already folded <code>2 + 3</code> to a constant.</div>
-      </div>
-      <div class="cards">
-        <div class="card">
-          <h4>Expression nodes — <code>struct elem</code></h4>
-          <p>The back end's expression tree. <code class="kw">E1</code>/<code class="kw">E2</code> are the
-             child operands. Far leaner than the front-end AST — no types-as-objects, just an operator and
-             operands.</p>
-          <div class="links">
-            <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/backend/el.d#L57" target="_blank" rel="noopener">backend/el.d</a>
-          </div>
-        </div>
-        <div class="card">
-          <h4>Operators — <code>enum OPER</code></h4>
-          <p>What an <code class="kw">elem</code> <i>does</i>: <code class="kw">OPadd</code>,
-             <code class="kw">OPmul</code>, <code class="kw">OPvar</code>, <code class="kw">OPconst</code>,
-             <code class="kw">OPcall</code>… These are the node labels in the IR pane.</p>
-          <div class="links">
-            <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/backend/oper.d#L21" target="_blank" rel="noopener">backend/oper.d</a>
-          </div>
-        </div>
-        <div class="card">
-          <h4>Back-end types — <code>enum TY</code></h4>
-          <p>The back end's own flat type tags — <code class="kw">TYint</code>,
-             <code class="kw">TYdouble</code>, <code class="kw">TYnptr</code> — carried on every
-             <code class="kw">elem</code>. No relation to the front end's <code class="kw">Type</code> classes.</p>
-          <div class="links">
-            <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/backend/ty.d#L36" target="_blank" rel="noopener">backend/ty.d</a>
-          </div>
-        </div>
-        <div class="card">
-          <h4>Basic blocks — <code>struct block</code> / <code>enum BC</code></h4>
-          <p>A function is a graph of blocks chained by <code class="kw">Bnext</code> and linked by
-             successor edges. <code class="kw">BC</code> is how a block exits:
-             <code class="kw">BC.goto_</code>, <code class="kw">BC.iftrue</code>,
-             <code class="kw">BC.retexp</code>…</p>
-          <div class="links">
-            <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/backend/cc.d#L326" target="_blank" rel="noopener">backend/cc.d</a>
-          </div>
-        </div>
-        <div class="card">
-          <h4>The optimizer — <code>optfunc</code></h4>
-          <p>Runs only with <code class="kw">-O</code>: constant folding, common-subexpression elimination,
-             dead-code removal, loop rotation… It rewrites the block/elem graph in place — that's the gap
-             between the pre- and post-opt IR.</p>
-          <div class="links">
-            <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/backend/go.d#L224" target="_blank" rel="noopener">backend/go.d</a>
-            <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/backend/blockopt.d" target="_blank" rel="noopener">backend/blockopt.d</a>
-          </div>
-        </div>
-      </div>
+    <p>Interactive demos:</p>
+    <div class="demo" data-panes="ir" data-height="360">
+<script type="text/plain" class="code" data-label="Array bounds check">// This function calls _d_arraybounds_indexp(file, line, index, length)
+// Because the backend uses binary trees, this list of 4 items is actually a pretty deep tree of OPParam pairs
+auto f(int[] arr) => arr[0];
+</script>
+<script type="text/plain" class="code" data-label="String slice (register pair)">// A string is a char[], which is a 64-bit (length, ptr) pair that gets
+// passed in 2 registers: (RDI RSI)
+// In initial backend IR, this pair is represented as a 128-bit integer type
+
+void f(ref string x)
+{
+    x = x.ptr[3 .. 5];
+}
+
+// This function is conceptually:
+// *x = (length: 5 - 3, ptr: x.ptr + 3)
+
+// But the backend IR expresses it as (redundant elems for side effects omitted):
+// (*x = pair((*x >> 64) + 3, (5 - 3)))
+</script>
     </div>
-
-    <div class="sub">
-      <h3>Code generation<span class="tag">Disassembly pane</span></h3>
-      <p>The final pass walks the optimized blocks and <b>selects instructions</b>, mapping each
-         <code class="kw">elem</code> to x86. It's smarter than a literal translation: a multiply by a small
-         constant is strength-reduced into an address computation, so <code class="kw">x * 3</code> emerges
-         as a single <code class="kw">lea</code> rather than an <code class="kw">imul</code>.</p>
-      <div class="demo">
-        <iframe loading="lazy" height="300" title="Disassembly demo"
-          src="index.html?embed=1&amp;layout=cols&amp;panes=asm&amp;src=int+triple%28int+x%29%0A%7B%0A++++return+x+%2A+3%3B%0A%7D%0A"></iframe>
-        <div class="cap">▶ <b>Disassembly</b> (<code>-vasm</code>) — the actual x86-64 instructions for that IR.
-          Watch <code>x * 3</code> become a single <code>lea</code> (address arithmetic) instead of a
-          multiply. Edit the source and the machine code follows.</div>
-      </div>
-      <div class="cards">
-        <div class="card">
-          <h4>Code gen &amp; disassembly</h4>
-          <p>The final pass walks the optimized blocks and selects x86 instructions; the disassembler
-             renders them for the <code class="kw">-vasm</code> (<b>Disassembly</b>) pane.</p>
-          <div class="links">
-            <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/backend/x86/cgcod.d" target="_blank" rel="noopener">x86/cgcod.d</a>
-            <a href="https://github.com/dlang/dmd/blob/master/compiler/src/dmd/backend/x86/disasm86.d" target="_blank" rel="noopener">x86/disasm86.d</a>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div class="aside">⚙️ The IR panes are dumped by this playground itself — a small printer in
-      <code class="kw">compiler/wasm/dmdwasm.d</code> walks the same <code class="kw">block</code>/
-      <code class="kw">elem</code> graph and labels each node with its real
-      <code class="kw">OPER</code>/<code class="kw">TY</code>/<code class="kw">BC</code> name.</div>
   </section>
 
   <footer>
-    Built from the DMD frontend <b>and</b> backend compiled to WebAssembly. Want the gory details of
-    how that works? It's all under
-    <a href="https://github.com/dlang/dmd/tree/master/compiler" target="_blank" rel="noopener">compiler/</a>.
+    Built from the DMD frontend <b>and</b> backend compiled to WebAssembly.
     &nbsp;·&nbsp; <a href="index.html">← back to the explorer</a>
   </footer>
 
 </main>
+
+<script>
+// Turn every <div class="demo"> into a live embed of the explorer. Each demo
+// holds one or more <script class="code"> snippets; with more than one we add a
+// dropdown that swaps the embedded source. Per-snippet data-panes overrides the
+// demo's default pane set (e.g. adding the diagnostics pane for an error demo).
+(function () {
+    function embedSrc(panes, code, layout) {
+        const p = new URLSearchParams();
+        p.set("embed", "1");
+        p.set("layout", layout || "cols");
+        p.set("panes", panes);
+        p.set("src", code);
+        return "index.html?" + p.toString();
+    }
+    document.querySelectorAll(".demo").forEach(function (demo) {
+        const defPanes = demo.dataset.panes || "parse";
+        const layout = demo.dataset.layout || "cols";
+        const variants = Array.prototype.map.call(
+            demo.querySelectorAll("script.code"),
+            function (b) {
+                return {
+                    label: b.dataset.label || "",
+                    panes: b.dataset.panes || defPanes,
+                    // strip the leading newline after the open tag, keep the rest verbatim
+                    code: b.textContent.replace(/^\n/, ""),
+                };
+            }
+        );
+        if (!variants.length) return;
+
+        const iframe = document.createElement("iframe");
+        iframe.loading = "lazy";
+        iframe.height = demo.dataset.height || "300";
+        iframe.title = "DMD explorer demo";
+        const show = function (v) { iframe.src = embedSrc(v.panes, v.code, layout); };
+
+        if (variants.length > 1) {
+            const sel = document.createElement("select");
+            sel.className = "demo-select";
+            sel.title = "Pick an example";
+            variants.forEach(function (v, i) {
+                const o = document.createElement("option");
+                o.value = String(i);
+                o.textContent = v.label || ("Example " + (i + 1));
+                sel.appendChild(o);
+            });
+            sel.addEventListener("change", function () { show(variants[+sel.value]); });
+            demo.appendChild(sel);
+        }
+        demo.appendChild(iframe);
+        show(variants[0]);
+    });
+})();
+</script>
 </body>
 </html>
