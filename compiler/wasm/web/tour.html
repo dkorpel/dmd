@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <link rel="icon" type="image/png" href="icon.png" />
 <link rel="stylesheet" href="aero.css" />
+<!-- Set <html data-theme> before paint (OS default + saved choice); wires #themeToggle. -->
+<script src="theme.js"></script>
 <title>A tour of DMD — from source text to machine code</title>
 <style>
   /* Frutiger Aero look — shared tokens/base live in aero.css; this block is the
@@ -13,8 +15,9 @@
   body { font: 16px/1.6 system-ui, sans-serif; margin: 0; }
   a { color: #4040dc; }
   a:hover { color: #2a2aa0; }
-  header { padding: 28px 24px; }
+  header { padding: 28px 24px; position: relative; }
   header .wrap { max-width: 860px; margin: 0 auto; }
+  header .theme-toggle { position: absolute; top: 22px; right: 24px; }
   header h1 { margin: 0 0 6px; font-size: 28px; display: flex; align-items: center; gap: 12px; }
   header h1 img { width: 30px; height: 30px; flex: none; image-rendering: -webkit-optimize-contrast; }
   header p { margin: 0; color: var(--aero-text-dim); }
@@ -25,83 +28,84 @@
   /* The pipeline ribbon at the top — glossy glass pills. */
   .pipe { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 26px 0 8px; }
   .pipe .step { padding: 6px 12px; border-radius: 20px; font-size: 13px; font-weight: 600;
-                color: #d2e8f1; text-decoration: none;
+                color: var(--aero-text); text-decoration: none;
                 background: var(--aero-glass);
                 border: 1px solid var(--aero-edge);
-                box-shadow: var(--aero-gloss), 0 1px 2px rgba(0,0,0,.3); }
-  .pipe .step:hover { color: #fff; border-color: var(--aero-edge-hi);
+                box-shadow: var(--aero-gloss), 0 1px 2px rgba(0,0,0,.15); }
+  .pipe .step:hover { border-color: var(--aero-edge-hi);
                 box-shadow: var(--aero-gloss), var(--aero-glow); }
-  .pipe .arrow { color: rgba(140,210,235,.5); }
-  .pipe .step.src     { border-color: rgba(78,161,255,.6); }
-  .pipe .step.parse   { border-color: rgba(59,142,234,.6); }
-  .pipe .step.sema    { border-color: rgba(35,209,139,.6); }
-  .pipe .step.codegen { border-color: rgba(229,162,59,.6); }
+  .pipe .arrow { color: var(--aero-muted); }
+  .pipe .step.src     { border-color: var(--src); }
+  .pipe .step.parse   { border-color: var(--parse); }
+  .pipe .step.sema    { border-color: var(--sema); }
+  .pipe .step.codegen { border-color: var(--codegen); }
 
   section { margin: 40px 0; }
   section h2 { font-size: 22px; margin: 0 0 4px; display: flex; align-items: center; gap: 10px;
-               color: var(--aero-text-hi); text-shadow: 0 1px 0 rgba(0,0,0,.4); }
+               color: var(--aero-text-hi); }
   section h2 .dot { width: 12px; height: 12px; border-radius: 50%; flex: none;
-                    box-shadow: inset 0 1px 0 rgba(255,255,255,.5), 0 0 8px currentColor; }
-  section .lead { color: #b3cdd8; margin: 4px 0 18px; }
+                    box-shadow: inset 0 1px 0 rgba(255,255,255,.4); }
+  section .lead { color: var(--aero-text-2); margin: 4px 0 18px; }
   .parse   h2 .dot { background: var(--parse);   color: var(--parse); }
   .sema    h2 .dot { background: var(--sema);     color: var(--sema); }
   .codegen h2 .dot { background: var(--codegen); color: var(--codegen); }
 
   /* A sub-stage within a section: its own heading, blurb, demo, and source links. */
   .sub { margin: 28px 0; padding-left: 14px; border-left: 2px solid var(--aero-line); }
-  .parse   .sub { border-left-color: rgba(59,142,234,.45); }
-  .sema    .sub { border-left-color: rgba(35,209,139,.45); }
-  .codegen .sub { border-left-color: rgba(229,162,59,.45); }
-  .sub h3 { font-size: 17px; margin: 0 0 4px; color: var(--aero-text); }
-  .sub h3 .tag { font: 11px ui-monospace, monospace; color: #aee3f7;
+  .parse   .sub { border-left-color: var(--parse); }
+  .sema    .sub { border-left-color: var(--sema); }
+  .codegen .sub { border-left-color: var(--codegen); }
+  .sub h3 { font-size: 17px; margin: 0 0 4px; color: var(--aero-text-hi); }
+  .sub h3 .tag { font: 11px ui-monospace, monospace; color: var(--aero-text-2);
                  background: var(--aero-glass-soft);
-                 border: 1px solid rgba(150,210,235,.3); border-radius: 4px; padding: 1px 6px; margin-left: 8px;
-                 box-shadow: inset 0 1px 0 rgba(255,255,255,.2); vertical-align: 2px; }
-  .sub > p { color: #c4d6de; margin: 4px 0 14px; font-size: 15px; }
+                 border: 1px solid var(--aero-edge); border-radius: 4px; padding: 1px 6px; margin-left: 8px;
+                 box-shadow: var(--aero-gloss); vertical-align: 2px; }
+  .sub > p { color: var(--aero-text-2); margin: 4px 0 14px; font-size: 15px; }
 
   /* Data-structure cards — translucent teal glass with a glossy top edge. */
   .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 14px; }
   @media (max-width: 680px) { .cards { grid-template-columns: 1fr; } }
-  .card { border: 1px solid rgba(120,195,225,.2); border-left: 3px solid rgba(140,210,235,.5);
+  .card { border: 1px solid var(--aero-line); border-left: 3px solid var(--aero-edge);
           border-radius: 8px; padding: 12px 14px;
           background: var(--aero-panel);
-          box-shadow: inset 0 1px 0 rgba(255,255,255,.12), 0 2px 8px rgba(0,0,0,.3); }
+          box-shadow: var(--aero-gloss), 0 2px 8px rgba(0,0,0,.12); }
   .parse   .card { border-left-color: var(--parse); }
   .sema    .card { border-left-color: var(--sema); }
   .codegen .card { border-left-color: var(--codegen); }
   .card h4 { margin: 0 0 4px; font-size: 15px; font-weight: 600; color: var(--aero-text-hi); }
   .card h4 code { font: 13px ui-monospace, monospace;
-                  background: rgba(12,20,26,.6); padding: 1px 5px;
-                  border-radius: 3px; color: #d4d4d4; }
-  .card p { margin: 6px 0 8px; font-size: 14px; color: #c4d6de; }
+                  background: var(--code-inline-bg); padding: 1px 5px;
+                  border-radius: 3px; color: var(--code-inline-fg); }
+  .card p { margin: 6px 0 8px; font-size: 14px; color: var(--aero-text-2); }
   .card .links { font-size: 12.5px; }
   .card .links a { margin-right: 12px; white-space: nowrap; }
-  .card .links a::before { content: "‹›"; color: rgba(140,210,235,.5); margin-right: 4px; letter-spacing: -2px; }
+  .card .links a::before { content: "‹›"; color: var(--aero-muted); margin-right: 4px; letter-spacing: -2px; }
 
-  .aside { border: 1px solid rgba(120,195,225,.22); border-radius: 8px; padding: 12px 16px;
-           margin: 18px 0; font-size: 14px; color: #cdd6df;
-           background: linear-gradient(180deg, rgba(60,100,118,.4) 0%, rgba(26,42,52,.45) 100%);
-           box-shadow: inset 0 1px 0 rgba(255,255,255,.12); }
+  .aside { border: 1px solid var(--aero-line); border-radius: 8px; padding: 12px 16px;
+           margin: 18px 0; font-size: 14px; color: var(--aero-text);
+           background: var(--aero-glass-soft);
+           box-shadow: var(--aero-gloss); }
   .aside b { color: var(--aero-text-hi); }
-  code.kw { font: 13px ui-monospace, monospace; color: #ce9178; }
-  footer { color: #8fb0bd; font-size: 13px; border-top: 1px solid var(--aero-line); padding-top: 18px; }
+  code.kw { font: 13px ui-monospace, monospace; color: var(--code-inline-fg); }
+  footer { color: var(--aero-muted); font-size: 13px; border-top: 1px solid var(--aero-line); padding-top: 18px; }
 
   /* Inline interactive demo: an iframe of the explorer in embed mode, showing a
      focused subset of panes for this stage. Lazy-loaded so each (large) wasm
      instance only spins up when the reader scrolls it into view. */
-  .demo { margin: 14px 0 6px; border: 1px solid rgba(120,195,225,.22); border-radius: 8px;
+  .demo { margin: 14px 0 6px; border: 1px solid var(--aero-line); border-radius: 8px;
           overflow: hidden; background: var(--aero-surface);
-          box-shadow: inset 0 1px 0 rgba(255,255,255,.08), 0 2px 10px rgba(0,0,0,.35); }
+          box-shadow: var(--aero-gloss), 0 2px 10px rgba(0,0,0,.18); }
   .demo iframe { display: block; width: 100%; border: 0; }
-  .demo .cap { font-size: 12.5px; color: #9aa7b3; padding: 8px 12px;
-               background: linear-gradient(180deg, rgba(52,86,102,.5), rgba(24,40,50,.5));
+  .demo .cap { font-size: 12.5px; color: var(--aero-text-2); padding: 8px 12px;
+               background: var(--aero-panel);
                border-top: 1px solid var(--aero-line); }
-  .demo .cap b { color: #cdd6df; font-weight: 600; }
-  .demo .cap code { font: 12px ui-monospace, monospace; color: #ce9178; }
+  .demo .cap b { color: var(--aero-text-hi); font-weight: 600; }
+  .demo .cap code { font: 12px ui-monospace, monospace; color: var(--code-inline-fg); }
 </style>
 </head>
 <body>
 <header>
+  <button id="themeToggle" class="theme-toggle" type="button" title="Toggle light/dark theme">☾</button>
   <div class="wrap">
     <a class="back" href="index.html">← back to the explorer</a>
     <h1><img src="icon.png" alt="" /> A tour of DMD</h1>

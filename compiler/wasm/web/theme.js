@@ -26,6 +26,10 @@
     // Follow OS changes only while the user hasn't pinned an explicit choice.
     mq.addEventListener?.("change", () => { if (!stored()) apply(resolve()); });
 
+    // Re-theme live in other same-origin documents (e.g. the tour's embedded
+    // explorer iframes) when the choice changes in one of them.
+    window.addEventListener("storage", (e) => { if (e.key === KEY) apply(resolve()); });
+
     document.addEventListener("DOMContentLoaded", () => {
         apply(resolve());                              // re-sync now the button exists
         const btn = document.getElementById("themeToggle");
