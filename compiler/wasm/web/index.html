@@ -371,12 +371,12 @@ const makeChip = (p) => {
     chip.dataset.toggle = p.dataset.pane;
     chip.textContent = p.dataset.title;
     chip.title = (p.dataset.tip ? p.dataset.tip + "\n\n" : "") +
-                 "Click: show only this panel · Ctrl+click: toggle it on/off";
+                 "Click: show only this panel · Ctrl/Shift+click: toggle it on/off";
     chip.setAttribute("aria-pressed", String(!p.hidden));
     // Default click solos this output (hides every other non-source pane);
     // Ctrl/⌘+click instead toggles just this pane on/off without disturbing the rest.
     chip.addEventListener("click", (e) => {
-        if (e.ctrlKey || e.metaKey) setHidden(p.dataset.pane, !p.hidden);
+        if (e.ctrlKey || e.metaKey || e.shiftKey) setHidden(p.dataset.pane, !p.hidden);
         else soloPane(p.dataset.pane);
         saveState();
         applyAutoLayout();
