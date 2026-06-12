@@ -13,14 +13,14 @@ module dmd.printast;
 
 import core.stdc.stdio;
 
-import dmd.astenums : TY, TMAX, STC, LINK;
+import dmd.astenums : TY, TMAX, STC, LINK, MOD, MODFlags;
 import dmd.asttypename : astTypeName;
 import dmd.attrib;
 import dmd.common.outbuffer;
 import dmd.ctfeexpr;
 import dmd.declaration;
 import dmd.dsymbol;
-import dmd.dtemplate : TemplateInstance;
+import dmd.dtemplate : TemplateInstance, TemplateDeclaration, TemplateParameter;
 import dmd.expression;
 import dmd.expressionsem : toInteger;
 import dmd.func;
@@ -120,10 +120,27 @@ void printAST(Dsymbol s, ref OutBuffer buf, int indent = 0, string prefix = null
 
     buf.printf(" `%s`", s.toChars());
     if (auto dec = s.isDeclaration())   // VarDeclaration, FuncDeclaration, ...
+    {
+        if (dec.storage_class)
+        {
+            buf.writestring(" stc: ");
+            stcNames(buf, dec.storage_class);
+        }
         if (dec.type)
             buf.printf(" type: %s", typeName(dec.type));
+    }
     emitLineMarker(buf, s.loc);
     buf.writeByte('\n');
+
+    if (auto td = s.isTemplateDeclaration())
+    {
+        // Show the template parameters as their own AST sub-tree (recursing into
+        // any spec/default types and values via printAST) rather than as the D
+        // source syntax `toChars` would render.
+        if (td.parameters)
+            foreach (tp; (*td.parameters)[])
+                printTemplateParam(tp, buf, indent + 2);
+    }
 
     if (auto fd = s.isFuncDeclaration())
     {
@@ -366,6 +383,61 @@ private void printTemplateArg(RootObject o, ref OutBuffer buf, int indent)
 }
 
 /********************
+ * Print one template parameter (an element of `TemplateDeclaration.parameters`)
+ * as its AST class name plus its `ident`, then recurse into the parts that hold
+ * further AST: specialization/default types (rendered via `typeName`) and
+ * specialization/default value expressions (via `printAST`). This keeps the dump
+ * structural instead of the D source syntax `toChars` would produce.
+ */
+private void printTemplateParam(TemplateParameter tp, ref OutBuffer buf, int indent)
+{
+    import dmd.dtemplate : isDsymbol;
+    if (!tp)
+        return;
+    printIndent(buf, indent);
+    buf.writestring(astTypeName(tp));
+    if (tp.ident)
+        buf.printf(" `%s`", tp.ident.toChars());
+    buf.writeByte('\n');
+
+    // TemplateThisParameter is a subclass of TemplateTypeParameter, so this also
+    // covers `this T` parameters.
+    if (auto ttp = tp.isTemplateTypeParameter())
+    {
+        if (ttp.specType)
+            label(buf, indent + 2, "spec:", typeName(ttp.specType));
+        if (ttp.defaultType)
+            label(buf, indent + 2, "default:", typeName(ttp.defaultType));
+    }
+    else if (auto tvp = tp.isTemplateValueParameter())
+    {
+        if (tvp.valType)
+            label(buf, indent + 2, "valType:", typeName(tvp.valType));
+        if (tvp.specValue)
+            printAST(tvp.specValue, buf, indent + 2, "spec: ");
+        if (tvp.defaultValue)
+            printAST(tvp.defaultValue, buf, indent + 2, "default: ");
+    }
+    else if (auto tap = tp.isTemplateAliasParameter())
+    {
+        if (tap.specType)
+            label(buf, indent + 2, "specType:", typeName(tap.specType));
+        if (auto sa = isDsymbol(tap.specAlias))
+            printAST(sa, buf, indent + 2, "spec: ");
+        if (auto da = isDsymbol(tap.defaultAlias))
+            printAST(da, buf, indent + 2, "default: ");
+    }
+    // TemplateTupleParameter carries no extra AST.
+}
+
+/// Print `name value` on its own indented line (a small fixed-text leaf helper).
+private void label(ref OutBuffer buf, int indent, string name, const(char)* value)
+{
+    printIndent(buf, indent);
+    buf.printf("%.*s %s\n", cast(int) name.length, name.ptr, value);
+}
+
+/********************
  * Render a type by its AST class name (e.g. `TypeBasic`, `TypeDArray`) rather
  * than as D source syntax, matching how expressions/statements are shown, and
  * recursing into the wrapped types so the full structure is visible.
@@ -389,6 +461,7 @@ private void typeToBuffer(ref OutBuffer buf, Type t)
         buf.writestring("null");
         return;
     }
+    modNames(buf, t.mod);   // ` shared const ` etc. prefix, internal names
     buf.writestring(astTypeName(t));
     if (auto tf = t.isTypeFunction())
     {
@@ -461,7 +534,9 @@ private void printAttribDetail(AttribDeclaration ad, ref OutBuffer buf)
     if (ad.dsym == DSYM.linkDeclaration)
     {
         auto ld = cast(LinkDeclaration) cast(void*) ad;
-        buf.printf(" extern(%.*s)", enumName(ld.linkage).fTuple.expand);
+        buf.printf("extern(");
+        buf.put(enumName(ld.linkage));
+        buf.put(")");
     }
     else if (ad.dsym == DSYM.pragmaDeclaration)
     {
@@ -475,6 +550,7 @@ private void printAttribDetail(AttribDeclaration ad, ref OutBuffer buf)
     }
     else if (auto sd = ad.isStorageClassDeclaration())  // also DeprecatedDeclaration
     {
+        buf.writestring(" ");
         if (!stcNames(buf, sd.stc))
             buf.writestring(" (no STC)");
     }
@@ -518,6 +594,30 @@ private string enumName(E)(E value) if (is(E == enum))
  * name (` static`, ` const`, ...). Composite STC aliases (multi-bit) are skipped
  * so only the individual flags show. Returns false if no flag was set.
  */
+/********************
+ * Append each set type-modifier flag of `mod` to `buf` by its internal MODFlags
+ * member name (`const_ `, `shared_ `, `immutable_ `, `wild `), so the dump shows
+ * the modifiers the way the frontend stores them. Returns false if none was set.
+ */
+private bool modNames(ref OutBuffer buf, MOD mod)
+{
+    bool any;
+    static foreach (m; __traits(allMembers, MODFlags))
+    {{
+        enum int v = __traits(getMember, MODFlags, m);
+        static if (v != 0 && (v & (v - 1)) == 0) // single-bit flag only
+        {
+            if (mod & v)
+            {
+                buf.put(m);
+                buf.put(" ");
+                any = true;
+            }
+        }
+    }}
+    return any;
+}
+
 private bool stcNames(ref OutBuffer buf, ulong stc)
 {
     bool any;
@@ -759,6 +859,18 @@ extern (C++) final class PrintASTVisitor : Visitor
         }
         else if (e.sds)
             .printAST(cast(Dsymbol) e.sds, *buf, indent + 2);
+    }
+
+    override void visit(FuncExp e)
+    {
+        head(e);
+        // Recurse into the literal's declaration so its body (and, for a
+        // template literal, its parameters) print as an AST sub-tree rather
+        // than being elided. `td` wraps `fd` when the literal is templated.
+        if (e.td)
+            .printAST(cast(Dsymbol) e.td, *buf, indent + 2);
+        else if (e.fd)
+            .printAST(cast(Dsymbol) e.fd, *buf, indent + 2);
     }
 
     override void visit(DeclarationExp e)
