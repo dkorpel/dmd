@@ -714,27 +714,34 @@ extern (C++) final class PrintASTVisitor : Visitor
         leaf(e, v.peekChars());
     }
 
+    override void visit(StringExp e)
+    {
+        leaf(e, e.toChars());
+    }
+
     override void visit(StructLiteralExp e)
     {
         head(e);
         printIndent(indent + 2);
-        buf.printf(".value: %s\n", e.toChars());
+        if (e.elements)
+            foreach (element; (*e.elements)[])
+                .printAST(element, *buf, indent + 2);
     }
 
     override void visit(SymbolExp e)
     {
         head(e);
         printIndent(indent + 2);
-        buf.printf(".var: %s\n", e.var ? e.var.toChars() : "");
+        buf.printf("var: %s\n", e.var ? e.var.toChars() : "");
     }
 
     override void visit(SymOffExp e)
     {
         head(e);
         printIndent(indent + 2);
-        buf.printf(".var: %s\n", e.var ? e.var.toChars() : "");
+        buf.printf("var: %s\n", e.var ? e.var.toChars() : "");
         printIndent(indent + 2);
-        buf.printf(".offset: %llx\n", e.offset);
+        buf.printf("offset: %llx\n", e.offset);
     }
 
     override void visit(VarExp e)
@@ -752,9 +759,9 @@ extern (C++) final class PrintASTVisitor : Visitor
     override void visit(DotIdExp e)
     {
         head(e);
-        printIndent(indent + 2);
-        buf.printf(".ident: %s\n", e.ident.toChars());
         .printAST(e.e1, *buf, indent + 2);
+        printIndent(indent + 2);
+        buf.printf("Identifier(%s)\n", e.ident.toChars());
     }
 
     override void visit(UnaExp e)
