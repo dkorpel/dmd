@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <link rel="icon" type="image/png" href="icon.png" />
 <link rel="stylesheet" href="aero.css" />
+<!-- Set <html data-theme> before paint (OS default + saved choice); wires #themeToggle. -->
+<script src="theme.js"></script>
 <title>DMD explorer</title>
 <!--
   Import map pinning CodeMirror 6 as ES modules from a CDN (no build step).
@@ -39,22 +41,22 @@
   header { padding: 8px 16px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
   header h1 { font-size: 16px; margin: 0; font-weight: 600; white-space: nowrap; }
   #status { color: var(--aero-text-dim); font-size: 12px; }
-  #updated { color: #6f93a2; font-size: 12px; margin-left: auto; white-space: nowrap; }
+  #updated { color: var(--aero-text-dim); font-size: 12px; margin-left: auto; white-space: nowrap; }
   .toolbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .toolbar .group { display: flex; align-items: center; gap: 4px; }
   .toolbar .sep { width: 1px; align-self: stretch; margin: 2px 6px;
-                  background: linear-gradient(180deg, transparent, rgba(140,210,235,.35), transparent); }
+                  background: linear-gradient(180deg, transparent, rgba(255,255,255,.4), transparent); }
   .toolbar label { font-size: 11px; color: var(--aero-text-dim); text-transform: uppercase; }
-  .chip { font: 12px system-ui; padding: 4px 10px; color: #d2e8f1;
+  .chip { font: 12px system-ui; padding: 4px 10px; color: var(--aero-text);
           background: var(--aero-glass);
           border: 1px solid var(--aero-edge); border-radius: 6px; cursor: pointer; user-select: none;
-          box-shadow: var(--aero-gloss), 0 1px 2px rgba(0,0,0,.3); }
+          box-shadow: var(--aero-gloss), 0 1px 2px rgba(0,0,0,.15); }
   .chip[aria-pressed="true"] { color: #fff;
           background: var(--aero-glass-on);
-          border-color: rgba(150,225,250,.7);
-          box-shadow: inset 0 1px 0 rgba(255,255,255,.5), 0 1px 3px rgba(0,0,0,.35), 0 0 9px rgba(55,185,235,.45); }
+          border-color: #7e2620;
+          box-shadow: inset 0 1px 0 rgba(255,255,255,.25), 0 1px 2px rgba(0,0,0,.3); }
   .chip:hover { border-color: var(--aero-edge-hi);
-          box-shadow: inset 0 1px 0 rgba(255,255,255,.4), var(--aero-glow); }
+          box-shadow: var(--aero-gloss), var(--aero-glow); }
   select.chip { cursor: pointer; }
 
   /* Pane layout container: columns / rows / grid. */
@@ -67,10 +69,10 @@
   .cols.rows .pane + .pane { border-left: 0; border-top: 1px solid var(--aero-line); }
   .cols.grid .pane { border: 1px solid var(--aero-line); }
   .pane[hidden] { display: none; }
-  .pane h2 { font-size: 12px; text-transform: uppercase; color: #9fb6bf; margin: 0;
+  .pane h2 { font-size: 12px; text-transform: uppercase; color: var(--aero-text-2); margin: 0;
              padding: 6px 12px 6px 9px; cursor: grab;
-             background: linear-gradient(180deg, rgba(52,86,102,.6) 0%, rgba(30,52,64,.6) 100%);
-             box-shadow: inset 0 1px 0 rgba(255,255,255,.1);
+             background: var(--aero-panel);
+             box-shadow: var(--aero-gloss);
              border-left: 3px solid transparent;
              display: flex; align-items: center; gap: 6px; }
   /* Stage accent stripe (matches the toolbar group colors). */
@@ -79,36 +81,36 @@
   .pane[data-stage="semantic"] h2 { border-left-color: var(--sema); }
   .pane[data-stage="codegen"]  h2 { border-left-color: var(--codegen); }
   .pane[data-stage="diag"]     h2 { border-left-color: var(--diag); }
-  .pane h2::before { content: "⠿"; color: #555; cursor: grab; }
+  .pane h2::before { content: "⠿"; color: var(--aero-muted); cursor: grab; }
   /* Per-pane close shortcut (hides the pane; the top-bar toggle still re-shows it). */
   /* Fill the full bar height and reach to the right edge (negative margins cancel
      the h2 padding) so the whole right end is the X hitbox — no drag strip around it. */
   .pane-close { margin: -6px -12px -6px 0; padding: 0 12px; align-self: stretch;
                 display: flex; align-items: center; background: none; border: 0;
-                color: #88a3ad; cursor: pointer; font: 14px/1 system-ui; }
-  .pane-close:hover { color: #fff; background: rgba(241,76,76,.35); }
+                color: #888; cursor: pointer; font: 14px/1 system-ui; }
+  .pane-close:hover { color: #b03931; background: rgba(176,57,49,.15); }
   body.embed .pane-close { display: none; }
   /* Solo: collapse to just this pane (hide all others); click again to restore.
      Sits immediately left of the close button at the right end of the header. */
   .pane-solo { margin: -6px 0 -6px auto; padding: 0 9px; align-self: stretch;
                display: flex; align-items: center; background: none; border: 0;
-               color: #7fb4c8; cursor: pointer; font: 13px/1 system-ui; }
-  .pane-solo:hover { color: #fff; background: rgba(80,190,235,.28); }
-  .pane[data-solo="true"] .pane-solo { color: #ffd86b; text-shadow: 0 0 7px rgba(255,200,90,.65); }
+               color: #888; cursor: pointer; font: 13px/1 system-ui; }
+  .pane-solo:hover { color: var(--code-kw); background: rgba(64,64,220,.12); }
+  .pane[data-solo="true"] .pane-solo { color: var(--codegen); }
   body.embed .pane-solo { display: none; }
   .pane.dragging { opacity: 0.4; }
-  .pane.dragover h2 { box-shadow: inset 3px 0 0 #0e639c; }
+  .pane.dragover h2 { box-shadow: inset 3px 0 0 #4040dc; }
   /* The D source pane is the editable input, not a read-only output — give it a
      distinct surface, header and "editable" badge so it reads as primary. */
-  .pane[data-stage="source"] { box-shadow: inset 0 0 0 1px #34546a; }
-  .pane[data-stage="source"] h2 { color: #cdd6df;
-      background: linear-gradient(180deg, rgba(40,66,84,.75) 0%, rgba(24,38,50,.75) 100%); }
+  .pane[data-stage="source"] { box-shadow: inset 0 0 0 1px var(--aero-edge); }
+  .pane[data-stage="source"] h2 { color: var(--aero-text);
+      background: var(--aero-srchead); }
   .pane[data-stage="source"] h2 .badge {
       margin-left: auto; font-size: 10px; letter-spacing: .03em; text-transform: none;
-      color: #6cb6ff; border: 1px solid #2d4a66; border-radius: 10px; padding: 1px 8px; }
+      color: var(--code-kw); border: 1px solid var(--aero-edge); border-radius: 10px; padding: 1px 8px; }
   textarea, pre { flex: 1; margin: 0; padding: 12px; border: 0; font: 13px/1.45 ui-monospace, monospace;
                   background: var(--aero-surface);
-                  color: #d4d4d4; white-space: pre; overflow: auto; tab-size: 4; }
+                  color: var(--code-fg); white-space: pre; overflow: auto; tab-size: 4; }
   textarea { resize: none; outline: none; }
   /* Each rendered output line is its own block so the synced-line highlight can
      span the full pane width (and cover horizontally-scrolled content). */
@@ -117,57 +119,53 @@
   /* Subtle translucent highlight with a short fade so moving the cursor between
      lines doesn't produce hard flashes. */
   .ln { transition: background-color 80ms ease-out; }
-  .ln.hl { background: rgba(88, 166, 255, 0.15); }
+  .ln.hl { background: rgba(64, 64, 220, 0.12); }
   /* Read-only syntax highlight for the lowered-AST pane: same palette as the
      editor, rendered as plain colored spans in a <pre> (no cursor/gutter) so it
      stays clearly an output, not an editable field. */
-  #ast .tok-keyword  { color: #569cd6; }
-  #ast .tok-type     { color: #4ec9b0; }
-  #ast .tok-comment  { color: #6a9955; font-style: italic; }
-  #ast .tok-string   { color: #ce9178; }
-  #ast .tok-number   { color: #b5cea8; }
-  #ast .tok-meta     { color: #dcdcaa; }
-  #ast .tok-variable { color: #9cdcfe; }
+  #ast .tok-keyword  { color: var(--code-kw); }
+  #ast .tok-type     { color: var(--code-type); }
+  #ast .tok-comment  { color: var(--code-comment); font-style: italic; }
+  #ast .tok-string   { color: var(--code-string); }
+  #ast .tok-number   { color: var(--code-number); }
+  #ast .tok-meta     { color: var(--code-meta); }
+  #ast .tok-variable { color: var(--code-fg); }
   /* CodeMirror editor host: fill the source pane between header and run bar. */
   #src { flex: 1; min-height: 0; overflow: hidden; }
   #src .cm-editor { height: 100%; }
   /* ANSI terminal palette for the diagnostics pane (VS Code dark). */
   .ansi-1 { font-weight: bold; }
-  .ansi-fg-0 { color: #666; } .ansi-fg-1 { color: #cd3131; }
-  .ansi-fg-2 { color: #0dbc79; } .ansi-fg-3 { color: #e5e510; }
-  .ansi-fg-4 { color: #2472c8; } .ansi-fg-5 { color: #bc3fbc; }
-  .ansi-fg-6 { color: #11a8cd; } .ansi-fg-7 { color: #e5e5e5; }
-  .ansi-1.ansi-fg-0 { color: #888; } .ansi-1.ansi-fg-1 { color: #f14c4c; }
-  .ansi-1.ansi-fg-2 { color: #23d18b; } .ansi-1.ansi-fg-3 { color: #f5f543; }
-  .ansi-1.ansi-fg-4 { color: #3b8eea; } .ansi-1.ansi-fg-5 { color: #d670d6; }
-  .ansi-1.ansi-fg-6 { color: #29b8db; } .ansi-1.ansi-fg-7 { color: #fff; }
+  .ansi-fg-0 { color: var(--diag-gray); }    .ansi-fg-1 { color: var(--diag-red); }
+  .ansi-fg-2 { color: var(--diag-green); }   .ansi-fg-3 { color: var(--diag-yellow); }
+  .ansi-fg-4 { color: var(--diag-blue); }    .ansi-fg-5 { color: var(--diag-magenta); }
+  .ansi-fg-6 { color: var(--diag-cyan); }    .ansi-fg-7 { color: var(--diag-fg); }
   /* Per-stage group label in the pane toolbar. */
-  .toolbar .stage-label { font-size: 10px; color: #777; text-transform: uppercase;
+  .toolbar .stage-label { font-size: 10px; color: var(--aero-text-dim); text-transform: uppercase;
                           letter-spacing: .04em; margin: 0 2px 0 6px; }
-  .toolbar .stage-label.source   { color: #aaa; }
-  .toolbar .stage-label.parse    { color: #6fb0f5; }
-  .toolbar .stage-label.semantic { color: #4fd99f; }
-  .toolbar .stage-label.codegen  { color: #ecb45f; }
-  .toolbar .stage-label.diag     { color: #f37070; }
+  .toolbar .stage-label.source   { color: #f2dedb; }
+  .toolbar .stage-label.parse    { color: #cdd9f5; }
+  .toolbar .stage-label.semantic { color: #c9ead6; }
+  .toolbar .stage-label.codegen  { color: #f0dcc0; }
+  .toolbar .stage-label.diag     { color: #f2cfcc; }
   .toolbar .stage-label.clickable { cursor: pointer; }
   .toolbar .stage-label.clickable:hover { text-decoration: underline; }
-  a.tour { font: 12px system-ui; color: #aee3f7; text-decoration: none; white-space: nowrap;
-           padding: 4px 10px; border: 1px solid rgba(150,210,235,.4); border-radius: 6px;
+  a.tour { font: 12px system-ui; color: var(--aero-text); text-decoration: none; white-space: nowrap;
+           padding: 4px 10px; border: 1px solid var(--aero-edge); border-radius: 6px;
            background: var(--aero-glass-soft);
-           box-shadow: inset 0 1px 0 rgba(255,255,255,.25); }
+           box-shadow: var(--aero-gloss); }
   a.tour:hover { color: #fff; border-color: var(--aero-edge-hi);
-           background: linear-gradient(180deg, #4cc3ee, #1577ad);
-           box-shadow: inset 0 1px 0 rgba(255,255,255,.45), 0 0 9px rgba(55,185,235,.45); }
+           background: var(--aero-glass-on);
+           box-shadow: inset 0 1px 0 rgba(255,255,255,.2), 0 1px 2px rgba(0,0,0,.25); }
   /* Embedded mode: when the explorer is hosted in an <iframe> on the tour page
      (index.html?embed=1&panes=…), drop the page chrome and let the chosen panes
      fill the frame so a focused subset can sit inline next to the prose. */
   body.embed header { display: none; }
   body.embed .cols { height: 100vh; }
   .embed-open { position: fixed; top: 6px; right: 8px; z-index: 5;
-      font: 11px system-ui; color: #6cb6ff; text-decoration: none;
-      background: rgba(30, 35, 41, .85); border: 1px solid #2d4a66;
-      border-radius: 4px; padding: 2px 8px; }
-  .embed-open:hover { background: #0e639c; color: #fff; border-color: #0e639c; }
+      font: 11px system-ui; color: var(--code-kw); text-decoration: none;
+      background: var(--aero-glass); border: 1px solid var(--aero-edge);
+      border-radius: 4px; padding: 2px 8px; box-shadow: var(--aero-gloss); }
+  .embed-open:hover { background: #b03931; color: #fff; border-color: #98312a; }
   /* Embedded demos are fixed two-pane slices — drop the drag-to-reorder chrome. */
   body.embed .pane h2 { cursor: default; }
   body.embed .pane h2::before { content: none; }
@@ -192,6 +190,7 @@
   </div>
   <span id="status">loading dmd.wasm…</span>
   <span id="updated" title="When the dmd.wasm build on this page was last deployed"></span>
+  <button id="themeToggle" class="theme-toggle" type="button" title="Toggle light/dark theme">☾</button>
 </header>
 <div class="cols" id="cols">
   <div class="pane" data-pane="src" data-stage="source" data-title="D source" draggable="false">
@@ -585,36 +584,38 @@ const dStreamParser = {
 };
 const dLanguage = StreamLanguage.define(dStreamParser);
 
-// Highlight palette tuned to the surrounding VS Code dark theme.
+// Highlight palette mirroring dlang.org's D code colors (keyword/type blue,
+// string red, comment gray). Values are aero.css tokens (var(...)), so the
+// editor re-themes live with the rest of the page when the theme is toggled.
 const dHighlight = HighlightStyle.define([
-    { tag: t.keyword,                      color: "#569cd6" },
-    { tag: t.typeName,                     color: "#4ec9b0" },
-    { tag: t.comment,                      color: "#6a9955", fontStyle: "italic" },
-    { tag: t.string,                       color: "#ce9178" },
-    { tag: t.number,                       color: "#b5cea8" },
-    { tag: t.meta,                         color: "#dcdcaa" },
-    { tag: t.variableName,                 color: "#9cdcfe" },
+    { tag: t.keyword,                      color: "var(--code-kw)" },
+    { tag: t.typeName,                     color: "var(--code-type)" },
+    { tag: t.comment,                      color: "var(--code-comment)", fontStyle: "italic" },
+    { tag: t.string,                       color: "var(--code-string)" },
+    { tag: t.number,                       color: "var(--code-number)" },
+    { tag: t.meta,                         color: "var(--code-meta)" },
+    { tag: t.variableName,                 color: "var(--code-fg)" },
 ]);
 
 const dTheme = EditorView.theme({
-    "&":                       { color: "#d4d4d4", backgroundColor: "#192026", height: "100%", fontSize: "13px" },
-    ".cm-content":             { fontFamily: "ui-monospace, monospace", caretColor: "#fff" },
+    "&":                       { color: "var(--code-fg)", background: "var(--aero-surface)", height: "100%", fontSize: "13px" },
+    ".cm-content":             { fontFamily: "ui-monospace, monospace", caretColor: "var(--code-fg)" },
     ".cm-line":                { transition: "background-color 80ms ease-out" },
-    ".cm-gutters":             { backgroundColor: "#151c22", color: "#5e7d89", border: "none" },
-    ".cm-activeLine":          { backgroundColor: "rgba(60,120,150,.14)" },
-    ".cm-activeLineGutter":    { backgroundColor: "rgba(60,120,150,.14)", color: "#9fc3d2" },
-    ".cm-syncHighlight":       { backgroundColor: "rgba(88, 166, 255, 0.15)", transition: "background-color 80ms ease-out" },
+    ".cm-gutters":             { backgroundColor: "var(--code-gutter)", color: "var(--aero-muted)", border: "none" },
+    ".cm-activeLine":          { backgroundColor: "rgba(64,64,220,.06)" },
+    ".cm-activeLineGutter":    { backgroundColor: "rgba(64,64,220,.06)", color: "var(--aero-text-2)" },
+    ".cm-syncHighlight":       { backgroundColor: "rgba(64, 64, 220, 0.12)", transition: "background-color 80ms ease-out" },
     "&.cm-focused":            { outline: "none" },
-    ".cm-cursor":              { borderLeftColor: "#fff" },
-    "&.cm-focused .cm-selectionBackground, ::selection": { backgroundColor: "#264f78" },
-    // Inline lint (diagnostics) — dark tooltip + VS Code error/warning colors.
-    ".cm-tooltip-lint":              { backgroundColor: "#252526", border: "1px solid #454545", color: "#d4d4d4" },
+    ".cm-cursor":              { borderLeftColor: "var(--code-fg)" },
+    "&.cm-focused .cm-selectionBackground, ::selection": { backgroundColor: "var(--code-sel)" },
+    // Inline lint (diagnostics) — themed tooltip + dlang.org error/warning colors.
+    ".cm-tooltip-lint":              { background: "var(--aero-panel)", border: "1px solid var(--aero-edge)", color: "var(--aero-text)" },
     ".cm-diagnostic":                { padding: "3px 8px", borderLeft: "3px solid #888" },
-    ".cm-diagnostic-error":          { borderLeftColor: "#f14c4c" },
-    ".cm-diagnostic-warning":        { borderLeftColor: "#cca700" },
-    ".cm-lintRange-error":           { backgroundImage: "none", textDecoration: "underline wavy #f14c4c" },
-    ".cm-lintRange-warning":         { backgroundImage: "none", textDecoration: "underline wavy #cca700" },
-}, { dark: true });
+    ".cm-diagnostic-error":          { borderLeftColor: "#b03931" },
+    ".cm-diagnostic-warning":        { borderLeftColor: "#c87f1e" },
+    ".cm-lintRange-error":           { backgroundImage: "none", textDecoration: "underline wavy #b03931" },
+    ".cm-lintRange-warning":         { backgroundImage: "none", textDecoration: "underline wavy #c87f1e" },
+});
 
 // Synced-line highlight in the editor: a StateField holding a single line
 // decoration, driven by `setHlLine` effects from the cross-pane sync below.
