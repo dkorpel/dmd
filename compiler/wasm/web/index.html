@@ -9,14 +9,7 @@
 <script src="theme.js"></script>
 <title>DMD explorer</title>
 <!--
-  Import map pinning CodeMirror 6 as ES modules from a CDN (no build step).
-  The `?external=...` flags force every package to import the shared CM packages
-  by bare specifier, so the import map below resolves them to a single copy —
-  avoids the "Unrecognized extension value" error from duplicate @codemirror/state.
-  These scoped packages are pinned at majors (@6/@1) because their npm latest ==
-  highest version. We deliberately avoid the `codemirror` meta-package: a rogue
-  6.65.7 (a CM5 bundle) outranks the real 6.0.2, so `@6` would resolve to it.
-  basicSetup is reconstructed from the individual packages in the script instead.
+  Import map pinning CodeMirror 6 as ES modules from a CDN
 -->
 <script type="importmap">
 {
@@ -35,8 +28,6 @@
 }
 </script>
 <style>
-  /* Frutiger Aero look — shared tokens/base live in aero.css; this block is the
-     explorer-specific layout on top. */
   body { font: 14px/1.4 system-ui, sans-serif; margin: 0; }
   header { padding: 8px 16px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
   header h1 { font-size: 16px; margin: 0; font-weight: 600; white-space: nowrap; }
@@ -188,8 +179,7 @@
   <div class="pane" data-pane="src" data-stage="source" data-title="D source" draggable="false">
     <h2 draggable="true">D source <span class="badge">✎ editable</span></h2>
     <div id="src"></div>
-    <!-- Initial document for the CodeMirror editor (mounted into #src above).
-         Edits auto-recompile (debounced); there's no manual run button. -->
+    <!-- Initial document for the CodeMirror editor (mounted into #src above)-->
     <textarea id="src-init" hidden>module test;
 
 int add(int a, int b)
@@ -197,26 +187,17 @@ int add(int a, int b)
     return a + b;
 }
 
-enum N = 3;
-
-int[] squares()
-{
-    int[] r;
-    foreach (i; 0 .. N)
-        r ~= i * i;
-    return r;
-}
 </textarea>
   </div>
-  <div class="pane" data-pane="lex" data-stage="parse" data-title="Tokens" data-tip="The token stream produced by the lexer, before parsing">
-    <h2 draggable="true" title="Internal lexer output: one line per source line, listing that line's TOK enum member names (e.g. int32, identifier, add). Tokens carrying a value get it as a parenthesized postfix, e.g. float32Literal(3.5).">Tokens (lexer)</h2>
+  <div class="pane" data-pane="lex" data-stage="parse" data-title="Tokens" data-tip="The token stream produced by the lexer">
+    <h2 draggable="true" title="Internal lexer output: one line per source line, listing that line's TOK enum member names.">Tokens (lexer)</h2>
     <pre id="lex"></pre>
   </div>
-  <div class="pane" data-pane="parse" data-stage="parse" data-title="Parse tree" data-tip="The Abstract Syntax Tree as parsed, before semantic analysis">
+  <div class="pane" data-pane="parse" data-stage="parse" data-title="Parse tree" data-tip="The Abstract Syntax Tree produced by the parser">
     <h2 draggable="true">Parse tree (printAST)</h2>
     <pre id="parse"></pre>
   </div>
-  <div class="pane" data-pane="sema" data-stage="semantic" data-title="Semantic tree" data-tip="The Abstract Syntax Tree after semantic analysis, labelled by internal DMD class names">
+  <div class="pane" data-pane="sema" data-stage="semantic" data-title="Semantic tree" data-tip="The Abstract Syntax Tree after semantic analysis">
     <h2 draggable="true" title="printAST after semantic analysis: like -vcg-ast, but labels nodes by their internal DMD class name (e.g. AddExp, CompoundStatement) instead of regenerated D syntax">Semantic tree (printAST, post-semantic)</h2>
     <pre id="sema"></pre>
   </div>
@@ -224,19 +205,19 @@ int[] squares()
     <h2 draggable="true">Lowered AST (-vcg-ast)</h2>
     <pre id="ast"></pre>
   </div>
-  <div class="pane" data-pane="ir" data-stage="codegen" data-title="Backend IR (pre-opt)" data-tip="Backend Intermediate Representation before optimizations have been performed">
-    <h2 draggable="true" title="Backend intermediate representation: the block/elem graph of each function just after lowering, before the optimizer runs. Nodes are labelled with the backend enum member names (OPadd, TYint, BC.goto_).">Backend IR — before -O (block/elem graph)</h2>
+  <div class="pane" data-pane="ir" data-stage="codegen" data-title="IR (unoptimized)" data-tip="Backend Intermediate Representation before optimizations">
+    <h2 draggable="true" title="Backend intermediate representation: the block/elem graph of each function just after lowering, before the optimizer runs.">Backend IR — before -O (block/elem graph)</h2>
     <pre id="ir"></pre>
   </div>
-  <div class="pane" data-pane="iropt" data-stage="codegen" data-title="Backend IR (post-opt)" data-tip="Backend Intermediate Representation after optimizations have been performed">
-    <h2 draggable="true" title="The same block/elem graph after the -O global optimizer (optfunc) has run, immediately before code generation. Diff against the pre-opt pane to see what the optimizer did.">Backend IR — after -O (block/elem graph)</h2>
+  <div class="pane" data-pane="iropt" data-stage="codegen" data-title="IR (optimized)" data-tip="Backend Intermediate Representation after optimizations">
+    <h2 draggable="true" title="The same block/elem graph after the -O global optimizer has run, immediately before code generation. Diff against the pre-opt pane to see what the optimizer did.">Backend IR — after -O (block/elem graph)</h2>
     <pre id="iropt"></pre>
   </div>
-  <div class="pane" data-pane="asm" data-stage="codegen" data-title="Disassembly" data-tip="The generated x86-64 machine code, disassembled (-vasm)">
-    <h2 draggable="true">x86-64 disassembly (-vasm)</h2>
+  <div class="pane" data-pane="asm" data-stage="codegen" data-title="Disassembly" data-tip="The generated x86-64 assembly">
+    <h2 draggable="true">x86-64 disassembly</h2>
     <pre id="asm"></pre>
   </div>
-  <div class="pane" data-pane="diag" data-stage="diag" data-title="Diagnostics" data-tip="Compiler errors, warnings and deprecation messages">
+  <div class="pane" data-pane="diag" data-stage="diag" data-title="Diagnostics" data-tip="Compiler errors and other console output">
     <h2 draggable="true">Diagnostics</h2>
     <pre id="diag"></pre>
   </div>
