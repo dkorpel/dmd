@@ -83,6 +83,26 @@
           border: 1px solid var(--aero-edge); background: var(--aero-glass); color: var(--aero-text);
           box-shadow: var(--aero-gloss); }
 
+  /* Data-structure cards — links into the actual dmd source for each construct
+     the prose names. */
+  .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 18px 0 6px; }
+  @media (max-width: 680px) { .cards { grid-template-columns: 1fr; } }
+  .card { border: 1px solid var(--aero-line); border-left: 3px solid var(--aero-edge);
+          border-radius: 8px; padding: 12px 14px;
+          background: var(--aero-panel);
+          box-shadow: var(--aero-gloss), 0 2px 8px rgba(0,0,0,.12); }
+  .parse   .card { border-left-color: var(--parse); }
+  .sema    .card { border-left-color: var(--sema); }
+  .codegen .card { border-left-color: var(--codegen); }
+  .card h4 { margin: 0 0 4px; font-size: 15px; font-weight: 600; color: var(--aero-text-hi); }
+  .card h4 code { font: 13px ui-monospace, monospace;
+                  background: var(--code-inline-bg); padding: 1px 5px;
+                  border-radius: 3px; color: var(--code-inline-fg); }
+  .card p { margin: 6px 0 8px; font-size: 14px; color: var(--aero-text-2); }
+  .card .links { font-size: 12.5px; }
+  .card .links a { margin-right: 12px; white-space: nowrap; }
+  .card .links a::before { content: "‹›"; color: var(--aero-muted); margin-right: 4px; letter-spacing: -2px; }
+
   footer { color: var(--aero-muted); font-size: 13px; border-top: 1px solid var(--aero-line);
            padding-top: 18px; margin-top: 50px; }
 </style>
@@ -97,23 +117,15 @@
 </header>
 <main>
 
-  <div class="pipe">
-    <a class="step src"     href="#lexing">source text</a><span class="arrow">→</span>
-    <a class="step parse"   href="#lexing">tokens &amp; AST</a><span class="arrow">→</span>
-    <a class="step sema"    href="#semantic">typed AST</a><span class="arrow">→</span>
-    <a class="step codegen" href="#codegen">backend IR</a><span class="arrow">→</span>
-    <a class="step codegen" href="#codegen">machine code</a>
-  </div>
-
-  <p>Hey, my name is Dennis Korpel. I've created this website's code with Claude Code, but all text is
-     written the old fashioned way.</p>
+  <p>Hey, my name is Dennis Korpel. I've created this website with help of an AI agent, but the text is
+     written by me in a plain text editor by me.</p>
 
   <p>Since 2022 I'm Pull Request and Issue Manager for the D Language Foundation.
-     This website is meant to help understand the D compiler
+     This website is meant to help understand the D compiler implementation
      <a href="https://github.com/dlang/dmd" target="_blank" rel="noopener">dmd</a>', for contributors both
      old and new.
      While most D programmers are familiar with D source code, to work on the compiler one must also be
-     aware of the compiler's internal representation of D code.
+     aware of the compiler's internal representation of D code at various stages.
      While many names are obvious (<code>IfStatement</code>, <code>StructDeclaration</code>), you'll also
      find there's plenty of unintuitive things.
      For example, an integer literal like <code>100</code> constructs a <code>new IntegerExp(100)</code>
@@ -122,7 +134,7 @@
      Nope! It's also an <code>new IntegerExp(1)</code>, but with the type set to <code>bool</code>, which
      internally has enum value <code>TY.Tbool</code> in the frontend, and <code>TYbool</code> in the
      backend.
-     Learning all these minutiae by rote is tedious, and a deterrent for new contributors.</p>
+     Learning all these minutiae by rote is tedious, and a barrier for contributions.</p>
 
   <p>When I created my <a href="https://github.com/dkorpel/ctod" target="_blank" rel="noopener">C to D</a>
      tool, I also had to constantly check how the 'tree-sitter' C parser library I used names various C
@@ -133,13 +145,12 @@
 
   <p>Another source of inspiration is of course Matt Godbolt's
      <a href="https://d.godbolt.org/" target="_blank" rel="noopener">compiler explorer</a>, which
-     interactively shows how C code maps to assembly (or how Rust code maps to LLVM IR).
-     I thought it would be great to have something similar for DMD's internal IR, as well as its internal
-     tokens and Abstract Syntax Tree (AST).</p>
+     interactively shows how C code maps to assembly.
+  </p>
 
-  <p>This tool lets you interactively get familiar with (or debug) DMD's various internal data
+  <p>This tool gives a peak into DMD's various internal data
      representations.
-     Feel free to play around, or read on and I'll show you around.</p>
+     Feel free to experiment in the editor, or read on and I'll show you around.</p>
 
   <!-- ============================ LEXING AND PARSING ============================ -->
   <section class="parse" id="lexing">
@@ -151,28 +162,37 @@
 
       <p>The first thing DMD does with D source code is split it up into 'tokens', which are the individual
          words, strings, numbers and punctuation.
-         Each token type is identified by a member in <code>enum TOK {}</code>.
+         Each token creates an instance of <code>struct Token</code>, which is a tagged union identified by a member in <code>enum TOK {}</code>.
          Every D keyword has their own token type.
          Unfortunately, the compiler is in an awkward position where it needs to refer to its own reserved
          keywords a lot, so the enum names always have to be (slightly) different than the source code names.
          Often an underscore is added (<code>pure</code> becomes <code>pure_</code>), other times a
-         different word is used (<code>int</code> became <code>int32</code>).</p>
+         different word is used (<code>int</code> becomes <code>int32</code>).</p>
 
       <p>All other names that appear in source code (variables, functions, types, attributes, ...) create an
          'identifier'.
          There isn't a hard line between keywords and identifiers though, since the compiler does have a
-         long list of recognized idenfitiers.
-         The main difference is that later in the parse stage, keywords often play an important role in
+         <a href="https://github.com/dlang/dmd/blob/765ef06db782209d0c816d7d0eea7b2c92da3fd3/compiler/src/dmd/id.d#L59">long list of recognized idenfitiers</a>.
+         The main difference is that keywords often play an important role in letting the parser recognize
          constructs, like how <code>if</code> starts an if-statement and <code>struct</code> begins a struct
          declaration.</p>
 
       <p>Interactive demo:</p>
       <div class="demo" data-panes="lex" data-height="240">
-<script type="text/plain" class="code">int i = -1 + 2L;
+<script type="text/plain" class="code">
+extern(C++)
+struct C
+{
+    int i = -1;
+    long j = 2L;
+}
 
 pure nothrow @safe @nogc:
 
-extern(C++) string getString() => "abc" ~ `def`c;
+string getString()
+{
+    return "abc" ~ `def`c;
+}
 </script>
       </div>
 
@@ -182,12 +202,12 @@ extern(C++) string getString() => "abc" ~ `def`c;
         <li>There are different types of number literals: <code>int32</code>, <code>int64</code>,
             <code>uns32</code> etc.</li>
         <li>The minus for negative numbers is a separate token: -3 is not parsed as <code>int32(-3)</code>,
-            but as <code>minus int32(3)</code></li>
+            but as <code>min int32(3)</code></li>
         <li>All string literals use the same TOK discriminator <code>string_</code></li>
         <li>Builtin attributes with an @ are 2 tokens. So while nobody does it, you are allowed to write
-            <code>@ /*hello*/ nogc</code> with arbitrary white space and comments inbetween.</li>
-        <li>Similarly, in <code>extern(C++)</code>, C++ is parsed as a <code>C</code> and <code>++</code>
-            token.</li>
+            arbitrary white space and comments inbetween, like <code>@ /*hello*/ nogc</code>.</li>
+        <li>Similarly, <code>extern(C++)</code> consists of separate <code>C</code> and <code>++</code>
+            tokens.</li>
       </ul>
 
       <p>Tokenization is simple and stable.
@@ -383,7 +403,6 @@ void f(ref string x)
   </section>
 
   <footer>
-    Built from the DMD frontend <b>and</b> backend compiled to WebAssembly.
     &nbsp;·&nbsp; <a href="index.html">← back to the explorer</a>
   </footer>
 
