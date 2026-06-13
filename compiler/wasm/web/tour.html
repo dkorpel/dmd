@@ -162,7 +162,11 @@
 
       <p>The first thing DMD does with D source code is split it up into 'tokens', which are the individual
          words, strings, numbers and punctuation.
-         Each token creates an instance of <code>struct Token</code>, which is a tagged union identified by a member in <code>enum TOK {}</code>.
+         This is done by <a href="https://github.com/dlang/dmd/blob/765ef06db782209d0c816d7d0eea7b2c92da3fd3/compiler/src/dmd/lexer.d#L63">
+          <code>class Lexer</code></a>, which creates instances of <a href="https://github.com/dlang/dmd/blob/765ef06db782209d0c816d7d0eea7b2c92da3fd3/compiler/src/dmd/tokens.d#L640">
+          <code>struct Token</code></a>,
+         which is a tagged union identified by a member in <a href="https://github.com/dlang/dmd/blob/765ef06db782209d0c816d7d0eea7b2c92da3fd3/compiler/src/dmd/tokens.d#L26">
+         <code>enum TOK : ubyte</code></a>.
          Every D keyword has their own token type.
          Unfortunately, the compiler is in an awkward position where it needs to refer to its own reserved
          keywords a lot, so the enum names always have to be (slightly) different than the source code names.
@@ -201,19 +205,19 @@ string getString()
         <li>Number and string literals store their integer/string payload.</li>
         <li>There are different types of number literals: <code>int32</code>, <code>int64</code>,
             <code>uns32</code> etc.</li>
-        <li>The minus for negative numbers is a separate token: -3 is not parsed as <code>int32(-3)</code>,
-            but as <code>min int32(3)</code></li>
-        <li>All string literals use the same TOK discriminator <code>string_</code></li>
+        <li>The minus for negative numbers is a separate token: -3 is not parsed as <code>int32literal(-3)</code>,
+            but as <code>min int32literal(3)</code></li>
+        <li>Different kinds of string literal all create the same <code>string_</code> token</li>
         <li>Builtin attributes with an @ are 2 tokens. So while nobody does it, you are allowed to write
             arbitrary white space and comments inbetween, like <code>@ /*hello*/ nogc</code>.</li>
-        <li>Similarly, <code>extern(C++)</code> consists of separate <code>C</code> and <code>++</code>
+        <li>Similarly, <code>extern(C++)</code> consists of separate <code>identifier(C)</code> and <code>plusPlus</code>
             tokens.</li>
       </ul>
 
       <p>Tokenization is simple and stable.
          Personally, I rarely look at it.
          Most of the interesting stuff happens in the semantic analysis phase.
-         Before we get there, we first arrive at another step: parsing</p>
+         Before we arrive there however, we first visit the next part: parsing</p>
     </div>
 
     <!-- ---------------- Parsing ---------------- -->
@@ -227,7 +231,9 @@ string getString()
 
       <p>If you ever wonder whether something is a parse error or a semantic error, try compiling the code
          inside a <code>version (none) {}</code> block.
-         Alternatively, put it in a template that you don't instantiate.</p>
+         Alternatively, put it in a template that you don't instantiate.
+         That way, the code doesn't get analyzed, but it is still required to parse.
+      </p>
 
       <h4>Ambiguity</h4>
 
@@ -238,7 +244,7 @@ string getString()
          the Lexer's token stream into Abstract Syntax Tree (AST) nodes, without any extra parameters or
          global variables to decide how to do that.</p>
 
-      <p>Contrast this to C, which famously requires keeping a symbol table while parsing.
+      <p>Contrast this to C, which infamously requires keeping a symbol table while parsing.
          Consider how the tokenizer ignores whitespace, so <code>size_t* i;</code> and <code>x * y;</code>
          both give the parser <code>identifier mult identifier semicolon</code> as input;
          It has to decide whether to create a declaration or expression based on what <code>identifier</code>
