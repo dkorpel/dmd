@@ -164,9 +164,21 @@ void dmdwasm_run(const(char)* src, size_t len)
 
     initFrontend();
 
-    // Inject a minimal `object` module so snippets typecheck without disk I/O.
-    enum objSrc = import("object_min.d");
-    global.fileManager.add(FileName("object.d"), cast(ubyte[]) (objSrc ~ '\0').dup);
+    // Register the full druntime source tree (baked into the wasm) so snippets
+    // can `import core.stdc.stdio;` etc., and so the real `object` module (with
+    // a class/TypeInfo layout matching the compiler) backs `class`/AA snippets.
+    import druntime_embed : registerDruntime;
+    registerDruntime();
+
+    // Make fatal() recoverable instead of calling exit(): a freestanding wasm
+    // exit kills the instance (the page must reload). Every fatal() is preceded
+    // by an .error() that already bumped global.errors, and the continuation
+    // paths are the same ones native dmd takes when gagged (e.g. a missing
+    // import: read() returns false -> load() returns null). Returning true
+    // turns the whole proc_exit crash class (missing/typo'd imports, etc.)
+    // into ordinary errors the web app can display.
+    import dmd.errors : fatalErrorHandler;
+    fatalErrorHandler = () => true;
 
     enum fileName = "input.d";
     auto fb = (cast(ubyte*) src)[0 .. len] ~ cast(ubyte) '\0';
