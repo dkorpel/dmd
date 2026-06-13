@@ -127,6 +127,26 @@ private void initFrontend()
     target.isX86_64 = true;
     target.isX86 = false;
     target._init(global.params);
+
+    // target._init() copies the *host* `real_t` properties into RealProperties.
+    // On x86_64 hosts that's the 80-bit x87 extended type, matching the target.
+    // But this frontend runs on wasm, whose `real` is 128-bit (mant_dig 113), so
+    // `real.mant_dig` would report 113 and float Phobos (std.math) would fail its
+    // `mant_dig == 64` static asserts. We compile *for* x86_64, so override the
+    // properties with the real x87 80-bit values.
+    with (target.RealProperties)
+    {
+        mant_dig   = 64;
+        dig        = 18;
+        max_exp    = 16384;
+        min_exp    = -16381;
+        max_10_exp = 4932;
+        min_10_exp = -4931;
+        max        = 0x1.fffffffffffffffep+16383L;
+        min_normal = 0x1p-16382L;
+        epsilon    = 0x1p-63L;
+    }
+
     Type_init();
     Id.initialize();
     Module._init();
