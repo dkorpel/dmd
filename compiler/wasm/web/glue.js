@@ -67,6 +67,7 @@ const wasi = {
 };
 
 let exports = null;
+let wasmModule = null;     // compiled WebAssembly.Module, instantiated fresh per compile
 let lastModified = null;   // dmd.wasm's Last-Modified header, as a Date (or null)
 
 // When dmd.wasm was last built/deployed, per its Last-Modified header.
@@ -76,19 +77,36 @@ export async function loadDmd(url = "dmd.wasm") {
     const resp = await fetch(url);
     const lm = resp.headers.get("last-modified");
     if (lm) { const d = new Date(lm); if (!isNaN(d)) lastModified = d; }
-    const { instance } = await WebAssembly.instantiateStreaming(resp, {
+    // Compile once; instantiate per compile (see newInstance). Holding only the
+    // Module — not an Instance — means no linear memory is retained between compiles.
+    wasmModule = await WebAssembly.compileStreaming(resp);
+}
+
+// Spin up a fresh wasm instance with its own zero-initialized linear memory.
+//
+// The DMD frontend is a one-shot compiler: its global tables (identifier/type
+// interning, the module list, ...) aren't designed to be re-initialized in
+// place, and its allocator is a bump pointer that never frees. Reusing a single
+// instance across compiles therefore (a) leaks ~77 MB per run — re-parsed
+// druntime/Phobos that is never reclaimed — so a few dozen runs exhaust the
+// wasm32 address space, and (b) corrupts global state (e.g. `import std.stdio`
+// compiles on the first run but traps on the second). A fresh instance per
+// compile sidesteps both: clean state and clean memory every time, and the
+// previous instance's memory is reclaimed by the JS GC once it's unreferenced.
+function newInstance() {
+    const instance = new WebAssembly.Instance(wasmModule, {
         wasi_snapshot_preview1: wasi,
         env: {},
     });
     exports = instance.exports;
     memory = exports.memory;
     if (exports.__wasm_call_ctors) exports.__wasm_call_ctors();
-    return instance;
 }
 
 // Compile `source`, returning { ast, asm, errors, diagnostics }.
 // `asm` is the -vasm x86 disassembly (the backend prints it to stdout).
 export function compile(source) {
+    newInstance();   // fresh memory + global state: no leak, no cross-run corruption
     stdoutText = "";
     stderrText = "";
     const bytes = te.encode(source);
@@ -96,7 +114,19 @@ export function compile(source) {
     new Uint8Array(memory.buffer, ptr, bytes.length).set(bytes);
     new Uint8Array(memory.buffer, ptr + bytes.length, 1)[0] = 0;
 
-    exports.dmdwasm_run(ptr, bytes.length);
+    // A user snippet can still trap the instance (e.g. the `real.mant_dig`
+    // static assert in float-heavy Phobos hits `unreachable`). Catch it so the
+    // page survives — the next compile gets a brand-new instance regardless.
+    try {
+        exports.dmdwasm_run(ptr, bytes.length);
+    } catch (e) {
+        return {
+            lex: "", parse: "", sema: "", ast: "", ir: "", irOpt: "",
+            asm: stdoutText,
+            errors: exports.dmdwasm_errors() || 1,
+            diagnostics: stderrText + "\ndmd.wasm trapped: " + e.message,
+        };
+    }
 
     const astPtr = exports.dmdwasm_ast_ptr();
     const astLen = exports.dmdwasm_ast_len();
