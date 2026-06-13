@@ -640,7 +640,6 @@ if (exSel) {
     });
     exSel.addEventListener("change", () => {
         const ex = EXAMPLES[+exSel.value];
-        exSel.selectedIndex = 0;          // reset to the placeholder
         if (!ex) return;
         editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: ex.code } });
         editor.focus();
