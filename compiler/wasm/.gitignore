@@ -1,6 +1,8 @@
 # build artifacts (regenerate with build.sh)
 *.o
 /dmd.wasm
+# generated druntime source table (baked into the wasm by build.sh)
+/druntime_embed.d
 # copied into web/ by build.sh; CI rebuilds it on deploy, so don't track it
 /web/dmd.wasm
 

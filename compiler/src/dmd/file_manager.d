@@ -258,6 +258,27 @@ nothrow:
             return null;
         }
 
+        version (WASI)
+        {
+            // The wasm build has no real filesystem: the druntime/phobos sources
+            // are pre-registered in this FileManager via `add()`. Resolve them
+            // straight from the cache, preferring a `pkg/package.d` package file
+            // so package imports (`std.range`, `core.sync`) keep their package
+            // semantics instead of loading as a plain module. Inert on native,
+            // where imports aren't cached before resolution.
+            import dmd.root.rmem : xarraydup;
+            foreach (ext; extensions)
+                if (files.lookup(ext))
+                    return ext.xarraydup;
+            const sansext = FileName.sansExt(filename);
+            const pkgd = FileName.combine(sansext, package_d);
+            if (files.lookup(pkgd))
+                return pkgd;
+            const pkgdi = FileName.combine(sansext, package_di);
+            if (files.lookup(pkgdi))
+                return pkgdi;
+        }
+
         // First see if module is found in any search paths.
         if (!FileName.absolute(filename))
         {

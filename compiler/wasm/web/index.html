@@ -172,7 +172,7 @@
     <div class="group">
       <label>Examples</label>
       <select id="examples" class="chip" title="Load a ready-made snippet">
-        <option value="" selected>Load an example…</option>
+        <option value="" selected disabled hidden>Load an example…</option>
       </select>
     </div>
   </div>
@@ -236,7 +236,7 @@ import { EditorView, keymap, lineNumbers, highlightActiveLineGutter, highlightSp
          highlightActiveLine, Decoration } from "@codemirror/view";
 import { EditorState, StateField, StateEffect } from "@codemirror/state";
 import { StreamLanguage, StringStream, HighlightStyle, syntaxHighlighting, defaultHighlightStyle,
-         foldGutter, foldKeymap, indentOnInput, bracketMatching } from "@codemirror/language";
+         foldGutter, foldKeymap, indentOnInput, indentUnit, bracketMatching } from "@codemirror/language";
 import { history, historyKeymap, defaultKeymap, indentWithTab } from "@codemirror/commands";
 import { searchKeymap, highlightSelectionMatches } from "@codemirror/search";
 import { autocompletion, completionKeymap, closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
@@ -249,6 +249,7 @@ const basicSetup = [
     lineNumbers(), highlightActiveLineGutter(), highlightSpecialChars(),
     history(), foldGutter(), drawSelection(), dropCursor(),
     EditorState.allowMultipleSelections.of(true), indentOnInput(),
+    EditorState.tabSize.of(4), indentUnit.of("\t"),   // indent with real tabs, 4 columns wide
     syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
     bracketMatching(), closeBrackets(), autocompletion(),
     rectangularSelection(), crosshairCursor(),
