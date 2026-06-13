@@ -33,7 +33,12 @@
 </script>
 <style>
   body { font: 14px/1.4 system-ui, sans-serif; margin: 0; }
-  header { padding: 8px 16px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  /* Bottom-align the tab row to the header's lower edge; keep everything else
+     vertically centered. Drop the header's bottom border/shadow so the tabs read
+     as connected to the pane row directly beneath them. */
+  header { padding: 8px 16px 0; display: flex; align-items: flex-end; gap: 16px; flex-wrap: wrap;
+           border-bottom: 0; box-shadow: inset 0 1px 0 rgba(255,255,255,.18); }
+  header > :not(#paneToggles) { align-self: center; margin-bottom: 8px; }
   header h1 { font-size: 16px; margin: 0; font-weight: 600; white-space: nowrap; }
   #status { color: var(--aero-text-dim); font-size: 12px; }
   #updated { color: var(--aero-text-dim); font-size: 12px; margin-left: auto; white-space: nowrap; }
@@ -53,14 +58,28 @@
   .chip:hover { border-color: var(--aero-edge-hi);
           box-shadow: var(--aero-gloss), var(--aero-glow); }
   select.chip { cursor: pointer; }
-  /* Pane toggles rendered as flush tabs rather than separate pill chips. */
-  #paneToggles { gap: 0; align-self: stretch; }
-  .tab { font: 12px system-ui; padding: 6px 12px; color: var(--aero-text-dim);
-         background: transparent; border: 0; border-bottom: 2px solid transparent;
-         cursor: pointer; user-select: none; white-space: nowrap; }
-  .tab:hover { color: var(--aero-text); background: var(--aero-glass-soft); }
-  .tab[aria-pressed="true"] { color: var(--aero-text);
-         border-bottom-color: var(--code-kw); }
+  /* Pane toggles rendered as skeuomorphic folder tabs: trapezoidal (slanted
+     sides via clip-path), a convex top-lit gradient, and a drop-shadow that
+     follows the slant. Tabs overlap slightly so their slants interlock. */
+  #paneToggles { gap: 0; align-self: flex-end; }
+  .tab { position: relative; font: 12px system-ui; padding: 6px 16px 7px; margin: 0 -3px;
+         color: var(--aero-text-2); white-space: nowrap; cursor: pointer; user-select: none;
+         border: 0;
+         background:
+           linear-gradient(180deg, rgba(255,255,255,.55) 0%, rgba(255,255,255,0) 48%),
+           var(--aero-glass);
+         /* gentle slant with chamfered (softly rounded) top corners */
+         clip-path: polygon(9px 0, calc(100% - 9px) 0, calc(100% - 6px) 4px,
+                            100% 100%, 0 100%, 6px 4px);
+         filter: drop-shadow(0 1px 1px rgba(0,0,0,.22)); }
+  .tab:first-child { margin-left: 0; }
+  .tab:hover { color: var(--aero-text); z-index: 2; }
+  .tab[aria-pressed="true"] { color: var(--aero-text-hi); z-index: 3;
+         background:
+           linear-gradient(180deg, rgba(255,255,255,.8) 0%, rgba(255,255,255,0) 48%),
+           var(--aero-glass-soft);
+         box-shadow: inset 0 2px 0 var(--code-kw);
+         filter: drop-shadow(0 2px 2px rgba(0,0,0,.3)); }
 
   /* Pane layout container: columns / rows / grid. */
   .cols { display: flex; height: calc(100vh - 50px); }
@@ -124,11 +143,6 @@
   .ansi-fg-2 { color: var(--diag-green); }   .ansi-fg-3 { color: var(--diag-yellow); }
   .ansi-fg-4 { color: var(--diag-blue); }    .ansi-fg-5 { color: var(--diag-magenta); }
   .ansi-fg-6 { color: var(--diag-cyan); }    .ansi-fg-7 { color: var(--diag-fg); }
-  /* Per-stage group label in the pane toolbar. */
-  .toolbar .stage-label { font-size: 10px; color: var(--aero-text-dim); text-transform: uppercase;
-                          letter-spacing: .04em; margin: 0 2px 0 6px; }
-  .toolbar .stage-label.clickable { cursor: pointer; }
-  .toolbar .stage-label.clickable:hover { text-decoration: underline; }
   a.tour { font: 12px system-ui; color: var(--aero-text); text-decoration: none; white-space: nowrap;
            padding: 4px 10px; border: 1px solid var(--aero-edge); border-radius: 6px;
            background: var(--aero-glass-soft);
@@ -154,17 +168,20 @@
   <h1>DMD explorer</h1>
   <a class="tour" href="tour.html"
      title="A guided tour of DMD's compiler passes and internal data structures, with links to the source">📖 Tour</a>
+  <a class="tour" href="https://github.com/dkorpel/dmd-explorer/issues" target="_blank" rel="noopener"
+     title="Report a bug or suggest an improvement on GitHub">⚑ Feedback</a>
   <div class="toolbar">
-    <div class="group" id="paneToggles">
-      <!-- per-stage labels + toggle chips injected here -->
-    </div>
-    <div class="sep"></div>
     <div class="group">
       <label>Examples</label>
       <select id="examples" class="chip" title="Load a ready-made snippet">
         <option value="" selected disabled hidden>Load an example…</option>
       </select>
     </div>
+  </div>
+  <!-- Pane toggles: rendered as tabs that drop to the header's bottom edge so
+       they sit flush against the pane row below (no maroon strip between). -->
+  <div class="group" id="paneToggles">
+    <!-- toggle tabs injected here -->
   </div>
   <span id="status">loading dmd.wasm…</span>
   <span id="updated" title="When the dmd.wasm build on this page was last deployed"></span>
@@ -355,27 +372,10 @@ const makeChip = (p) => {
     });
     return chip;
 };
-for (const [stage, label] of STAGES) {
-    const panes = paneEls().filter((p) => p.dataset.stage === stage);
-    if (!panes.length) continue;
-    const lab = document.createElement("span");
-    lab.className = "stage-label " + stage;
-    lab.textContent = label;
-    toggles.appendChild(lab);
-    // Source is always visible — no toggle chips, label is inert.
-    if (stage === "source") continue;
-    // Clicking the group label toggles every pane in that stage at once:
-    // if all are visible, hide the group; otherwise show the whole group.
-    lab.classList.add("clickable");
-    lab.title = "Toggle all " + label + " panes";
-    lab.addEventListener("click", () => {
-        const ps = paneEls().filter((p) => p.dataset.stage === stage);
-        const anyHidden = ps.some((p) => p.hidden);
-        for (const p of ps) setHidden(p.dataset.pane, !anyHidden);
-        saveState();
-        applyAutoLayout();
-    });
-    for (const p of panes) toggles.appendChild(makeChip(p));
+for (const [stage] of STAGES) {
+    if (stage === "source") continue;   // the editor is always visible — no toggle
+    for (const p of paneEls().filter((p) => p.dataset.stage === stage))
+        toggles.appendChild(makeChip(p));
 }
 
 // "Solo" a pane: show only this output (plus the always-on D source input) by
