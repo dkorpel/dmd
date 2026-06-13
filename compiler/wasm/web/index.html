@@ -7,6 +7,10 @@
 <link rel="stylesheet" href="aero.css" />
 <!-- Set <html data-theme> before paint (OS default + saved choice); wires #themeToggle. -->
 <script src="theme.js"></script>
+<!-- In embed mode, hide the page before first paint so the reader never sees the
+     full chrome + all panes flash before applyEmbed() trims to the requested slice. -->
+<script>if (new URLSearchParams(location.search).has("embed")) document.documentElement.classList.add("embed-boot");</script>
+<style>html.embed-boot body { visibility: hidden; }</style>
 <title>DMD explorer</title>
 <!--
   Import map pinning CodeMirror 6 as ES modules from a CDN
@@ -147,7 +151,8 @@
   .embed-open { position: fixed; top: 6px; right: 8px; z-index: 5;
       font: 11px system-ui; color: var(--code-kw); text-decoration: none;
       background: var(--aero-glass); border: 1px solid var(--aero-edge);
-      border-radius: 4px; padding: 2px 8px; box-shadow: var(--aero-gloss); }
+      border-radius: 4px; padding: 2px 8px; box-shadow: var(--aero-gloss);
+      cursor: pointer; user-select: none; -webkit-user-select: none; }
   .embed-open:hover { background: #b03931; color: #fff; border-color: #98312a; }
   /* Embedded demos are fixed two-pane slices — drop the drag-to-reorder chrome. */
   body.embed .pane h2 { cursor: default; }
@@ -225,6 +230,7 @@ int add(int a, int b)
 
 <script type="module">
 import { loadDmd, compile, dmdLastModified } from "./glue.js";
+import { EXAMPLES } from "./examples.js";   // shared with the tour's inline demos
 import { EditorView, keymap, lineNumbers, highlightActiveLineGutter, highlightSpecialChars,
          drawSelection, dropCursor, rectangularSelection, crosshairCursor,
          highlightActiveLine, Decoration } from "@codemirror/view";
@@ -455,6 +461,7 @@ cols.addEventListener("drop", (e) => {
 });
 
 if (EMBED) applyEmbed(); else loadState();
+document.documentElement.classList.remove("embed-boot");   // panes configured — reveal
 
 // ---- CodeMirror source editor (replaces the plain textarea) ---------------
 
@@ -621,60 +628,21 @@ const editor = new EditorView({
 const getSrc = () => editor.state.doc.toString();
 
 // ---- Example snippets dropdown --------------------------------------------
-const EXAMPLES = [
-  ["Token kinds (lexer)",
-`enum hex = 0xDEAD_BEEF;
-double pi = 3.14e2;
-string s = "a\\tb";
-`],
-  ["foreach + append lowering",
-`int[] squares(int n)
-{
-    int[] r;
-    foreach (i; 0 .. n)
-        r ~= i * i;
-    return r;
-}
-`],
-  ["Array slices",
-`int tail(int[] a)
-{
-    int s;
-    foreach (x; a[1 .. $])
-        s += x;
-    return s;
-}
-`],
-  ["try / catch / finally",
-`void risky(int x)
-{
-    try
-    {
-        if (x < 0)
-            throw new Exception("negative");
-    }
-    catch (Exception e)
-    {
-    }
-    finally
-    {
-    }
-}
-`]
-];
+// Populated from the shared catalog (examples.js) that the tour's inline demos
+// also draw from, so the two never drift apart.
 const exSel = $("examples");
 if (exSel) {
-    EXAMPLES.forEach(([name], i) => {
+    EXAMPLES.forEach((ex, i) => {
         const o = document.createElement("option");
         o.value = String(i);
-        o.textContent = name;
+        o.textContent = ex.label;
         exSel.appendChild(o);
     });
     exSel.addEventListener("change", () => {
         const ex = EXAMPLES[+exSel.value];
         exSel.selectedIndex = 0;          // reset to the placeholder
         if (!ex) return;
-        editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: ex[1] } });
+        editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: ex.code } });
         editor.focus();
     });
 }
