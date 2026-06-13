@@ -53,6 +53,14 @@
   .chip:hover { border-color: var(--aero-edge-hi);
           box-shadow: var(--aero-gloss), var(--aero-glow); }
   select.chip { cursor: pointer; }
+  /* Pane toggles rendered as flush tabs rather than separate pill chips. */
+  #paneToggles { gap: 0; align-self: stretch; }
+  .tab { font: 12px system-ui; padding: 6px 12px; color: var(--aero-text-dim);
+         background: transparent; border: 0; border-bottom: 2px solid transparent;
+         cursor: pointer; user-select: none; white-space: nowrap; }
+  .tab:hover { color: var(--aero-text); background: var(--aero-glass-soft); }
+  .tab[aria-pressed="true"] { color: var(--aero-text);
+         border-bottom-color: var(--code-kw); }
 
   /* Pane layout container: columns / rows / grid. */
   .cols { display: flex; height: calc(100vh - 50px); }
@@ -65,18 +73,10 @@
   .cols.grid .pane { border: 1px solid var(--aero-line); }
   .pane[hidden] { display: none; }
   .pane h2 { font-size: 12px; text-transform: uppercase; color: var(--aero-text-2); margin: 0;
-             padding: 6px 12px 6px 9px; cursor: grab;
+             padding: 6px 12px;
              background: var(--aero-panel);
              box-shadow: var(--aero-gloss);
-             border-left: 3px solid transparent;
              display: flex; align-items: center; gap: 6px; }
-  /* Stage accent stripe (matches the toolbar group colors). */
-  .pane[data-stage="source"]   h2 { border-left-color: var(--src); }
-  .pane[data-stage="parse"]    h2 { border-left-color: var(--parse); }
-  .pane[data-stage="semantic"] h2 { border-left-color: var(--sema); }
-  .pane[data-stage="codegen"]  h2 { border-left-color: var(--codegen); }
-  .pane[data-stage="diag"]     h2 { border-left-color: var(--diag); }
-  .pane h2::before { content: "⠿"; color: var(--aero-muted); cursor: grab; }
   /* Per-pane close shortcut (hides the pane; the top-bar toggle still re-shows it). */
   /* Fill the full bar height and reach to the right edge (negative margins cancel
      the h2 padding) so the whole right end is the X hitbox — no drag strip around it. */
@@ -85,8 +85,6 @@
                 color: #888; cursor: pointer; font: 14px/1 system-ui; }
   .pane-close:hover { color: #b03931; background: rgba(176,57,49,.15); }
   body.embed .pane-close { display: none; }
-  .pane.dragging { opacity: 0.4; }
-  .pane.dragover h2 { box-shadow: inset 3px 0 0 #4040dc; }
   /* The D source pane is the editable input, not a read-only output — give it a
      distinct surface, header and "editable" badge so it reads as primary. */
   .pane[data-stage="source"] { box-shadow: inset 0 0 0 1px var(--aero-edge); }
@@ -129,11 +127,6 @@
   /* Per-stage group label in the pane toolbar. */
   .toolbar .stage-label { font-size: 10px; color: var(--aero-text-dim); text-transform: uppercase;
                           letter-spacing: .04em; margin: 0 2px 0 6px; }
-  .toolbar .stage-label.source   { color: #f2dedb; }
-  .toolbar .stage-label.parse    { color: #cdd9f5; }
-  .toolbar .stage-label.semantic { color: #c9ead6; }
-  .toolbar .stage-label.codegen  { color: #f0dcc0; }
-  .toolbar .stage-label.diag     { color: #f2cfcc; }
   .toolbar .stage-label.clickable { cursor: pointer; }
   .toolbar .stage-label.clickable:hover { text-decoration: underline; }
   a.tour { font: 12px system-ui; color: var(--aero-text); text-decoration: none; white-space: nowrap;
@@ -154,9 +147,6 @@
       border-radius: 4px; padding: 2px 8px; box-shadow: var(--aero-gloss);
       cursor: pointer; user-select: none; -webkit-user-select: none; }
   .embed-open:hover { background: #b03931; color: #fff; border-color: #98312a; }
-  /* Embedded demos are fixed two-pane slices — drop the drag-to-reorder chrome. */
-  body.embed .pane h2 { cursor: default; }
-  body.embed .pane h2::before { content: none; }
 </style>
 </head>
 <body>
@@ -181,8 +171,8 @@
   <button id="themeToggle" class="theme-toggle" type="button" title="Toggle light/dark theme">☾</button>
 </header>
 <div class="cols" id="cols">
-  <div class="pane" data-pane="src" data-stage="source" data-title="D source" draggable="false">
-    <h2 draggable="true">D source <span class="badge">✎ editable</span></h2>
+  <div class="pane" data-pane="src" data-stage="source" data-title="D source">
+    <h2>D source <span class="badge">✎ editable</span></h2>
     <div id="src"></div>
     <!-- Initial document for the CodeMirror editor (mounted into #src above)-->
     <textarea id="src-init" hidden>module test;
@@ -195,35 +185,35 @@ int add(int a, int b)
 </textarea>
   </div>
   <div class="pane" data-pane="lex" data-stage="parse" data-title="Tokens" data-tip="The token stream produced by the lexer">
-    <h2 draggable="true" title="Internal lexer output: one line per source line, listing that line's TOK enum member names.">Tokens (lexer)</h2>
+    <h2 title="Internal lexer output: one line per source line, listing that line's TOK enum member names.">Tokens (lexer)</h2>
     <pre id="lex"></pre>
   </div>
   <div class="pane" data-pane="parse" data-stage="parse" data-title="Parse tree" data-tip="The Abstract Syntax Tree produced by the parser">
-    <h2 draggable="true">Parse tree (printAST)</h2>
+    <h2>Parse tree (printAST)</h2>
     <pre id="parse"></pre>
   </div>
   <div class="pane" data-pane="sema" data-stage="semantic" data-title="Semantic tree" data-tip="The Abstract Syntax Tree after semantic analysis">
-    <h2 draggable="true" title="printAST after semantic analysis: like -vcg-ast, but labels nodes by their internal DMD class name (e.g. AddExp, CompoundStatement) instead of regenerated D syntax">Semantic tree (printAST, post-semantic)</h2>
+    <h2 title="printAST after semantic analysis: like -vcg-ast, but labels nodes by their internal DMD class name (e.g. AddExp, CompoundStatement) instead of regenerated D syntax">Semantic tree (printAST, post-semantic)</h2>
     <pre id="sema"></pre>
   </div>
   <div class="pane" data-pane="ast" data-stage="semantic" data-title="Lowered AST" data-tip="The Abstract Syntax Tree after lowering, regenerated as D source (-vcg-ast)">
-    <h2 draggable="true">Lowered AST (-vcg-ast)</h2>
+    <h2>Lowered AST (-vcg-ast)</h2>
     <pre id="ast"></pre>
   </div>
   <div class="pane" data-pane="ir" data-stage="codegen" data-title="IR (unoptimized)" data-tip="Backend Intermediate Representation before optimizations">
-    <h2 draggable="true" title="Backend intermediate representation: the block/elem graph of each function just after lowering, before the optimizer runs.">Backend IR — before -O (block/elem graph)</h2>
+    <h2 title="Backend intermediate representation: the block/elem graph of each function just after lowering, before the optimizer runs.">Backend IR — before -O (block/elem graph)</h2>
     <pre id="ir"></pre>
   </div>
   <div class="pane" data-pane="iropt" data-stage="codegen" data-title="IR (optimized)" data-tip="Backend Intermediate Representation after optimizations">
-    <h2 draggable="true" title="The same block/elem graph after the -O global optimizer has run, immediately before code generation. Diff against the pre-opt pane to see what the optimizer did.">Backend IR — after -O (block/elem graph)</h2>
+    <h2 title="The same block/elem graph after the -O global optimizer has run, immediately before code generation. Diff against the pre-opt pane to see what the optimizer did.">Backend IR — after -O (block/elem graph)</h2>
     <pre id="iropt"></pre>
   </div>
   <div class="pane" data-pane="asm" data-stage="codegen" data-title="Disassembly" data-tip="The generated x86-64 assembly">
-    <h2 draggable="true">x86-64 disassembly</h2>
+    <h2>x86-64 disassembly</h2>
     <pre id="asm"></pre>
   </div>
   <div class="pane" data-pane="diag" data-stage="diag" data-title="Diagnostics" data-tip="Compiler errors and other console output">
-    <h2 draggable="true">Diagnostics</h2>
+    <h2>Diagnostics</h2>
     <pre id="diag"></pre>
   </div>
 </div>
@@ -272,15 +262,14 @@ const params = new URLSearchParams(location.search);
 const EMBED = params.has("embed");
 if (EMBED) document.body.classList.add("embed");
 
-// ---- Pane show/hide + order + layout, persisted to localStorage ----------
+// ---- Pane show/hide + layout, persisted to localStorage ------------------
 
 function paneEls() { return [...cols.querySelectorAll(".pane")]; }
 
 function saveState() {
     if (EMBED) return;   // embed layout is fixed by URL params, never persisted
-    const order = paneEls().map((p) => p.dataset.pane);
     const hidden = paneEls().filter((p) => p.hidden).map((p) => p.dataset.pane);
-    localStorage.setItem(LS_KEY, JSON.stringify({ order, hidden }));
+    localStorage.setItem(LS_KEY, JSON.stringify({ hidden }));
 }
 
 // Pick the best layout for the current viewport + visible pane count: stack into
@@ -313,18 +302,14 @@ function setHidden(pane, hidden) {
     if (!el) return;
     if (el.dataset.stage === "source") hidden = false;   // D source pane is always visible
     el.hidden = hidden;
-    const chip = document.querySelector(`.chip[data-toggle="${pane}"]`);
+    const chip = document.querySelector(`[data-toggle="${pane}"]`);
     if (chip) chip.setAttribute("aria-pressed", String(!hidden));
 }
 
 function loadState() {
     let s = {};
     try { s = JSON.parse(localStorage.getItem(LS_KEY)) || {}; } catch {}
-    if (Array.isArray(s.order))            // reorder panes to match saved order
-        for (const pane of s.order) {
-            const el = cols.querySelector(`.pane[data-pane="${pane}"]`);
-            if (el) cols.appendChild(el);
-        }
+    // Panes always render in the default DOM order; only visibility is persisted.
     for (const p of (s.hidden || [])) setHidden(p, true);
     applyAutoLayout();
 }
@@ -339,7 +324,6 @@ function applyEmbed() {
         const el = cols.querySelector(`.pane[data-pane="${pane}"]`);
         if (el) cols.appendChild(el);
     }
-    for (const h of cols.querySelectorAll(".pane h2")) h.draggable = false;  // fixed slice, not reorderable
     applyLayout(params.get("layout") || "cols");
 }
 
@@ -355,7 +339,7 @@ const STAGES = [
 const toggles = $("paneToggles");
 const makeChip = (p) => {
     const chip = document.createElement("button");
-    chip.className = "chip";
+    chip.className = "tab";
     chip.dataset.toggle = p.dataset.pane;
     chip.textContent = p.dataset.title;
     chip.title = (p.dataset.tip ? p.dataset.tip + "\n\n" : "") +
@@ -426,39 +410,6 @@ let layoutTimer = null;
 window.addEventListener("resize", () => {
     clearTimeout(layoutTimer);
     layoutTimer = setTimeout(applyAutoLayout, 150);
-});
-
-// Drag-to-reorder via the pane header.
-let dragEl = null;
-cols.addEventListener("dragstart", (e) => {
-    if (e.target.closest(".pane-close")) return;   // close button, not a drag handle
-    const h2 = e.target.closest("h2");
-    if (!h2) return;
-    dragEl = h2.closest(".pane");
-    dragEl.classList.add("dragging");
-    e.dataTransfer.effectAllowed = "move";
-});
-cols.addEventListener("dragend", () => {
-    if (dragEl) dragEl.classList.remove("dragging");
-    for (const p of paneEls()) p.classList.remove("dragover");
-    dragEl = null;
-});
-cols.addEventListener("dragover", (e) => {
-    e.preventDefault();
-    const over = e.target.closest(".pane");
-    if (!over || over === dragEl) return;
-    for (const p of paneEls()) p.classList.toggle("dragover", p === over);
-});
-cols.addEventListener("drop", (e) => {
-    e.preventDefault();
-    const over = e.target.closest(".pane");
-    if (!over || over === dragEl || !dragEl) return;
-    const rect = over.getBoundingClientRect();
-    const vertical = cols.classList.contains("rows");
-    const before = vertical ? (e.clientY < rect.top + rect.height / 2)
-                            : (e.clientX < rect.left + rect.width / 2);
-    cols.insertBefore(dragEl, before ? over : over.nextSibling);
-    saveState();
 });
 
 if (EMBED) applyEmbed(); else loadState();
@@ -643,6 +594,14 @@ if (exSel) {
         const ex = EXAMPLES[+exSel.value];
         if (!ex) return;
         editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: ex.code } });
+        // Match the tour's pane configuration: show the example's declared panes
+        // (plus the always-on source input), hide the rest.
+        const want = new Set((ex.panes || "").split(",").map((s) => s.trim()).filter(Boolean));
+        if (want.size) {
+            for (const p of paneEls()) setHidden(p.dataset.pane, !want.has(p.dataset.pane));
+            saveState();
+            applyAutoLayout();
+        }
         editor.focus();
     });
 }
