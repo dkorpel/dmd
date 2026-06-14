@@ -14,18 +14,13 @@ PHOBOS_ROOT="${PHOBOS_ROOT:-/home/dennis/repos/phobos}"
 # --- Generate the embedded standard-library source table -----------------------
 # Bake every regular druntime + phobos .d source (including the real object.d)
 # into the wasm data section and register it in the frontend's FileManager at
-# runtime, so user snippets can `import core.stdc.stdio;` / `import std.stdio;`
-# etc. without a real filesystem, and so `class`/AA snippets get an object/TypeInfo
-# layout matching the compiler. The data lives in static immutable storage (no
-# per-run allocation). Package imports (`import core.sync;`, `import std.range;`)
-# resolve via a WASI fast-path in file_manager.d that prefers `pkg/package.d`.
-# Each root must be on a -J path below so the `import("...")` literals resolve.
+# runtime
 EMBED="$DMD_ROOT/compiler/wasm/druntime_embed.d"
 emit_root() {
   # $1 = absolute root dir; remaining args = subdirs (relative to root) to scan.
   _root="$1"; shift
   ( cd "$_root" && find "$@" -name '*.d' | sed 's|^\./||' | sort | while IFS= read -r f; do
-      printf '    EF("%s", cast(immutable(ubyte)[])(import("%s") ~ "\\0")),\n' "$f" "$f"
+      printf '    EF("%s", import("%s")),\n' "$f" "$f"
     done )
 }
 {
