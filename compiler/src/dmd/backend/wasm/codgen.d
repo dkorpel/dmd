@@ -2225,13 +2225,15 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
             paramSpills ~= ParamSpill(i0, s, 0, pty);
         }
     }
-    // buildFuncType may force-extend a function's WASM signature beyond what
-    // the D source declared (e.g. `_Dmain` is normalised to (i32, i32) -> i32
-    // regardless of the user's source).  Pad cg.locals with placeholder params
-    // so the implicit WASM locals 0..numParams-1 don't get clobbered by
-    // subsequent allocTemp() calls.
+    // The WASM signature may have more params than the D source declared
+    // (e.g. `_Dmain` is normalised to (i32, i32) -> i32 regardless of the
+    // user's source).  Pad cg.locals with placeholder params so the implicit
+    // WASM locals 0..numParams-1 don't get clobbered by subsequent allocTemp()
+    // calls.  Use the signature cached at func_start: recomputing buildFuncType
+    // here would double-count the `this` pointer, which the glue layer injects
+    // into Tparamtypes after func_start (see wmod_funcTypeForSym).
     {
-        WasmFuncType ft = buildFuncType(sfunc.Stype, sfunc);
+        WasmFuncType ft = wmod_funcTypeForSym(sfunc);
         while (cg.locals.length < ft.params.length)
         {
             ubyte v = ft.params[cg.locals.length];
