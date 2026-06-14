@@ -1390,7 +1390,7 @@ void WasmObj_term2(const(char)[] objfilename, ref WasmModule wmod, ref OutBuffer
 
         // Phase 2: generate code now that import indices are stable.
         // Restore each function's globsym before calling wasm_codgen.
-        import dmd.backend.var : globsym;
+        import dmd.backend.symbol : globsym;
 
         foreach (ref WasmFuncBody fb; wasmFuncBodies)
         {
@@ -2011,7 +2011,7 @@ void WasmObj_func_term(Symbol* sfunc)
 {
     // Save globsym (function locals/params) for use in deferred codegen.
     // globsym is cleared by the caller after func_term returns.
-    import dmd.backend.var : globsym;
+    import dmd.backend.symbol : globsym;
 
     foreach (ref WasmFuncBody fb; wasmFuncBodies)
     {
