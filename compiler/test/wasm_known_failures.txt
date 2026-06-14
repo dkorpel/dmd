@@ -80,8 +80,6 @@ runnable/test22209.d
 runnable/test17899.d
 runnable/interpret.d
 runnable/xtest55.d
-runnable/test20401.d
-runnable/nrvo.d
 runnable/link2644.d
 runnable/test15373.d
 runnable/ice10857.d
@@ -96,16 +94,13 @@ runnable/bench1.d
 runnable/bug7068.d
 runnable/test10567.sh
 runnable/test7618.d
-runnable/link12037.d
 runnable/fix20433.c
-runnable/test24884.d
 runnable/test19825.d
 runnable/minimal.d
 runnable/testdefault_after_variadic.d
 runnable/test23343.c
 runnable/testbtst.d
 runnable/test22531.c
-runnable/test16098.d
 runnable/testgc2.d
 runnable/gdb14330.d
 runnable/inline4.d
@@ -120,7 +115,6 @@ runnable/test20831.c
 runnable/test19086.d
 runnable/test17868b.d
 runnable/dbitfieldsdm.d
-runnable/test809.d
 runnable/testreturn.d
 runnable/exe2.c
 runnable/constfold.d
@@ -142,7 +136,6 @@ runnable/test40.d
 runnable/wc.d
 runnable/linktypeinfo.d
 runnable/pi.d
-runnable/test7595.d
 runnable/test19675.sh
 runnable/gdb18504.d
 runnable/printargs.d
@@ -209,7 +202,6 @@ runnable/bitfieldsms.c
 runnable/gdb14225.d
 runnable/bitfieldsposix32.c
 runnable/testcontracts.d
-runnable/test19639.d
 runnable/test20365.d
 runnable/test22538.c
 runnable/test23889.c
@@ -296,7 +288,6 @@ runnable/gdb_slice_debuginfo_32.d
 runnable/interface3.d
 runnable/tls.d
 runnable/integrate.d
-runnable/template2962.d
 runnable/test19782.d
 runnable/testaliascast.d
 runnable/ice15138.d
@@ -438,7 +429,6 @@ runnable/nan.d
 runnable/test5943.d
 runnable/link15017.d
 runnable/bcraii.d
-runnable/testassert_release.d
 runnable/test19251.d
 runnable/test22070_2.c
 runnable/testabi.d
@@ -478,13 +468,11 @@ runnable/staticaa.d
 runnable/test23337.d
 runnable/test19393.d
 runnable/test22585.c
-runnable/test19734.d
 runnable/foreach3.d
 runnable/ufcs.d
 runnable/gdb_baseclass_fields.d
 runnable/test16980.d
 runnable/test23710.d
-runnable/test19774.d
 runnable/link14834.sh
 runnable/mixin1.d
 runnable/link20802.sh
@@ -499,5 +487,3 @@ runnable/template3.d
 runnable/gdb10311.d
 runnable/test16047.d
 runnable/testdt.d
-compilable/test23679.d
-runnable/test17338.d

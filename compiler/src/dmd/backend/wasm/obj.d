@@ -1674,6 +1674,22 @@ uint wmod_func_param_count(uint fidx)
     return cast(uint) wmod.funcTypes[typeIdx].params.length;
 }
 
+// Returns the WASM signature computed for `sfunc` at func_start time, when
+// the backend type is still in its "raw" form.  After func_start the glue
+// layer injects the `this` pointer into `Tparamtypes`, which would make a
+// fresh `buildFuncType` double-count it (once via the Fmember flag, once via
+// the new Tparamtypes entry).  Deferred codegen must use this cached type so
+// its WASM-local numbering matches the emitted function signature.
+WasmFuncType wmod_funcTypeForSym(Symbol* sfunc)
+{
+    if (sfunc.Sseg >= 0 && sfunc.Sseg < wmod.funcs.length && wmod.funcs[sfunc.Sseg].sym is sfunc)
+        return wmod.funcs[sfunc.Sseg].pendingType;
+    foreach (ref WasmFunc f; wmod.funcs)
+        if (f.sym is sfunc)
+            return f.pendingType;
+    return buildFuncType(sfunc.Stype, sfunc);
+}
+
 int WasmObj_external(Symbol* s)
 {
     if (!s || !s.Stype)
