@@ -27,7 +27,7 @@ import dmd.backend.el;
 import dmd.backend.oper;
 import dmd.backend.ty;
 import dmd.backend.type;
-import dmd.backend.var : globsym;
+import dmd.backend.symbol : globsym;
 import dmd.backend.wasm.enums;
 import dmd.backend.wasm.util : writeuLEB128_5;
 import dmd.backend.wasm.obj;
