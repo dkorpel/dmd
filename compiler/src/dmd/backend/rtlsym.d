@@ -249,7 +249,102 @@ Symbol* getRtlsym(RTLSYM i) @trusted
         default:
             assert(0);
     }
+
+    // The shared placeholder `t` carries no parameter types and a void return,
+    // which is fine for backends that derive the call ABI from the IR argument
+    // list.  The WASM backend, however, encodes a fixed function signature in
+    // the type section and validates operand-stack types against it, so each
+    // runtime symbol needs its real prototype.  Supply it at the source rather
+    // than reverse-engineering it from call sites in the WASM object writer.
+    if (config.objfmt == OBJ_WASM)
+        if (type* wt = wasmRtlsymType(i))
+            (*ps).Stype = wt;
+
     return* ps;
+}
+
+/******************************************
+ * Build the real backend signature for a runtime library symbol when targeting
+ * WASM.  Returns null for symbols that are x86/Windows-only (or otherwise never
+ * emitted on WASM), in which case the shared placeholder type is kept.
+ *
+ * `size_t` is 32-bit on wasm32, so it maps to TYuint.  D slices (`string`,
+ * `void[]`) are modelled as TYdarray so the object writer splits them into the
+ * (length, pointer) pair, and `ref T[]` / class references are plain pointers.
+ */
+private type* wasmRtlsymType(RTLSYM i) @trusted
+{
+    type* tvoid = tstypes[TYvoid];
+    type* tint  = tstypes[TYint];
+    type* tuint = tstypes[TYuint];
+    type* tsize = tstypes[TYuint];   // size_t on wasm32
+    type* tdchar = tstypes[TYdchar];
+
+    static type* ptrTo(type* tn) => type_pointer(tn);
+    type* voidPtr()  => ptrTo(tvoid);
+    type* charPtr()  => ptrTo(tstypes[TYchar]);
+    type* str()      => type_dyn_array(tstypes[TYchar]); // immutable(char)[]
+    type* voidArr()  => type_dyn_array(tvoid);           // void[]
+
+    type* fn(type*[] params, type* ret) => type_function(TYnfunc, params, false, ret);
+
+    switch (i)
+    {
+        case RTLSYM.THROWC:
+        case RTLSYM.THROWDWARF:
+        case RTLSYM.DINVARIANT:
+        case RTLSYM.CALLFINALIZER:
+        case RTLSYM.CALLINTERFACEFINALIZER:
+            return fn([voidPtr()], tvoid);
+
+        case RTLSYM.DASSERT:
+        case RTLSYM.DUNITTEST:
+            return fn([str(), tuint], tvoid);
+        case RTLSYM.DASSERTP:
+        case RTLSYM.DUNITTESTP:
+        case RTLSYM.DARRAYP:
+        case RTLSYM.DNULLP:
+            return fn([charPtr(), tuint], tvoid);
+        case RTLSYM.DASSERT_MSG:
+        case RTLSYM.DUNITTEST_MSG:
+            return fn([str(), str(), tuint], tvoid);
+        case RTLSYM.DARRAY_INDEXP:
+            return fn([charPtr(), tuint, tsize, tsize], tvoid);
+        case RTLSYM.DARRAY_SLICEP:
+            return fn([charPtr(), tuint, tsize, tsize, tsize], tvoid);
+
+        case RTLSYM.MEMCMP:
+            return fn([voidPtr(), voidPtr(), tsize], tint);
+        case RTLSYM.MEMCPY:
+            return fn([voidPtr(), voidPtr(), tsize], voidPtr());
+        case RTLSYM.MEMSET8:
+            return fn([voidPtr(), tint, tsize], voidPtr());
+        case RTLSYM.ALLOCMEMORY:
+        case RTLSYM.TRACEALLOCMEMORY:
+            return fn([tsize], voidPtr());
+
+        case RTLSYM.ARRAYAPPENDCD:
+        case RTLSYM.ARRAYAPPENDWD:
+            return fn([voidPtr(), tdchar], voidArr()); // ref byte[] x, dchar c
+        case RTLSYM.ARRAYCOPY:
+            return fn([tsize, voidArr(), voidArr()], voidArr());
+
+        case RTLSYM.C_ASSERT:   // _assert(msg, file, line)
+        case RTLSYM.C__ASSERT:  // __assert(msg, file, line)
+            return fn([charPtr(), charPtr(), tint], tvoid);
+        case RTLSYM.C__ASSERT_FAIL: // __assert_fail(exp, file, line, func)
+            return fn([charPtr(), charPtr(), tuint, charPtr()], tvoid);
+        case RTLSYM.C__ASSERT_RTN:  // __assert_rtn(func, file, line, msg)
+            return fn([charPtr(), charPtr(), tint, charPtr()], tvoid);
+
+        case RTLSYM.FMODF:
+            return fn([tstypes[TYfloat], tstypes[TYfloat]], tstypes[TYfloat]);
+        case RTLSYM.FMOD:
+            return fn([tstypes[TYdouble], tstypes[TYdouble]], tstypes[TYdouble]);
+
+        default:
+            return null;
+    }
 }
 
 

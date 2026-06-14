@@ -216,7 +216,6 @@ runnable/link11931.d
 runnable/foreach.d
 runnable/minimal2.d
 runnable/funclit.d
-runnable/test23014.i
 runnable/previewin.d
 runnable/exe1.c
 runnable/link14814.d
