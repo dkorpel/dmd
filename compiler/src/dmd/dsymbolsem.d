@@ -3991,7 +3991,11 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
         if (sc.parent && sc.parent.isModule())
             if (auto i = sa.exp.isIntegerExp())
                 if (i.toInteger() == 0)
+                {
                     staticAssertFail(sa, sc);
+                    // so semantic2 doesn't report it again
+                    sa.semanticRun = PASS.semantic2done;
+                }
     }
 
     override void visit(DebugSymbol ds)

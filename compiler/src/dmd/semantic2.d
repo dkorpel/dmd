@@ -96,6 +96,8 @@ private extern(C++) final class Semantic2Visitor : Visitor
     override void visit(StaticAssert sa)
     {
         //printf("StaticAssert::semantic2() %s\n", sa.toChars());
+        if (sa.semanticRun >= PASS.semantic2done)
+            return;
         if (const e = sa.exp.isStringExp())
         {
             // deprecated in 2.107
@@ -1076,8 +1078,6 @@ void staticAssertFail(StaticAssert sa, Scope* sc)
             if (e.op == EXP.error)
             {
                 errorSupplemental(sa.loc, "while evaluating `static assert` argument `%s`", (*sa.msgs)[i].toChars());
-                if (!global.gag)
-                    fatal();
                 return;
             }
             if (StringExp se = e.toStringExp())
@@ -1098,6 +1098,4 @@ void staticAssertFail(StaticAssert sa, Scope* sc)
         error(sa.loc, "static assert:  `%s` is false", sa.exp.toErrMsg());
     if (sc.tinst)
         sc.tinst.printInstantiationTrace();
-    if (!global.gag)
-        fatal();
 }
