@@ -567,7 +567,6 @@ extern (C++) final class Module : Package
         {
             error(loc, "%s `%s` source file and output file have same name '%s'",
                 kind, toPrettyChars, srcfile.toChars());
-            fatal();
         }
         return FileName(docfilename);
     }
