@@ -104,7 +104,7 @@ final class LibElf : Library
             // read file and take buffer ownership
             OutBuffer b;
             if (readFile(Loc.initial, module_name, b))
-                fatal();
+                return; // error already emitted; driver checks `global.errors`
             buffer = cast(ubyte[])b.extractSlice();
             fromfile = 1;
         }

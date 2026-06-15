@@ -45,10 +45,7 @@ import dmd.visitor;
 const(char)* toCppMangleMSVC(Dsymbol s)
 {
     scope VisualCPPMangler v = new VisualCPPMangler(s.loc, global.errorSink);
-    auto p = v.mangleOf(s);
-    if (v.errors)
-        fatal();  // because this error should be handled in frontend
-    return p;
+    return v.mangleOf(s);
 }
 
 const(char)* cppTypeInfoMangleMSVC(Dsymbol s) @safe
