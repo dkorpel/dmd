@@ -295,17 +295,6 @@ void WRblockarray(block*[] bl)
     ferr("\n");
 }
 
-@trusted
-void WRdefnod(ref GlobalOptimizer go)
-{
-    foreach (i; 0 .. go.defnod.length)
-    {
-        printf("defnod[%d] in B%zu = (", go.defnod[i].DNblock.Bdfoidx, i);
-        WReqn(go.defnod[i].DNelem);
-        printf(");\n");
-    }
-}
-
 const(char)* fl_str(FL fl)
 {
     immutable char*[FL.max + 1] fls =

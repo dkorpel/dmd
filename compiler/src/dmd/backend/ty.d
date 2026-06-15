@@ -261,10 +261,6 @@ uint tycomplex(tym_t ty) { return tytab[ty & 0xFF] & TYFLcomplex; }
 @trusted
 uint tyreal(tym_t ty) { return tytab[ty & 0xFF] & TYFLreal; }
 
-// Fits into 64 bit register
-@trusted
-bool ty64reg(tym_t ty) { return tytab[ty & 0xFF] & (TYFLintegral | TYFLptr | TYFLref) && tysize(ty) <= _tysize[TYnptr]; }
-
 // Can go in XMM floating point register
 @trusted
 uint tyxmmreg(tym_t ty) { return tytab[ty & 0xFF] & TYFLxmmreg; }
@@ -272,24 +268,12 @@ uint tyxmmreg(tym_t ty) { return tytab[ty & 0xFF] & TYFLxmmreg; }
 // Is a vector type
 bool tyvector(tym_t ty) { return tybasic(ty) >= TYfloat4 && tybasic(ty) <= TYullong4; }
 
-/* Types that are chars or shorts       */
-@trusted
-uint tyshort(tym_t ty) { return tytab[ty & 0xFF] & TYFLshort; }
-
 /* Detect TYlong or TYulong     */
 bool tylong(tym_t ty) { return tybasic(ty) == TYlong || tybasic(ty) == TYulong; }
 
 /* Use to detect a pointer type */
 @trusted
 uint typtr(tym_t ty) { return tytab[ty & 0xFF] & TYFLptr; }
-
-/* Use to detect a reference type */
-@trusted
-uint tyref(tym_t ty) { return tytab[ty & 0xFF] & TYFLref; }
-
-// Use to detect a nullptr type
-@trusted
-uint tynullptr(tym_t ty) { return tytab[ty & 0xFF] & TYFLnullptr; }
 
 /* Detect TYfptr or TYvptr      */
 @trusted

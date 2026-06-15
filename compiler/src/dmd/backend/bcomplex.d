@@ -69,36 +69,6 @@ nothrow:
         return y * sqrt(1 + temp * temp);
     }
 
-    static Complex_f sqrtc(ref Complex_f z)
-    {
-        if (z.re == 0 && z.im == 0)
-        {
-            return Complex_f(0, 0);
-        }
-        const targ_real x = fabs(z.re);
-        const targ_real y = fabs(z.im);
-        targ_real r, w;
-        if (x >= y)
-        {
-            r = y / x;
-            w = sqrt(x) * sqrt(0.5 * (1 + sqrt(1 + r * r)));
-        }
-        else
-        {
-            r = x / y;
-            w = sqrt(y) * sqrt(0.5 * (r + sqrt(1 + r * r)));
-        }
-
-        if (z.re >= 0)
-        {
-            return Complex_f(cast(float)w, (z.im / cast(float)(w + w)));
-        }
-        else
-        {
-            const cim = (z.im >= 0) ? w : -w;
-            return Complex_f((z.im / cast(float)(cim + cim)), cast(float)cim);
-        }
-    }
 }
 
 struct Complex_d
@@ -150,39 +120,6 @@ nothrow:
         }
     }
 
-    static Complex_d sqrtc(ref Complex_d z)
-    {
-        if (z.re == 0 && z.im == 0)
-        {
-            return Complex_d(0, 0);
-        }
-        else
-        {
-            const targ_real x = fabs(z.re);
-            const targ_real y = fabs(z.im);
-            targ_real r, w;
-            if (x >= y)
-            {
-                r = y / x;
-                w = sqrt(x) * sqrt(0.5 * (1 + sqrt(1 + r * r)));
-            }
-            else
-            {
-                r = x / y;
-                w = sqrt(y) * sqrt(0.5 * (r + sqrt(1 + r * r)));
-            }
-
-            if (z.re >= 0)
-            {
-                return Complex_d(cast(double)w, (z.im / cast(double)(w + w)));
-            }
-            else
-            {
-                const cim = (z.im >= 0) ? w : -w;
-                return Complex_d((z.im / cast(double)(cim + cim)), cast(double)cim);
-            }
-        }
-    }
 }
 
 
@@ -232,37 +169,4 @@ nothrow:
         return y * sqrt(1 + temp * temp);
     }
 
-    static Complex_ld sqrtc(ref Complex_ld z)
-    {
-        if (z.re == 0 && z.im == 0)
-        {
-            return Complex_ld(targ_real(0), targ_real(0));
-        }
-        else
-        {
-            const targ_real x = fabsl(z.re);
-            const targ_real y = fabsl(z.im);
-            targ_real r, w;
-            if (x >= y)
-            {
-                r = y / x;
-                w = sqrt(x) * sqrt(0.5 * (1 + sqrt(1 + r * r)));
-            }
-            else
-            {
-                r = x / y;
-                w = sqrt(y) * sqrt(0.5 * (r + sqrt(1 + r * r)));
-            }
-
-            if (z.re >= 0)
-            {
-                return Complex_ld(w, z.im / (w + w));
-            }
-            else
-            {
-                const cim = (z.im >= 0) ? w : -w;
-                return Complex_ld(z.im / (cim + cim), cim);
-            }
-        }
-    }
 }

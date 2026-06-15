@@ -100,21 +100,6 @@ Goal bc_goal(BC bc)
     }
 }
 
-/*********************************
- * Free the memory in block_freelist.
- */
-
-@trusted
-void block_term(ref BlockOpt bo)
-{
-    while (bo.block_freelist)
-    {
-        block* b = bo.block_freelist.Bnext;
-        mem_free(bo.block_freelist);
-        bo.block_freelist = b;
-    }
-}
-
 /**************************
  * Finish up this block and start the next one.
  */
@@ -178,23 +163,6 @@ void block_goto(block* bgoto,block* bnew)
     block_next(bc,bnew);
 }
 
-}
-
-/**********************************
- * Replace block numbers with block pointers.
- */
-
-@trusted
-void block_ptr(ref BlockOpt bo)
-{
-    //printf("block_ptr()\n");
-
-    uint numblks = 0;
-    for (block* b = bo.startblock; b; b = b.Bnext)       /* for each block        */
-    {
-        b.Bblknum = numblks;
-        numblks++;
-    }
 }
 
 /*******************************
@@ -429,16 +397,10 @@ void blockopt(ref GlobalOptimizer go, ref BlockOpt bo)
             blexit(go, bo);
             brmin(go, bo);                  // minimize branching
 
-            // Switched to one block per Statement, do not undo it
-            enum merge = false;
-
-            do
-            {
-                compdfo(bo, bo.dfo, bo.startblock); // compute depth first order (DFO)
-                elimblks(go, bo);           /* remove blocks not in DFO      */
-                assert(count < iterationLimit);
-                count++;
-            } while (merge && mergeblks(bo));      // merge together blocks
+            compdfo(bo, bo.dfo, bo.startblock); // compute depth first order (DFO)
+            elimblks(go, bo);           /* remove blocks not in DFO      */
+            assert(count < iterationLimit);
+            count++;
         } while (go.changes);
 
         debug if (debugw)
@@ -946,99 +908,6 @@ private void elimblks(ref GlobalOptimizer go, ref BlockOpt bo)
     }
 
     debug if (debugc) printf("elimblks done\n");
-}
-
-/**********************************
- * Merge together blocks where the first block is a goto to the next
- * block and the next block has only the first block as a predecessor.
- * Example:
- *      e1; GOTO L2;
- *      L2: return e2;
- * becomes:
- *      L2: return (e1 , e2);
- * Returns:
- *      # of merged blocks
- */
-
-@trusted
-private int mergeblks(ref BlockOpt bo)
-{
-    int merge = 0;
-
-    assert(OPTIMIZER);
-    debug if (debugc) printf("mergeblks()\n");
-    foreach (b; bo.dfo[])
-    {
-        if (b.bc == BC.goto_)
-        {   block* bL2 = b.Bsucc[0];
-
-            if (b == bL2)
-            {
-                continue;
-            }
-            assert(bL2.Bpred.length);
-            if (bL2.Bpred.length == 1 && bL2 != bo.startblock)
-            {
-                if (b == bL2 || bL2.bc == BC.asm_)
-                    continue;
-
-                if (bL2.bc == BC.try_ ||
-                    bL2.bc == BC._try ||
-                    b.Btry != bL2.Btry)
-                    continue;
-
-                /* JOIN the elems               */
-                elem* e = el_combine(b.Belem,bL2.Belem);
-                if (b.Belem && bL2.Belem)
-                    e = doptelem(e,bc_goal(bL2.bc) | Goal.again);
-                bL2.Belem = e;
-                b.Belem = null;
-
-                /* Remove b from predecessors of bL2    */
-                bL2.Bpred.reset();
-                foreach (bp; b.Bpred[])
-                    bL2.Bpred.push(bp);
-                b.Bpred.reset();
-
-                /* Remove bL2 from successors of b      */
-                b.Bsucc.reset();
-
-                /* fix up successor list of predecessors        */
-                foreach (bl; bL2.Bpred[])
-                {
-                    foreach (i, bs; bl.Bsucc[])
-                        if (bs == b)
-                            bl.Bsucc[i] = bL2;
-                }
-
-                merge++;
-                debug if (debugc) printf("block %p merged with %p\n",b,bL2);
-
-                if (b == bo.startblock)
-                {   /* bL2 is the new startblock */
-                    debug if (debugc) printf("bL2 is new startblock\n");
-                    /* Remove bL2 from list of blocks   */
-                    for (block** pb = &bo.startblock; 1; pb = &(*pb).Bnext)
-                    {
-                        assert(*pb);
-                        if (*pb == bL2)
-                        {
-                            *pb = bL2.Bnext;
-                            break;
-                        }
-                    }
-
-                    /* And relink bL2 at the start              */
-                    bL2.Bnext = bo.startblock.Bnext;
-                    bo.startblock = bL2;   // new start
-
-                    block_free(bo, b);
-                    break;              // dfo[] is now invalid
-                }
-            }
-        }
-    }
-    return merge;
 }
 
 /*******************************
@@ -1914,133 +1783,6 @@ private elem* assignparams(elem** pe,int* psi,elem** pe2)
         *pe = null;
     }
     return e;
-}
-
-/****************************************************
- * Eliminate empty loops.
- */
-
-@trusted
-private void emptyloops(ref GlobalOptimizer go, ref BlockOpt bo)
-{
-    debug if (debugc) printf("emptyloops()\n");
-    for (block* b = bo.startblock; b; b = b.Bnext)
-    {
-        if (b.bc == BC.iftrue &&
-            b.Bsucc[0] == b &&
-            b.Bpred.length == 2)
-        {
-            // Find predecessor to b
-            block* bpred = b.Bpred[0];
-            if (bpred == b)
-                bpred = b.Bpred[1];
-            if (!bpred.Belem)
-                continue;
-
-            // Find einit
-            elem* einit = *el_scancommas(&(bpred.Belem));
-            if (einit.Eoper != OPeq ||
-                einit.E2.Eoper != OPconst ||
-                einit.E1.Eoper != OPvar)
-                continue;
-
-            // Look for ((i += 1) < limit)
-            elem* erel = b.Belem;
-            if (erel.Eoper != OPlt ||
-                erel.E2.Eoper != OPconst ||
-                erel.E1.Eoper != OPaddass)
-                continue;
-
-            elem* einc = erel.E1;
-            if (einc.E2.Eoper != OPconst ||
-                einc.E1.Eoper != OPvar ||
-                !el_match(einc.E1,einit.E1))
-                continue;
-
-            if (!tyintegral(einit.E1.Ety) ||
-                el_tolong(einc.E2) != 1 ||
-                el_tolong(einit.E2) >= el_tolong(erel.E2)
-               )
-                continue;
-
-             {
-                erel.Eoper = OPeq;
-                erel.Ety = erel.E1.Ety;
-                erel.E1 = el_selecte1(erel.E1);
-                b.bc = BC.goto_;
-                b.Bsucc.subtract(b);
-                b.Bpred.subtract(b);
-
-                debug if (debugc)
-                {
-                    WReqn(erel);
-                    printf(" eliminated loop\n");
-                }
-
-                go.changes++;
-             }
-        }
-    }
-}
-
-/******************************************
- * Determine if function has any side effects.
- * This means, determine if all the function does is return a value;
- * no extraneous definitions or effects or exceptions.
- * A function with no side effects can be CSE'd. It does not reference
- * statics or indirect references.
- */
-
-@trusted
-private void funcsideeffects(ref BlockOpt bo)
-{
-    //printf("funcsideeffects('%s')\n",funcsym_p.Sident);
-    for (block* b = bo.startblock; b; b = b.Bnext)
-    {
-        if (b.Belem && funcsideeffect_walk(b.Belem))
-        {
-            //printf("  function '%s' has side effects\n",funcsym_p.Sident);
-            return;
-        }
-    }
-    funcsym_p.Sfunc.Fflags3 |= Fnosideeff;
-    //printf("  function '%s' has no side effects\n",funcsym_p.Sident);
-}
-
-@trusted
-private int funcsideeffect_walk(elem* e)
-{
-    assert(e);
-    elem_debug(e);
-    if (typemask(e) & (mTYvolatile | mTYshared))
-        return 1;
-    int op = e.Eoper;
-    switch (op)
-    {
-        case OPcall:
-        case OPucall:
-            Symbol* s;
-            if (e.E1.Eoper == OPvar &&
-                tyfunc((s = e.E1.Vsym).Stype.Tty) &&
-                ((s.Sfunc && s.Sfunc.Fflags3 & Fnosideeff) || s == funcsym_p)
-               )
-                break;
-            goto Lside;
-
-        // Note: we should allow assignments to local variables as
-        // not being a 'side effect'.
-
-        default:
-            assert(op < OPMAX);
-            return OTsideff(op) ||
-                (OTunary(op) && funcsideeffect_walk(e.E1)) ||
-                (OTbinary(op) && (funcsideeffect_walk(e.E1) ||
-                                  funcsideeffect_walk(e.E2)));
-    }
-    return 0;
-
-  Lside:
-    return 1;
 }
 
 /*******************************

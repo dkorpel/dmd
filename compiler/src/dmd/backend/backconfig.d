@@ -421,34 +421,13 @@ __gshared:
 bool debuga = 0; /// cg - watch assignaddr()
 bool debugb = 0; /// watch block optimization
 bool debugc = 0; /// watch code generated
-bool debugd = 0; /// watch debug information generated
 bool debuge = 0; /// dump eh info
 bool debugf = 0; /// trees after dooptim
-bool debugg = 0; /// trees for code generator
-bool debugo = 0; /// watch optimizer
 bool debugr = 0; /// watch register allocation
 bool debugs = 0; /// watch common subexp eliminator
-bool debugt = 0; /// do test points
-bool debugu = 0;
 bool debugw = 0; /// watch progress
 bool debugx = 0; /// suppress predefined CPP stuff
 bool debugy = 0; /// watch output to il buffer
-
-/*************************************
- */
-
-@trusted
-void util_set16()
-{
-    // The default is 16 bits
-    _tysize[TYreal] = 10;
-    _tysize[TYireal] = 10;
-    _tysize[TYcreal] = 20;
-
-    _tyalignsize[TYreal] = 2;
-    _tyalignsize[TYireal] = 2;
-    _tyalignsize[TYcreal] = 2;
-}
 
 /*******************************
  * Redo tables from 8086/286 to 386/486.

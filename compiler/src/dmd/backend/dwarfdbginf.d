@@ -427,17 +427,6 @@ static if (1)
         CFA_state_current.regstates[dw_reg].offset = offset;
     }
 
-    /**************************************
-     * Set total size of arguments pushed on the stack.
-     * Params:
-     *      sz = total size
-     */
-    void dwarf_CFA_args_size(size_t sz)
-    {
-        cfa_buf.writeByte(DW_CFA_GNU_args_size);
-        cfa_buf.writeuLEB128(cast(uint)sz);
-    }
-
     struct Section
     {
         segidx_t seg = 0;

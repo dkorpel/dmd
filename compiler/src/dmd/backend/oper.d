@@ -245,8 +245,6 @@ OPER rel_not(OPER op)       { return _rel_not      [op - RELOPMIN]; }
 OPER rel_swap(OPER op)      { return _rel_swap     [op - RELOPMIN]; }
 OPER rel_integral(OPER op)  { return _rel_integral [op - RELOPMIN]; }
 OPER rel_exception(OPER op) { return _rel_exception[op - RELOPMIN]; }
-OPER rel_unord(OPER op)     { return _rel_unord    [op - RELOPMIN]; }
-
 /****************************************
  * Conversion operators.
  * Convert from conversion operator to conversion index
