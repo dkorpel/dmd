@@ -4,16 +4,13 @@
  * Run after semantic analysis is complete: by then every reference to a symbol
  * has gone through name resolution, which sets `Dsymbol.used`. Any candidate
  * declaration that is still unmarked is reported, unless it falls under one of
- * the exceptions (exported symbols, generic/documentation symbols, parameters,
- * struct padding fields).
+ * the exceptions (exported symbols, generic/documentation symbols, parameters).
  *
  * Copyright:   Copyright (C) 1999-2026 by The D Language Foundation, All Rights Reserved
  * License:     $(LINK2 https://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
  * Source:      $(LINK2 https://github.com/dlang/dmd/blob/master/compiler/src/dmd/unused.d, _unused.d)
  */
 module dmd.unused;
-
-import core.stdc.string : strstr;
 
 import dmd.astenums;
 import dmd.attrib;
@@ -27,6 +24,7 @@ import dmd.func;
 import dmd.funcsem : isVirtual;
 import dmd.globals;
 import dmd.identifier;
+import dmd.typesem : toBasetype;
 import dmd.visitor.foreachvar : foreachExpAndVar, foreachVar;
 
 /****************************************
@@ -161,6 +159,9 @@ private bool isExcepted(Dsymbol s)
         // Virtual methods may be reached polymorphically through a base class.
         if (fd.isVirtual())
             return true;
+        // Compiler-generated functions (e.g. `opAssign`, `opCmp`).
+        if (fd.isGenerated)
+            return true;
     }
 
     if (auto vd = s.isVarDeclaration())
@@ -173,11 +174,19 @@ private bool isExcepted(Dsymbol s)
         // Parameters: the function may need to honor a specific API.
         if (vd.isParameter() || vd.isResult())
             return true;
-        // Struct padding fields, by naming convention.
-        if (name[0] == '_' || strstr(id.toChars(), "pad"))
+
+        // Manifest constants (`enum x = 5;`) behave like C `#define`s and are
+        // commonly declared in named groups, e.g. translated C headers where
+        // not every value is referenced (ELF relocations, config flags, ...).
+        if (vd.storage_class & STC.manifest)
             return true;
 
-
+        // RAII scope guards: a struct local whose type has a destructor is
+        // declared for the destructor's side effect, not to be referenced.
+        if (auto t = vd.type)
+            if (auto ts = t.toBasetype().isTypeStruct())
+                if (ts.sym.dtor)
+                    return true;
     }
 
     // Symbols meant for export: `export`, `extern(C)`, `pragma(mangle)`.

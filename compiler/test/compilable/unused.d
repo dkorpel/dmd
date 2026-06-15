@@ -3,7 +3,6 @@
 // Unused module-level declarations are reported.
 int unusedGlobal;
 enum UnusedEnum { a, b }
-enum unusedManifest = 5;
 void unusedFunc() {}
 
 // Used declarations are silent.
@@ -26,7 +25,15 @@ void consumer()
     // Exception: foreach loop variables are not flagged even if unused.
     foreach (i; 0 .. 2) {}
     foreach (j, c; "ab") {}
+
+    // Exception: a struct local with a destructor is an RAII scope guard,
+    // declared for its destructor's side effect rather than to be referenced.
+    Guard g;
 }
+
+// Exception: manifest constants behave like C `#define`s and are commonly
+// declared in named groups (e.g. translated headers) where not all are used.
+enum unusedManifest = 5;
 
 // Exception: symbols meant for export.
 export void exportedFunc() {}
@@ -37,14 +44,24 @@ pragma(mangle, "mangled") void mangledFunc() {}
 // reported as unused, but `unusedParam` is not.
 void takesParamUsed(int unusedParam) { unusedParam++; }
 
-// Exception: struct padding fields by naming convention.
+// Unused aggregate fields are reported, just like other variables.
 struct S
 {
-    int _reserved;
-    int padding0;
+    int usedField;
     int unusedField;
 }
-int useS(S s) { return s._reserved + s.padding0; }
+int useS(S s) { return s.usedField; }
+
+// Accessing fields through `.tupleof` counts as a reference, so none of
+// `T`'s fields are flagged.
+struct T
+{
+    int a;
+    int b;
+}
+int useTupleof(T t) { return t.tupleof[0] + t.tupleof[1]; }
+
+struct Guard { ~this() {} }
 
 // Exception: generic / documentation symbols.
 template Tmpl(T)
@@ -68,12 +85,12 @@ TEST_OUTPUT:
 ---
 compilable/unused.d(4): Warning: unused variable `unused.unusedGlobal`
 compilable/unused.d(5): Warning: unused enum `unused.UnusedEnum`
-compilable/unused.d(6): Warning: unused variable `unused.unusedManifest`
-compilable/unused.d(7): Warning: unused function `unused.unusedFunc`
-compilable/unused.d(15): Warning: unused function `unused.consumer`
-compilable/unused.d(24): Warning: unused variable `unused.consumer.unusedLocal`
-compilable/unused.d(38): Warning: unused function `unused.takesParamUsed`
-compilable/unused.d(45): Warning: unused variable `unused.S.unusedField`
-compilable/unused.d(47): Warning: unused function `unused.useS`
+compilable/unused.d(6): Warning: unused function `unused.unusedFunc`
+compilable/unused.d(14): Warning: unused function `unused.consumer`
+compilable/unused.d(23): Warning: unused variable `unused.consumer.unusedLocal`
+compilable/unused.d(45): Warning: unused function `unused.takesParamUsed`
+compilable/unused.d(51): Warning: unused variable `unused.S.unusedField`
+compilable/unused.d(53): Warning: unused function `unused.useS`
+compilable/unused.d(62): Warning: unused function `unused.useTupleof`
 ---
 */

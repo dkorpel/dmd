@@ -6751,6 +6751,7 @@ Expression dotExp(Type mt, Scope* sc, Expression e, Identifier ident, DotExpFlag
             for (size_t i = 0; i < mt.sym.fields.length; i++)
             {
                 VarDeclaration v = mt.sym.fields[i];
+                markUsed(v);    // `.tupleof` references every field
                 Expression ex;
                 if (ev)
                     ex = new DotVarExp(e.loc, ev, v);
@@ -7073,6 +7074,7 @@ Expression dotExp(Type mt, Scope* sc, Expression e, Identifier ident, DotExpFlag
                 if (v.ident == Id.__monitor)
                     continue;
 
+                markUsed(v);    // `.tupleof` references every field
                 Expression ex;
                 if (ev)
                     ex = new DotVarExp(e.loc, ev, v);

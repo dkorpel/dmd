@@ -443,7 +443,7 @@ Dsymbol search(Scope* _this, Loc loc, Identifier ident, out Dsymbol pscopesym, S
  * share a single symbol table entry, so the whole overload set is marked to avoid
  * false positives on sibling overloads that weren't the resolved candidate.
  */
-private void markUsed(Dsymbol s)
+void markUsed(Dsymbol s)
 {
     if (!global.params.v.unused)
         return;

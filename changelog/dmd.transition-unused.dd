@@ -22,10 +22,13 @@ $(LIST
       as `extern(C)`, or renamed with `pragma(mangle, ...)`.
     * Generic and documentation symbols: anything declared inside a `template`,
       `mixin template` or `unittest`.
+    * Compiler-generated functions, such as an implicit `opAssign`.
     * Function parameters, since a function may have to honor a specific API.
     * `foreach` loop variables, e.g. `i` in `foreach (i; 0 .. 2)`.
-    * Struct padding fields, recognised by a name that starts with an underscore
-      or contains `pad`.
+    * Manifest constants (`enum x = 5;`), which act like C `#define`s and are
+      often declared in named groups such as translated C headers.
+    * RAII scope guards: a `struct` variable whose type has a destructor, since
+      it is declared for the destructor's effect rather than to be referenced.
 )
 
 The diagnostics are warnings, so passing `-w` together with `-transition=unused`
