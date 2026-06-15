@@ -58,14 +58,16 @@ bool genTypeInfo(Expression e, Loc loc, Type torig, Scope* sc)
             if (sc && sc.tinst)
                 sc.tinst.printInstantiationTrace(Classification.error, uint.max);
 
-            fatal();
+            // error emitted to the sink; the driver's `if (global.errors) fatal()`
+            // handles it. Returning leaves `torig.vtinfo` null, which callers guard.
+            return false;
         }
     }
 
     if (!Type.dtypeinfo)
     {
         .error(loc, "`object.TypeInfo` could not be found, but is implicitly used");
-        fatal();
+        return false;
     }
 
     import dmd.typesem : merge2;
@@ -118,6 +120,9 @@ extern (C++) Type getTypeInfoType(Loc loc, Type t, Scope* sc)
         Module m = sc._module.importedFrom;
         m.members.push(t.vtinfo);
     }
+    // genTypeInfo leaves vtinfo null when it errored
+    if (!t.vtinfo)
+        return Type.terror;
     return t.vtinfo.type;
 }
 
