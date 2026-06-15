@@ -1569,7 +1569,7 @@ void templateInstanceSemantic3(TemplateInstance tempinst, Scope* sc, Scope* sc2)
             {
                 global.gag = 0; // ensure error message gets printed
                 .error(tempinst.loc, "%s `%s` recursive expansion", tempinst.kind, tempinst.toPrettyChars);
-                fatal();
+                break;
             }
         }
         if (ti && ti.deferred)
@@ -1896,7 +1896,10 @@ private void tryExpandMembers(TemplateInstance ti, Scope* sc2)
     {
         global.gag = 0; // ensure error message gets printed
         .error(ti.loc, "%s `%s` recursive expansion exceeded allowed nesting limit", ti.kind, ti.toPrettyChars);
-        fatal();
+        // Stop descending instead of exit()ing. The recursion is linear, so the
+        // first frame to cross the limit reports once and the stack unwinds.
+        nest--;
+        return;
     }
 
     ti.expandMembers(sc2);
@@ -1913,7 +1916,10 @@ private void trySemantic3(TemplateInstance ti, Scope* sc2)
     {
         global.gag = 0; // ensure error message gets printed
         .error(ti.loc, "%s `%s` recursive expansion exceeded allowed nesting limit", ti.kind, ti.toPrettyChars);
-        fatal();
+        // Stop descending instead of exit()ing. The recursion is linear, so the
+        // first frame to cross the limit reports once and the stack unwinds.
+        --nest;
+        return;
     }
 
     semantic3(ti, sc2);
