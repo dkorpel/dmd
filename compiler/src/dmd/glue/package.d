@@ -176,7 +176,7 @@ public void generateCodeAndWrite(Module[] modules, const(char)*[] libmodules,
             eSink.message(Loc.initial, "library   %.*s", library.filename.fTuple.expand);
 
         if (!ensurePathToNameExists(Loc.initial, library.filename))
-            fatal();
+            return;
 
         /* Write library to temporary file. If that is successful,
          * then and only then replace the existing file with the temporary file
@@ -190,7 +190,7 @@ public void generateCodeAndWrite(Module[] modules, const(char)*[] libmodules,
         {
             eSink.error(Loc.initial, "error writing file '%.*s'", library.filename.fTuple.expand);
             destroy(tmpname);
-            fatal();
+            return;
         }
         destroy(tmpname);
     }
@@ -1299,7 +1299,7 @@ private void obj_end(ref OutBuffer objbuf, Library library, const(char)[] objfil
     {
         //printf("write obj %s\n", objfilename);
         if (!writeFile(Loc.initial, objfilename, objbuf[]))
-            return fatal();
+            return;
 
         // For non-libraries, the object buffer should be cleared to
         // avoid repetitions.

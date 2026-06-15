@@ -61,7 +61,7 @@ DArray!ubyte preprocess(FileName csrcfile, Loc loc, ref OutBuffer defines)
     else
     {
         error(loc, "cannot find \"importc.h\" along import path");
-        fatal();
+        return DArray!ubyte();
     }
 
     //printf("preprocess %s\n", csrcfile.toChars());
@@ -71,7 +71,7 @@ DArray!ubyte preprocess(FileName csrcfile, Loc loc, ref OutBuffer defines)
         DArray!ubyte text;
         int status = runPreprocessor(loc, command, csrcfile.toString(), importc_h, global.params.cppswitches, global.params.v.verbose, global.errorSink, defines, text);
         if (status)
-            fatal();
+            return DArray!ubyte();
         return text;
     }
     else

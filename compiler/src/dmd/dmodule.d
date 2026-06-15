@@ -664,7 +664,10 @@ extern (C++) final class Module : Package
             /* Apply C preprocessor to the .c file, returning the contents
              * after preprocessing
              */
+            const errorsBefore = global.errors;
             srctext = global.preprocess(srcfile, loc, defines).data;
+            if (global.errors != errorsBefore)
+                return false;
         }
         else
             srctext = global.fileManager.getFileContents(filename);

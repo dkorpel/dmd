@@ -81,8 +81,6 @@ const(char)* toCppMangleItanium(Dsymbol s)
     OutBuffer buf;
     scope CppMangleVisitor v = new CppMangleVisitor(&buf, s.loc);
     v.mangleOf(s);
-    if (v.errors)
-        fatal();
     return buf.extractChars();
 }
 
@@ -94,8 +92,6 @@ const(char)* cppTypeInfoMangleItanium(Dsymbol s)
     buf.writestring("_ZTI");    // "TI" means typeinfo structure
     scope CppMangleVisitor v = new CppMangleVisitor(&buf, s.loc);
     v.cpp_mangle_name(s, false);
-    if (v.errors)
-        fatal();
     return buf.extractChars();
 }
 
@@ -107,8 +103,6 @@ const(char)* cppThunkMangleItanium(FuncDeclaration fd, int offset)
     buf.printf("_ZThn%u_", offset);  // "Th" means thunk, "n%u" is the call offset
     scope CppMangleVisitor v = new CppMangleVisitor(&buf, fd.loc);
     v.mangle_function_encoding(fd);
-    if (v.errors)
-        fatal();
     return buf.extractChars();
 }
 
