@@ -386,6 +386,14 @@ dmd -cov -unittest myprog.d
         Option("extern-std=[h|help|?]",
             "list all supported standards"
         ),
+        Option("extractTypes=<name>",
+            "write struct/class <name> and its field-type dependencies to stdout",
+            `Print an isolated D module containing the aggregate $(I name) together
+            with every struct, class and enum reachable through its fields. Only
+            fields are kept; methods, constructors and templates are dropped. This
+            is intended for testing introspection-based serialization in isolation.
+            Redirect stdout to save it, e.g. $(TT dmd -o- -extractTypes=Foo foo.d > Foo.d).`,
+        ),
         Option("fIBT",
             "generate Indirect Branch Tracking code"
         ),

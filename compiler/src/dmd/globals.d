@@ -248,6 +248,9 @@ extern (C++) struct Param
     Output mixinOut;                    // write expanded mixins for debugging
     Output moduleDeps;                  // Generate `.deps` module dependencies
 
+    const(char)[] extractTypes;         // -extractTypes=Name: emit the named aggregate and its
+                                        // transitive field-type dependencies as an isolated module
+
     bool debugEnabled;                  // Global -debug flag (no -debug=XXX) is active
 
     bool run; // run resulting executable

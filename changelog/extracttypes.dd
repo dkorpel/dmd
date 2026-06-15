@@ -1,0 +1,31 @@
+New `-extractTypes=<name>` switch to extract a type's data layout in isolation
+
+The new switch takes the name of a `struct` or `class` and prints, to stdout, an
+isolated module containing that type together with every `struct`, `class` and
+`enum` reachable through its fields. Only fields are kept; methods, constructors,
+templates and UDAs are dropped.
+
+The goal is to obtain a self-contained module that mirrors the in-memory layout of
+a type, so introspection-based (de)serialization code can be exercised without
+recompiling the rest of the code base. Redirect stdout to save the result:
+
+---
+dmd -o- -c -extractTypes=Shape app.d > Shape.d
+---
+
+Given:
+
+---
+enum Color : ubyte { red, green = 5, blue }
+struct Point { double x, y; }
+class Base { int id; void method() {} }
+class Shape : Base
+{
+    Color color;
+    Point[] points;
+    void draw() {}
+}
+---
+
+the command above produces a module containing `Shape`, `Base`, `Point` and
+`Color`, with the methods stripped.

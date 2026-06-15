@@ -750,6 +750,12 @@ private int tryMain(const(char)[][] argv, out Param params)
         if (generateJson(modules, eSink))
             fatal();
     }
+    if (params.extractTypes.length)
+    {
+        import dmd.extracttypes : extractTypes;
+        if (extractTypes(modules, params.extractTypes, eSink))
+            fatal();
+    }
     if (!global.errors && params.ddoc.doOutput)
     {
         foreach (m; modules)

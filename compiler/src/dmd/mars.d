@@ -959,6 +959,13 @@ bool parseCommandLine(const ref Strings arguments, const size_t argc, out Param 
             params.mixinOut.doOutput = true;
             params.mixinOut.name = mem.xstrdup(tmp).toDString;
         }
+        else if (startsWith(p + 1, "extractTypes="))
+        {
+            auto tmp = p + "-extractTypes=".length;
+            if (!tmp[0])
+                goto Lnoarg;
+            params.extractTypes = mem.xstrdup(tmp).toDString;
+        }
         else if (arg == "-g") // https://dlang.org/dmd.html#switch-g
             driverParams.symdebug = true;
         else if (startsWith(p + 1, "gdwarf")) // https://dlang.org/dmd.html#switch-gdwarf
