@@ -424,6 +424,7 @@ void codgenx(ref CGstate cg, Symbol* sfunc)
     {
         __gshared Barray!ubyte disasmBuf;
         disasmBuf.reset();
+        vasmLines.reset();      // -vasm: collect disasmBuf offset -> source line as codout runs
 
         for (block* b = bo.startblock; b; b = b.Bnext)
         {
@@ -3327,6 +3328,21 @@ void andregcon(const ref con_t pregconsave)
 }
 
 
+/********************************
+ * -vasm source-line annotations: maps a byte offset within `disasmBuf` (the
+ * per-function disassembly buffer) to the source line of the statement that
+ * starts there. Populated from the PSOP.linnum nodes in codout(), consumed by
+ * disassemble() below. Offsets are monotonically increasing.
+ */
+struct VasmLine { uint offset; uint linnum; }
+__gshared Barray!VasmLine vasmLines;
+
+/// Opt-in flag for the "; line N" annotations above. Off by default so plain
+/// `-vasm` output is unchanged; the WebAssembly explorer sets it to drive its
+/// source<->asm highlight sync. Gates the linnum collection (cod3.codout), the
+/// addlinenumbers force (backconfig) and the marker printing (disassemble).
+__gshared bool vasmSourceLines = false;
+
 /**********************************************
  * Disassemble the code instruction bytes
  * Params:
@@ -3340,10 +3356,29 @@ void disassemble(ubyte[] code)
     @trusted
     void put(char c) { printf("%c", c); }
 
+    // Walk the source-line table in lockstep with the instruction offsets,
+    // printing a "; line N" marker whenever a new statement begins.
+    size_t li = 0;
+    uint lastLine = 0;
+    void emitLineMarker(size_t off)
+    {
+        while (li < vasmLines.length && vasmLines[li].offset <= off)
+        {
+            const ln = vasmLines[li].linnum;
+            li++;
+            if (ln && ln != lastLine)
+            {
+                printf("; line %u\n", ln);
+                lastLine = ln;
+            }
+        }
+    }
+
     if (cgstate.AArch64)
     {
         for (size_t i = 0; i < code.length; i += 4)
         {
+            emitLineMarker(i);
             printf("%04x:", cast(int)i);
             dmd.backend.arm.disasmarm.getopstring(&put, code, cast(uint)i, 4, 64, false, true, true,
                     null, null, null, null);
@@ -3356,6 +3391,7 @@ void disassemble(ubyte[] code)
         size_t i = 0;
         while (i < code.length)
         {
+            emitLineMarker(i);
             printf("%04x:", cast(int)i);
             uint pc;
             const sz = dmd.backend.x86.disasm86.calccodsize(code, cast(uint)i, pc, model);

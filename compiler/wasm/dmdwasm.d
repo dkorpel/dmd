@@ -243,6 +243,10 @@ void dmdwasm_run(const(char)* src, size_t len)
         import dmd.target : target;
 
         driverParams.vasm = true;
+        // Annotate the disassembly with "; line N" markers so the web app can sync
+        // source<->asm highlighting. Opt-in: plain native -vasm stays unmarked.
+        import dmd.backend.x86.cgcod : vasmSourceLines;
+        vasmSourceLines = true;
         driverParams.optimize = true;   // run the -O global optimizer so the two IR panes differ
         backend_init(global.params, driverParams, target);
         ObjcGlue_initialize();
