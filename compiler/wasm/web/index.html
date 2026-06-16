@@ -354,19 +354,36 @@ const STAGES = [
     ["diag",     "Output"],
 ];
 const toggles = $("paneToggles");
+// Anchor for shift-click range selection (browser-tab style): the last pane
+// solo'd or toggled, used as the other end of a shift-click range.
+let tabAnchor = null;
+const tabOrder = () => paneEls().filter((p) => p.dataset.stage !== "source").map((p) => p.dataset.pane);
 const makeChip = (p) => {
     const chip = document.createElement("button");
     chip.className = "tab";
     chip.dataset.toggle = p.dataset.pane;
     chip.textContent = p.dataset.title;
     chip.title = (p.dataset.tip ? p.dataset.tip + "\n\n" : "") +
-                 "Click: show only this panel · Ctrl/Shift+click: toggle it on/off";
+                 "Click: show only this panel · Ctrl/⌘+click: toggle it · Shift+click: select range";
     chip.setAttribute("aria-pressed", String(!p.hidden));
     // Default click solos this output (hides every other non-source pane);
-    // Ctrl/⌘+click instead toggles just this pane on/off without disturbing the rest.
+    // Ctrl/⌘+click toggles just this pane (multi-select); Shift+click selects
+    // the contiguous range from the anchor to this pane.
     chip.addEventListener("click", (e) => {
-        if (e.ctrlKey || e.metaKey || e.shiftKey) setHidden(p.dataset.pane, !p.hidden);
-        else soloPane(p.dataset.pane);
+        const pane = p.dataset.pane;
+        if (e.shiftKey && tabAnchor) {
+            const order = tabOrder();
+            let a = order.indexOf(tabAnchor), b = order.indexOf(pane);
+            if (a > b) [a, b] = [b, a];
+            const range = new Set(order.slice(a, b + 1));
+            for (const q of order) setHidden(q, !range.has(q));
+        } else if (e.ctrlKey || e.metaKey) {
+            setHidden(pane, !p.hidden);
+            tabAnchor = pane;
+        } else {
+            soloPane(pane);
+            tabAnchor = pane;
+        }
         saveState();
         applyAutoLayout();
     });
@@ -793,11 +810,11 @@ function run() {
     renderLined("ir", ir, false, "(no code generated)");
     renderLined("iropt", irOpt, false, "(no code generated)");
     $("asm").textContent = asm || "(no code generated)";
-    $("diag").innerHTML = diagnostics ? ansiToHtml(diagnostics) : "(no diagnostics)";
+    $("diag").innerHTML = diagnostics ? ansiToHtml(diagnostics) : "(no errors/deprecations or other output)";
     // Mirror the diagnostics inline in the editor (gutter + underline + tooltip),
     // pushed synchronously now that this compile's results are in hand.
     editor.dispatch(setDiagnostics(editor.state, parseDiagnostics(diagnostics, editor.state.doc)));
-    $("status").textContent = `errors: ${errors} · ${ms} ms`;
+    $("status").textContent = `${ms} ms`;
     applyHighlight(/*force*/ true);   // DOM was rebuilt; re-apply current highlight
 }
 

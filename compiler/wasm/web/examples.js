@@ -8,32 +8,32 @@
 //   code = the D source
 
 export const EXAMPLES = [
-	{
-		id: "tokenKinds",
-		label: "Token kinds (lexer)",
-		panes: "lex",
-		height: 300,
-		code: `extern(C++)
+{
+	id: "tokenKinds",
+	label: "Token kinds (lexer)",
+	panes: "lex",
+	height: 300,
+	code: `extern(C++)
 struct C
 {
 	int i = -1;
 	long j = 2L;
 }
 
-pure nothrow @safe @nogc:
+pure /*comment*/  nothrow @safe @nogc:
 
 string getString()
 {
 	return "abc" ~ \`def\`c;
 }
 `,
-	},
-	{
-		id: "ambiguityDecl",
-		label: "Declaration vs multiplication",
-		panes: "parse,sema",
-		height: 380,
-		code: `// X and Y could be both types like \`int\` / \`float\`
+},
+{
+	id: "ambiguityDecl",
+	label: "Declaration vs multiplication",
+	panes: "parse,sema",
+	height: 380,
+	code: `// X and Y could be both types like \`int\` / \`float\`
 // or values like \`64\` / \`[20, 30]\`
 
 void foo(alias X, alias Y)()
@@ -47,48 +47,48 @@ void foo(alias X, alias Y)()
 
 alias f = foo!(int, 3);
 `,
-	},
-	{
-		id: "structVsFunc",
-		label: "Struct vs function literal",
-		panes: "parse",
-		height: 320,
-		code: `// Sometimes the parser needs to look ahead pretty far to
+},
+{
+	id: "structVsFunc",
+	label: "Struct vs function literal",
+	panes: "parse",
+	height: 320,
+	code: `// Sometimes the parser needs to look ahead pretty far to
 // disambiguate a struct literal from a function literal
 
 void bar()()
 {
-		auto y = { 1, 2, 3 };
-		auto z = { 1, 2, 3; };
+	auto y = { 1, 2, 3 };
+	auto z = { 1, 2, 3; };
 
-		// Because of the semicolon, 1, 2, 3 is parsed as a
-		// 'comma expression', common in C but mostly disallowed to use in D,
-		// though D's parser still recognizes it like any other expression.
+	// Because of the semicolon, 1, 2, 3 is parsed as a
+	// 'comma expression', common in C but mostly disallowed to use in D,
+	// though D's parser still recognizes it like any other expression.
 }
 `,
-	},
-	{
-		id: "arrayInitVsAA",
-		label: "Array initializer vs AA literal",
-		panes: "parse",
-		height: 320,
-		code: `// Array initializers and Associative Array literals have the same grammar
+},
+{
+	id: "arrayInitVsAA",
+	label: "Array initializer vs AA literal",
+	panes: "parse",
+	height: 320,
+	code: `// Array initializers and Associative Array literals have the same grammar
 // Yet they are separate AST nodes, and which is created depends on whether
 // we are in a declaration with initializer vs. an assignment expression.
 
 void foo()()
 {
-		int[2] x = [0: 10, 1: 20];
-		x = [0: 10, 1: 20];
+	int[2] x = [0: 10, 1: 20];
+	x = [0: 10, 1: 20];
 }
 `,
-	},
-	{
-		id: "parseVsSema",
-		label: "Parse error vs semantic error",
-		panes: "parse,diag",
-		height: 320,
-		code: `// Whether something is a parser/semantic error can be a bit arbitrary
+},
+{
+	id: "parseVsSema",
+	label: "Parse error vs semantic error",
+	panes: "parse,diag",
+	height: 320,
+	code: `// Whether something is a parser/semantic error can be a bit arbitrary
 
 void foo()()
 {
@@ -130,8 +130,8 @@ immutable z = x;
 		code: `// Initializers are constant folded
 void f()
 {
-		string x = "abc" ~ "def"; // no GC allocations!
-		int t = 3 * 9; // no runtime computation
+	string x = "abc" ~ "def"; // no GC allocations!
+	int t = 3 * 9; // no runtime computation
 }
 `,
 	},
@@ -165,7 +165,7 @@ immutable int[8] arr = 3;
 		panes: "ir",
 		height: 360,
 		code: `// This function calls _d_arraybounds_indexp(file, line, index, length)
-// Because the backend uses binary trees, this list of 4 items is actually a pretty deep tree of OPParam pairs
+// Because the backend uses binary trees, this list of 4 items is actually a pretty deep tree of OPparam pairs
 auto f(int[] arr) => arr[0];
 `,
 	},
@@ -180,7 +180,7 @@ auto f(int[] arr) => arr[0];
 
 void f(ref string x)
 {
-		x = x.ptr[3 .. 5];
+	x = x.ptr[3 .. 5];
 }
 
 // This function is conceptually:
