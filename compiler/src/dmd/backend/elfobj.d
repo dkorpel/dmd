@@ -919,7 +919,7 @@ void* elf_renumbersyms()
 void ElfObj_termfile()
 {
     //dbg_printf("ElfObj_termfile\n");
-    if (config.addlinenumbers)
+    if (config.fulltypes)       // symmetric with dwarf_initmodule (gated on fulltypes)
     {
         dwarf_termmodule();
     }
@@ -938,7 +938,7 @@ void ElfObj_term(const(char)[] objfilename)
     //printf("ElfObj_term()\n");
     outfixlist();           // backpatches
 
-    if (config.addlinenumbers)
+    if (config.fulltypes)       // symmetric with dwarf_initfile (gated on fulltypes)
         dwarf_termfile();
 
     if (config.useModuleInfo)

@@ -613,7 +613,7 @@ void build_syment_table(bool bigobj)
 void MsCoffObj_termfile()
 {
     //dbg_printf("MsCoffObj_termfile\n");
-    if (config.addlinenumbers)
+    if (config.fulltypes)       // symmetric with cv8_initmodule (gated on fulltypes)
     {
         cv8_termmodule();
     }
@@ -633,7 +633,7 @@ void MsCoffObj_term(const(char)[] objfilename)
     outfixlist();           // backpatches
     objflush_importTableRefs();
 
-    if (config.addlinenumbers)
+    if (config.fulltypes)       // symmetric with cv8_initfile (gated on fulltypes)
     {
         cv8_termfile(objfilename);
     }

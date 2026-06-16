@@ -24,6 +24,7 @@ import dmd.backend.ty;
 import dmd.backend.type;
 
 import dmd.backend.dwarfdbginf;
+import dmd.backend.x86.cgcod : vasmSourceLines;
 
 nothrow:
 @safe:
@@ -388,6 +389,12 @@ static if (0)
         cfg.fulltypes = CVNONE;
         //cfg.flags &= ~CFGalwaysframe;
     }
+
+    // -vasm with source-line annotations (opt-in, used by the wasm explorer)
+    // needs the per-statement linnum pseudo-ops threaded through codegen
+    // (independent of -g). Plain -vasm is unaffected.
+    if (vasm && vasmSourceLines)
+        cfg.addlinenumbers = 1;
 
     if (alwaysframe)
         cfg.flags |= CFGalwaysframe;

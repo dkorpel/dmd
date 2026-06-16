@@ -34,6 +34,7 @@ import dmd.backend.code;
 import dmd.backend.arm.cod3;
 import dmd.backend.arm.instr;
 import dmd.backend.x86.code_x86;
+import dmd.backend.x86.cgcod : VasmLine, vasmLines, vasmSourceLines;
 import dmd.backend.codebuilder;
 import dmd.backend.dvec;
 import dmd.backend.melf;
@@ -7411,6 +7412,10 @@ uint codout(int seg, code* c, Barray!ubyte* disasmBuf, ref targ_size_t framehand
             {   case PSOP.linnum:
                     /* put out line number stuff    */
                     objmod.linnum(c.IEV1.Vsrcpos,seg,ggen.getOffset());
+                    // -vasm: record disasmBuf offset -> source line so the
+                    // disassembly can be annotated (see cgcod.disassemble).
+                    if (vasmSourceLines && disasmBuf && c.IEV1.Vsrcpos.Slinnum)
+                        vasmLines.push(VasmLine(cast(uint)disasmBuf.length, c.IEV1.Vsrcpos.Slinnum));
                     break;
                 case PSOP.adjesp:
                     //printf("adjust ESP %ld\n", cast(long)c.IEV1.Vint);

@@ -601,7 +601,7 @@ void mach_numbersyms()
 void MachObj_termfile()
 {
     //dbg_printf("MachObj_termfile\n");
-    if (config.addlinenumbers)
+    if (config.fulltypes)       // symmetric with dwarf_initmodule (gated on fulltypes)
     {
         dwarf_termmodule();
     }
@@ -616,7 +616,7 @@ void MachObj_term(const(char)[] objfilename)
     //printf("MachObj_term()\n");
     outfixlist();           // backpatches
 
-    if (config.addlinenumbers)
+    if (config.fulltypes)       // symmetric with dwarf_initfile (gated on fulltypes)
     {
         dwarf_termfile();
     }
