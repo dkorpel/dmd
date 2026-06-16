@@ -41,9 +41,8 @@
   header > :not(#paneToggles) { align-self: center; margin-bottom: 8px; }
   header h1 { font-size: 16px; margin: 0; font-weight: 600; white-space: nowrap; }
   #status { color: var(--aero-text-dim); font-size: 12px; }
-  /* Busy spinner shown while dmd.wasm compiles. The compile blocks the main
-     thread, so the animation must run on the compositor (transform only) to keep
-     visibly spinning while the thread is busy. */
+  /* Busy spinner shown while dmd.wasm compiles (in a Web Worker, off the main
+     thread, so the page stays responsive and this animates smoothly). */
   #spinner { width: 13px; height: 13px; border-radius: 50%;
              border: 2px solid var(--aero-edge); border-top-color: var(--code-kw);
              animation: spin .6s linear infinite; }
@@ -245,7 +244,8 @@ int add(int a, int b)
 </div>
 
 <script type="module">
-import { loadDmd, compile, dmdLastModified } from "./glue.js";
+// dmd.wasm runs in a Web Worker (see worker.js) so the synchronous compile
+// can't freeze the page; this thread only sends source and renders results.
 import { EXAMPLES } from "./examples.js";   // shared with the tour's inline demos
 import { EditorView, keymap, lineNumbers, highlightActiveLineGutter, highlightSpecialChars,
          drawSelection, dropCursor, rectangularSelection, crosshairCursor,
@@ -826,10 +826,8 @@ cols.addEventListener("mouseleave", () => { hoverLine = null; applyHighlight(); 
 
 // ---- Compile + render -----------------------------------------------------
 
-function compileAndRender() {
-    const t0 = performance.now();
-    const { lex, parse, sema, ast, ir, irOpt, asm, errors, diagnostics } = compile(getSrc());
-    lastRunMs = performance.now() - t0;
+// Render one result object produced by the worker's compile(). Pure DOM work.
+function render({ lex, parse, sema, ast, ir, irOpt, asm, errors, diagnostics }) {
     renderLined("lex", lex, /*positional*/ true);
     renderLined("parse", parse);
     renderLined("sema", sema);
@@ -838,38 +836,72 @@ function compileAndRender() {
     renderLined("iropt", irOpt, false, "(no code generated)");
     renderLined("asm", asmWithLineMarks(asm), false, "(no code generated)");
     $("diag").innerHTML = diagnostics ? ansiToHtml(diagnostics) : "(no errors/deprecations or other output)";
-    // Mirror the diagnostics inline in the editor (gutter + underline + tooltip),
-    // pushed synchronously now that this compile's results are in hand.
+    // Mirror the diagnostics inline in the editor (gutter + underline + tooltip).
     editor.dispatch(setDiagnostics(editor.state, parseDiagnostics(diagnostics, editor.state.doc)));
-    $("status").textContent = `${lastRunMs.toFixed(1)} ms`;
     applyHighlight(/*force*/ true);   // DOM was rebuilt; re-apply current highlight
 }
 
-// The compile is synchronous and blocks the main thread, so we can't paint a
-// spinner partway through it. Instead we reveal the spinner and let the browser
-// paint it (two rAFs — the second fires after the spinner frame is on screen)
-// before kicking off the blocking compile, then hide it once results render. The
-// spinner's CSS animation runs on the compositor, so it keeps turning while the
-// thread is busy.
+// The compile happens in a Web Worker (worker.js), so the page never blocks and
+// the spinner animates for real. While a compile is in flight, further run()
+// calls just flag pendingRun; when the worker finishes we re-kick it with the
+// latest source, coalescing a burst of edits into a single trailing compile. The
+// spinner stays up from the first request until the worker goes idle.
+const worker = new Worker("./worker.js", { type: "module" });
 let lastRunMs = 0;
-let runScheduled = false;
+let compileT0 = 0;
+let workerBusy = false;
+let pendingRun = false;
+let dmdLM = null;            // dmd.wasm Last-Modified, as a Date (or null)
+let loadResolve = null, loadReject = null;
+
+worker.onmessage = (e) => {
+    const msg = e.data;
+    switch (msg.type) {
+        case "loaded":
+            if (msg.lastModified) { const d = new Date(msg.lastModified); if (!isNaN(d)) dmdLM = d; }
+            loadResolve && loadResolve();
+            break;
+        case "loadError":
+            loadReject && loadReject(new Error(msg.message));
+            break;
+        case "result":
+            lastRunMs = performance.now() - compileT0;
+            render(msg.result);
+            $("status").textContent = `${lastRunMs.toFixed(1)} ms`;
+            workerBusy = false;
+            if (pendingRun) startCompile();           // newer edits arrived mid-compile
+            else $("spinner").hidden = true;
+            break;
+    }
+};
+worker.onerror = (e) => { $("status").textContent = "worker error: " + e.message; console.error(e); };
+
+function startCompile() {
+    workerBusy = true;
+    pendingRun = false;
+    compileT0 = performance.now();
+    worker.postMessage({ type: "compile", src: getSrc() });
+}
+
 function run() {
     $("spinner").hidden = false;
     $("status").textContent = "compiling…";
-    if (runScheduled) return;   // coalesce calls until the pending compile fires
-    runScheduled = true;
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-        runScheduled = false;
-        try { compileAndRender(); } finally { $("spinner").hidden = true; }
-    }));
+    if (workerBusy) { pendingRun = true; return; }   // coalesce until current compile returns
+    startCompile();
+}
+
+function loadDmdWorker(url) {
+    return new Promise((resolve, reject) => {
+        loadResolve = resolve; loadReject = reject;
+        worker.postMessage({ type: "load", url });
+    });
 }
 
 (async () => {
     try {
-        await loadDmd("dmd.wasm");
+        await loadDmdWorker("dmd.wasm");
         $("status").textContent = "ready";
-        const lm = dmdLastModified();
-        if (lm) $("updated").textContent = "updated " + lm.toISOString().slice(0, 10);
+        if (dmdLM) $("updated").textContent = "updated " + dmdLM.toISOString().slice(0, 10);
         // Ctrl+Enter (or ⌘+Enter on macOS) forces an immediate recompile.
         document.addEventListener("keydown", (e) => {
             if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); runNow(); }
