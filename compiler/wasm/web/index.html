@@ -41,6 +41,14 @@
   header > :not(#paneToggles) { align-self: center; margin-bottom: 8px; }
   header h1 { font-size: 16px; margin: 0; font-weight: 600; white-space: nowrap; }
   #status { color: var(--aero-text-dim); font-size: 12px; }
+  /* Busy spinner shown while dmd.wasm compiles. The compile blocks the main
+     thread, so the animation must run on the compositor (transform only) to keep
+     visibly spinning while the thread is busy. */
+  #spinner { width: 13px; height: 13px; border-radius: 50%;
+             border: 2px solid var(--aero-edge); border-top-color: var(--code-kw);
+             animation: spin .6s linear infinite; }
+  #spinner[hidden] { display: none; }
+  @keyframes spin { to { transform: rotate(360deg); } }
   #updated { color: var(--aero-text-dim); font-size: 12px; margin-left: auto; white-space: nowrap; }
   .toolbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .toolbar .group { display: flex; align-items: center; gap: 4px; }
@@ -183,6 +191,7 @@
   <div class="group" id="paneToggles">
     <!-- toggle tabs injected here -->
   </div>
+  <span id="spinner" title="Compiling…" hidden></span>
   <span id="status">loading dmd.wasm…</span>
   <span id="updated" title="When the dmd.wasm build on this page was last deployed"></span>
   <button id="themeToggle" class="theme-toggle" type="button" title="Toggle light/dark theme">☾</button>
@@ -763,6 +772,24 @@ function renderLined(id, text, positional = false, emptyMsg = "(no output)") {
     pre.appendChild(frag);
 }
 
+// The -vasm disassembly carries "; line N" marker lines (emitted only by this
+// wasm build, not native dmd). Fold them into the same SOH carry format
+// renderLined consumes: stamp \x01N on the instruction that follows a marker
+// (later instructions carry it forward), clear the carry at each function header
+// (a line ending in ':'), and drop the marker lines so the pane shows clean asm.
+function asmWithLineMarks(asm) {
+    const out = [];
+    let pending = null;                       // source line to stamp on the next emitted line
+    for (const line of asm.split("\n")) {
+        const m = line.match(/^; line (\d+)$/);
+        if (m) { pending = +m[1]; continue; }              // marker: drop, remember its line
+        if (line.endsWith(":")) { out.push(line + "\x010"); pending = null; continue; }  // function header: reset carry
+        if (pending != null) { out.push(line + "\x01" + pending); pending = null; }
+        else out.push(line);
+    }
+    return out.join("\n");
+}
+
 // Effective highlighted source line: a hovered line (editor or output) wins over
 // the editor's cursor line, so moving the mouse away falls back to the caret.
 let hoverLine = null, cursorLine = 1, lastApplied, lastEditorHl;
@@ -799,23 +826,42 @@ cols.addEventListener("mouseleave", () => { hoverLine = null; applyHighlight(); 
 
 // ---- Compile + render -----------------------------------------------------
 
-function run() {
+function compileAndRender() {
     const t0 = performance.now();
     const { lex, parse, sema, ast, ir, irOpt, asm, errors, diagnostics } = compile(getSrc());
-    const ms = (performance.now() - t0).toFixed(1);
+    lastRunMs = performance.now() - t0;
     renderLined("lex", lex, /*positional*/ true);
     renderLined("parse", parse);
     renderLined("sema", sema);
     if (ast) $("ast").innerHTML = highlightD(ast); else $("ast").textContent = "(no output)";
     renderLined("ir", ir, false, "(no code generated)");
     renderLined("iropt", irOpt, false, "(no code generated)");
-    $("asm").textContent = asm || "(no code generated)";
+    renderLined("asm", asmWithLineMarks(asm), false, "(no code generated)");
     $("diag").innerHTML = diagnostics ? ansiToHtml(diagnostics) : "(no errors/deprecations or other output)";
     // Mirror the diagnostics inline in the editor (gutter + underline + tooltip),
     // pushed synchronously now that this compile's results are in hand.
     editor.dispatch(setDiagnostics(editor.state, parseDiagnostics(diagnostics, editor.state.doc)));
-    $("status").textContent = `${ms} ms`;
+    $("status").textContent = `${lastRunMs.toFixed(1)} ms`;
     applyHighlight(/*force*/ true);   // DOM was rebuilt; re-apply current highlight
+}
+
+// The compile is synchronous and blocks the main thread, so we can't paint a
+// spinner partway through it. Instead we reveal the spinner and let the browser
+// paint it (two rAFs — the second fires after the spinner frame is on screen)
+// before kicking off the blocking compile, then hide it once results render. The
+// spinner's CSS animation runs on the compositor, so it keeps turning while the
+// thread is busy.
+let lastRunMs = 0;
+let runScheduled = false;
+function run() {
+    $("spinner").hidden = false;
+    $("status").textContent = "compiling…";
+    if (runScheduled) return;   // coalesce calls until the pending compile fires
+    runScheduled = true;
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+        runScheduled = false;
+        try { compileAndRender(); } finally { $("spinner").hidden = true; }
+    }));
 }
 
 (async () => {
