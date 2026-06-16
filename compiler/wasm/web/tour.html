@@ -55,10 +55,9 @@
   .codegen h2 .dot { background: var(--codegen); }
 
   /* A sub-stage within a section. */
-  .sub { margin: 28px 0; padding-left: 14px; border-left: 2px solid var(--aero-line); }
-  .parse   .sub { border-left-color: var(--parse); }
-  .sema    .sub { border-left-color: var(--sema); }
-  .codegen .sub { border-left-color: var(--codegen); }
+  /* A sub-stage within a section. No left rule: wide demos are centered on the
+     viewport and bleed past the prose column, so a rule there would be crossed. */
+  .sub { margin: 28px 0; }
   .sub h3 { font-size: 18px; margin: 0 0 8px; color: var(--aero-text-hi); }
   .sub h4 { font-size: 16px; margin: 22px 0 8px; color: var(--aero-text-hi); }
   .sub > p, .sub > ul { color: var(--aero-text); }
@@ -77,14 +76,13 @@
   .demo { margin: 14px 0 18px; border: 1px solid var(--aero-line); border-radius: 8px;
           overflow: hidden; background: var(--aero-surface);
           box-shadow: var(--aero-gloss), 0 2px 10px rgba(0,0,0,.18);
-          /* The left edge stays flush with the prose (and the section's left rule);
-             the demo only bleeds *rightward* into the page margin so two side-by-side
-             panes get enough width to render without an inner horizontal scrollbar.
-             The width fills out to ~16px from the viewport's right edge, capped so it
-             never gets absurdly wide on large screens. The 372px constant is the
-             prose column's left offset on wide screens: (820/2) - 24 main pad - 14
-             sub indent; max(38px, …) keeps it correct once the column stops centering. */
-          width: min(1180px, calc(100vw - max(38px, 50vw - 372px) - 16px)); }
+          /* Center the demo on the viewport and let it bleed symmetrically past the
+             prose column so side-by-side panes get width without an inner scrollbar.
+             left:50% + translateX(-50%) is relative to the centered <main>, whose
+             center coincides with the viewport center; width is capped at 1180px and
+             otherwise fills to ~16px from each viewport edge. */
+          position: relative; left: 50%; transform: translateX(-50%);
+          width: min(1180px, calc(100vw - 32px)); }
   .demo iframe { display: block; width: 100%; border: 0; }
   .demo .demo-select { display: block; margin: 10px 10px 4px; font: inherit; font-size: 13px;
           padding: 4px 8px; border-radius: 6px; cursor: pointer;

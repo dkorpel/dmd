@@ -40,6 +40,13 @@
     --aero-glow:    0 1px 3px rgba(0,0,0,.18);   /* subtle lift used on hover     */
     --aero-h1-glow: 0 1px 1px rgba(0,0,0,.3);    /* legibility on maroon, no glow */
 
+    /* Folder tabs (pane toggles). Light mode: darker inactive base so active tabs
+       stand out against the maroon header; the top highlight stays crisp. */
+    --tab-bg:     linear-gradient(180deg, #dadada 0%, #c6c6c6 100%);
+    --tab-bg-on:  linear-gradient(180deg, #f8f8f8 0%, #ececec 100%);
+    --tab-hi:     rgba(255,255,255,.55);
+    --tab-hi-on:  rgba(255,255,255,.85);
+
     /* Text. */
     --aero-text:        #333;       /* body text                       */
     --aero-text-2:      #555;       /* secondary text / pane labels    */
@@ -101,6 +108,12 @@
     --aero-gloss:   inset 0 1px 0 rgba(255,255,255,.08);
     --aero-glow:    0 1px 3px rgba(0,0,0,.5);
     --aero-h1-glow: 0 1px 1px rgba(0,0,0,.5);
+
+    /* Dark mode: tone down the white top-light on tabs so they don't glare. */
+    --tab-bg:     linear-gradient(180deg, #333333 0%, #282828 100%);
+    --tab-bg-on:  linear-gradient(180deg, #3e3e3e 0%, #323232 100%);
+    --tab-hi:     rgba(255,255,255,.16);
+    --tab-hi-on:  rgba(255,255,255,.26);
 
     --aero-text:        #d4d4d4;
     --aero-text-2:      #b0b0b0;
