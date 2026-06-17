@@ -30,7 +30,7 @@ self.onmessage = async (e) => {
             // compile() already catches wasm traps; this guards anything else so a
             // bad run reports an error instead of killing the worker.
             result = {
-                lex: "", parse: "", sema: "", ast: "", ir: "", irOpt: "", asm: "",
+                lex: "", parse: "", sema: "", ast: "", ir: "", irOpt: "", asm: "", asmUnopt: "",
                 errors: 1,
                 diagnostics: "dmd.wasm worker error: " + String((err && err.message) || err),
             };
