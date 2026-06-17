@@ -158,7 +158,9 @@ private void initFrontend()
 }
 
 /// Run the frontend on `src` (length `len`) and fill the output buffers.
-void dmdwasm_run(const(char)* src, size_t len)
+/// `optimize` runs the backend `-O` global optimizer; the web app compiles the
+/// same source twice (optimize off then on) to fill the two disassembly panes.
+void dmdwasm_run(const(char)* src, size_t len, int optimize)
 {
     import dmd.dmodule : Module;
     import dmd.identifier : Identifier;
@@ -247,7 +249,7 @@ void dmdwasm_run(const(char)* src, size_t len)
         // source<->asm highlighting. Opt-in: plain native -vasm stays unmarked.
         import dmd.backend.x86.cgcod : vasmSourceLines;
         vasmSourceLines = true;
-        driverParams.optimize = true;   // run the -O global optimizer so the two IR panes differ
+        driverParams.optimize = optimize != 0;   // -O drives both the optimized IR pane and the optimized disassembly
         backend_init(global.params, driverParams, target);
         ObjcGlue_initialize();
 
@@ -281,7 +283,7 @@ int dmdwasm_selftest()
         "int add(int a, int b) { return a + b; }\n" ~
         "enum N = 3;\n" ~
         "int[] squares() { int[] r; foreach (i; 0 .. N) r ~= i * i; return r; }\n";
-    dmdwasm_run(snippet.ptr, snippet.length);
+    dmdwasm_run(snippet.ptr, snippet.length, 1);
     auto ast = buffers.ast[];
     printf("=== errors: %u, ast bytes: %zu ===\n", global.errors, ast.length);
     if (ast.length)
@@ -324,7 +326,7 @@ void dmdwasm_run_stdin()
         len += n;
     }
 
-    dmdwasm_run(buf, len);
+    dmdwasm_run(buf, len, 1);
     printf("errors=%u astlen=%zu\n", global.errors, cast(size_t) buffers.ast[].length);
     fflush(stdout);
 }

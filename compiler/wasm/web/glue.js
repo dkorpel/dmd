@@ -103,9 +103,10 @@ function newInstance() {
     if (exports.__wasm_call_ctors) exports.__wasm_call_ctors();
 }
 
-// Compile `source`, returning { ast, asm, errors, diagnostics }.
-// `asm` is the -vasm x86 disassembly (the backend prints it to stdout).
-export function compile(source) {
+// Run the frontend+backend once on `source` in a fresh instance. `optimize`
+// selects the backend `-O` pass, which changes both the optimized-IR pane and
+// the disassembly. Returns all panes plus the -vasm disassembly (`asm`).
+function runOnce(source, optimize) {
     newInstance();   // fresh memory + global state: no leak, no cross-run corruption
     stdoutText = "";
     stderrText = "";
@@ -118,7 +119,7 @@ export function compile(source) {
     // static assert in float-heavy Phobos hits `unreachable`). Catch it so the
     // page survives — the next compile gets a brand-new instance regardless.
     try {
-        exports.dmdwasm_run(ptr, bytes.length);
+        exports.dmdwasm_run(ptr, bytes.length, optimize ? 1 : 0);
     } catch (e) {
         return {
             lex: "", parse: "", sema: "", ast: "", ir: "", irOpt: "",
@@ -147,4 +148,18 @@ export function compile(source) {
     const irOptLen = exports.dmdwasm_iropt_len();
     const irOpt = irOptLen ? td.decode(new Uint8Array(memory.buffer, irOptPtr, irOptLen)) : "";
     return { lex, parse, sema, ast, ir, irOpt, asm: stdoutText, errors: exports.dmdwasm_errors(), diagnostics: stderrText };
+}
+
+// Compile `source`, returning all panes plus both disassemblies:
+// `asm` is the optimized (-O) x86 disassembly, `asmUnopt` the unoptimized one.
+// The backend can only emit one of them per codegen, so we run two fresh
+// instances (a second pass is cheap relative to a single keystroke debounce and
+// the fresh-instance model already isolates the global state between runs).
+export function compile(source) {
+    const result = runOnce(source, /*optimize*/ true);
+    // Only worth a second pass once the source actually generated code.
+    result.asmUnopt = result.errors === 0
+        ? runOnce(source, /*optimize*/ false).asm
+        : "";
+    return result;
 }
