@@ -3578,6 +3578,12 @@ elem* elstruct(elem* e, Goal goal)
 
     if (!e.ET)
         return e;
+
+    // WASM passes all aggregates by pointer (see argtypes_wasm / buildFuncType).
+    // Don't rewrite an OPstrpar argument into a register-sized integer value;
+    // leave it as OPstrpar so the backend passes the aggregate's address.
+    if (e.Eoper == OPstrpar && config.objfmt == OBJ_WASM)
+        return e;
     //printf("\tnumbytes = %d\n", cast(int)type_size(e.ET));
 
     type* t = e.ET;

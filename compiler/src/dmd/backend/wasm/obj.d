@@ -379,7 +379,12 @@ bool returnByPtr(type* t)
     }
 }
 
-WasmFuncType buildFuncType(elem* e)
+// Derive a call's WASM signature from the argument tree alone (used for
+// indirect calls with no typed callee symbol — e.g. a virtual call through a
+// vtable slot).  `args` is the OPparam spine (e.E2); `retTy` is the call
+// elem's own type (e.Ety), since the spine's Ety is TYvoid and carries no
+// return type.
+WasmFuncType buildFuncType(elem* args, tym_t retTy)
 {
     WASM_TYPE[] callParams;
     void collect(elem* p)
@@ -395,9 +400,9 @@ WasmFuncType buildFuncType(elem* e)
         callParams ~= wasmType(tybasic(p.Ety));
     }
 
-    collect(e);
+    collect(args);
     WASM_TYPE[] callResults;
-    const tym_t retTy0 = tybasic(e.Ety);
+    const tym_t retTy0 = tybasic(retTy);
     if (typeHasValue(retTy0))
         callResults ~= wasmType(retTy0);
     return WasmFuncType(callParams, callResults);

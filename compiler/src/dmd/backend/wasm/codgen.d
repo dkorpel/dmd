@@ -1090,7 +1090,7 @@ private bool genCall(ref WasmCG cg, elem* e)
         }
         else
         {
-            typeIdx = cg.internType(buildFuncType(e.E2));
+            typeIdx = cg.internType(buildFuncType(e.E2, e.Ety));
         }
 
         // Function pointer source: strip an outer OPind (fptr table index
