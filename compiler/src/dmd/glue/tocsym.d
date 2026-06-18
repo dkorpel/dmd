@@ -491,6 +491,19 @@ Symbol* toSymbol(Dsymbol s)
             if (fd.isMember2() && fd.isStatic())
                 f.Fflags |= Fstatic;
 
+            // The WASM backend derives a function's exact type signature (and
+            // thus its implicit leading 'this'/static-link parameter) from these
+            // flags. toObjFile sets them only when a body is emitted, so external
+            // member/nested declarations would otherwise get a wrong import type.
+            // Set them here so imports match how callers push arguments.
+            if (target.isWasm)
+            {
+                if (fd.isNested())
+                    f.Fflags3 |= Fnested;
+                else if (fd.needThis())
+                    f.Fflags3 |= Fmember;
+            }
+
             if (fd.isSafe())
                 f.Fflags3 |= F3safe;
 
