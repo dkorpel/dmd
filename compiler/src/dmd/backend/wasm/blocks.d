@@ -188,11 +188,12 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         if (b.bc == BC.retexp)
         {
             // Return value: leave on stack, then return
+            bool hasRetVal;
             if (b.Belem)
-                cg.genElem(b.Belem);
+                hasRetVal = cg.genElem(b.Belem);
             if (cg.hasShadowFrame)
             {
-                if (b.Belem) // return value is on the stack
+                if (hasRetVal) // return value is on the stack
                 {
                     // Save, epilogue, reload. Aggregates returned via
                     // hidden pointer leave an i32 on the stack.
