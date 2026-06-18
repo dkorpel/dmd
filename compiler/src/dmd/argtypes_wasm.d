@@ -80,13 +80,13 @@ TypeTuple toArgTypes_wasm(Type t)
         break;
     }
 
-    // (length, ptr)
-    if (tb.ty == Tarray)
-        return new TypeTuple(Type.tsize_t, Type.tvoidptr);
-
-    // (funcptr, contextptr)
-    if (tb.ty == Tdelegate)
-        return new TypeTuple(Type.tvoidptr, Type.tvoidptr);
+    // Slices and delegates are two-word aggregates.  They are *passed* as two
+    // i32 params (handled directly in the backend's buildFuncType), but for the
+    // return ABI we route them through a hidden sret pointer just like structs,
+    // so the value never has to be packed into a single i64.  Returning empty
+    // here makes Target.isReturnOnStack() report return-on-stack for them.
+    if (tb.ty == Tarray || tb.ty == Tdelegate)
+        return TypeTuple.empty;
 
     // Other aggregates (structs, static arrays, etc.): always pass by reference.
     // Returning TypeTuple(t) for aggregates would recurse into visitStruct

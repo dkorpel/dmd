@@ -359,18 +359,15 @@ public bool isSliceOrDelegate(type* t) @trusted nothrow
 ///: Returns true if the backend type is an aggregate (struct/array) that must be
 /// returned via a hidden pointer parameter in the WASM calling convention.
 //
-// Note: slices and delegates are NOT returned via hidden pointer at the WASM
-// level — they continue to be returned as a packed i64 (length<<32 | ptr).
-// The front-end builds them as OPpair-to-i64 and we keep that representation
-// at the ABI boundary. Adding sret for slice/delegate returns is a larger
-// refactor (see slice_abi_refactor_plan.md).
+// Slices and delegates are two-word aggregates returned via a hidden sret
+// pointer, matching `ldc2 -O0` and `Target.isReturnOnStack` (see
+// argtypes_wasm.d).  The front-end constructs the return value through the
+// hidden `__result` pointer, so no i64 packing is needed at the ABI boundary.
 bool returnByPtr(type* t)
 {
     auto tb = tybasic(t.Tty);
-    if (tb == TYdarray || tb == TYdelegate)
-    {
-        // return true;
-    }
+    if (isSliceOrDelegate(t))
+        return true;
 
     switch (tb)
     {

@@ -2254,10 +2254,9 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
     type* retType = sfunc.Stype.Tnext;
     assert(retType);
     const bool hasReturn = tybasic(retType.Tty) != TYvoid;
-    {
-        const tym_t rb = tybasic(retType.Tty);
-        cg.retByHiddenPtr = (rb == TYstruct || rb == TYarray);
-    }
+    // Slices/delegates return via hidden sret pointer too (returnByPtr keys off
+    // the type's Tnext to tell a real slice from a plain ulong/long).
+    cg.retByHiddenPtr = returnByPtr(retType);
 
     // Always allocate a shadow frame, even when empty — keeps code paths uniform.
     cg.hasShadowFrame = true;
