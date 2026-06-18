@@ -3,15 +3,20 @@
  * single, self-contained `.d` file.
  *
  * This is driven by the `-extractTypes=<Name>` switch.  Only the data layout is
- * kept: fields are emitted, methods/constructors/templates/UDAs are dropped.  The
- * goal is to obtain an isolated module that mirrors the in-memory representation
- * of a type so introspection-based (de)serialization code can be tested without
- * recompiling the rest of the code base.
+ * kept: fields (and their user-defined attributes) are emitted, while methods,
+ * constructors and templates are dropped.  The goal is to obtain an isolated
+ * module that mirrors the in-memory representation of a type so introspection-
+ * based (de)serialization code can be tested without recompiling the rest of the
+ * code base.
  *
  * The emitted module is written to stdout; redirect it to create the `.d` file:
  * ---
  * dmd -o- -extractTypes=Foo foo.d > Foo.d
  * ---
+ *
+ * Rather than stringifying declarations by hand, this module builds a stripped
+ * copy of each declaration's AST (keeping only the fields and UDAs) and hands it
+ * to `dmd.hdrgen` for printing, so the output matches dmd's own pretty-printer.
  *
  * Copyright:   Copyright (C) 1999-2025 by The D Language Foundation, All Rights Reserved
  * Authors:     $(LINK2 https://www.digitalmars.com, Walter Bright)
@@ -26,6 +31,7 @@ import core.stdc.stdio;
 
 import dmd.aggregate;
 import dmd.arraytypes;
+import dmd.attrib;
 import dmd.dclass;
 import dmd.declaration;
 import dmd.denum;
@@ -33,6 +39,7 @@ import dmd.dmodule;
 import dmd.dstruct;
 import dmd.dsymbol;
 import dmd.errorsink;
+import dmd.expression;
 import dmd.globals;
 import dmd.hdrgen;
 import dmd.identifier;
@@ -44,7 +51,7 @@ import dmd.common.outbuffer;
 
 /**
  * Emit `typeName` together with every aggregate/enum reachable through its
- * fields as a single isolated module.
+ * fields (and field/aggregate UDAs) as a single isolated module.
  *
  * Params:
  *      modules  = all root modules being compiled, searched for `typeName`
@@ -71,11 +78,11 @@ bool extractTypes(ref Modules modules, const(char)[] typeName, ErrorSink eSink)
         return true;
     }
 
-    // Collect `root` and all of its transitive field-type dependencies
+    // Collect `root` and all of its transitive dependencies
     Collector c;
     c.addAggregate(root);
 
-    // Emit the result.  AST nodes (fields, enums) are rendered through hdrgen
+    // Build a stripped AST for each collected symbol and let hdrgen print it,
     // so the output matches dmd's own pretty-printer.
     OutBuffer buf;
     buf.doindent = true;
@@ -86,10 +93,14 @@ bool extractTypes(ref Modules modules, const(char)[] typeName, ErrorSink eSink)
     buf.writenl();
     foreach (s; c.order[])
     {
+        buf.writenl();
+        Dsymbol stripped;
         if (auto ed = s.isEnumDeclaration())
-            emitEnum(buf, ed, hgs);
+            stripped = stripEnum(ed);
         else if (auto ad = s.isAggregateDeclaration())
-            emitAggregate(buf, ad, c, hgs);
+            stripped = stripAggregate(ad, c);
+        if (stripped)
+            toCBuffer(stripped, buf, hgs);
     }
 
     fwrite(buf[].ptr, 1, buf.length, stdout);
@@ -116,6 +127,12 @@ AggregateDeclaration searchAggregate(Dsymbols* members, const(char)[] name)
             if (auto found = searchAggregate(sds.members, name))
                 return found;
         }
+        // Recurse into attribute declarations (e.g. `@UDA class Shape {}`)
+        if (auto attr = s.isAttribDeclaration())
+        {
+            if (auto found = searchAggregate(attr.decl, name))
+                return found;
+        }
     }
     return null;
 }
@@ -140,8 +157,12 @@ struct Collector
                 addAggregate(cd.baseClass);
         }
 
+        addUdas(ad);
         foreach (vd; ad.fields)
+        {
             addType(vd.type);
+            addUdas(vd);
+        }
     }
 
     void addEnum(EnumDeclaration ed)
@@ -150,6 +171,7 @@ struct Collector
             return;
         seen[cast(void*) ed] = true;
         order.push(ed);
+        addUdas(ed);
         if (ed.memtype)
             addType(ed.memtype);
     }
@@ -174,82 +196,91 @@ struct Collector
             addType(n);
     }
 
+    /// Collect types referenced by the UDAs attached to `sym`
+    void addUdas(Dsymbol sym)
+    {
+        if (!sym.userAttribDecl || !sym.userAttribDecl.atts)
+            return;
+        foreach (e; *sym.userAttribDecl.atts)
+            addUdaExpr(e);
+    }
+
+    void addUdaExpr(Expression e)
+    {
+        if (!e)
+            return;
+        if (auto te = e.isTupleExp())
+        {
+            if (te.exps)
+                foreach (sub; *te.exps)
+                    addUdaExpr(sub);
+        }
+        else
+            addType(e.type);
+    }
+
     bool isEmitted(AggregateDeclaration ad)
     {
         return ad && (cast(void*) ad in seen) !is null;
     }
 }
 
-void emitAggregate(ref OutBuffer buf, AggregateDeclaration ad, ref Collector c, ref HdrGenState hgs)
+/**
+ * Wrap `inner` in a `@(...)` UDA declaration if `src` carries user-defined
+ * attributes, so hdrgen re-emits them.  Otherwise return `inner` unchanged.
+ */
+Dsymbol withUdas(Dsymbol inner, Dsymbol src)
 {
-    buf.writenl();
+    if (src.userAttribDecl && src.userAttribDecl.atts && src.userAttribDecl.atts.length)
+        return new UserAttributeDeclaration(src.userAttribDecl.atts, new Dsymbols(inner));
+    return inner;
+}
+
+/// Build a stripped copy of `ad` containing only its fields (and their UDAs).
+Dsymbol stripAggregate(AggregateDeclaration ad, ref Collector c)
+{
+    auto members = new Dsymbols();
+    foreach (vd; ad.fields)
+        members.push(withUdas(vd, vd));
+
+    AggregateDeclaration decl;
     if (auto cd = ad.isClassDeclaration())
     {
-        buf.writestring("class ");
-        buf.writestring(ad.ident.toString());
+        auto baseclasses = new BaseClasses();
         // Only keep the base if it is part of the emitted set
         if (cd.baseClass && c.isEmitted(cd.baseClass))
-        {
-            buf.writestring(" : ");
-            buf.writestring(cd.baseClass.ident.toString());
-        }
+            baseclasses.push(new BaseClass(cd.baseClass.type));
+        decl = new ClassDeclaration(ad.loc, ad.ident, baseclasses, members, false);
     }
     else if (ad.isUnionDeclaration())
     {
-        buf.writestring("union ");
-        buf.writestring(ad.ident.toString());
+        decl = new UnionDeclaration(ad.loc, ad.ident);
+        decl.members = members;
     }
     else
     {
-        buf.writestring("struct ");
-        buf.writestring(ad.ident.toString());
+        decl = new StructDeclaration(ad.loc, ad.ident, false);
+        decl.members = members;
     }
-    buf.writenl();
-    buf.writeByte('{');
-    buf.writenl();
-    buf.level++;
-    // Render each field as D code via hdrgen, dropping methods entirely
-    foreach (vd; ad.fields)
-        toCBuffer(vd, buf, hgs);
-    buf.level--;
-    buf.writeByte('}');
-    buf.writenl();
+    return withUdas(decl, ad);
 }
 
-void emitEnum(ref OutBuffer buf, EnumDeclaration ed, ref HdrGenState hgs)
+/// Build a stripped copy of `ed` using pre-semantic member values.
+Dsymbol stripEnum(EnumDeclaration ed)
 {
-    buf.writenl();
-    buf.writestring("enum ");
-    buf.writestring(ed.ident.toString());
-    if (ed.memtype)
-    {
-        buf.writestring(" : ");
-        toCBuffer(ed.memtype, buf, null, hgs);
-    }
-    buf.writenl();
-    buf.writeByte('{');
-    buf.writenl();
-    buf.level++;
+    auto decl = new EnumDeclaration(ed.loc, ed.ident, ed.memtype);
+    decl.members = new Dsymbols();
     if (ed.members)
     {
         foreach (s; *ed.members)
         {
-            auto em = s.isEnumMember();
-            if (!em)
-                continue;
-            buf.writestring(em.ident.toString());
-            // Use the original (pre-semantic) value so the rendered member is
-            // valid D source, not a `cast(...)` of the resolved constant.
-            if (em.origValue)
+            if (auto em = s.isEnumMember())
             {
-                buf.writestring(" = ");
-                toCBuffer(em.origValue, buf, hgs);
+                // Use the original (pre-semantic) value so the rendered member
+                // is valid D source, not a `cast(...)` of the resolved constant.
+                decl.members.push(new EnumMember(em.loc, em.ident, em.origValue, null));
             }
-            buf.writeByte(',');
-            buf.writenl();
         }
     }
-    buf.level--;
-    buf.writeByte('}');
-    buf.writenl();
+    return withUdas(decl, ed);
 }

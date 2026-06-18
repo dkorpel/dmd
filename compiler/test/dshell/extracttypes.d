@@ -24,6 +24,9 @@ int main()
     assert(text.canFind("struct Point"),        "missing struct dependency");
     assert(text.canFind("enum Color"),          "missing enum dependency");
     assert(text.canFind("Point[] points"),      "missing slice field");
+    assert(text.canFind("struct Tag"),          "missing UDA-only type dependency");
+    assert(text.canFind(`@(Tag("shape"))`),     "missing aggregate UDA");
+    assert(text.canFind(`@(Tag("pts"))`),       "missing field UDA");
     assert(!text.canFind("draw"),               "method should not be emitted");
     assert(!text.canFind("counter"),            "static field should not be emitted");
 
