@@ -5984,6 +5984,11 @@ elem* callfunc(Loc loc,
     }
     else
     {
+        // For an indirect call there's no callee Symbol to carry the
+        // function type into the backend, so stash is here
+        // for function pointers, delegates, and virtual/interface dispatch
+        if (ec && ec.Eoper != OPvar)
+            ec.ET = Type_toCtype(tf);
         // `OPcallns` used to be passed here for certain pure functions,
         // but optimizations based on pure have to be retought, see:
         // https://issues.dlang.org/show_bug.cgi?id=22277

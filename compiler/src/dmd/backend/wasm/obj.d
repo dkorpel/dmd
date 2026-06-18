@@ -386,42 +386,6 @@ bool returnByPtr(type* t)
     }
 }
 
-// Derive a call's WASM signature from the argument tree alone (used for
-// indirect calls with no typed callee symbol — e.g. a virtual call through a
-// vtable slot).  `args` is the OPparam spine (e.E2); `retTy` is the call
-// elem's own type (e.Ety), since the spine's Ety is TYvoid and carries no
-// return type.
-WasmFuncType buildFuncType(elem* args, tym_t retTy)
-{
-    WASM_TYPE[] callParams;
-    void collect(elem* p)
-    {
-        if (!p)
-            return;
-        if (p.Eoper == OPparam)
-        {
-            collect(p.E2);
-            collect(p.E1);
-            return;
-        }
-        // Aggregates (e.g. a by-value struct, OPstrpar) are passed by pointer,
-        // so the value actually pushed is an i32 address, not the struct itself.
-        const tym_t pty = tybasic(p.Ety);
-        if (pty == TYstruct || pty == TYarray)
-        {
-            callParams ~= WASM_I32;
-            return;
-        }
-        callParams ~= wasmType(pty);
-    }
-
-    collect(args);
-    WASM_TYPE[] callResults;
-    const tym_t retTy0 = tybasic(retTy);
-    if (typeHasValue(retTy0))
-        callResults ~= wasmType(retTy0);
-    return WasmFuncType(callParams, callResults);
-}
 
 /// Build a WasmFuncType from a backend function type.
 /// Aggregates are passed/returned by pointer; aggregate return adds a hidden i32 first.

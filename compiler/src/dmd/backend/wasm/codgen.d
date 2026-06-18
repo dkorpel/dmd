@@ -1017,6 +1017,15 @@ private bool genCall(ref WasmCG cg, elem* e)
     // underlying Symbol (Stype is pointer-to-function; Tnext is the func).
     if (!fty)
     {
+        // e2ir's callfunc stashes the pointed-to function type on the
+        // indirect-call function elem (e.E1.ET). This is the authoritative
+        // source for a call through a value with no backing Symbol (a
+        // function pointer loaded from a field, array element, AA, ...).
+        if (e.E1 && e.E1.ET && tyfunc(e.E1.ET.Tty))
+            fty = e.E1.ET;
+    }
+    if (!fty)
+    {
         elem* fe = e.E1;
         // Peel an outer OPind: e2ir often emits `*&f` for function calls.
         if (fe && fe.Eoper == OPind && fe.E1)
@@ -1090,25 +1099,20 @@ private bool genCall(ref WasmCG cg, elem* e)
         // direct calls. Fall back to deriving from arg shapes when the
         // function pointer carries no type info.
         uint typeIdx;
-        if (fty)
-        {
-            // e2ir lowers a delegate/member-pointer call to push hidden leading
-            // pointers (delegate context, multi-context array, hidden return
-            // pointer) ahead of the declared args, but the function type fished
-            // out of the pointer/delegate variable only lists the declared
-            // params. ctx.skipCount counts those hidden arg leaves; buildFuncType
-            // already re-adds the hidden return pointer via returnByPtr, so pass
-            // the remainder so the call_indirect signature matches what is
-            // actually pushed.
-            const bool retPtr = fty.Tnext && returnByPtr(fty.Tnext);
-            const uint hiddenLeading = ctx.skipCount > (retPtr ? 1 : 0)
-                ? ctx.skipCount - (retPtr ? 1 : 0) : 0;
-            typeIdx = cg.internType(buildFuncType(fty, null, hiddenLeading));
-        }
-        else
-        {
-            typeIdx = cg.internType(buildFuncType(e.E2, e.Ety));
-        }
+        assert(fty);
+
+        // e2ir lowers a delegate/member-pointer call to push hidden leading
+        // pointers (delegate context, multi-context array, hidden return
+        // pointer) ahead of the declared args, but the function type fished
+        // out of the pointer/delegate variable only lists the declared
+        // params. ctx.skipCount counts those hidden arg leaves; buildFuncType
+        // already re-adds the hidden return pointer via returnByPtr, so pass
+        // the remainder so the call_indirect signature matches what is
+        // actually pushed.
+        const bool retPtr = fty.Tnext && returnByPtr(fty.Tnext);
+        const uint hiddenLeading = ctx.skipCount > (retPtr ? 1 : 0)
+            ? ctx.skipCount - (retPtr ? 1 : 0) : 0;
+        typeIdx = cg.internType(buildFuncType(fty, null, hiddenLeading));
 
         // Function pointer source: strip an outer OPind (fptr table index
         // lives at the address) and evaluate the inner expression to push
