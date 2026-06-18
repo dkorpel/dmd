@@ -453,7 +453,7 @@ $(WASM_LIB): $(WASM_OBJS)
 	ar rcs $@ $(WASM_OBJS)
 
 .PHONY: wasm
-wasm: $(WASM_LIB)
+wasm: copy $(WASM_LIB)
 
 UT_SRCS:=$(SRCS)
 UT_MODULES:=$(patsubst src/%.d,$(ROOT)/unittest/%,$(UT_SRCS))
