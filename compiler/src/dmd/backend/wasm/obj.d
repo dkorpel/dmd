@@ -201,7 +201,14 @@ struct WasmFuncBody
     string name; // for synthesized functions with no Symbol
     WasmLocal[] locals;
     uint numParams;
-    OutBuffer code; // WASM bytecode (without local decls header)
+    // Heap pointer, not a by-value field: WasmFuncBody lives in the GC-grown
+    // `wasmFuncBodies` array, and `~=` reallocation bit-copies elements. A
+    // by-value OutBuffer would then exist in both the stale and the live array
+    // block, and OutBuffer.~this frees its C-malloc'd buffer — so the GC would
+    // finalize (free) the same buffer twice (double free under -lowmem). Holding
+    // the OutBuffer behind a pointer means realloc only copies the pointer; the
+    // single OutBuffer object is finalized exactly once.
+    OutBuffer* code; // WASM bytecode (without local decls header)
     Symbol*[] savedGlobsym; // globsym snapshot at func_term time
 
     // Code relocations recorded during code generation.
@@ -242,7 +249,7 @@ __gshared WasmFuncBody[] wasmFuncBodies;
 struct WasmDataSeg
 {
     uint offset;          // linear memory offset of first byte
-    OutBuffer data;       // raw bytes
+    OutBuffer* data;      // raw bytes (heap pointer — see WasmFuncBody.code note re: GC double free)
     Symbol* sym;          // owning data symbol (null for anonymous rodata)
     const(char)[] name;   // segment name for SEGMENT_INFO ("" => synthesise)
     uint alignLog2 = 2;   // log2(alignment) for SEGMENT_INFO
@@ -1578,6 +1585,7 @@ int WasmObj_data_start(Symbol* sdata, targ_size_t datasize, int seg)
     // the symbol's linear-memory address; the segment's bytes are exactly
     // the symbol's payload.
     WasmDataSeg ds;
+    ds.data = new OutBuffer();
     ds.offset = base;
     ds.sym = sdata;
     if (sdata)
@@ -1879,6 +1887,7 @@ private uint allocRoData(const(void)* p, uint len, uint align_)
     uint base = (wmod.dataHeap + mask) & ~mask;
 
     WasmDataSeg ds;
+    ds.data = new OutBuffer();
     ds.offset = base;
     // Synthesised name (".rodata.<n>") matches the LLVM convention so wasm-ld
     // groups these alongside other rodata.
@@ -1956,6 +1965,7 @@ void WasmObj_func_start(Symbol* sfunc)
 
     // Allocate a function body slot
     WasmFuncBody fb;
+    fb.code = new OutBuffer();
     fb.sym = sfunc;
     wasmFuncBodies ~= fb;
 }
