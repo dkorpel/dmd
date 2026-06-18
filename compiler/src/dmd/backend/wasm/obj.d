@@ -1272,24 +1272,23 @@ void preRegisterExternals(elem* e)
         return;
 
     const op = e.Eoper;
+
+    // A function referenced by value (OPvar) or by address (OPrelconst &func,
+    // for a function pointer) must have its import registered here too
+    if (op == OPvar || op == OPrelconst)
+    {
+        Symbol* s = e.Vsym;
+        if (s && s.Stype && tyfunc(tybasic(s.Stype.Tty)) &&
+            s.Sclass != SC.auto_ && s.Sclass != SC.parameter && s.Sclass != SC.fastpar)
+            funcIndex(s); // side-effect: registers as import if not defined
+        return;
+    }
+
     if (OTleaf(op))
         return;
 
     if (op == OPcall || op == OPucall)
     {
-        if (e.E1 && e.E1.Eoper == OPvar)
-        {
-            // elem_print(e);
-            Symbol* s = e.E1.Vsym;
-            if (s)
-            {
-                if (s.Sclass != SC.auto_ && s.Sclass != SC.parameter && s.Sclass != SC.fastpar)
-                {
-                    funcIndex(s); // side-effect: registers as import if not defined
-                }
-            }
-        }
-
         if (e.E1)
             preRegisterExternals(e.E1);
         if (e.E2)
