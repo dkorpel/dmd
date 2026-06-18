@@ -404,7 +404,15 @@ WasmFuncType buildFuncType(elem* args, tym_t retTy)
             collect(p.E1);
             return;
         }
-        callParams ~= wasmType(tybasic(p.Ety));
+        // Aggregates (e.g. a by-value struct, OPstrpar) are passed by pointer,
+        // so the value actually pushed is an i32 address, not the struct itself.
+        const tym_t pty = tybasic(p.Ety);
+        if (pty == TYstruct || pty == TYarray)
+        {
+            callParams ~= WASM_I32;
+            return;
+        }
+        callParams ~= wasmType(pty);
     }
 
     collect(args);
@@ -1944,6 +1952,15 @@ Symbol* WasmObj_sym_cdata(tym_t ty, char* p, int len)
     uint off = allocRoData(p, len, align_);
     Symbol* s = symboldata(off, ty);
     s.Sseg = 1;
+    // Tie the freshly-created rodata segment to this symbol so the linking
+    // section emits a DEFINED WASM_SYMTAB.DATA entry (segment index + offset 0)
+    // for it. Otherwise the symbol is referenced by a MEMORY_ADDR reloc but has
+    // no owning segment, so it's emitted UNDEFINED and wasm-ld resolves every
+    // reference (e.g. a string literal's `.ptr`) to address 0. Failed before:
+    //   int strlen_(const(char)* s) { int n; while (s[n]) n++; return n; }
+    //   int main() { return strlen_("hello".ptr) == 5 ? 0 : 1; } // exited 1: ptr==null
+    if (wmod.activeSegIdx >= 0 && wmod.activeSegIdx < cast(int) wmod.dataSegs.length)
+        wmod.dataSegs[wmod.activeSegIdx].sym = s;
     return s;
 }
 
