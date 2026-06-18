@@ -104,6 +104,12 @@ WASM_TYPE wasmType(tym_t ty)
         // OP_UNREACHABLE so this is unused at runtime.
         return WASM_I32;
 
+    case TYstruct:
+    case TYarray:
+        // e.g. the result of a `cond ? structA : structB` or a by-value struct argument
+        // TODO: Should be WASM_PTR or something
+        return WASM_I32;
+
     default:
         try {
             writeln("ty = ", tym_str(ty).fromStringz, ", tybasic = ", tybasic(ty));
@@ -1086,7 +1092,18 @@ private bool genCall(ref WasmCG cg, elem* e)
         uint typeIdx;
         if (fty)
         {
-            typeIdx = cg.internType(buildFuncType(fty, null));
+            // e2ir lowers a delegate/member-pointer call to push hidden leading
+            // pointers (delegate context, multi-context array, hidden return
+            // pointer) ahead of the declared args, but the function type fished
+            // out of the pointer/delegate variable only lists the declared
+            // params. ctx.skipCount counts those hidden arg leaves; buildFuncType
+            // already re-adds the hidden return pointer via returnByPtr, so pass
+            // the remainder so the call_indirect signature matches what is
+            // actually pushed.
+            const bool retPtr = fty.Tnext && returnByPtr(fty.Tnext);
+            const uint hiddenLeading = ctx.skipCount > (retPtr ? 1 : 0)
+                ? ctx.skipCount - (retPtr ? 1 : 0) : 0;
+            typeIdx = cg.internType(buildFuncType(fty, null, hiddenLeading));
         }
         else
         {

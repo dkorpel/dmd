@@ -427,7 +427,12 @@ WasmFuncType buildFuncType(elem* args, tym_t retTy)
 /// Aggregates are passed/returned by pointer; aggregate return adds a hidden i32 first.
 /// Slices and delegates are split into 2 params.
 /// `sfunc` may be null for indirect calls — Fmember/Fnested fixups are skipped.
-public WasmFuncType buildFuncType(type* t, Symbol* sfunc)
+/// `hiddenLeadingPtrs` is the number of hidden i32 pointers (delegate context,
+/// multi-context array, ...) that the caller prepends to the argument list but
+/// that don't appear in `t`'s Tparamtypes. For indirect calls (sfunc == null)
+/// it replaces the Fmember/Fnested fixup, which can't be consulted there; it
+/// excludes the hidden return pointer, which `returnByPtr` already accounts for.
+public WasmFuncType buildFuncType(type* t, Symbol* sfunc, uint hiddenLeadingPtrs = 0)
 {
     WasmFuncType ft;
 
@@ -486,6 +491,11 @@ public WasmFuncType buildFuncType(type* t, Symbol* sfunc)
     // D nested functions (Fnested) receive a static-link/closure pointer.
     // Neither is in Tparamtypes, so prepend an i32.
     // (TODO: what order are hidden ret and this ptr passed? doesn't matter here, but still...)
+    // For an indirect call the callee symbol (and thus its flags) isn't known,
+    // so the caller passes the prepended-pointer count it derived from the
+    // actual argument list instead.
+    foreach (_; 0 .. hiddenLeadingPtrs)
+        ft.params ~= WASM_I32;
     if (sfunc && sfunc.Sfunc && (sfunc.Sfunc.Fflags3 & (Fmember | Fnested)))
         ft.params ~= WASM_I32;
 
