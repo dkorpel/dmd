@@ -844,11 +844,21 @@ private bool emitSliceHalf(ref WasmCG cg, elem* e, bool ptrHalf)
 {
     if (!e)
         return false;
+    const uint half = ptrHalf ? 4u : 0u;
+    uint memOff;
+    // OPrelconst is &sym: the slice value lives in `sym` at Voffset, so load
+    // each half directly from the symbol. (Its Ety is the pointer type, not
+    // TYdarray, so this case precedes the darray/delegate Ety guard below.)
+    if (e.Eoper == OPrelconst && e.Vsym &&
+        emitSymBase(cg, e.Vsym, cast(uint) e.Voffset + half, memOff))
+    {
+        cg.emit(OP_I32_LOAD);
+        cg.emitMemArg(2, memOff);
+        return true;
+    }
     const tym_t ety = tybasic(e.Ety);
     if (ety != TYdarray && ety != TYdelegate)
         return false;
-    const uint half = ptrHalf ? 4u : 0u;
-    uint memOff;
     if (e.Eoper == OPvar && e.Vsym &&
         emitSymBase(cg, e.Vsym, cast(uint) e.Voffset + half, memOff))
     {
@@ -892,12 +902,50 @@ private void emitSliceArg(ref WasmCG cg, elem* arg)
         cg.genElem(a.E2);
         return;
     }
+    // OPrpair is the reversed pair: E1 = msb (ptr), E2 = lsb (length). Emit
+    // (length, ptr) by swapping the operand order.
+    if (a.Eoper == OPrpair)
+    {
+        cg.genElem(a.E2);
+        cg.genElem(a.E1);
+        return;
+    }
+    // A non-void OPparam is a slice/delegate already split into a register pair
+    // by elparamx (cgelem.d): E1 = msw (ptr/funcptr), E2 = lsw (length/context).
+    // Emit (lsw, msw) to match the (length, ptr) / (context, funcptr) order.
+    if (a.Eoper == OPparam)
+    {
+        cg.genElem(a.E2);
+        cg.genElem(a.E1);
+        return;
+    }
     if (emitSliceHalf(cg, a, /*ptrHalf*/ false) &&
         emitSliceHalf(cg, a, /*ptrHalf*/ true))
         return;
 
     elem_print(arg);
     assert(0);
+}
+
+// True if `e` is an OPparam spine node (the void-typed binary list backbone)
+// rather than a non-void OPparam that `elparamx` (cgelem.d) produced to pass a
+// slice/delegate as a split register pair — those count as one ABI argument.
+private bool isParamSpine(const(elem)* e)
+{
+    return e && e.Eoper == OPparam && tybasic(e.Ety) == TYvoid;
+}
+
+// Count the leaves of a call's argument tree. Each leaf is one positional ABI
+// argument (including any prepended hidden-ret pointer / ethis / nested static
+// link). A non-void OPparam is a single split slice/delegate argument, so it
+// counts as one leaf rather than recursing into its two halves.
+private size_t countParamLeaves(elem* e)
+{
+    if (!e)
+        return 0;
+    if (isParamSpine(e))
+        return countParamLeaves(e.E1) + countParamLeaves(e.E2);
+    return 1;
 }
 
 // Consume one leaf of the current call's OPparam tree as a single argument,
@@ -911,7 +959,7 @@ private void consumeCallArg(ref WasmCG cg, elem* e)
 {
     if (!e)
         return;
-    if (e.Eoper == OPparam)
+    if (isParamSpine(e))
     {
         cg.genElem(e); // → case OPparam → recurses through here
         return;
@@ -988,11 +1036,27 @@ private bool genCall(ref WasmCG cg, elem* e)
     // are prepended to the WASM signature by buildFuncType, but they don't
     // appear in Tparamtypes. The OPparam tree contains them as leaves walked
     // before the declared args, so let consumeCallArg skip past them.
-    if (fty && fty.Tnext && returnByPtr(fty.Tnext))
-        ctx.skipCount++;
-    if (calleeSym && calleeSym.Sfunc &&
-        (calleeSym.Sfunc.Fflags3 & (Fmember | Fnested)))
-        ctx.skipCount++;
+    //
+    // We can't rely on the callee's func_t flags (Fmember/Fnested/F3hiddenPtr):
+    // they're only set when the function is *defined* in this compilation, not
+    // for external/imported declarations (e.g. object.Exception.__ctor). For
+    // non-variadic calls the number of prepended ABI leaves is simply the
+    // excess of actual OPparam leaves over declared parameters, which captures
+    // the hidden-ret pointer, ethis, and the nested static link uniformly.
+    if (!ctx.isCVariadic)
+    {
+        const size_t leaves = countParamLeaves(e.E2);
+        if (leaves > ctx.remainingParams.length)
+            ctx.skipCount = cast(int)(leaves - ctx.remainingParams.length);
+    }
+    else
+    {
+        if (fty && fty.Tnext && returnByPtr(fty.Tnext))
+            ctx.skipCount++;
+        if (calleeSym && calleeSym.Sfunc &&
+            (calleeSym.Sfunc.Fflags3 & (Fmember | Fnested)))
+            ctx.skipCount++;
+    }
 
     // Walk the OPparam tree via genElem natural recursion; consumeCallArg
     // emits each leaf using `ctx`, queueing variadics into ctx.varArgs.
@@ -1591,7 +1655,10 @@ bool genElem(ref WasmCG cg, elem* e)
         // The contained E1 is the struct value (typically an lvalue: OPvar
         // for a variable, OPind for a pointer dereference, or a comma chain
         // that ends in one of those).
-        if (emitLValueAddr(cg, e.E1))
+        // The struct value may be wrapped in an OPcomma chain that builds it
+        // into a temporary (field-by-field stores) and yields the temp as its
+        // final lvalue — emit the side effects, then address the lvalue.
+        if (emitLValueAddr(cg, unwrapComma(cg, e.E1)))
             return true;
 
         assert(0);
