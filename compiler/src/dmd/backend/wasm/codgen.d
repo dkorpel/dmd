@@ -258,6 +258,26 @@ nothrow:
         code.writeuLEB128_5(addr);
     }
 
+    // Relocatable (-> 5-byte padded i32.const + MEMORY_ADDR reloc):
+    //   __gshared int g = 9;        // FL.data,    Sseg == DATA
+    //   int tls = 7;                // FL.tlsdata,  Sseg == DATA (TLS mapped to data)
+    //   template T(U){ U x = 4; }   // comdat data, Sseg == DATA
+    //   extern __gshared int e;     // FL.extern_  (undefined data ref)
+    //
+    // Non-relocatable (-> plain i32.const of the raw segment offset):
+    //   __gshared int bss;          // FL.udata,   no DATA symtab entry (BSS)
+    //   int tlsBss;                 // FL.tlsdata, Sseg == UDATA (TLS-BSS)
+    static bool symCanRelocate(const Symbol* sym)
+    {
+        if (sym.Sident.ptr is null)
+            return false;
+        if (sym.Sfl == FL.udata)
+            return false;
+        if (sym.Sfl == FL.tlsdata)
+            return sym.Sseg == DATA;
+        return true;
+    }
+
     // Emit OP_I32_CONST with a data-segment address.
     // Emits a 5-byte padded ULEB128 and records a R_WASM.MEMORY_ADDR_LEB
     // relocation so wasm-ld patches the address after moving the data section
@@ -267,12 +287,7 @@ nothrow:
         emit(OP_I32_CONST);
         const uint addr = cast(uint)(sym.Soffset + addend);
 
-        // Only relocate symbols in the INITIALIZED data section (FL.data,
-        // FL.csdata, FL.datseg). BSS (FL.udata) and TLS (FL.tlsdata) have
-        // offsets beyond the active data segment and don't map to valid
-        // WASM_SYMTAB.DATA entries in it.
-        const bool canRelocate = sym.Sident.ptr != null &&
-            sym.Sfl != FL.udata && sym.Sfl != FL.tlsdata;
+        const bool canRelocate = symCanRelocate(sym);
         if (canRelocate)
         {
             dataAddrRelocs ~= WasmFuncBody.DataAddrReloc(cast(uint) code.length, sym, addend);
@@ -291,8 +306,7 @@ nothrow:
     void emitDataBase(Symbol* sym)
     {
         emit(OP_I32_CONST);
-        const bool canRelocate = sym.Sident.ptr != null &&
-            sym.Sfl != FL.udata && sym.Sfl != FL.tlsdata;
+        const bool canRelocate = symCanRelocate(sym);
         if (canRelocate)
         {
             dataAddrRelocs ~= WasmFuncBody.DataAddrReloc(cast(uint) code.length, sym, 0);
@@ -367,9 +381,9 @@ private MemOps memOpsFor(tym_t ty) @safe
         return MemOps(OP_F32_LOAD, OP_F32_STORE, 2);
     case TYdouble, TYdouble_alias, TYreal, TYireal:
         return MemOps(OP_F64_LOAD, OP_F64_STORE, 3);
-    case TYchar, TYschar:
+    case TYschar:
         return MemOps(OP_I32_LOAD8_S, OP_I32_STORE8, 0);
-    case TYuchar, TYbool:
+    case TYchar, TYuchar, TYbool:
         return MemOps(OP_I32_LOAD8_U, OP_I32_STORE8, 0);
     case TYshort:
         return MemOps(OP_I32_LOAD16_S, OP_I32_STORE16, 1);
