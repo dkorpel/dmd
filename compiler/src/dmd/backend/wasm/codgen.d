@@ -1322,21 +1322,26 @@ bool genElem(ref WasmCG cg, elem* e)
             }
             // Store rhs through lvalue E1, leaving the rhs value on stack
             // (unless this assignment is used as a statement, e.Ety == void).
+            //
+            // Evaluate the RHS *before* computing the destination address.
+            // The destination address may read a temp that the RHS defines
+            // (e.g. a bitfield store `*t = (*t & ~mask) | v` where the RHS
+            // subtree contains `t = &field`). Pushing the address first would
+            // capture the temp before the RHS assigns it. This matches the
+            // x86 backend (cdeq: evaluate value, then address, then store).
+            uint valTmp = cg.allocTemp(wasmType(e.E1.Ety));
+            cg.genElem(e.E2);
+            cg.emitLocal(OP_LOCAL_SET, valTmp);
             uint memOff;
             if (cg.emitLValueBase(e.E1, memOff))
             {
-                cg.genElem(e.E2);
+                cg.emitLocal(OP_LOCAL_GET, valTmp);
+                cg.emitStore(e.E1.Ety, memOff);
                 if (typeHasValue(e.Ety))
                 {
-                    // Save value so the store doesn't consume our result.
-                    uint valTmp = cg.allocTemp(wasmType(e.E1.Ety));
-                    cg.emit(OP_LOCAL_TEE);
-                    cg.emitULEB(valTmp);
-                    cg.emitStore(e.E1.Ety, memOff);
                     cg.emitLocal(OP_LOCAL_GET, valTmp);
                     return true;
                 }
-                cg.emitStore(e.E1.Ety, memOff);
                 return false;
             }
             elem_print(e);
