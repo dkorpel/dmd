@@ -21,6 +21,8 @@ const scriptDir = __FILE_FULL_PATH__.dirName.buildNormalizedPath;
 immutable testDirs = ["runnable", "runnable_cxx", "dshell", "compilable", "fail_compilation"];
 shared bool verbose; // output verbose logging
 shared bool force; // always run all tests (ignores timestamp checking)
+shared string extraDependency; // extra file (e.g. the WASM druntime archive) whose
+                               // mtime invalidates cached results when it is newer
 shared string hostDMD; // path to host DMD binary (used for building the tools)
 shared string unitTestRunnerCommand;
 
@@ -141,6 +143,11 @@ Options:
         environment["ARGS"] = "";
         args = ["compilable", "runnable"];
         wasmKnownFailures = loadWasmKnownFailures();
+        // The WASM druntime archive is linked into every test but is not a test
+        // source, so timestamp-based caching wouldn't otherwise re-run tests
+        // after the archive is rebuilt. Track it as an extra dependency.
+        extraDependency = scriptDir.buildPath("..", "..", "generated", "wasm",
+            "release", "wasm32", "libdruntime-wasm.a");
     }
 
     // allow overwrites from the environment
@@ -594,6 +601,9 @@ Target[] filterTargets(Target[] targets, const string[string] env)
 
     Target[] targetsThatNeedUpdating;
     const dmdLastModified = env["DMD"].timeLastModified.ifThrown(SysTime.init);
+    const extraDepModified = extraDependency.length
+        ? extraDependency.timeLastModified.ifThrown(SysTime.init)
+        : SysTime.init;
     foreach (t; targets)
     {
         immutable testName = t.normalizedTestName;
@@ -602,7 +612,8 @@ Target[] filterTargets(Target[] targets, const string[string] env)
         auto testSourcePath = testPath(testName);
         auto sourceLastModified = testSourcePath.timeLastModified.ifThrown(SysTime.init);
         if (!force && resultRunTime > sourceLastModified &&
-                resultRunTime > dmdLastModified)
+                resultRunTime > dmdLastModified &&
+                resultRunTime > extraDepModified)
             log("%s is already up-to-date", testName);
         else
             targetsThatNeedUpdating ~= t;
