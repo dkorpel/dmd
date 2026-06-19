@@ -7562,7 +7562,7 @@ elem* constructVa_start(elem* e)
 
     e.Eoper = OPva_start;
     e.Ety = TYvoid;
-    if (target.isX86_64 || target.isAArch64)
+    if (target.isX86_64 || target.isAArch64 || target.isWasm)
     {
         // (OPparam &va &arg)
         // call as (OPva_start &va)

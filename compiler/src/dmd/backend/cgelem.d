@@ -5602,6 +5602,13 @@ private elem* elva_start(elem* e, Goal goal)
 {
     assert(e.Eoper == OPva_start);
 
+    if (config.objfmt == OBJ_WASM)
+        // WASM lowers OPva_start directly in its own code generator: the
+        // variadic args were spilled by the caller and a pointer to that block
+        // is the trailing implicit parameter. The x86/x86_64 stack-walking
+        // rewrites below don't apply, so leave the node intact.
+        return e;
+
     if (funcsym_p.ty() & mTYnaked)
     {   // do not generate prolog
         el_free(e);

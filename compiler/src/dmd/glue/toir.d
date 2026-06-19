@@ -617,7 +617,7 @@ int intrinsic_op(FuncDeclaration fd)
     return op;
 
 Lva_start:
-    if ((target.isX86_64 || target.isAArch64) &&
+    if ((target.isX86_64 || target.isAArch64 || target.isWasm) &&
         fd.toParent().isTemplateInstance() &&
         id3 == Id.va_start &&
         id2 == Id.stdarg &&
