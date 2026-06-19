@@ -63,7 +63,13 @@ void outthunk(Symbol* sthunk, Symbol* sfunc, uint p, tym_t thisty,
         targ_size_t d, int i, targ_size_t d2)
 {
     sthunk.Sseg = cseg;
-    cod3_thunk(sthunk,sfunc,p,thisty,cast(uint)d,i,cast(uint)d2);
+    if (config.objfmt == OBJ_WASM)
+    {
+        import dmd.backend.wasm.obj : WasmObj_thunk;
+        WasmObj_thunk(sthunk, sfunc, p, thisty, cast(int)d, i, cast(uint)d2);
+    }
+    else
+        cod3_thunk(sthunk,sfunc,p,thisty,cast(uint)d,i,cast(uint)d2);
     sthunk.Sfunc.Fflags &= ~Fpending;
     sthunk.Sfunc.Fflags |= Foutput;   /* mark it as having been output */
 }

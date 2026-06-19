@@ -2033,6 +2033,79 @@ void WasmObj_func_start(Symbol* sfunc)
     wasmFuncBodies ~= fb;
 }
 
+// Emit an adjustor thunk as a real WASM function.
+//
+// An interface method's vtable slot holds a thunk that subtracts the
+// interface offset from the incoming `this` pointer before forwarding to the
+// concrete method.  The x86 path (cod3_thunk in dout.d) emits machine code
+// directly; on wasm we synthesise a function body that forwards every
+// parameter unchanged except `this`, which is adjusted by `d`, then calls
+// sfunc and returns its result.
+//
+// Only the direct-call form (i == -1) produced by toThunkSymbol is handled;
+// the virtual-dispatch form (i != -1) is x86-specific and never reached here.
+//
+//   sthunk = the thunk's Symbol (e.g. _THUNK0)
+//   sfunc  = the concrete target function
+//   d      = signed byte offset added to the `this` pointer
+//   i      = vtbl index for a virtual call, or -1 for a direct call
+void WasmObj_thunk(Symbol* sthunk, Symbol* sfunc, uint p, tym_t thisty, int d, int i, uint d2)
+{
+    assert(i == -1, "wasm only supports direct-call adjustor thunks");
+
+    // Share sfunc's emitted WASM signature so the vtable slot's type matches.
+    // wmod_funcTypeForSym returns the cached signature when sfunc is already
+    // registered (avoids double-counting the `this` pointer that the glue
+    // injects into Tparamtypes after func_start), else falls back to buildFuncType.
+    WasmFuncType ft = wmod_funcTypeForSym(sfunc);
+
+    // Register the thunk as a defined function (lockstep with wasmFuncBodies).
+    WasmFunc f;
+    f.typeIdx = uint.max;
+    f.pendingType = ft;
+    f.sym = sthunk;
+    f.comdat = (sthunk.Sclass == SC.comdat);
+    sthunk.Sseg = cast(int) wmod.funcs.length;
+    wmod.funcs ~= f;
+
+    // The `this` pointer is WASM param 0.  Under the D-linkage wasm ABI the
+    // caller pushes `this` first (the OPparam tree is walked E2-first, ethis
+    // last-appended -> first-emitted), so the hidden struct-return pointer and
+    // the declared args all follow `this` (see wasm_codgen2's param spill and
+    // the consumeCallArg note in codgen.d).  Thunks always adjust member `this`.
+    const uint thisParamIndex = 0;
+
+    // Pre-generate the body; its sym is null so the phase-2 codegen pass (which
+    // walks the IR) skips it, but emitCodeSection still writes fb.code.
+    WasmFuncBody fb;
+    fb.code = new OutBuffer();
+    fb.sym = null;
+    fb.numParams = cast(uint) ft.params.length;
+    foreach (ubyte v; ft.params)
+        fb.locals ~= WasmLocal(cast(WASM_TYPE) v);
+
+    foreach (uint pi; 0 .. cast(uint) ft.params.length)
+    {
+        fb.code.writeByte(OP_LOCAL_GET);
+        fb.code.writeuLEB128(pi);
+        if (pi == thisParamIndex && d != 0)
+        {
+            fb.code.writeByte(OP_I32_CONST);
+            fb.code.writesLEB128(d); // i32.add of a (possibly negative) constant
+            fb.code.writeByte(OP_I32_ADD);
+        }
+    }
+
+    // call sfunc — 5-byte padded ULEB128 so wasm-ld can patch the index; the
+    // reloc carries sfunc so term-time resolution finds it by symbol.
+    fb.code.writeByte(OP_CALL);
+    fb.codeRelocs ~= WasmFuncBody.CodeReloc(cast(uint) fb.code.length,
+        R_WASM.FUNCTION_INDEX_LEB, 0, 0, sfunc);
+    (*fb.code).writeuLEB128_5(0u);
+
+    wasmFuncBodies ~= fb;
+}
+
 void WasmObj_func_term(Symbol* sfunc)
 {
     // Save globsym (function locals/params) for use in deferred codegen.
