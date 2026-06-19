@@ -39,7 +39,12 @@ private void dbgAssert(scope const(char)[] tag, scope const(char)[] file, uint l
 }
 
 noreturn _d_assert(string file, uint line) @nogc          { dbgAssert("ASSERT", file, line); wasm_abort(); }
-noreturn _d_assertp(immutable(char)* file, uint line) @nogc { dbgWrite("ASSERTP\n"); wasm_abort(); }
+noreturn _d_assertp(immutable(char)* file, uint line) @nogc {
+    dbgWrite("ASSERTP ");
+    if (file) { size_t n = 0; while (file[n]) n++; dbgWrite(file[0 .. n]); }
+    dbgWrite(":"); dbgNum(line); dbgWrite("\n");
+    wasm_abort();
+}
 noreturn _d_assert_msg(string msg, string file, uint line) @nogc { dbgAssert("ASSERTMSG", file, line); wasm_abort(); }
 
 void _d_unittest(string file, uint line) @nogc          { wasm_abort(); }
