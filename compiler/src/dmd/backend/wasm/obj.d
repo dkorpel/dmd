@@ -171,6 +171,7 @@ struct WasmFunc
     Symbol* sym; // the D symbol
     bool exported;
     bool isImport;
+    bool comdat; // duplicate copies across objects merge instead of colliding
     const(char)[] importModule; // for imports: module name
     const(char)[] importName; // for imports: field name
     // string name; // for synthesized functions with no Symbol and no importName
@@ -795,6 +796,8 @@ private bool emitLinkingSection(ref OutBuffer out_, ref WasmModule wmod)
             flags = WASM_SYM.EXPLICIT_NAME;
             if (f.exported)
                 flags |= WASM_SYM.EXPORTED;
+            if (f.comdat)
+                flags |= WASM_SYM.BINDING_WEAK;
             // Defined non-exported functions: global binding by default
             // (omit WASM_SYM.BINDING_LOCAL so wasm-ld can use them for type relocs)
         }
@@ -1466,6 +1469,7 @@ int WasmObj_comdat(Symbol* s)
     f.pendingType = ft;
     f.sym = s;
     f.exported = (s.Sclass == SC.global);
+    f.comdat = true;
 
     s.Sseg = cast(int) wmod.funcs.length;
     wmod.funcs ~= f;
@@ -1950,6 +1954,7 @@ void WasmObj_func_start(Symbol* sfunc)
     f.pendingType = ft;
     f.sym = sfunc;
     f.exported = (sfunc.Sclass == SC.global);
+    f.comdat = (sfunc.Sclass == SC.comdat);
     wmod.funcs ~= f;
     sfunc.Sseg = cast(int)(wmod.funcs.length - 1);
 
