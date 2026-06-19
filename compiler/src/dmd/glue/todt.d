@@ -347,8 +347,27 @@ void Expression_toDt(Expression e, ref DtBuilder dtb)
             case Tfloat80:
             case Timaginary80:
             {
+                const sz = target.realsize - target.realpad;
+                if (sz <= 8)
+                {
+                    // The target's `real` is narrower than the host 80-bit
+                    // long double (e.g. WASM, where real is 64-bit). Copying
+                    // the low `sz` bytes of the x87 representation would store
+                    // the mantissa, not a valid float — narrow numerically.
+                    if (sz == 4)
+                    {
+                        auto fvalue = cast(float)e.value;
+                        dtb.nbytes((cast(ubyte*)&fvalue)[0 .. 4]);
+                    }
+                    else
+                    {
+                        auto dvalue = cast(double)e.value;
+                        dtb.nbytes((cast(ubyte*)&dvalue)[0 .. 8]);
+                    }
+                    break;
+                }
                 auto evalue = e.value;
-                dtb.nbytes((cast(ubyte*)&evalue)[0 .. target.realsize - target.realpad]);
+                dtb.nbytes((cast(ubyte*)&evalue)[0 .. sz]);
                 dtb.nzeros(target.realpad);
                 break;
             }
