@@ -67,3 +67,6 @@ untracked_files/
 
 /compiler/backend/old/*
 /compiler/backend/new/*
+
+.claude/projects/*
+compiler/src/dmd/backend/wasm/slice_lowering_plan.md
