@@ -455,6 +455,7 @@ WASM_DRT_SRCS := \
 	src/object.d \
 	src/core/memory.d \
 	src/rt/invariant_.d \
+	src/rt/memset.d \
 	src/rt/aApply.d \
 	src/rt/aApplyR.d \
 	src/rt/arraycat.d \

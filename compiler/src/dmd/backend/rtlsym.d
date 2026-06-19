@@ -319,6 +319,19 @@ private type* wasmRtlsymType(RTLSYM i) @trusted
             return fn([voidPtr(), voidPtr(), tsize], voidPtr());
         case RTLSYM.MEMSET8:
             return fn([voidPtr(), tint, tsize], voidPtr());
+        case RTLSYM.MEMSET16:
+            return fn([ptrTo(tstypes[TYshort]), tstypes[TYshort], tsize], ptrTo(tstypes[TYshort]));
+        case RTLSYM.MEMSET32:
+            return fn([ptrTo(tstypes[TYint]), tint, tsize], ptrTo(tstypes[TYint]));
+        case RTLSYM.MEMSET64:
+            return fn([ptrTo(tstypes[TYllong]), tstypes[TYllong], tsize], ptrTo(tstypes[TYllong]));
+        case RTLSYM.MEMSETFLOAT:
+            return fn([ptrTo(tstypes[TYfloat]), tstypes[TYfloat], tsize], ptrTo(tstypes[TYfloat]));
+        case RTLSYM.MEMSETDOUBLE:
+            return fn([ptrTo(tstypes[TYdouble]), tstypes[TYdouble], tsize], ptrTo(tstypes[TYdouble]));
+        case RTLSYM.MEMSETN:
+            // void* _memsetn(void* p, void* value, int count, size_t sizelem)
+            return fn([voidPtr(), voidPtr(), tint, tsize], voidPtr());
         case RTLSYM.ALLOCMEMORY:
         case RTLSYM.TRACEALLOCMEMORY:
             return fn([tsize], voidPtr());
