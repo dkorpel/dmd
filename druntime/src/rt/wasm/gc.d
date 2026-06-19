@@ -25,15 +25,19 @@ private enum HEAP_SIZE = 48 * 1024; // 48 KiB — room for data + stack + this h
 private __gshared ubyte[HEAP_SIZE] _heap_buf;
 private __gshared ubyte* _heap_ptr;
 private __gshared size_t _heap_left;
+private __gshared bool _heap_inited;
 
 private void bump_init() @nogc nothrow
 {
     _heap_ptr  = _heap_buf.ptr;
     _heap_left = HEAP_SIZE;
+    _heap_inited = true;
 }
 
 private void* bump_alloc(size_t sz) @nogc nothrow
 {
+    // _start does not run rt_init/gc_init, so initialize lazily on first use.
+    if (!_heap_inited) bump_init();
     if (sz == 0) sz = 1;
     sz = (sz + 7u) & ~7u; // 8-byte alignment
     if (sz > _heap_left) return null; // heap exhausted

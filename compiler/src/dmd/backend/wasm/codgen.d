@@ -1856,15 +1856,16 @@ bool genElem(ref WasmCG cg, elem* e)
 
     case OPmemcpy:
         {
-            // IR: OPmemcpy(dst, OPparam(count, src)). Result is dst.
+            // IR: OPmemcpy(dst, OPparam(src, count)). Result is dst.
+            // (See cgelem.d elmemcpy: E2.E1 is the source, E2.E2 the byte count.)
             uint dstTmp = cg.allocTemp(WASM_I32);
             cg.genElem(e.E1);
             cg.emit(OP_LOCAL_TEE);
             cg.emitULEB(dstTmp); // stack: dst
             if (e.E2 && e.E2.Eoper == OPparam)
             {
-                cg.genElem(e.E2.E2, WASM_I32); // src
-                cg.genElem(e.E2.E1, WASM_I32); // count
+                cg.genElem(e.E2.E1, WASM_I32); // src
+                cg.genElem(e.E2.E2, WASM_I32); // count
             }
             else if (e.E2)
             {
