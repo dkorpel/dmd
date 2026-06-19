@@ -453,6 +453,26 @@ extern (C++) struct Target
     FPTypeProperties!double DoubleProperties;   ///
     FPTypeProperties!real_t RealProperties;     ///
 
+    // Copy properties from one floating point type to another. Used when the
+    // target's `real` is narrower than the host's real_t, so `real` properties
+    // must mirror those of `double` (or `float`). All FPTypeProperties fields
+    // are real_t/long regardless of the template argument, so this is a plain
+    // field-by-field copy across instantiations.
+    extern (D) private static void copyFPProperties(Dst, Src)(ref Dst dst, ref const Src src)
+    {
+        dst.max        = src.max;
+        dst.min_normal = src.min_normal;
+        dst.nan        = src.nan;
+        dst.infinity   = src.infinity;
+        dst.epsilon    = src.epsilon;
+        dst.dig        = src.dig;
+        dst.mant_dig   = src.mant_dig;
+        dst.max_exp    = src.max_exp;
+        dst.min_exp    = src.min_exp;
+        dst.max_10_exp = src.max_10_exp;
+        dst.min_10_exp = src.min_10_exp;
+    }
+
     private Type tvalist; // cached lazy result of va_listType()
 
     private const(Param)* params;  // cached reference to global.params
@@ -535,6 +555,14 @@ extern (C++) struct Target
             realpad = 0;
             realalignsize = 8;
         }
+
+        // On targets where `real` is no wider than `double` (e.g. WASM), its
+        // type properties (mant_dig, epsilon, nan, ...) must reflect the narrower
+        // type rather than the host compiler's possibly-wider real_t.
+        if (realsize - realpad <= 4)
+            copyFPProperties(RealProperties, FloatProperties);
+        else if (realsize - realpad <= 8)
+            copyFPProperties(RealProperties, DoubleProperties);
 
         c.initialize(params, this);
         cpp.initialize(params, this);
