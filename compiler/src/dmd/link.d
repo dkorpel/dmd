@@ -279,7 +279,8 @@ private int runWasmLINK(bool verbose, ref Param params, ErrorSink eSink)
     // Push our vendored -L paths FIRST so `-l:libc.a` / `-l:libdruntime-wasm.a`
     // resolve against the WASM-targeted archives, not host /usr/lib (which a
     // user's dmd.conf may put on the search path via -L-L/usr/lib).
-    if (hasDruntime)
+    // Always needed: even betterC programs routinely call into libc
+    // (printf/puts/memcmp), and an archive only pulls referenced members.
     {
         void pushLPathEarly(const(char)[] dir)
         {
@@ -340,13 +341,13 @@ private int runWasmLINK(bool verbose, ref Param params, ErrorSink eSink)
     // `-L-L<dir>` flags were already forwarded above, so they take
     // precedence. Append an argv0-relative fallback so out-of-the-box
     // builds keep working when no explicit path is configured.
+    // -L paths for these archives were pushed earlier so they outrank any
+    // host paths a user's dmd.conf may have appended via linkswitches.
     if (hasDruntime)
-    {
-        // -L paths for these archives were pushed earlier so they outrank any
-        // host paths a user's dmd.conf may have appended via linkswitches.
         argv.push("-l:libdruntime-wasm.a");
-        argv.push("-l:libc.a"); // WASI C runtime (printf, memcpy, etc.)
-    }
+    // libc.a is linked in both modes: betterC programs commonly call printf /
+    // puts / memcmp, and an archive only contributes the members referenced.
+    argv.push("-l:libc.a"); // WASI C runtime (printf, memcpy, etc.)
 
     foreach (p; params.dllfiles)
         argv.push(p);

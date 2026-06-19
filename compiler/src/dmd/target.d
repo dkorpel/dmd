@@ -570,7 +570,10 @@ extern (C++) struct Target
         }
         else if (os == Target.OS.WASM)
         {
-            obj_ext = "wasm";
+            // Object files use `.o` (clang/wasm-ld convention) while the final
+            // module uses `.wasm` (dll_ext). Distinct extensions let separate
+            // compilation link `.o` inputs into a `.wasm` output without clashing.
+            obj_ext = "o";
             lib_ext = "a";
             dll_ext = "wasm";
             run_noext = true;
