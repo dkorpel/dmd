@@ -28,3 +28,19 @@ uint ulebSize(uint v) nothrow
     while (v);
     return n;
 }
+
+/// Returns: number of bytes needed for signed LEB128 encoding of v.
+uint slebSize(long v) nothrow
+{
+    uint n = 0;
+    bool more = true;
+    while (more)
+    {
+        const byte b = cast(byte)(v & 0x7F);
+        v >>= 7;
+        if ((v == 0 && (b & 0x40) == 0) || (v == -1 && (b & 0x40) != 0))
+            more = false;
+        n++;
+    }
+    return n;
+}
