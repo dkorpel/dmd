@@ -1228,7 +1228,12 @@ bool genElem(ref WasmCG cg, elem* e)
             break;
         case WASM_F64:
             cg.emit(OP_F64_CONST);
-            double d = e.Vdouble;
+            // A `real`/`ireal` constant (TYreal) keeps its value in the 80-bit
+            // Vreal field, not Vdouble. On WASM `real` is 64-bit, so narrow it
+            // numerically — reading Vdouble would grab the low 8 bytes of the
+            // x87 representation (the mantissa) and corrupt the value.
+            const tbF64 = tybasic(e.Ety);
+            double d = (tbF64 == TYreal || tbF64 == TYireal) ? cast(double) e.Vreal : e.Vdouble;
             cg.code.write(&d, 8);
             break;
         case WASM_I32:
