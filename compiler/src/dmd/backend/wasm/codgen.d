@@ -2311,6 +2311,8 @@ private struct ParamSpill
     Symbol* sym;       // symbol whose shadow slot this fills
     uint byteOffset;   // offset within the symbol's shadow slot
     tym_t ty;          // backend type of the param (used to pick store op + alignment)
+    uint copyBytes;    // if non-zero: param is a by-pointer aggregate; memory.copy
+                       // this many bytes from the incoming pointer into the slot
 }
 
 void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
@@ -2339,10 +2341,14 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
         }
         else if (pty == TYstruct || pty == TYarray)
         {
-            // Aggregate param: passed by pointer (i32).
+            // Aggregate param: passed by pointer (i32). The incoming pointer
+            // addresses the caller's copy; spill by copying the bytes into this
+            // param's own shadow slot so in-body field accesses (which address
+            // the slot directly) see the value, not the pointer.
             const uint i0 = cast(uint) cg.locals.length;
             cg.locals ~= WasmLocal(WASM_I32);
-            paramSpills ~= ParamSpill(i0, s, 0, TYuint);
+            const uint sz = cast(uint) type_size(s.Stype);
+            paramSpills ~= ParamSpill(i0, s, 0, TYuint, sz);
         }
         else
         {
@@ -2391,9 +2397,24 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
     // Spill incoming WASM params into their shadow-frame slots.
     foreach (ref sp; paramSpills)
     {
+        const uint off = cast(uint) sp.sym.Soffset + sp.byteOffset;
+        if (sp.copyBytes)
+        {
+            // By-pointer aggregate: memory.copy(dst = shadowBase+off,
+            // src = incoming pointer, n = struct size).
+            cg.emitLocal(OP_LOCAL_GET, cg.shadowBaseLocal);
+            if (off)
+            {
+                cg.emitConst(OP_I32_CONST, off);
+                cg.emit(OP_I32_ADD);
+            }
+            cg.emitLocal(OP_LOCAL_GET, sp.wasmLocalIdx);
+            cg.emitConst(OP_I32_CONST, sp.copyBytes);
+            emitMemoryCopy(cg);
+            continue;
+        }
         cg.emitLocal(OP_LOCAL_GET, cg.shadowBaseLocal);
         cg.emitLocal(OP_LOCAL_GET, sp.wasmLocalIdx);
-        const uint off = cast(uint) sp.sym.Soffset + sp.byteOffset;
         const m = memOpsFor(sp.ty);
         cg.emit(m.storeOp);
         cg.emitMemArg(m.alignLog2, off);
