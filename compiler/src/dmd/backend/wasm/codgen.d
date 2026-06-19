@@ -1407,6 +1407,29 @@ bool genElem(ref WasmCG cg, elem* e)
         cg.emitLocal(OP_LOCAL_GET, cg.shadowBaseLocal);
         return true;
 
+    case OPva_start:
+        // The caller spilled the variadic args into a contiguous block and
+        // passed a pointer to it as the trailing implicit WASM parameter
+        // (see genVarArgs / buildFuncType). va_start stores that pointer into
+        // the va_list; va_arg (core.stdc.stdarg, WebAssembly branch) walks it.
+        //
+        // OPva_start has two address operands: the va_list and the last named
+        // parameter (unused on this ABI). Their order is NOT fixed — the
+        // compiler-generated `_argptr` setup (glue/package.d) builds it as
+        // (&va_list &lastParam), while a user `va_start(ap, n)` arrives via
+        // constructVa_start with the arguments reversed (&lastParam &va_list).
+        // The va_list is the operand that addresses a non-parameter symbol.
+        {
+            elem* eva = e.E1;
+            if (e.E1.Eoper == OPrelconst && e.E1.Vsym && isParameter(e.E1.Vsym))
+                eva = e.E2;
+            cg.genElem(eva);                              // push &va_list
+            cg.emitLocal(OP_LOCAL_GET, cg.numParams - 1); // varargs-block ptr
+            cg.emit(OP_I32_STORE);
+            cg.emitMemArg(2, 0);
+        }
+        return false;
+
     case OPpostinc:
     case OPpostdec:
         // D `x++` / `x--`. Result is the original value; the side effect
