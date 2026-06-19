@@ -64,3 +64,5 @@ untracked_files/
 .DS_Store
 /compiler/src/vcbuild/*.filters
 /compiler/src/vcbuild/*.sources
+.claude/projects/*
+compiler/src/dmd/backend/wasm/slice_lowering_plan.md
