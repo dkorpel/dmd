@@ -99,8 +99,26 @@ void gc_runFinalizers(const scope void[] segment) {}
 
 GC.BlkInfo gc_query(return scope void* p) pure @nogc { return GC.BlkInfo.init; }
 
+// No statistics tracked by the bump allocator.
+GC.Stats gc_stats() @nogc { return GC.Stats.init; }
+GC.ProfileStats gc_profileStats() @nogc { return GC.ProfileStats.init; }
+
 // Stub: in a leaking GC, "expanding used" always succeeds (no real capacity tracking).
 bool gc_expandArrayUsed(void[] slice, size_t newUsed, bool atomic) @nogc { return true; }
+
+// This GC tracks no per-block capacity, so report none reserved: callers then
+// reallocate rather than write past the exact bump-allocated size.
+size_t gc_reserveArrayCapacity(void[] slice, size_t request, bool atomic) @nogc { return 0; }
+
+// No capacity tracking, so shrinking the "used" length is a no-op that reports
+// failure; the array simply keeps its current block.
+bool gc_shrinkArrayUsed(void[] slice, size_t existingUsed, bool atomic) @nogc { return false; }
+
+// No per-block size tracking in the bump allocator.
+size_t gc_sizeOf(void* p) @nogc { return 0; }
+
+// Single-threaded, no finalizers run: never inside one.
+bool gc_inFinalizer() @nogc { return false; }
 
 uint gc_getAttr(void* p) @nogc { return 0; }
 uint gc_setAttr(void* p, uint a) @nogc { return 0; }

@@ -46,7 +46,18 @@ version (X86_64)  version = X86_Any;
 nothrow:
 @nogc:
 
-version (CRuntime_Microsoft)
+version (WebAssembly)
+{
+    // wasi-libc exposes errno as a plain global; rt/wasm provides a
+    // __errno_location() accessor over it so the rest of druntime can treat
+    // errno uniformly as a ref-returning function (as on glibc/musl).
+    extern (C)
+    {
+        ref int __errno_location();
+        alias errno = __errno_location;
+    }
+}
+else version (CRuntime_Microsoft)
 {
     extern (C)
     {

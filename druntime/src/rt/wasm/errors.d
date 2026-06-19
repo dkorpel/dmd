@@ -57,3 +57,9 @@ noreturn onInvalidMemoryOperationError(void* pretend_sideffect = null, string fi
 
 noreturn __assert(const(char)* file, int line, const(char)* msg) @nogc nothrow { wasm_abort(); }
 noreturn __assert_fail(const(char)* msg, const(char)* file, uint line, const(char)* func) @nogc nothrow { wasm_abort(); }
+
+// ── errno ──────────────────────────────────────────────────────────────────────
+// wasi-libc exposes errno as a plain global; the rest of druntime (core.stdc.errno)
+// expects a __errno_location() accessor, which wasi-libc does not provide.
+private extern(C) extern __gshared int errno;
+ref int __errno_location() @nogc nothrow { return errno; }
