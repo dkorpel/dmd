@@ -223,6 +223,11 @@ private extern (C) void _initialize() @system
         GetSystemInfo(&si);
         (cast() pageSize) = cast(size_t) si.dwPageSize;
     }
+    else version (WebAssembly)
+    {
+        // WASM linear memory grows in fixed 64 KiB pages.
+        (cast() pageSize) = 65536;
+    }
     else
         static assert(false, __FUNCTION__ ~ " is not implemented on this platform");
 }

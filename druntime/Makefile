@@ -444,13 +444,53 @@ WASM_MODULES := start gc sync errors eh
 WASM_OBJS   := $(addprefix $(WASM_ROOT)/rt_,$(addsuffix .wasm,$(WASM_MODULES)))
 WASM_FLAGS  := -c -mwasm32 -os=wasm -betterC -conf= -Isrc -Iimport -w -de
 
+# Real (cross-platform) druntime modules that supply non-template runtime
+# functions referenced by user code: object.d class methods (Exception.__ctor,
+# TypeInfo_*), array growth/append helpers, the new AA, dynamic-cast and
+# dassert support, etc.  Unlike the rt/wasm stubs above these need full D
+# (TypeInfo, `throw`), so they are built WITHOUT -betterC.  Modules requiring
+# unimplemented wasm bits (rt/sections, core.memory._initialize, threads) are
+# deliberately excluded for now.
+WASM_DRT_SRCS := \
+	src/object.d \
+	src/core/memory.d \
+	src/rt/invariant_.d \
+	src/rt/aApply.d \
+	src/rt/aApplyR.d \
+	src/rt/arraycat.d \
+	src/core/internal/array/utils.d \
+	src/core/internal/array/capacity.d \
+	src/core/internal/array/appending.d \
+	src/core/internal/array/concatenation.d \
+	src/core/internal/array/construction.d \
+	src/core/internal/array/arrayassign.d \
+	src/core/internal/util/array.d \
+	src/core/internal/hash.d \
+	src/core/internal/newaa.d \
+	src/core/internal/cast_.d \
+	src/core/internal/dassert.d \
+	src/core/internal/convert.d \
+	src/core/internal/utf.d \
+	src/core/interpolation.d
+WASM_DRT_FLAGS := -c -mwasm32 -os=wasm -conf= -Isrc -Iimport -w -de
+WASM_DRT_OBJS := $(foreach s,$(WASM_DRT_SRCS),$(WASM_ROOT)/drt_$(notdir $(basename $(s))).wasm)
+
 $(WASM_ROOT)/rt_%.wasm : $(WASM_RT_DIR)/%.d $(DMD)
 	@mkdir -p $(dir $@)
 	$(WASM_DMD) $(WASM_FLAGS) -of$@ $<
 
-$(WASM_LIB): $(WASM_OBJS)
+# One pattern-free rule per real druntime source (sources live in different
+# directories, so a static pattern rule can't map them).
+define WASM_DRT_RULE
+$(WASM_ROOT)/drt_$(notdir $(basename $(1))).wasm : $(1) $(DMD)
+	@mkdir -p $$(dir $$@)
+	$(WASM_DMD) $(WASM_DRT_FLAGS) -of$$@ $(1)
+endef
+$(foreach s,$(WASM_DRT_SRCS),$(eval $(call WASM_DRT_RULE,$(s))))
+
+$(WASM_LIB): $(WASM_OBJS) $(WASM_DRT_OBJS)
 	rm -f $@
-	ar rcs $@ $(WASM_OBJS)
+	ar rcs $@ $(WASM_OBJS) $(WASM_DRT_OBJS)
 
 .PHONY: wasm
 wasm: copy $(WASM_LIB)
