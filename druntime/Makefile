@@ -473,6 +473,7 @@ WASM_DRT_SRCS := \
 	src/core/internal/convert.d \
 	src/core/internal/utf.d \
 	src/core/interpolation.d \
+	src/core/stdc/stdarg.d \
 	src/rt/wasm/extra.d
 WASM_DRT_FLAGS := -c -mwasm32 -os=wasm -conf= -Isrc -Iimport -w -de
 WASM_DRT_OBJS := $(foreach s,$(WASM_DRT_SRCS),$(WASM_ROOT)/drt_$(notdir $(basename $(s))).wasm)
