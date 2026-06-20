@@ -4307,16 +4307,19 @@ elem* toElem(Expression e, ref IRState irs)
  */
 elem* toElemRVO(Expression e, elem* ehidden, ref IRState irs)
 {
-    // WASM: class types may reach here under betterC-like class restrictions.
-    // Fall back to plain toElem for non-aggregate types rather than asserting.
+    // WASM: slices, delegates and (under betterC class restrictions) class
+    // references can also reach here, because they're returned via a hidden
+    // pointer (see backend/wasm/obj.d returnByPtr). For these non-aggregate
+    // types the destination must still be threaded through as ehidden so the
+    // callee writes directly into it (NRVO); otherwise the call allocates a
+    // discarded temp and the result is never copied to the destination.
     import dmd.target : target;
-    if (target.isWasm)
-    {
-        auto tb = e.type.toBasetype();
-        if (tb.ty != Tstruct && tb.ty != Tsarray)
-            return toElem(e, irs);
-    }
-    assert(e.type.toBasetype().ty == Tstruct || e.type.toBasetype().ty == Tsarray);
+    const wasmNonAgg = target.isWasm &&
+        e.type.toBasetype().ty != Tstruct && e.type.toBasetype().ty != Tsarray;
+    if (wasmNonAgg && !ehidden)
+        return toElem(e, irs);
+    assert(wasmNonAgg ||
+        e.type.toBasetype().ty == Tstruct || e.type.toBasetype().ty == Tsarray);
 
     elem* doCommaRVO(CommaExp ce)
     {
@@ -4389,7 +4392,20 @@ elem* toElemRVO(Expression e, elem* ehidden, ref IRState irs)
         case EXP.question:      return doCondRVO(e.isCondExp());
         case EXP.call:          return doCallRVO(e.isCallExp());
         case EXP.structLiteral: return doStructLiteralRVO(e.isStructLiteralExp());
-        default:                assert(0);
+        default:
+            // WASM: a slice/delegate/class returned by hidden pointer whose RHS
+            // is not a call/comma/cond — store the value into *ehidden directly.
+            assert(wasmNonAgg);
+            elem* ev = toElem(e, irs);
+            elem* ed = el_copytree(ehidden);
+            if (tybasic(ed.Ety) == TYnptr)
+            {
+                ed = el_una(OPind, ev.Ety, ed);
+                ed.ET = ev.ET;
+            }
+            elem* ea = el_bin(OPeq, ev.Ety, ed, ev);
+            elem_setLoc(ea, e.loc);
+            return ea;
     }
 }
 
