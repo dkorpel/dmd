@@ -37,3 +37,56 @@ runnable/link846.sh
 runnable/link14198a.sh
 runnable/link14834.sh
 runnable/link20802.sh
+
+# --- Require Phobos (std.* not ported to the WASM target) ---
+# These fail at compile with "unable to read module" for std.math / std.file /
+# std.stdio / std.conv / std.algorithm / std.traits / std.string etc.
+compilable/paranoia_ctfe.d
+compilable/test5227.d
+runnable/argufilem.d
+runnable/arrayop.d
+runnable/ctorpowtests.d
+runnable/dhry.d
+runnable/link11069b.d
+runnable/paranoia.d
+runnable/test13117.d
+runnable/test13117b.d
+runnable/test19.d
+runnable/test5943.d
+runnable/test8544.d
+runnable/testaa2.d
+runnable/wc.d
+runnable/wc2.d
+runnable/wc3.d
+runnable/xtest46.d
+runnable/xtest46_gc.d
+
+# --- Require complex types (cfloat/cdouble/creal) ---
+# Hit `assert(0)` in backend/wasm/codgen.d wasmType for the deprecated complex
+# types, which the WASM backend does not support.
+compilable/fix20425.c
+compilable/sw_transition_complex.d
+compilable/test19227.d
+compilable/test21514.d
+compilable/testcomplex.c
+compilable/testcomplex.i
+runnable/complex3.d
+runnable/test18054.d
+runnable/test21515.d
+runnable/testc22259.c
+runnable/testcomplexinit.c
+
+# --- gdb debugger tests (cannot run under WASM) ---
+# The harness drives gdb against a native executable; the emitted .wasm gives
+# "exec format error", so these can never run on the WASM target.
+runnable/gdb1.d
+runnable/gdb4149.d
+runnable/gdb4181.d
+runnable/gdb10311.d
+runnable/gdb14225.d
+runnable/gdb14276.d
+runnable/gdb14313.d
+runnable/gdb14330.d
+runnable/gdb18504.d
+runnable/gdb22590.c
+runnable/gdb_baseclass_fields.d
