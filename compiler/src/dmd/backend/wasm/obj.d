@@ -2171,7 +2171,13 @@ void WasmObj_func_term(Symbol* sfunc)
             break;
         }
     }
-    // Code generation deferred to WasmObj_term (two-phase compilation).
+
+    // Assign shadow-frame offsets now, while we're still in the e2ir phase and
+    // before any nested function's IR (which bakes the enclosing frame offset of
+    // captured variables) is built.  Code generation itself stays deferred to
+    // WasmObj_term (two-phase compilation).
+    import dmd.backend.wasm.codgen : wasm_assignShadowOffsets;
+    wasm_assignShadowOffsets(sfunc);
 }
 
 void WasmObj_write_pointerRef(Symbol* s, uint off)

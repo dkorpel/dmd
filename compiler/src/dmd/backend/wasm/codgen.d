@@ -210,11 +210,23 @@ nothrow:
     /// Register a symbol in the shadow frame (idempotent).
     void registerShadow(Symbol* s)
     {
-        if (inShadow(s))
-            return;
-
         assert(s.Stype);
         const uint sz = cast(uint) type_size(s.Stype);
+
+        if (inShadow(s))
+        {
+            // Offset was already assigned — by an earlier registerShadow in this
+            // pass, or by the eager wasm_assignShadowOffsets() pre-pass run at
+            // func_term (so nested functions could bake the right frame offset).
+            // Don't re-assign; just make sure the frame size covers this slot, so
+            // the prologue reserves enough space even when every symbol was
+            // pre-assigned and this call would otherwise be a no-op.
+            const uint end = cast(uint) s.Soffset + sz;
+            if (end > shadowFrameSize)
+                shadowFrameSize = end;
+            return;
+        }
+
         const uint al = Symbol_Salignsize(*s);
         const uint off = (shadowFrameSize + al - 1) & ~(al - 1);
         s.Soffset = off;
@@ -1009,6 +1021,10 @@ private void emitSliceArg(ref WasmCG cg, elem* arg)
         emitSliceHalf(cg, a, /*ptrHalf*/ true))
         return;
 
+    // TODO: shapes like `cond ? sliceA : sliceB` whose branches we can't address
+    // as memory. A slice must NEVER be carried as an i64-packed value — it has to
+    // be spilled to the shadow stack and referenced by pointer (so emitSliceHalf
+    // can load both halves). Lower the conditional into a shadow-stack temp first.
     elem_print(arg);
     assert(0);
 }
@@ -2365,6 +2381,34 @@ void emitCondToI32(ref WasmCG cg, elem* condElem, bool invert = false)
 void emitCondInvert(ref WasmCG cg, elem* condElem)
 {
     return emitCondToI32(cg, condElem, true);
+}
+
+/// Eagerly assign shadow-frame offsets to a function's parameters and locals.
+///
+/// WASM code generation is deferred to module finalization, but a nested
+/// function's IR bakes the enclosing frame offset of each captured variable at
+/// e2ir time (e2ir.d, the `soffset = s.Soffset` path).  If offsets were only
+/// assigned during the deferred wasm_codgen2, every captured variable would
+/// still read Soffset 0 and alias the first one.  Called from func_term (which
+/// runs during e2ir, parent before child), this fixes the offsets in time.
+///
+/// Must use the same registration order as wasm_codgen2 (params then locals).
+/// registerShadow is idempotent, so wasm_codgen2's later calls reuse these
+/// offsets and only re-derive the frame size.
+void wasm_assignShadowOffsets(Symbol* sfunc)
+{
+    import dmd.backend.symbol : globsym;
+    WasmCG cg;
+    foreach (s; globsym[])
+        if (s.isParameter)
+            cg.registerShadow(s);
+    foreach (s; globsym[])
+    {
+        if (s.isParameter)
+            continue;
+        if (s.Sclass == SC.auto_ || s.Sclass == SC.register || s.Sclass == SC.stack)
+            cg.registerShadow(s);
+    }
 }
 
 /// Main entry point generating code for a function - called from dout.d
