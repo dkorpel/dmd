@@ -7499,6 +7499,7 @@ elem* callCAssert(ref IRState irs, Loc loc, Expression exp, Expression emsg, con
     {
         case Musl:
         case Glibc:
+        case WASI: // wasi-libc is musl-based
             // __assert_fail(exp, file, line, func);
             assertSym = getRtlsym(RTLSYM.C__ASSERT_FAIL);
             elem* efunc = getFuncName();
