@@ -26,6 +26,49 @@ extern (C) Object _d_newclass(const ClassInfo ci) nothrow
     return cast(Object) p;
 }
 
+// rt.lifetime.rt_finalize2 — run a class instance's destructor chain.
+// The full druntime version also consults the GC collect handler, deletes the
+// object monitor and resets the instance memory; this minimal runtime has no
+// custom collect handler and no monitors, so it just walks the
+// TypeInfo_Class.destructor chain (base-ward) and optionally resets memory.
+extern (C) void rt_finalize2(void* p, bool det = true, bool resetMemory = true) nothrow
+{
+    alias fp_t = void function(Object);
+    auto ppv = cast(void**) p;
+    if (!p || !*ppv)
+        return;
+
+    auto pc = cast(TypeInfo_Class*) *ppv;
+    try
+    {
+        auto c = *pc;
+        do
+        {
+            if (c.destructor)
+                (cast(fp_t) c.destructor)(cast(Object) p);
+        }
+        while ((c = c.base) !is null);
+
+        if (resetMemory)
+        {
+            auto w = (*pc).initializer;
+            p[0 .. w.length] = cast(void[]) w[];
+        }
+    }
+    catch (Throwable)
+    {
+    }
+    finally
+    {
+        *ppv = null; // zero vptr
+    }
+}
+
+extern (C) void rt_finalize(void* p, bool det = true) nothrow
+{
+    rt_finalize2(p, det, true);
+}
+
 // core.demangle.demangleType — diagnostic only; return empty.
 pragma(mangle, "_D4core8demangle12demangleTypeFNaNbNfAxaAaZQd")
 char[] _wasm_demangleType(const(char)[] buf, char[] dst = null) nothrow pure @trusted
