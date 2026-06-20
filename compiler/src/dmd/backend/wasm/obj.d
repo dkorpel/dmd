@@ -464,6 +464,13 @@ public WasmFuncType buildFuncType(type* t, Symbol* sfunc, uint hiddenLeadingPtrs
     if (sfunc && sfunc.Sfunc && (sfunc.Sfunc.Fflags3 & (Fmember | Fnested)))
         ft.params ~= WASM_I32;
 
+    // extern(D) `...` variadics receive a hidden leading `_arguments`
+    // (TypeInfo_Tuple class reference, a single i32) ahead of the declared
+    // params — see semantic3/glue's v_arguments. The matching trailing
+    // _argptr-block pointer is appended below by the `variadic(t)` check.
+    if (dstyleVariadic(t))
+        ft.params ~= WASM_I32;
+
     const tym_t fty = tybasic(t.Tty);
 
     // Tparamtypes is null for a zero-parameter function.

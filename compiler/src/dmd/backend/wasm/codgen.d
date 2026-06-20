@@ -765,23 +765,54 @@ private void genVarArgs(ref WasmCG cg, elem*[] varArgs, ref uint spLocal, ref ui
         return;
     }
 
+    // How a variadic argument is laid into the shadow frame. Each kind matches
+    // how core.stdc.stdarg.va_arg!T reads back the bytes on WebAssembly:
+    //   scalar    — one i32/i64/f32→f64 store (float promoted to double)
+    //   slicePair — a D slice/delegate (OPparam split): {length, ptr} as two
+    //               i32 stores; align 4 since size_t/ptr are 4-byte on wasm32
+    //   aggregate — a by-value struct (OPstrpar): memory.copy the bytes inline
+    enum VaKind { scalar, slicePair, aggregate }
     struct VaSlot
     {
         elem* e;
         uint off;
-        WASM_OP storeOp;
+        VaKind kind;
+        WASM_OP storeOp;   // scalar only
         uint alignLog2;
-        bool promoteF32;
+        bool promoteF32;   // scalar only
+        uint byteSize;     // aggregate only
     }
 
     VaSlot[] slots;
     uint offset = 0;
     foreach (va; varArgs)
     {
+        VaKind kind = VaKind.scalar;
         ubyte storeOp;
         uint sz, al;
         bool promF32 = false;
-        switch (tybasic(va.Ety).wasmType)
+
+        // A non-void OPparam is a slice/delegate split into a (ptr, length)
+        // register pair by elparamx (E1 = ptr/msw, E2 = length/lsw). va_arg!T
+        // reads it as a D slice {length, ptr} — 8 bytes, 4-byte aligned.
+        if (va.Eoper == OPparam)
+        {
+            kind = VaKind.slicePair;
+            sz = 8;
+            al = 2;
+        }
+        // A by-value struct argument. va_arg!T reads sizeof(T) bytes inline, so
+        // copy the struct bytes into the frame at its natural alignment.
+        else if (va.Eoper == OPstrpar)
+        {
+            kind = VaKind.aggregate;
+            type* st = va.ET;
+            sz = st ? cast(uint) type_size(st) : 0;
+            sz = (sz + 3) & ~3; // va_arg advances by size rounded up to size_t
+            const uint aln = st ? type_alignsize(st) : 4;
+            al = aln >= 8 ? 3 : 2;
+        }
+        else switch (tybasic(va.Ety).wasmType)
         {
         case WASM_I64:
             storeOp = OP_I64_STORE;
@@ -810,7 +841,7 @@ private void genVarArgs(ref WasmCG cg, elem*[] varArgs, ref uint spLocal, ref ui
         }
         uint byteAlign = 1u << al;
         offset = (offset + byteAlign - 1) & ~(byteAlign - 1);
-        slots ~= VaSlot(va, offset, storeOp, al, promF32);
+        slots ~= VaSlot(va, offset, kind, storeOp, al, promF32, sz);
         offset += sz;
     }
     vaFrameSize = (offset + 15) & ~15;
@@ -830,12 +861,47 @@ private void genVarArgs(ref WasmCG cg, elem*[] varArgs, ref uint spLocal, ref ui
     // Store each variadic arg into the frame.
     foreach (ref sl; slots)
     {
-        cg.emitLocal(OP_LOCAL_GET, spLocal); // addr
-        cg.genElem(sl.e); // value
-        if (sl.promoteF32)
-            cg.emit(OP_F64_PROMOTE_F32);
-        cg.emit(sl.storeOp);
-        cg.emitMemArg(sl.alignLog2, sl.off);
+        final switch (sl.kind)
+        {
+        case VaKind.scalar:
+            cg.emitLocal(OP_LOCAL_GET, spLocal); // addr
+            cg.genElem(sl.e); // value
+            if (sl.promoteF32)
+                cg.emit(OP_F64_PROMOTE_F32);
+            cg.emit(sl.storeOp);
+            cg.emitMemArg(sl.alignLog2, sl.off);
+            break;
+
+        case VaKind.slicePair:
+            // D slice layout {length, ptr}: store E2 (length/lsw) at off+0 and
+            // E1 (ptr/msw) at off+4 as two i32s.
+            cg.emitLocal(OP_LOCAL_GET, spLocal);
+            cg.genElem(sl.e.E2);
+            cg.emit(OP_I32_STORE);
+            cg.emitMemArg(2, sl.off);
+            cg.emitLocal(OP_LOCAL_GET, spLocal);
+            cg.genElem(sl.e.E1);
+            cg.emit(OP_I32_STORE);
+            cg.emitMemArg(2, sl.off + 4);
+            break;
+
+        case VaKind.aggregate:
+            // memory.copy(dst = sp+off, src = &struct, byteSize). genElem on the
+            // OPstrpar pushes the struct's source address.
+            if (sl.byteSize)
+            {
+                cg.emitLocal(OP_LOCAL_GET, spLocal); // dst base
+                if (sl.off)
+                {
+                    cg.emitConst(OP_I32_CONST, cast(int) sl.off);
+                    cg.emit(OP_I32_ADD);
+                }
+                cg.genElem(sl.e);                    // src address
+                cg.emitConst(OP_I32_CONST, cast(int) sl.byteSize);
+                cg.emitMemoryCopy();
+            }
+            break;
+        }
     }
 
     // Push varargs pointer as the last parameter.
@@ -1084,6 +1150,11 @@ private bool genCall(ref WasmCG cg, elem* e)
             ctx.skipCount++;
         if (calleeSym && calleeSym.Sfunc &&
             (calleeSym.Sfunc.Fflags3 & (Fmember | Fnested)))
+            ctx.skipCount++;
+        // extern(D) variadics push a leading `_arguments` (TypeInfo_Tuple
+        // pointer, single i32) before the declared params; emit it as a plain
+        // arg, not a spilled vararg value (buildFuncType reserves a slot).
+        if (fty && dstyleVariadic(fty))
             ctx.skipCount++;
     }
 
@@ -1946,9 +2017,10 @@ bool genElem(ref WasmCG cg, elem* e)
             return true;
         }
 
-    // bit scan forward = count trailing zeros; result is always i32
+    // bit scan forward = count trailing zeros; result is always i32,
+    // so switch on the operand width (e.E1), not the node's result type.
     case OPbsf:
-        final switch (e.wasmType)
+        final switch (e.E1.wasmType)
         {
             case WASM_I64:
                 cg.genElem(e.E1);
@@ -1963,7 +2035,7 @@ bool genElem(ref WasmCG cg, elem* e)
         }
 
     case OPbsr:
-        final switch (e.wasmType)
+        final switch (e.E1.wasmType)
         {
             case WASM_I64:
                 cg.emitConst(OP_I64_CONST, 63);
