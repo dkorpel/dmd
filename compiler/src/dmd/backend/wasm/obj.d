@@ -671,9 +671,45 @@ private bool emitCodeSection(ref OutBuffer out_, ref WasmModule wmod)
     // to compute absolute relocation offsets for reloc.CODE.
     uint payloadOffset = ulebSize(defined);
 
+    // Resolve a symbol to its current index in wmod.funcs (imports first, then
+    // defined functions). Used to patch provisional FUNCTION_INDEX_LEB operands
+    // whose code bytes were emitted before the final index space was known
+    // (notably adjustor thunks, generated before imports are inserted at the
+    // front, which shifts every defined-function index).
+    uint curFuncIdxBySym(const(Symbol)* sym)
+    {
+        if (sym)
+            foreach (size_t k, ref const WasmFunc f; wmod.funcs)
+                if (f.sym is sym)
+                    return cast(uint) k;
+        return uint.max;
+    }
+
     foreach (size_t fi, ref const WasmFunc f; wmod.funcs[wmod.numImports .. $])
     {
         WasmFuncBody* fb = fi < wasmFuncBodies.length ? &wasmFuncBodies[fi] : null;
+
+        // Patch provisional function-index operands to their final values now
+        // that wmod.funcs is stable. Idempotent for calls emitted at term time
+        // (already correct); fixes calls emitted earlier (thunks).
+        if (fb && fb.code.length())
+        {
+            ubyte[] codeBytes = fb.code.peekSlice();
+            foreach (ref const WasmFuncBody.CodeReloc r; fb.codeRelocs)
+            {
+                if (r.type != R_WASM.FUNCTION_INDEX_LEB || !r.sym)
+                    continue;
+                uint idx = curFuncIdxBySym(r.sym);
+                if (idx == uint.max || r.offset + 5 > codeBytes.length)
+                    continue;
+                uint v = idx;
+                foreach (b; 0 .. 5)
+                {
+                    codeBytes[r.offset + b] = cast(ubyte)((v & 0x7f) | (b < 4 ? 0x80 : 0));
+                    v >>= 7;
+                }
+            }
+        }
 
         // Build local declarations into a temp buffer to know their size.
         OutBuffer locBuf;
@@ -2097,7 +2133,13 @@ void WasmObj_thunk(Symbol* sthunk, Symbol* sfunc, uint p, tym_t thisty, int d, i
     }
 
     // call sfunc — 5-byte padded ULEB128 so wasm-ld can patch the index; the
-    // reloc carries sfunc so term-time resolution finds it by symbol.
+    // reloc carries sfunc so term-time resolution finds it by symbol.  The
+    // index written here is only a placeholder: this thunk body is generated
+    // before all imports are inserted at the front of wmod.funcs (which shifts
+    // every defined-function index), so no index is stable yet.  emitCodeSection
+    // rewrites this operand to sfunc's final index once wmod.funcs is settled,
+    // which is what makes the relocatable object validate before linking (a
+    // placeholder 0 would point at the first import, whose signature differs).
     fb.code.writeByte(OP_CALL);
     fb.codeRelocs ~= WasmFuncBody.CodeReloc(cast(uint) fb.code.length,
         R_WASM.FUNCTION_INDEX_LEB, 0, 0, sfunc);
