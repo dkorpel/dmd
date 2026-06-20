@@ -1021,12 +1021,51 @@ private void emitSliceArg(ref WasmCG cg, elem* arg)
         emitSliceHalf(cg, a, /*ptrHalf*/ true))
         return;
 
-    // TODO: shapes like `cond ? sliceA : sliceB` whose branches we can't address
-    // as memory. A slice must NEVER be carried as an i64-packed value — it has to
-    // be spilled to the shadow stack and referenced by pointer (so emitSliceHalf
-    // can load both halves). Lower the conditional into a shadow-stack temp first.
+    // `cond ? sliceA : sliceB`: cgelem has collapsed the slice to an i64-packed
+    // value (TYulong), so emitSliceHalf rejects the branches. A slice must NEVER
+    // be carried as an i64-packed value and split arithmetically — it lives in
+    // memory and is referenced by pointer. Lower the conditional so each branch
+    // yields the ADDRESS of its in-memory slice, select the address with an
+    // `if (result i32)` block, then load the two i32 halves (length, ptr).
+    if (a.Eoper == OPcond &&
+        sliceBranchAddressable(cg, a.E2.E1) &&
+        sliceBranchAddressable(cg, a.E2.E2))
+    {
+        cg.genElem(a.E1);
+        emitCondToI32(cg, a.E1);
+        cg.emit(OP_IF);
+        cg.emit(WASM_I32); // block yields the slice's linear-memory address
+        emitLValueAddr(cg, a.E2.E1);
+        cg.emit(OP_ELSE);
+        emitLValueAddr(cg, a.E2.E2);
+        cg.emit(OP_END);
+
+        const uint ptrTmp = cg.allocTemp(WASM_I32);
+        cg.emitLocal(OP_LOCAL_TEE, ptrTmp);
+        cg.emit(OP_I32_LOAD); // length at offset 0
+        cg.emitMemArg(2, 0);
+        cg.emitLocal(OP_LOCAL_GET, ptrTmp);
+        cg.emit(OP_I32_LOAD); // ptr at offset 4
+        cg.emitMemArg(2, 4);
+        return;
+    }
+
     elem_print(arg);
     assert(0);
+}
+
+// True if `e` is a slice/delegate whose in-memory address `emitLValueAddr` can
+// push: an OPind (the pointer expression) or an addressable OPvar (a data
+// symbol or shadow-frame local). Used to gate the conditional-slice lowering.
+private bool sliceBranchAddressable(ref WasmCG cg, elem* e)
+{
+    if (!e)
+        return false;
+    if (e.Eoper == OPind)
+        return e.E1 !is null;
+    if (e.Eoper == OPvar && e.Vsym)
+        return isDataSym(e.Vsym.Sfl) || cg.inShadow(e.Vsym);
+    return false;
 }
 
 // True if `e` is an OPparam spine node (the void-typed binary list backbone)
