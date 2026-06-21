@@ -269,9 +269,10 @@ private int runWasmLINK(bool verbose, ref Param params, ErrorSink eSink)
     }
     else
     {
-        // betterC: no runtime, use --no-entry for maximum flexibility.
-        argv.push("--no-entry");
-        argv.push("--export-if-defined=main");
+        // betterC: link the standalone crt1_betterc.wasm shim, which provides a
+        // WASI `_start` that calls the user's `main` (wasmtime invokes `_start`,
+        // not `main`).  With `_start` present wasm-ld uses it as the default
+        // entry, so `--no-entry` is omitted.
         argv.push("--allow-undefined");
         argv.push("--no-gc-sections");
     }
@@ -345,6 +346,8 @@ private int runWasmLINK(bool verbose, ref Param params, ErrorSink eSink)
     // host paths a user's dmd.conf may have appended via linkswitches.
     if (hasDruntime)
         argv.push("-l:libdruntime-wasm.a");
+    else
+        argv.push("-l:crt1_betterc.wasm"); // WASI _start shim for betterC `main`
     // libc.a is linked in both modes: betterC programs commonly call printf /
     // puts / memcmp, and an archive only contributes the members referenced.
     argv.push("-l:libc.a"); // WASI C runtime (printf, memcpy, etc.)

@@ -1555,6 +1555,36 @@ void WasmObj_ehsections()
 
 void WasmObj_moduleinfo(Symbol* scc)
 {
+    // Mirror ElfObj_moduleinfo: emit a pointer to this module's ModuleInfo
+    // (`scc`) into a data segment named "minfo".  wasm-ld concatenates all
+    // "minfo" segments across the linked objects and synthesises the bracket
+    // symbols `__start_minfo` / `__stop_minfo`, which rt.wasm.minfo walks to run
+    // the module ctors/dtors recorded in each ModuleInfo.
+    if (!scc)
+        return;
+
+    enum align_ = 4;
+    const uint base = (wmod.dataHeap + (align_ - 1)) & ~(align_ - 1);
+
+    WasmDataSeg ds;
+    ds.data = new OutBuffer();
+    ds.offset = base;
+    ds.sym = null;          // anonymous: the slot is reached via __start_minfo
+    ds.name = "minfo";
+    ds.alignLog2 = 2;
+    wmod.dataSegs ~= ds;
+    wmod.activeSegIdx = cast(int)(wmod.dataSegs.length - 1);
+    wmod.dataHeap = base + 4;
+
+    // 4-byte pointer slot, patched by wasm-ld to scc's final address.
+    const uint segIdx = cast(uint) wmod.activeSegIdx;
+    uint zero = 0;
+    wmod.dataSegs[segIdx].data.write(&zero, 4);
+    wmod.dataRelocations ~= WasmModule.DataReloc(segIdx, 0, scc, 0);
+
+    // Don't leave the minfo segment as the active one: any later data emission
+    // would otherwise append into it.
+    wmod.activeSegIdx = -1;
 }
 
 int WasmObj_comdat(Symbol* s)

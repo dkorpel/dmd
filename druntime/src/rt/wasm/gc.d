@@ -11,40 +11,15 @@ import core.memory : GC;
 
 nothrow:
 
-// ── Bump-pointer allocator ────────────────────────────────────────────────────
-// Avoids importing malloc from "env" (which WASM runtimes don't provide).
-// Uses a static heap buffer (BSS — zero-init, no binary size cost).
-// Allocations are never freed; the GC is intentionally a leaking allocator.
 
-// Keep within the initial 64 KiB WASM page; the WASM backend doesn't yet
-// grow pages for BSS globals, so the buffer must fit alongside the data section.
-// TODO: switch to memory.grow-based allocation once the backend supports it.
-private enum HEAP_SIZE = 48 * 1024; // 48 KiB — room for data + stack + this heap
+private extern(C) void* calloc(size_t, size_t) @nogc nothrow;
 
-// Zero-initialized (BSS): no binary overhead, allocated from WASM linear memory.
-private __gshared ubyte[HEAP_SIZE] _heap_buf;
-private __gshared ubyte* _heap_ptr;
-private __gshared size_t _heap_left;
-private __gshared bool _heap_inited;
-
-private void bump_init() @nogc nothrow
-{
-    _heap_ptr  = _heap_buf.ptr;
-    _heap_left = HEAP_SIZE;
-    _heap_inited = true;
-}
+private void bump_init() @nogc nothrow {}
 
 private void* bump_alloc(size_t sz) @nogc nothrow
 {
-    // _start does not run rt_init/gc_init, so initialize lazily on first use.
-    if (!_heap_inited) bump_init();
     if (sz == 0) sz = 1;
-    sz = (sz + 7u) & ~7u; // 8-byte alignment
-    if (sz > _heap_left) return null; // heap exhausted
-    void* p = _heap_ptr;
-    _heap_ptr  += sz;
-    _heap_left -= sz;
-    return p;
+    return calloc(1, sz); // wasi-libc calloc returns zeroed, aligned storage
 }
 
 // Zero-fill [p, p+sz).
@@ -53,8 +28,6 @@ private void memzero(void* p, size_t sz) @nogc nothrow
     auto b = cast(ubyte*) p;
     foreach (i; 0 .. sz) b[i] = 0;
 }
-
-// ── GC extern(C) interface ────────────────────────────────────────────────────
 
 extern (C):
 
@@ -80,7 +53,6 @@ void* gc_calloc(size_t sz, uint ba = 0, const scope TypeInfo ti = null)
 
 void* gc_realloc(void* p, size_t sz, uint ba = 0, const scope TypeInfo ti = null)
 {
-    // Simple realloc: alloc new, copy up to sz bytes, leak old.
     void* q = bump_alloc(sz);
     if (q && p)
     {
