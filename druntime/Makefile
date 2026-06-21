@@ -474,11 +474,20 @@ WASM_DRT_SRCS := \
 	src/core/internal/utf.d \
 	src/core/interpolation.d \
 	src/core/stdc/stdarg.d \
+	src/rt/wasm/minfo.d \
 	src/rt/wasm/extra.d
 WASM_DRT_FLAGS := -c -mwasm32 -os=wasm -conf= -Isrc -Iimport -w -de
 WASM_DRT_OBJS := $(foreach s,$(WASM_DRT_SRCS),$(WASM_ROOT)/drt_$(notdir $(basename $(s))).wasm)
 
+# Standalone _start shim for betterC programs (NOT part of libdruntime-wasm.a,
+# which betterC does not link).  dmd.link adds this object in betterC mode.
+WASM_BETTERC_CRT := $(WASM_ROOT)/crt1_betterc.wasm
+
 $(WASM_ROOT)/rt_%.wasm : $(WASM_RT_DIR)/%.d $(DMD)
+	@mkdir -p $(dir $@)
+	$(WASM_DMD) $(WASM_FLAGS) -of$@ $<
+
+$(WASM_BETTERC_CRT) : $(WASM_RT_DIR)/start_betterc.d $(DMD)
 	@mkdir -p $(dir $@)
 	$(WASM_DMD) $(WASM_FLAGS) -of$@ $<
 
@@ -496,7 +505,7 @@ $(WASM_LIB): $(WASM_OBJS) $(WASM_DRT_OBJS)
 	ar rcs $@ $(WASM_OBJS) $(WASM_DRT_OBJS)
 
 .PHONY: wasm
-wasm: copy $(WASM_LIB)
+wasm: copy $(WASM_LIB) $(WASM_BETTERC_CRT)
 
 UT_SRCS:=$(SRCS)
 UT_MODULES:=$(patsubst src/%.d,$(ROOT)/unittest/%,$(UT_SRCS))

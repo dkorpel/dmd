@@ -45,11 +45,11 @@ export void _start() nothrow
     while (true) {}
 }
 
-// ── Module constructor stubs (Phase 5) ────────────────────────────────────────
-// Replaced once the minfo section / ModuleInfo iteration is wired up.
-
-void rt_moduleCtor()  {}
-void rt_moduleDtor()  {}
+// Module ctor/dtor execution lives in rt.wasm.minfo (rt_moduleCtor /
+// rt_moduleDtor), driven off the wasm-ld "minfo" segment brackets.  The TLS
+// variants are folded into those (WASM is single-threaded), so they stay no-ops.
+extern(C) void rt_moduleCtor();
+extern(C) void rt_moduleDtor();
 void rt_moduleTlsCtor() @nogc {}
 void rt_moduleTlsDtor() @nogc {}
 
@@ -60,7 +60,9 @@ int _d_run_main(int argc, char** argv, MainFunc mainFunc)
 {
     gc_init();
     rt_moduleCtor();
-    char[][] args = null; // empty args for now (no WASI argv yet)
+    // WASI argv is not yet wired (its staging interacts badly with the wasm
+    // backend's cross-object data layout); programs that read args see none.
+    char[][] args = null;
     int result = mainFunc(args);
     rt_moduleDtor();
     gc_term();
