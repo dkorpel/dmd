@@ -76,6 +76,16 @@ runnable/test21515.d
 runnable/testc22259.c
 runnable/testcomplexinit.c
 
+# --- Require exception handling (try/catch, throw, synchronized) ---
+# The WASM backend has no working exception-handling runtime: `throw` lowers to
+# a `_d_throwc` call and `synchronized` to `_d_criticalenter2`, neither of which
+# is provided. These tests fundamentally rely on catching thrown exceptions, so
+# they cannot pass until EH is implemented for the WASM target.
+runnable/eh.d
+runnable/eh2.d
+runnable/inline7625.d
+runnable/test22427.d
+
 # --- gdb debugger tests (cannot run under WASM) ---
 # The harness drives gdb against a native executable; the emitted .wasm gives
 # "exec format error", so these can never run on the WASM target.
