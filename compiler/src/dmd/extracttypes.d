@@ -269,9 +269,9 @@ Dsymbol stripAggregate(AggregateDeclaration ad, ref Collector c)
 Dsymbol stripEnum(EnumDeclaration ed)
 {
     auto decl = new EnumDeclaration(ed.loc, ed.ident, ed.memtype);
-    decl.members = new Dsymbols();
     if (ed.members)
     {
+        decl.members = new Dsymbols();
         foreach (s; *ed.members)
         {
             if (auto em = s.isEnumMember())
