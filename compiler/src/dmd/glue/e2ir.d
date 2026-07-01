@@ -5950,6 +5950,12 @@ elem* callfunc(Loc loc,
             e = el_una(op,mTYvolatile | tyret,ep);
         else if (op == OPva_start)
             e = constructVa_start(ep);
+        else if (op == OPmemsize)
+        {
+            assert(!ep);
+            e = el_long(tyret, 0);
+            e.Eoper = OPmemsize;
+        }
         else if (op == OPtoPrec)
         {
             const bool RealIsDouble = _tysize[TYreal] == 8;

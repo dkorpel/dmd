@@ -51,6 +51,8 @@ enum : ubyte
     OP_F64_STORE = 0x39,
     OP_I32_STORE8 = 0x3A,
     OP_I32_STORE16 = 0x3B,
+    OP_MEMORY_SIZE = 0x3F,
+    OP_MEMORY_GROW = 0x40,
     // Constants
     OP_I32_CONST = 0x41,
     OP_I64_CONST = 0x42,

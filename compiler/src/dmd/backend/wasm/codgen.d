@@ -1050,8 +1050,67 @@ private void emitSliceArg(ref WasmCG cg, elem* arg)
         return;
     }
 
+    // `cond ? sliceA : sliceB` where the branches are (r)pairs of side-effect
+    // free halves (e.g. string literals: rpair(relconst, const)). The halves
+    // can be re-emitted freely, so evaluate the condition once into a temp and
+    // select each half with its own `if (result i32)` block.
+    if (a.Eoper == OPcond &&
+        slicePairEmittable(a.E2.E1) &&
+        slicePairEmittable(a.E2.E2))
+    {
+        cg.genElem(a.E1);
+        emitCondToI32(cg, a.E1);
+        const uint condTmp = cg.allocTemp(WASM_I32);
+        cg.emitLocal(OP_LOCAL_TEE, condTmp);
+        foreach (ptrHalf; [false, true])
+        {
+            if (ptrHalf)
+                cg.emitLocal(OP_LOCAL_GET, condTmp);
+            cg.emit(OP_IF);
+            cg.emit(WASM_I32);
+            emitPairHalf(cg, a.E2.E1, ptrHalf);
+            cg.emit(OP_ELSE);
+            emitPairHalf(cg, a.E2.E2, ptrHalf);
+            cg.emit(OP_END);
+        }
+        return;
+    }
+
     elem_print(arg);
     assert(0);
+}
+
+// True if `e` is a slice/delegate (r)pair whose two halves are side-effect
+// free leaves, so each half can be emitted more than once (emitSliceArg's
+// conditional lowering emits one half per `if` block). OPconst is a null
+// slice/delegate.
+private bool slicePairEmittable(const(elem)* e)
+{
+    if (!e)
+        return false;
+    if (e.Eoper == OPconst)
+        return true;
+    if (e.Eoper != OPpair && e.Eoper != OPrpair)
+        return false;
+    static bool pureLeaf(const(elem)* h)
+    {
+        return h && (h.Eoper == OPconst || h.Eoper == OPrelconst || h.Eoper == OPvar);
+    }
+    return pureLeaf(e.E1) && pureLeaf(e.E2);
+}
+
+// Emit one half of a slice/delegate (r)pair vetted by slicePairEmittable:
+// the length/context half (ptrHalf false) or the ptr/funcptr half (ptrHalf
+// true). OPpair is (lsw, msw) = (length, ptr); OPrpair is reversed.
+private void emitPairHalf(ref WasmCG cg, elem* e, bool ptrHalf)
+{
+    if (e.Eoper == OPconst)
+    {
+        cg.emitConst(OP_I32_CONST, 0);
+        return;
+    }
+    elem* half = (e.Eoper == OPpair) == ptrHalf ? e.E2 : e.E1;
+    cg.genElem(half);
 }
 
 // True if `e` is a slice/delegate whose in-memory address `emitLValueAddr` can
@@ -1326,6 +1385,19 @@ bool genElem(ref WasmCG cg, elem* e)
     case OPcall:
     case OPucall:
         return cg.genCall(e);
+
+    case OPmemgrow:
+        // core.wasm.memoryGrow(pages) → memory.grow (returns previous page count)
+        cg.genElem(e.E1);
+        cg.emit(OP_MEMORY_GROW);
+        cg.emitULEB(0); // memory index 0
+        return true;
+
+    case OPmemsize:
+        // core.wasm.memorySize() → memory.size (current page count)
+        cg.emit(OP_MEMORY_SIZE);
+        cg.emitULEB(0); // memory index 0
+        return true;
 
     case OPparam:
         // OPparam is only valid inside an OPcall's E2 subtree. Walk E2 then E1
