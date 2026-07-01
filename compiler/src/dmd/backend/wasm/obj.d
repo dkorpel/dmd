@@ -1852,11 +1852,11 @@ void WasmObj_byte(int seg, targ_size_t offset, uint _byte)
         wmod.activeSeg.data.writeByte(cast(ubyte) _byte);
 }
 
-size_t WasmObj_bytes(int seg, targ_size_t offset, size_t nbytes, const(void)* p)
+size_t WasmObj_bytes(int seg, targ_size_t offset, const(void)[] data)
 {
-    if (wmod.activeSeg && p)
-        wmod.activeSeg.data.write(p, nbytes);
-    return nbytes;
+    if (wmod.activeSeg && data.ptr)
+        wmod.activeSeg.data.write(data.ptr, data.length);
+    return data.length;
 }
 
 void WasmObj_reftodatseg(int seg, targ_size_t offset, targ_size_t val, uint targetdatum, int flags)
@@ -2040,19 +2040,20 @@ private uint allocRoData(const(void)* p, uint len, uint align_)
     return base;
 }
 
-int WasmObj_data_readonly(char* p, int len, int* pseg)
+int WasmObj_data_readonly(void[] data, int* pseg)
 {
+    const len = cast(int) data.length;
     uint align_ = len >= 8 ? 8 : len >= 4 ? 4 : len >= 2 ? 2 : 1;
-    uint off = allocRoData(p, len, align_);
+    uint off = allocRoData(cast(char*) data.ptr, len, align_);
     if (pseg)
         *pseg = 1;
     return cast(int) off;
 }
 
-int WasmObj_data_readonly(char* p, int len)
+int WasmObj_data_readonly(void[] data)
 {
     int pseg;
-    return WasmObj_data_readonly(p, len, &pseg);
+    return WasmObj_data_readonly(data, &pseg);
 }
 
 int WasmObj_string_literal_segment(uint sz)
@@ -2061,14 +2062,14 @@ int WasmObj_string_literal_segment(uint sz)
     return UNKNOWN;
 }
 
-Symbol* WasmObj_sym_cdata(tym_t ty, char* p, int len)
+Symbol* WasmObj_sym_cdata(tym_t ty, const(void)[] data)
 {
     import dmd.backend.global : symboldata;
 
     uint align_ = cast(uint) tyalignsize(ty);
     if (align_ < 1)
         align_ = 1;
-    uint off = allocRoData(p, len, align_);
+    uint off = allocRoData(cast(char*) data.ptr, cast(int) data.length, align_);
     Symbol* s = symboldata(off, ty);
     s.Sseg = 1;
     // Tie the freshly-created rodata segment to this symbol so the linking

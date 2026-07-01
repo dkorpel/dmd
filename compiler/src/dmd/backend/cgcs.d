@@ -341,11 +341,13 @@ void ecom(ref CGCS cgcs, ref elem* pe)
         case OPstrpar:                      /* so we don't break logexp()   */
         case OPinp:                 /* never CSE the I/O instruction itself */
         case OPprefetch:            // don't CSE E2 or the instruction
+        case OPmemgrow:             // never CSE the instruction itself
             ecom(cgcs, e.E1);
             goto case OPasm;
 
         case OPasm:
         case OPstrthis:             // don't CSE these
+        case OPmemsize:
         case OPframeptr:
         case OPgot:
         case OPctor:

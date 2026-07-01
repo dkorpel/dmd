@@ -6736,4 +6736,6 @@ private immutable elfp_t[OPMAX] elxxx =
     OPvecfill: &elzot,
     OPva_start: &elva_start,
     OPprefetch: &elzot,
+    OPmemgrow: &elzot,
+    OPmemsize: &elzot,
 ];

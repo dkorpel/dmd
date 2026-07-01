@@ -232,6 +232,8 @@ enum
 
         OPva_start,             // va_start intrinsic (dmd)
         OPprefetch,             // prefetch intrinsic (dmd)
+        OPmemgrow,              // wasm memory.grow intrinsic (core.wasm.memoryGrow)
+        OPmemsize,              // wasm memory.size intrinsic (core.wasm.memorySize)
 
         OPMAX                   // 1 past last operator
 }
@@ -787,6 +789,8 @@ static immutable string[OPMAX] debtab =
     OPvecfill: "vecfill",
     OPva_start: "va_start",
     OPprefetch: "prefetch",
+    OPmemgrow: "memgrow",
+    OPmemsize: "memsize",
 ];
 
 private:
@@ -833,6 +837,7 @@ enum Eunary =
         OPvector,OPvecfill,
         OPsqrt,OPsin,OPcos,OPinp,
         OPvp_fp,OPcvp_fp,OPnp_fp,OPnp_f16p,OPf16p_np,OPoffset,
+        OPmemgrow,
     ];
 
 enum Ecommut =
@@ -856,6 +861,7 @@ enum Esideff =
         OPcmpxchg,
         OPva_start,
         OPinp,OPoutp,OPvecsto,OPprefetch,
+        OPmemgrow,OPmemsize,
     ];
 
 enum Eeop0e =

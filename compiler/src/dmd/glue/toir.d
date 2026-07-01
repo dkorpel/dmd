@@ -598,6 +598,16 @@ int intrinsic_op(FuncDeclaration fd)
                  if (id3 == Id.volatileLoad)  op = OPind;
             else if (id3 == Id.volatileStore) op = OPeq;
         }
+        else if (id2 == Id.wasm)
+        {
+            // core.wasm intrinsics only lower to instructions on a wasm
+            // target; elsewhere the calls are left as-is (undefined at link)
+            if (target.isWasm)
+            {
+                     if (id3 == Id.memoryGrow) op = OPmemgrow;
+                else if (id3 == Id.memorySize) op = OPmemsize;
+            }
+        }
     }
 
     if (target.isX86)

@@ -458,11 +458,13 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
                     // True path is inline; false path at nottakenIdx.
                     // If the true path jumps past the false path (if-else), we need an
                     // outer block so the true path can 'br 1' to skip the false path.
-                    // Detect by peeking at the taken block's successor.
+                    // The true path may span several blocks (bi+1 .. nottakenIdx-1);
+                    // its LAST block is the one that jumps to the merge point, so
+                    // peek at that one's successor.
                     int mergeIdx = -1;
-                    if (bi + 1 < N)
+                    if (nottakenIdx - 1 > cast(int) bi && nottakenIdx - 1 < N)
                     {
-                        block* takenBlock = blocks[bi + 1];
+                        block* takenBlock = blocks[nottakenIdx - 1];
                         if (takenBlock.bc == BC.goto_ && takenBlock.Bsucc.length > 0)
                         {
                             block* mergeBlock = takenBlock.Bsucc[0];
