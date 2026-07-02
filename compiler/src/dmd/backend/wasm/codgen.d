@@ -2766,6 +2766,12 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
             continue;
         cg.registerShadow(s);
         const tym_t pty = tybasic(s.ty());
+        // No-value params (noreturn/void) are dropped from the WASM signature by
+        // buildFuncType, so allocate no local slot for them either — otherwise
+        // every following local index is off by one (e.g. hashOf!(noreturn)).
+        if (!isSliceOrDelegate(s.Stype) && pty != TYstruct && pty != TYarray
+            && !typeHasValue(pty))
+            continue;
         if (isSliceOrDelegate(s.Stype))
         {
             // Slice/delegate: 2 i32 WASM params (len/context, ptr/funcptr).
