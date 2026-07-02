@@ -809,6 +809,49 @@ else version (CRuntime_WASI)
             ret i1 %cmp
         `, bool)(val);
     }
+    else version (DigitalMars)
+    extern (D) pure pragma(inline, true) {
+        private uint __FLOAT_BITS(float __f)
+        {
+            union __u_t { float __f; uint __i; }
+            __u_t __u;
+            __u.__f = __f;
+            return __u.__i;
+        }
+        private ulong __DOUBLE_BITS(double __f)
+        {
+            union __u_t { double __f; ulong __i; }
+            __u_t __u;
+            __u.__f = __f;
+            return __u.__i;
+        }
+
+        int fpclassify(float val)
+        {
+            const bits = __FLOAT_BITS(val) & 0x7fff_ffff;
+            if (bits == 0) return FP_ZERO;
+            if (bits >= 0x7f80_0000) return bits == 0x7f80_0000 ? FP_INFINITE : FP_NAN;
+            return bits < 0x0080_0000 ? FP_SUBNORMAL : FP_NORMAL;
+        }
+        int fpclassify(double val)
+        {
+            const bits = __DOUBLE_BITS(val) & (ulong.max >> 1);
+            if (bits == 0) return FP_ZERO;
+            if (bits >= 0x7ffUL << 52) return bits == 0x7ffUL << 52 ? FP_INFINITE : FP_NAN;
+            return bits < 1UL << 52 ? FP_SUBNORMAL : FP_NORMAL;
+        }
+        // real has the same 8-byte layout as double on WASM (Target.realsize == 8)
+        int fpclassify(real val) => fpclassify(cast(double) val);
+
+        bool isinf(T)(T val) => fpclassify(val) == FP_INFINITE;
+        bool isnan(T)(T val) => fpclassify(val) == FP_NAN;
+        bool isnormal(T)(T val) => fpclassify(val) == FP_NORMAL;
+        bool isfinite(T)(T val) => fpclassify(val) > FP_INFINITE;
+
+        bool signbit(float val) => (__FLOAT_BITS(val) & 0x8000_0000) != 0;
+        bool signbit(double val) => (__DOUBLE_BITS(val) & (1UL << 63)) != 0;
+        bool signbit(real val) => signbit(cast(double) val);
+    }
     else static assert(0, "Unknown D compiler for WASI");
 }
 else version (CRuntime_UClibc)

@@ -1647,6 +1647,11 @@ bool genElem(ref WasmCG cg, elem* e)
     case OPle:
     case OPgt:
     case OPge:
+        cg.genElem(e.E1);
+        cg.genElem(e.E2, e.E1.wasmType);
+        emitRelop(cg, op, e.E1.Ety);
+        return true;
+
     case OPunord:
     case OPlg:
     case OPleg:
@@ -1675,9 +1680,12 @@ bool genElem(ref WasmCG cg, elem* e)
     case OPneg:
         switch (e.wasmType)
         {
-        case WASM_F32: return unaryOp(OP_F32_NEG);
-        case WASM_F64: return unaryOp(OP_F64_NEG);
-            // integer negation = 0 - x
+        case WASM_F32:
+            return unaryOp(OP_F32_NEG);
+        case WASM_F64:
+            return unaryOp(OP_F64_NEG);
+
+        // integer negation = 0 - x
         case WASM_I64:
             cg.emitConst(OP_I64_CONST, 0);
             cg.genElem(e.E1);
@@ -2374,23 +2382,34 @@ private void emitRelop(ref WasmCG cg, int op, tym_t ty)
 {
     // Reduce the unordered/negated forms (true when a float operand is NaN)
     // to a base compare plus optional eqz. WASM float compares are all
-    // ordered (false on NaN), so e.g. !> is eqz(gt).
+    // ordered (false on NaN), so e.g. !> is eqz(gt). D source like
+    // `if (!(aspect > 0))` on a double reaches these opers via the opnot
+    // table in oper.d; test: runnable/wasm_float_cmp.d.
     bool negate = false;
-    switch (op)
+
     {
-    case OPngt: case OPule: op = OPgt;  negate = true; break;
-    case OPnge: case OPul:  op = OPge;  negate = true; break;
-    case OPnlt: case OPuge: op = OPlt;  negate = true; break;
-    case OPnle: case OPug:  op = OPle;  negate = true; break;
-    case OPue:  case OPnlg:  op = OPlg;  negate = true; break;
-    case OPunord: case OPnleg: op = OPleg; negate = true; break;
-    case OPnule: op = OPgt; break;
-    case OPnul:  op = OPge; break;
-    case OPnuge: op = OPlt; break;
-    case OPnug:  op = OPle; break;
-    case OPnue:  op = OPlg; break;
-    case OPord:  op = OPleg; break;
-    default: break;
+        switch (op)
+        {
+        case OPngt:
+        case OPule: op = OPgt;  negate = true; break;
+        case OPnge:
+        case OPul:  op = OPge;  negate = true; break;
+        case OPnlt:
+        case OPuge: op = OPlt;  negate = true; break;
+        case OPnle:
+        case OPug:  op = OPle;  negate = true; break;
+        case OPue:
+        case OPnlg:  op = OPlg;  negate = true; break;
+        case OPunord:
+        case OPnleg: op = OPleg; negate = true; break;
+        case OPnule: op = OPgt; break;
+        case OPnul:  op = OPge; break;
+        case OPnuge: op = OPlt; break;
+        case OPnug:  op = OPle; break;
+        case OPnue:  op = OPlg; break;
+        case OPord:  op = OPleg; break;
+        default: break;
+        }
     }
 
     // <> and <>= need the operands twice (ordered = x==x && y==y)
