@@ -116,6 +116,11 @@ enum RTLSYM
     FMOD,
     FMODL,
 
+    SINF,
+    SIN,
+    COSF,
+    COS,
+
     CXA_ATEXIT
 }
 
@@ -245,6 +250,11 @@ Symbol* getRtlsym(RTLSYM i) @trusted
         case RTLSYM.FMOD:                   symbolz(ps,FL.func,FREGSAVED,"fmod",  0, t); break;  // C library function fmod()
         case RTLSYM.FMODL:                  symbolz(ps,FL.func,FREGSAVED,"fmodl", 0, t); break;  // C library function fmodl()
 
+        case RTLSYM.SINF:                   symbolz(ps,FL.func,FREGSAVED,"sinf",  0, t); break;  // C library function sinf()
+        case RTLSYM.SIN:                    symbolz(ps,FL.func,FREGSAVED,"sin",   0, t); break;  // C library function sin()
+        case RTLSYM.COSF:                   symbolz(ps,FL.func,FREGSAVED,"cosf",  0, t); break;  // C library function cosf()
+        case RTLSYM.COS:                    symbolz(ps,FL.func,FREGSAVED,"cos",   0, t); break;  // C library function cos()
+
         case RTLSYM.CXA_ATEXIT:             symbolz(ps,FL.func,FREGSAVED,"__cxa_atexit", 0, t); break;
         default:
             assert(0);
@@ -354,6 +364,13 @@ private type* wasmRtlsymType(RTLSYM i) @trusted
             return fn([tstypes[TYfloat], tstypes[TYfloat]], tstypes[TYfloat]);
         case RTLSYM.FMOD:
             return fn([tstypes[TYdouble], tstypes[TYdouble]], tstypes[TYdouble]);
+
+        case RTLSYM.SINF:
+        case RTLSYM.COSF:
+            return fn([tstypes[TYfloat]], tstypes[TYfloat]);
+        case RTLSYM.SIN:
+        case RTLSYM.COS:
+            return fn([tstypes[TYdouble]], tstypes[TYdouble]);
 
         default:
             return null;

@@ -28,6 +28,7 @@ import dmd.backend.oper;
 import dmd.backend.ty;
 import dmd.backend.type;
 import dmd.backend.symbol : globsym;
+import dmd.backend.rtlsym : getRtlsym, RTLSYM;
 import dmd.backend.wasm.enums;
 import dmd.backend.wasm.util : writeuLEB128_5;
 import dmd.backend.wasm.obj;
@@ -1747,6 +1748,23 @@ bool genElem(ref WasmCG cg, elem* e)
             assert(0);
         }
 
+    case OPsin: // D `import core.math; sin(x);` -- no native wasm instruction, call libm
+    case OPcos:
+        {
+            cg.genElem(e.E1);
+            Symbol* fn;
+            final switch (e.wasmType)
+            {
+            case WASM_F32: fn = getRtlsym(op == OPsin ? RTLSYM.SINF : RTLSYM.COSF); break;
+            case WASM_F64: fn = getRtlsym(op == OPsin ? RTLSYM.SIN : RTLSYM.COS); break;
+            case WASM_I32:
+            case WASM_I64:
+                assert(0);
+            }
+            cg.emitCall(cg.funcIndex(fn), fn);
+            return true;
+        }
+
     case OPnegass:
         // `x = -x;` lowered as a single op (an in-place negation).
         // Reuse the OPneg emitter for the value, then store back.
@@ -2197,6 +2215,46 @@ bool genElem(ref WasmCG cg, elem* e)
             return true;
         }
 
+    case OPbtc: // D `import core.bitop; btc/btr/bts(p, bitnum);`
+    case OPbtr: // no native wasm instruction, synthesize from load/store + bit ops.
+    case OPbts:
+        // e2ir builds these right-to-left, so E1 = bitnum, E2 = pointer to
+        // a size_t[] (size_t is 32-bit on wasm32).
+        emitBitTestOp(cg, op, e.E1, e.E2);
+        return true;
+
+    case OPbtst:
+        // cgelem's `((a >> b) & 1) => (a btst b)` peephole (also reachable
+        // via `(*p >> shift) & 1` on a 64-bit value): E1 = word, E2 = bit
+        // index. No native wasm instruction; synthesize the shift+mask at
+        // E1's width.
+        {
+            const rty = e.E1.wasmType;
+            cg.genElem(e.E1, rty);
+            cg.genElem(e.E2, rty);
+            final switch (rty)
+            {
+            case WASM_I32:
+                cg.emitConst(OP_I32_CONST, 31);
+                cg.emit(OP_I32_AND);
+                cg.emit(OP_I32_SHR_U);
+                cg.emitConst(OP_I32_CONST, 1);
+                cg.emit(OP_I32_AND);
+                break;
+            case WASM_I64:
+                cg.emitConst(OP_I64_CONST, 63);
+                cg.emit(OP_I64_AND);
+                cg.emit(OP_I64_SHR_U);
+                cg.emitConst(OP_I64_CONST, 1);
+                cg.emit(OP_I64_AND);
+                break;
+            case WASM_F32:
+            case WASM_F64:
+                assert(0);
+            }
+            return true;
+        }
+
     case OPu64_128: // no cent/ucent
     case OPs64_128:
     case OP128_64:
@@ -2282,6 +2340,74 @@ private void emitBswap64(ref WasmCG cg)
     cg.emitLocal(OP_LOCAL_GET, hi);
     cg.emit(OP_I64_EXTEND_I32_U);
     cg.emit(OP_I64_OR);
+}
+
+// Emit `core.bitop.{btc,btr,bts}(p, bitnum)`: test bit `bitnum` of the
+// size_t array at `p` (size_t is 32-bit on wasm32), leaving the old bit
+// value (0 or 1, i32) on the stack, then complement/reset/set that bit.
+private void emitBitTestOp(ref WasmCG cg, uint op, elem* bitnumE, elem* ptrE)
+{
+    cg.genElem(bitnumE);
+    const uint bitTmp = cg.allocTemp(WASM_I32);
+    cg.emitLocal(OP_LOCAL_SET, bitTmp);
+
+    // addr = p + (bitnum >> 5) * 4
+    cg.genElem(ptrE);
+    cg.emitLocal(OP_LOCAL_GET, bitTmp);
+    cg.emitConst(OP_I32_CONST, 5);
+    cg.emit(OP_I32_SHR_U);
+    cg.emitConst(OP_I32_CONST, 2);
+    cg.emit(OP_I32_SHL);
+    cg.emit(OP_I32_ADD);
+    const uint addrTmp = cg.allocTemp(WASM_I32);
+    cg.emitLocal(OP_LOCAL_TEE, addrTmp);
+
+    cg.emit(OP_I32_LOAD);
+    cg.emitMemArg(2, 0);
+    const uint wordTmp = cg.allocTemp(WASM_I32);
+    cg.emitLocal(OP_LOCAL_SET, wordTmp);
+
+    // mask = 1 << (bitnum & 31)
+    cg.emitConst(OP_I32_CONST, 1);
+    cg.emitLocal(OP_LOCAL_GET, bitTmp);
+    cg.emitConst(OP_I32_CONST, 31);
+    cg.emit(OP_I32_AND);
+    cg.emit(OP_I32_SHL);
+    const uint maskTmp = cg.allocTemp(WASM_I32);
+    cg.emitLocal(OP_LOCAL_TEE, maskTmp);
+
+    // result = (word & mask) != 0
+    cg.emitLocal(OP_LOCAL_GET, wordTmp);
+    cg.emit(OP_I32_AND);
+    cg.emitConst(OP_I32_CONST, 0);
+    cg.emit(OP_I32_NE);
+    const uint resultTmp = cg.allocTemp(WASM_I32);
+    cg.emitLocal(OP_LOCAL_SET, resultTmp);
+
+    // *addr = word <op> mask
+    cg.emitLocal(OP_LOCAL_GET, addrTmp);
+    cg.emitLocal(OP_LOCAL_GET, wordTmp);
+    cg.emitLocal(OP_LOCAL_GET, maskTmp);
+    switch (op)
+    {
+    case OPbts:
+        cg.emit(OP_I32_OR);
+        break;
+    case OPbtr:
+        cg.emitConst(OP_I32_CONST, -1);
+        cg.emit(OP_I32_XOR); // ~mask
+        cg.emit(OP_I32_AND);
+        break;
+    case OPbtc:
+        cg.emit(OP_I32_XOR);
+        break;
+    default:
+        assert(0);
+    }
+    cg.emit(OP_I32_STORE);
+    cg.emitMemArg(2, 0);
+
+    cg.emitLocal(OP_LOCAL_GET, resultTmp);
 }
 
 // Get the address of an lvalue expression
