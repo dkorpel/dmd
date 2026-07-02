@@ -92,6 +92,23 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         int closeAfter;
     }
 
+    // WASM_BLOCKS=1: dump the block graph for debugging structuring bugs
+    {
+        import core.stdc.stdlib : getenv;
+        import core.stdc.stdio : printf;
+        if (getenv("WASM_BLOCKS"))
+        {
+            printf("=== block graph (%d blocks) ===\n", N);
+            foreach (size_t i, b; blocks)
+            {
+                printf("  b%d bc=%d succ=[", cast(int) i, cast(int) b.bc);
+                foreach (int si; 0 .. cast(int) b.Bsucc.length)
+                    printf("%s%d", si ? ",".ptr : "".ptr, blockIdx(b.Bsucc[si]));
+                printf("]\n");
+            }
+        }
+    }
+
     Frame[] stack;
     int depth()
     {
@@ -157,6 +174,43 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
 
             if (dests.length > 1)
                 qsort(dests.ptr, dests.length, int.sizeof, &cmpInt);
+
+            // Case bodies also branch forward to blocks that aren't case
+            // starts: the merge block after the switch, or local if/else
+            // merge points inside/between case bodies. Every such target
+            // needs a block frame closing exactly at it, so fold them into
+            // the wrapper list (extending the scanned range to a fixpoint —
+            // a found target extends the switch body). Targets are capped
+            // at the enclosing frame's close point so wrappers stay nested
+            // (e.g. a break out of a loop the switch sits in is a farther
+            // target a wrapper can't legally cover).
+            if (dests.length)
+            {
+                const int maxTarget = stack.length ? stack[$ - 1].closeAfter + 1 : N;
+                for (int ti = cast(int) bi + 1; ti < dests[$ - 1] && ti < N; ti++)
+                {
+                    block* tb = blocks[ti];
+                    if (tb.bc != BC.goto_ && tb.bc != BC.iftrue)
+                        continue;
+                    foreach (int si; 0 .. cast(int) tb.Bsucc.length)
+                    {
+                        int midx = blockIdx(tb.Bsucc[si]);
+                        if (midx == int.max || midx <= cast(int) bi || midx > maxTarget)
+                            continue;
+                        bool found = false;
+                        foreach (d; dests)
+                            if (d == midx)
+                            {
+                                found = true;
+                                break;
+                            }
+                        if (found)
+                            continue;
+                        dests ~= midx;
+                        qsort(dests.ptr, dests.length, int.sizeof, &cmpInt);
+                    }
+                }
+            }
 
             // Open one wrapper block per unique dest, outermost (highest idx) first.
             // Frame closeAfter = destIdx - 1 so the block ends just before that block.
@@ -453,6 +507,18 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
             {
                 // Pure forward if/else (no loop involved).
                 // Open a block BEFORE emitting the condition so we can br_if out.
+
+                // If an enclosing block frame already closes exactly where the
+                // skipped path begins, branch to it instead of opening a new
+                // frame that would cross enclosing frames (illegal nesting).
+                size_t reuse(int targetIdx)
+                {
+                    foreach_reverse (size_t fi, ref const Frame f; stack)
+                        if (!f.isLoop && f.closeAfter == targetIdx - 1)
+                            return fi;
+                    return stack.length; // sentinel: not found
+                }
+
                 if (takenIdx == cast(int) bi + 1)
                 {
                     // True path is inline; false path at nottakenIdx.
@@ -475,17 +541,43 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
                                     mergeIdx = midx;
                             }
                         }
+                        else if (takenBlock.bc == BC.retexp || takenBlock.bc == BC.ret
+                            || takenBlock.bc == BC.exit)
+                        {
+                            // True path ends in a return: it never reaches a merge
+                            // point itself, but blocks inside it (e.g. an inner if)
+                            // may still branch forward past the false path. Open an
+                            // outer block covering up to the farthest such target so
+                            // those branches have a properly nested frame to use.
+                            foreach (int ti; cast(int) bi + 1 .. nottakenIdx)
+                            {
+                                foreach (int si; 0 .. cast(int) blocks[ti].Bsucc.length)
+                                {
+                                    int midx = blockIdx(blocks[ti].Bsucc[si]);
+                                    if (midx != int.max && midx > nottakenIdx && midx > mergeIdx)
+                                        mergeIdx = midx;
+                                }
+                            }
+                        }
                     }
-                    if (mergeIdx >= 0)
+                    // The merge frame must nest inside enclosing frames.
+                    if (mergeIdx >= 0 && stack.length &&
+                        mergeIdx - 1 > stack[$ - 1].closeAfter)
+                        mergeIdx = stack[$ - 1].closeAfter + 1;
+                    if (mergeIdx >= 0 && reuse(mergeIdx) >= stack.length)
                     {
                         // if-else structure: open outer block covering both paths.
                         stack ~= Frame(false, mergeIdx - 1);
                         cg.emit(OP_BLOCK);
                         cg.emit(WASM_VOID_BLOCK);
                     }
-                    stack ~= Frame(false, nottakenIdx - 1);
-                    cg.emit(OP_BLOCK);
-                    cg.emit(WASM_VOID_BLOCK);
+                    const size_t skipFrame = reuse(nottakenIdx);
+                    if (skipFrame >= stack.length)
+                    {
+                        stack ~= Frame(false, nottakenIdx - 1);
+                        cg.emit(OP_BLOCK);
+                        cg.emit(WASM_VOID_BLOCK);
+                    }
                     if (b.Belem)
                         cg.genElem(b.Belem);
                     else
@@ -494,15 +586,56 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
                     }
                     emitCondInvert(cg, b.Belem);
                     cg.emit(OP_BR_IF);
-                    cg.emitULEB(0);
+                    cg.emitULEB(skipFrame < stack.length ? brDepth(skipFrame) : 0);
                 }
                 else if (nottakenIdx == cast(int) bi + 1)
                 {
                     // False path is inline; true path at takenIdx.
                     // block $skip ... cond; br_if 0 ... [false path] ... end $skip
-                    stack ~= Frame(false, takenIdx - 1);
-                    cg.emit(OP_BLOCK);
-                    cg.emit(WASM_VOID_BLOCK);
+                    // Mirror of the case above: if the inline false path ends
+                    // by jumping past the true path to a merge point, open an
+                    // outer block for the merge so that goto has an exactly
+                    // matching frame.
+                    int mergeIdx = -1;
+                    if (takenIdx - 1 > cast(int) bi && takenIdx - 1 < N)
+                    {
+                        block* elseBlock = blocks[takenIdx - 1];
+                        if (elseBlock.bc == BC.goto_ && elseBlock.Bsucc.length > 0)
+                        {
+                            int midx = blockIdx(elseBlock.Bsucc[0]);
+                            if (midx != int.max && midx > takenIdx)
+                                mergeIdx = midx;
+                        }
+                        else if (elseBlock.bc == BC.retexp || elseBlock.bc == BC.ret
+                            || elseBlock.bc == BC.exit)
+                        {
+                            foreach (int ti; cast(int) bi + 1 .. takenIdx)
+                            {
+                                foreach (int si; 0 .. cast(int) blocks[ti].Bsucc.length)
+                                {
+                                    int midx = blockIdx(blocks[ti].Bsucc[si]);
+                                    if (midx != int.max && midx > takenIdx && midx > mergeIdx)
+                                        mergeIdx = midx;
+                                }
+                            }
+                        }
+                    }
+                    if (mergeIdx >= 0 && stack.length &&
+                        mergeIdx - 1 > stack[$ - 1].closeAfter)
+                        mergeIdx = stack[$ - 1].closeAfter + 1;
+                    if (mergeIdx >= 0 && reuse(mergeIdx) >= stack.length)
+                    {
+                        stack ~= Frame(false, mergeIdx - 1);
+                        cg.emit(OP_BLOCK);
+                        cg.emit(WASM_VOID_BLOCK);
+                    }
+                    const size_t skipFrame = reuse(takenIdx);
+                    if (skipFrame >= stack.length)
+                    {
+                        stack ~= Frame(false, takenIdx - 1);
+                        cg.emit(OP_BLOCK);
+                        cg.emit(WASM_VOID_BLOCK);
+                    }
                     if (b.Belem)
                         cg.genElem(b.Belem);
                     else
@@ -511,17 +644,35 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
                     }
                     emitCondToI32(cg, b.Belem);
                     cg.emit(OP_BR_IF);
-                    cg.emitULEB(0);
+                    cg.emitULEB(skipFrame < stack.length ? brDepth(skipFrame) : 0);
                 }
                 else
                 {
-                    // Both branches non-immediate — complex; just evaluate.
-                    if (b.Belem)
+                    // Both branches non-immediate (e.g. `if (c) break; continue;`
+                    // in a switch case): branch to each target through frames
+                    // that close exactly where the target begins.
+                    bool brTo(int targetIdx, bool conditional)
                     {
-                        bool v = cg.genElem(b.Belem);
-                        if (v)
-                            cg.emit(OP_DROP);
+                        foreach_reverse (size_t fi, ref const Frame f; stack)
+                        {
+                            if (!f.isLoop && f.closeAfter == targetIdx - 1)
+                            {
+                                cg.emit(conditional ? OP_BR_IF : OP_BR);
+                                cg.emitULEB(brDepth(fi));
+                                return true;
+                            }
+                        }
+                        return false;
                     }
+                    if (b.Belem)
+                        cg.genElem(b.Belem);
+                    else
+                        cg.emitConst(OP_I32_CONST, 0);
+                    emitCondToI32(cg, b.Belem);
+                    if (!brTo(takenIdx, true))
+                        cg.emit(OP_DROP);
+                    else if (nottakenIdx != cast(int) bi + 1)
+                        brTo(nottakenIdx, false);
                 }
             }
             continue;
