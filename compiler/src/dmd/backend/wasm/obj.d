@@ -202,13 +202,9 @@ struct WasmFuncBody
     string name; // for synthesized functions with no Symbol
     WasmLocal[] locals;
     uint numParams;
-    // Heap pointer, not a by-value field: WasmFuncBody lives in the GC-grown
-    // `wasmFuncBodies` array, and `~=` reallocation bit-copies elements. A
-    // by-value OutBuffer would then exist in both the stale and the live array
-    // block, and OutBuffer.~this frees its C-malloc'd buffer — so the GC would
-    // finalize (free) the same buffer twice (double free under -lowmem). Holding
-    // the OutBuffer behind a pointer means realloc only copies the pointer; the
-    // single OutBuffer object is finalized exactly once.
+    // Must be a heap pointer: `wasmFuncBodies ~=` bit-copies elements on
+    // realloc, and a by-value OutBuffer would then be finalized twice
+    // (double free of its C-malloc'd buffer under -lowmem).
     OutBuffer* code; // WASM bytecode (without local decls header)
     Symbol*[] savedGlobsym; // globsym snapshot at func_term time
 
@@ -956,23 +952,11 @@ private bool emitRelocDataSection(ref OutBuffer out_, ref WasmModule wmod, uint 
         return false;
 
     uint[] funcToSymIdx = buildFuncToSymIdx();
-
-    // Data symbol indices follow the function symbols in the linking symtab
-    // (same scheme as emitRelocCodeSection / emitLinkingSection).
     Symbol*[] datasyms = buildDataSymtabOrder();
-    uint dataSymBase = 0;
-    foreach (size_t i, ref const WasmFunc f; wmod.funcs)
-    {
-        if (funcToSymIdx[i] == uint.max || isShadowedFunc(i))
-            continue;
-        dataSymBase++;
-    }
+    const uint dataSymBase = countFuncSymtabEntries(funcToSymIdx);
     uint dataSymIdx(const(Symbol)* sym)
     {
-        foreach (size_t k, ds; datasyms)
-            if (sameDataSym(ds, sym))
-                return dataSymBase + cast(uint) k;
-        return uint.max;
+        return dataSymIndex(datasyms, dataSymBase, sym);
     }
 
     // Data section payload layout (matches emitDataSection):
@@ -1037,18 +1021,7 @@ private bool emitRelocDataSection(ref OutBuffer out_, ref WasmModule wmod, uint 
     if (!rels.length)
         return false;
 
-    // Insertion sort by offset (typically already nearly sorted).
-    for (size_t i = 1; i < rels.length; i++)
-    {
-        auto v = rels[i];
-        size_t j = i;
-        while (j > 0 && rels[j - 1].offset > v.offset)
-        {
-            rels[j] = rels[j - 1];
-            j--;
-        }
-        rels[j] = v;
-    }
+    sortByOffset(rels);
 
     OutBuffer payload;
     payload.writeuLEB128(dataSectionIdx);
@@ -1112,32 +1085,11 @@ private bool emitRelocElemSection(ref OutBuffer out_, ref WasmModule wmod, uint 
 private bool emitRelocCodeSection(ref OutBuffer out_, ref WasmModule wmod, uint codeSectionIdx)
 {
     uint[] funcToSymIdx = buildFuncToSymIdx();
-
-    // Data symbol table ordering: must match buildDataSymtabOrder used by
-    // emitLinkingSection (defined-by-segment first, then extern code-refs).
     Symbol*[] datasyms = buildDataSymtabOrder();
-
-    // The data symbol table indices start right after the function symbol table.
-    // Count distinct function sym indices (shadowed funcs alias to a canonical
-    // index and must not inflate the count).
-    uint dataSymBase = 0;
-    foreach (size_t i, ref const WasmFunc f; wmod.funcs)
-    {
-        if (funcToSymIdx[i] == uint.max)
-            continue;
-        if (isShadowedFunc(i))
-            continue;
-        dataSymBase++;
-    }
-    // (TABLE symbol is emitted after data syms in the linking section, so it
-    //  doesn't affect data sym indices here.)
-
+    const uint dataSymBase = countFuncSymtabEntries(funcToSymIdx);
     uint dataSymIdx(const(Symbol)* sym)
     {
-        foreach (size_t k, ds; datasyms)
-            if (sameDataSym(ds, sym))
-                return dataSymBase + cast(uint) k;
-        return uint.max;
+        return dataSymIndex(datasyms, dataSymBase, sym);
     }
 
     // Resolve a CodeReloc's funcIdx to the current wmod.funcs index. Prefers
@@ -1183,11 +1135,9 @@ private bool emitRelocCodeSection(ref OutBuffer out_, ref WasmModule wmod, uint 
     if (!totalRelocs)
         return false;
 
-    // wasm-ld requires relocations in ascending offset order.
-    // Merge all relocations into a flat list and sort by absolute offset.
     struct AnyReloc
     {
-        uint absOffset; // fb.codePayloadStart + r.offset
+        uint offset; // fb.codePayloadStart + r.offset
         ubyte type;
         uint sym;
         uint addend; // only for MEMORY_ADDR_LEB
@@ -1231,18 +1181,7 @@ private bool emitRelocCodeSection(ref OutBuffer out_, ref WasmModule wmod, uint 
         }
     }
 
-    // Sort by absOffset (insertion sort — typically nearly-sorted already).
-    for (size_t i = 1; i < allRelocs.length; i++)
-    {
-        AnyReloc key = allRelocs[i];
-        size_t j = i;
-        while (j > 0 && allRelocs[j - 1].absOffset > key.absOffset)
-        {
-            allRelocs[j] = allRelocs[j - 1];
-            j--;
-        }
-        allRelocs[j] = key;
-    }
+    sortByOffset(allRelocs);
 
     OutBuffer payload;
     payload.writeuLEB128(codeSectionIdx);
@@ -1251,7 +1190,7 @@ private bool emitRelocCodeSection(ref OutBuffer out_, ref WasmModule wmod, uint 
     foreach (ref const AnyReloc r; allRelocs)
     {
         payload.writeByte(r.type);
-        payload.writeuLEB128(r.absOffset);
+        payload.writeuLEB128(r.offset);
         payload.writeuLEB128(r.sym);
         if (r.type == R_WASM.MEMORY_ADDR_LEB)
             payload.writesLEB128(cast(int) r.addend); // addend is SLEB per spec
@@ -1259,6 +1198,44 @@ private bool emitRelocCodeSection(ref OutBuffer out_, ref WasmModule wmod, uint 
 
     writeCustomSection(out_, "reloc.CODE", &payload);
     return true;
+}
+
+// wasm-ld requires relocation entries in ascending offset order.
+// Insertion sort: the lists are typically nearly sorted already.
+private void sortByOffset(T)(T[] rels)
+{
+    for (size_t i = 1; i < rels.length; i++)
+    {
+        T v = rels[i];
+        size_t j = i;
+        while (j > 0 && rels[j - 1].offset > v.offset)
+        {
+            rels[j] = rels[j - 1];
+            j--;
+        }
+        rels[j] = v;
+    }
+}
+
+// Number of function entries in the linking symtab; data symbol indices start
+// right after them. Shadowed funcs alias a canonical entry and don't count.
+private uint countFuncSymtabEntries(const uint[] funcToSymIdx)
+{
+    uint n = 0;
+    foreach (size_t i; 0 .. funcToSymIdx.length)
+        if (funcToSymIdx[i] != uint.max && !isShadowedFunc(i))
+            n++;
+    return n;
+}
+
+// Symtab index of a data symbol, given the buildDataSymtabOrder list and the
+// index of its first entry
+private uint dataSymIndex(Symbol*[] datasyms, uint base, const(Symbol)* sym)
+{
+    foreach (size_t k, ds; datasyms)
+        if (sameDataSym(ds, sym))
+            return base + cast(uint) k;
+    return uint.max;
 }
 
 // Symbol-table order for DATA entries:

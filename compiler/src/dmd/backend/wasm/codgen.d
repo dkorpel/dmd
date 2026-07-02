@@ -1018,19 +1018,12 @@ private void emitSliceArg(ref WasmCG cg, elem* arg)
         return;
     }
     // OPind: evaluate the address expression ONCE (it may have side effects,
-    // e.g. a call returning a slice via hidden sret pointer), then load the
-    // two halves through a temp.
+    // e.g. a call returning a slice via hidden sret pointer)
     if (a.Eoper == OPind && a.E1 &&
         (tybasic(a.Ety) == TYdarray || tybasic(a.Ety) == TYdelegate))
     {
         cg.genElem(a.E1);
-        const uint addrTmp = cg.allocTemp(WASM_I32);
-        cg.emitLocal(OP_LOCAL_TEE, addrTmp);
-        cg.emit(OP_I32_LOAD); // length/context at offset 0
-        cg.emitMemArg(2, 0);
-        cg.emitLocal(OP_LOCAL_GET, addrTmp);
-        cg.emit(OP_I32_LOAD); // ptr/funcptr at offset 4
-        cg.emitMemArg(2, 4);
+        loadSliceHalves(cg);
         return;
     }
 
@@ -1039,11 +1032,9 @@ private void emitSliceArg(ref WasmCG cg, elem* arg)
         return;
 
     // `cond ? sliceA : sliceB`: cgelem has collapsed the slice to an i64-packed
-    // value (TYulong), so emitSliceHalf rejects the branches. A slice must NEVER
-    // be carried as an i64-packed value and split arithmetically — it lives in
-    // memory and is referenced by pointer. Lower the conditional so each branch
-    // yields the ADDRESS of its in-memory slice, select the address with an
-    // `if (result i32)` block, then load the two i32 halves (length, ptr).
+    // value (TYulong), so emitSliceHalf rejects the branches. A slice must never
+    // be carried as a packed i64 — select the ADDRESS of the in-memory slice
+    // with an `if (result i32)` block instead, then load the halves.
     if (a.Eoper == OPcond &&
         sliceBranchAddressable(cg, a.E2.E1) &&
         sliceBranchAddressable(cg, a.E2.E2))
@@ -1051,19 +1042,12 @@ private void emitSliceArg(ref WasmCG cg, elem* arg)
         cg.genElem(a.E1);
         emitCondToI32(cg, a.E1);
         cg.emit(OP_IF);
-        cg.emit(WASM_I32); // block yields the slice's linear-memory address
+        cg.emit(WASM_I32);
         emitLValueAddr(cg, a.E2.E1);
         cg.emit(OP_ELSE);
         emitLValueAddr(cg, a.E2.E2);
         cg.emit(OP_END);
-
-        const uint ptrTmp = cg.allocTemp(WASM_I32);
-        cg.emitLocal(OP_LOCAL_TEE, ptrTmp);
-        cg.emit(OP_I32_LOAD); // length at offset 0
-        cg.emitMemArg(2, 0);
-        cg.emitLocal(OP_LOCAL_GET, ptrTmp);
-        cg.emit(OP_I32_LOAD); // ptr at offset 4
-        cg.emitMemArg(2, 4);
+        loadSliceHalves(cg);
         return;
     }
 
@@ -1095,6 +1079,19 @@ private void emitSliceArg(ref WasmCG cg, elem* arg)
 
     elem_print(arg);
     assert(0);
+}
+
+// Replace the slice/delegate address on the stack with its two i32 halves:
+// (length/context, ptr/funcptr).
+private void loadSliceHalves(ref WasmCG cg)
+{
+    const uint addrTmp = cg.allocTemp(WASM_I32);
+    cg.emitLocal(OP_LOCAL_TEE, addrTmp);
+    cg.emit(OP_I32_LOAD);
+    cg.emitMemArg(2, 0);
+    cg.emitLocal(OP_LOCAL_GET, addrTmp);
+    cg.emit(OP_I32_LOAD);
+    cg.emitMemArg(2, 4);
 }
 
 // True if `e` is a slice/delegate (r)pair whose two halves are side-effect
@@ -1215,23 +1212,13 @@ private bool genCall(ref WasmCG cg, elem* e)
 {
     // E1 is the function. Direct call: E1 is OPvar of a function symbol.
     Symbol* calleeSym = e.E1.Vsym;
-    // null;
-    // if (e.E1.Eoper == OPvar && e.E1.Vsym && e.E1.Vsym.Sclass != SC.auto_ && e.E1.Vsym.Sclass != SC.parameter && e.E1.Vsym.Sclass != SC.fastpar)
-    //    calleeSym = e.E1.Vsym;
 
     type* fty = calleeSym ? calleeSym.Stype : null;
-    // Indirect call: derive the function type from the function-pointer
-    // variable's declared type so slice/delegate args still split into
-    // (length, ptr) and the call_indirect type signature matches the
-    // callee's declared signature. e.ET is only set for TYstruct/TYarray
-    // elems, so for function pointers we have to fish the type out of the
-    // underlying Symbol (Stype is pointer-to-function; Tnext is the func).
+    // Indirect call: e2ir's callfunc stashes the pointed-to function type on
+    // e.E1.ET. Needed so slice/delegate args still split into (length, ptr)
+    // and the call_indirect type signature matches the callee's.
     if (!fty)
     {
-        // e2ir's callfunc stashes the pointed-to function type on the
-        // indirect-call function elem (e.E1.ET). This is the authoritative
-        // source for a call through a value with no backing Symbol (a
-        // function pointer loaded from a field, array element, AA, ...).
         if (e.E1 && e.E1.ET && tyfunc(e.E1.ET.Tty))
             fty = e.E1.ET;
     }
