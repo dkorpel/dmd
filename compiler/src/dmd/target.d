@@ -144,8 +144,7 @@ void addDefaultVersionIdentifiers(const ref Param params, const ref Target tgt)
     }
     else if (tgt.isWasm)
     {
-        // TypeInfo structs are statically allocated (no GC) and fit in linear memory.
-        // D_ModuleInfo and D_Exceptions are suppressed: no module system or EH runtime.
+        // Exceptions and ModuleInfo not supported (yet) on wasm
         if (params.useTypeInfo)
             VersionCondition.addPredefinedGlobalIdent("D_TypeInfo");
     }
@@ -556,9 +555,8 @@ extern (C++) struct Target
             realalignsize = 8;
         }
 
-        // On targets where `real` is no wider than `double` (e.g. WASM), its
-        // type properties (mant_dig, epsilon, nan, ...) must reflect the narrower
-        // type rather than the host compiler's possibly-wider real_t.
+        // On WASM where `real` is no wider than `double`, use those type properties
+        // (mant_dig, epsilon, nan, ...) rather than the host compiler's real_t.
         if (realsize - realpad <= 4)
             copyFPProperties(RealProperties, FloatProperties);
         else if (realsize - realpad <= 8)
@@ -598,9 +596,8 @@ extern (C++) struct Target
         }
         else if (os == Target.OS.WASM)
         {
-            // Object files use `.o` (clang/wasm-ld convention) while the final
-            // module uses `.wasm` (dll_ext). Distinct extensions let separate
-            // compilation link `.o` inputs into a `.wasm` output without clashing.
+            // Could all be .wasm, but distinct extensions prevent clashing with
+            // separate compilation (clang/wasm-ld convention)
             obj_ext = "o";
             lib_ext = "a";
             dll_ext = "wasm";
@@ -756,7 +753,6 @@ extern (C++) struct Target
         }
         else if (isWasm)
         {
-            // WASM has no hardware va_list; use a simple pointer convention.
             tvalist = Type.tchar.pointerTo();
         }
         else
@@ -1513,7 +1509,7 @@ extern (C++) struct Target
                   isX86_64         ?  8 :
                   isAArch64        ?  8 :
                   isX86            ?  4 :
-                  isWasm           ?  8 : 0; // WASM: 8-byte alignment (wasm32 pointer-natural)
+                  isWasm           ?  8 : 0;
         assert(sz);
         return sz;
     }
