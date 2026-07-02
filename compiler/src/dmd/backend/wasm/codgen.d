@@ -1032,53 +1032,62 @@ private void emitSliceArg(ref WasmCG cg, elem* arg)
         return;
 
     // `cond ? sliceA : sliceB`: cgelem has collapsed the slice to an i64-packed
-    // value (TYulong), so emitSliceHalf rejects the branches. A slice must never
-    // be carried as a packed i64 — select the ADDRESS of the in-memory slice
-    // with an `if (result i32)` block instead, then load the halves.
-    if (a.Eoper == OPcond &&
-        sliceBranchAddressable(cg, a.E2.E1) &&
-        sliceBranchAddressable(cg, a.E2.E2))
+    // value (TYulong), so emitSliceHalf rejects the branches. A slice must
+    // never be carried as a packed i64 — emit each arm recursively into two
+    // temps inside a void `if` (arms may themselves be conditionals, calls,
+    // pairs, ...).
+    if (a.Eoper == OPcond)
     {
         cg.genElem(a.E1);
         emitCondToI32(cg, a.E1);
-        cg.emit(OP_IF);
-        cg.emit(WASM_I32);
-        emitLValueAddr(cg, a.E2.E1);
-        cg.emit(OP_ELSE);
-        emitLValueAddr(cg, a.E2.E2);
-        cg.emit(OP_END);
-        loadSliceHalves(cg);
-        return;
-    }
-
-    // `cond ? sliceA : sliceB` where the branches are (r)pairs of side-effect
-    // free halves (e.g. string literals: rpair(relconst, const)). The halves
-    // can be re-emitted freely, so evaluate the condition once into a temp and
-    // select each half with its own `if (result i32)` block.
-    if (a.Eoper == OPcond &&
-        slicePairEmittable(a.E2.E1) &&
-        slicePairEmittable(a.E2.E2))
-    {
-        cg.genElem(a.E1);
-        emitCondToI32(cg, a.E1);
-        const uint condTmp = cg.allocTemp(WASM_I32);
-        cg.emitLocal(OP_LOCAL_TEE, condTmp);
-        foreach (ptrHalf; [false, true])
+        const uint lenTmp = cg.allocTemp(WASM_I32);
+        const uint ptrTmp = cg.allocTemp(WASM_I32);
+        void emitArm(elem* arm)
         {
-            if (ptrHalf)
-                cg.emitLocal(OP_LOCAL_GET, condTmp);
-            cg.emit(OP_IF);
-            cg.emit(WASM_I32);
-            emitPairHalf(cg, a.E2.E1, ptrHalf);
-            cg.emit(OP_ELSE);
-            emitPairHalf(cg, a.E2.E2, ptrHalf);
-            cg.emit(OP_END);
+            emitSliceArg(cg, arm); // pushes (length, ptr)
+            cg.emitLocal(OP_LOCAL_SET, ptrTmp);
+            cg.emitLocal(OP_LOCAL_SET, lenTmp);
         }
+        cg.emit(OP_IF);
+        cg.emit(WASM_VOID_BLOCK);
+        emitArm(a.E2.E1);
+        cg.emit(OP_ELSE);
+        emitArm(a.E2.E2);
+        cg.emit(OP_END);
+        cg.emitLocal(OP_LOCAL_GET, lenTmp);
+        cg.emitLocal(OP_LOCAL_GET, ptrTmp);
         return;
     }
 
     elem_print(arg);
     assert(0);
+}
+
+// Push the address of a by-value struct argument (OPstrpar operand): a
+// comma chain ending in an lvalue, or a conditional selecting between two
+// such values.
+private bool emitStructParAddr(ref WasmCG cg, elem* e)
+{
+    e = unwrapComma(cg, e);
+    if (e.Eoper == OPcond)
+    {
+        cg.genElem(e.E1);
+        emitCondToI32(cg, e.E1);
+        const uint addrTmp = cg.allocTemp(WASM_I32);
+        cg.emit(OP_IF);
+        cg.emit(WASM_VOID_BLOCK);
+        if (!emitStructParAddr(cg, e.E2.E1))
+            return false;
+        cg.emitLocal(OP_LOCAL_SET, addrTmp);
+        cg.emit(OP_ELSE);
+        if (!emitStructParAddr(cg, e.E2.E2))
+            return false;
+        cg.emitLocal(OP_LOCAL_SET, addrTmp);
+        cg.emit(OP_END);
+        cg.emitLocal(OP_LOCAL_GET, addrTmp);
+        return true;
+    }
+    return emitLValueAddr(cg, e);
 }
 
 // Replace the slice/delegate address on the stack with its two i32 halves:
@@ -1092,53 +1101,6 @@ private void loadSliceHalves(ref WasmCG cg)
     cg.emitLocal(OP_LOCAL_GET, addrTmp);
     cg.emit(OP_I32_LOAD);
     cg.emitMemArg(2, 4);
-}
-
-// True if `e` is a slice/delegate (r)pair whose two halves are side-effect
-// free leaves, so each half can be emitted more than once (emitSliceArg's
-// conditional lowering emits one half per `if` block). OPconst is a null
-// slice/delegate.
-private bool slicePairEmittable(const(elem)* e)
-{
-    if (!e)
-        return false;
-    if (e.Eoper == OPconst)
-        return true;
-    if (e.Eoper != OPpair && e.Eoper != OPrpair)
-        return false;
-    static bool pureLeaf(const(elem)* h)
-    {
-        return h && (h.Eoper == OPconst || h.Eoper == OPrelconst || h.Eoper == OPvar);
-    }
-    return pureLeaf(e.E1) && pureLeaf(e.E2);
-}
-
-// Emit one half of a slice/delegate (r)pair vetted by slicePairEmittable:
-// the length/context half (ptrHalf false) or the ptr/funcptr half (ptrHalf
-// true). OPpair is (lsw, msw) = (length, ptr); OPrpair is reversed.
-private void emitPairHalf(ref WasmCG cg, elem* e, bool ptrHalf)
-{
-    if (e.Eoper == OPconst)
-    {
-        cg.emitConst(OP_I32_CONST, 0);
-        return;
-    }
-    elem* half = (e.Eoper == OPpair) == ptrHalf ? e.E2 : e.E1;
-    cg.genElem(half);
-}
-
-// True if `e` is a slice/delegate whose in-memory address `emitLValueAddr` can
-// push: an OPind (the pointer expression) or an addressable OPvar (a data
-// symbol or shadow-frame local). Used to gate the conditional-slice lowering.
-private bool sliceBranchAddressable(ref WasmCG cg, elem* e)
-{
-    if (!e)
-        return false;
-    if (e.Eoper == OPind)
-        return e.E1 !is null;
-    if (e.Eoper == OPvar && e.Vsym)
-        return isDataSym(e.Vsym.Sfl) || cg.inShadow(e.Vsym);
-    return false;
 }
 
 // True if `e` is an OPparam spine node (the void-typed binary list backbone)
@@ -1685,6 +1647,26 @@ bool genElem(ref WasmCG cg, elem* e)
     case OPle:
     case OPgt:
     case OPge:
+    case OPunord:
+    case OPlg:
+    case OPleg:
+    case OPule:
+    case OPul:
+    case OPuge:
+    case OPug:
+    case OPue:
+    case OPngt:
+    case OPnge:
+    case OPnlt:
+    case OPnle:
+    case OPord:
+    case OPnlg:
+    case OPnleg:
+    case OPnule:
+    case OPnul:
+    case OPnuge:
+    case OPnug:
+    case OPnue:
         cg.genElem(e.E1);
         cg.genElem(e.E2, e.E1.wasmType);
         emitRelop(cg, op, e.E1.Ety);
@@ -1928,9 +1910,10 @@ bool genElem(ref WasmCG cg, elem* e)
         // The struct value may be wrapped in an OPcomma chain that builds it
         // into a temporary (field-by-field stores) and yields the temp as its
         // final lvalue — emit the side effects, then address the lvalue.
-        if (emitLValueAddr(cg, unwrapComma(cg, e.E1)))
+        if (emitStructParAddr(cg, e.E1))
             return true;
 
+        elem_print(e);
         assert(0);
 
     case OPpair:
@@ -2389,6 +2372,71 @@ private void emitBinop(ref WasmCG cg, int op, tym_t ty)
 // Emit a relational/comparison opcode
 private void emitRelop(ref WasmCG cg, int op, tym_t ty)
 {
+    // Reduce the unordered/negated forms (true when a float operand is NaN)
+    // to a base compare plus optional eqz. WASM float compares are all
+    // ordered (false on NaN), so e.g. !> is eqz(gt).
+    bool negate = false;
+    switch (op)
+    {
+    case OPngt: case OPule: op = OPgt;  negate = true; break;
+    case OPnge: case OPul:  op = OPge;  negate = true; break;
+    case OPnlt: case OPuge: op = OPlt;  negate = true; break;
+    case OPnle: case OPug:  op = OPle;  negate = true; break;
+    case OPue:  case OPnlg:  op = OPlg;  negate = true; break;
+    case OPunord: case OPnleg: op = OPleg; negate = true; break;
+    case OPnule: op = OPgt; break;
+    case OPnul:  op = OPge; break;
+    case OPnuge: op = OPlt; break;
+    case OPnug:  op = OPle; break;
+    case OPnue:  op = OPlg; break;
+    case OPord:  op = OPleg; break;
+    default: break;
+    }
+
+    // <> and <>= need the operands twice (ordered = x==x && y==y)
+    if (op == OPlg || op == OPleg)
+    {
+        const WASM_TYPE wt = wasmType(ty);
+        if (wt == WASM_I32 || wt == WASM_I64)
+        {
+            if (op == OPlg)
+                op = OPne; // integers are always ordered
+            else
+            {
+                cg.emit(OP_DROP);
+                cg.emit(OP_DROP);
+                cg.emitConst(OP_I32_CONST, negate ? 0 : 1);
+                return;
+            }
+        }
+        else
+        {
+            const uint yTmp = cg.allocTemp(wt);
+            const uint xTmp = cg.allocTemp(wt);
+            cg.emitLocal(OP_LOCAL_SET, yTmp);
+            cg.emitLocal(OP_LOCAL_SET, xTmp);
+            const ubyte feq = (wt == WASM_F32) ? OP_F32_EQ : OP_F64_EQ;
+            cg.emitLocal(OP_LOCAL_GET, xTmp);
+            cg.emitLocal(OP_LOCAL_GET, xTmp);
+            cg.emit(feq);
+            cg.emitLocal(OP_LOCAL_GET, yTmp);
+            cg.emitLocal(OP_LOCAL_GET, yTmp);
+            cg.emit(feq);
+            cg.emit(OP_I32_AND);
+            if (op == OPlg)
+            {
+                const ubyte fne = (wt == WASM_F32) ? OP_F32_NE : OP_F64_NE;
+                cg.emitLocal(OP_LOCAL_GET, xTmp);
+                cg.emitLocal(OP_LOCAL_GET, yTmp);
+                cg.emit(fne);
+                cg.emit(OP_I32_AND);
+            }
+            if (negate)
+                cg.emit(OP_I32_EQZ);
+            return;
+        }
+    }
+
     static ubyte relOp(int op, tym_t ty)
     {
         const bool isUns = tyuns(ty) != 0;
@@ -2419,6 +2467,8 @@ private void emitRelop(ref WasmCG cg, int op, tym_t ty)
         }
     }
     cg.emit(relOp(op, ty));
+    if (negate)
+        cg.emit(OP_I32_EQZ);
 }
 
 /// Function index lookup
@@ -2663,7 +2713,13 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
 
     block* startblock = sfunc.Sfunc.Fstartblock;
     if (startblock)
+    {
+        import core.stdc.stdlib : getenv;
+        import core.stdc.stdio : printf;
+        if (getenv("WASM_BLOCKS"))
+            printf("=== func %s\n", &sfunc.Sident[0]);
         genBlocksProper(cg, startblock, hasReturn);
+    }
 
     if (cg.hasShadowFrame)
         emitShadowEpilogue(cg);
