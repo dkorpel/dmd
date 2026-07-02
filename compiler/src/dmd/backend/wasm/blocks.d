@@ -150,6 +150,16 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         cg.emit(WASM_VOID_BLOCK);
     }
 
+    // Branch to the frame at `fi`. A missing frame (fi == stack.length
+    // sentinel) means the CFG couldn't be structured — a dropped branch
+    // would silently corrupt control flow, so fail loudly instead.
+    void branchTo(size_t fi, bool conditional)
+    {
+        assert(fi < stack.length, "wasm blocks: branch target has no frame");
+        cg.emit(conditional ? OP_BR_IF : OP_BR);
+        cg.emitULEB(brDepth(fi));
+    }
+
     foreach (const bi; 0 .. N)
     {
         block* b = blocks[bi];
@@ -412,38 +422,17 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
                 // Back edge: condition true => loop continue
                 emitCondValue();
                 emitCondToI32(cg, b.Belem);
-                size_t lf = loopFrame(takenIdx);
-                if (lf < stack.length)
-                {
-                    cg.emit(OP_BR_IF);
-                    cg.emitULEB(brDepth(lf));
-                    // false => exit loop
-                    if (nottakenIdx > info[takenIdx].loopEnd)
-                    {
-                        size_t ef = blockFrame(nottakenIdx);
-                        if (ef < stack.length)
-                        {
-                            cg.emit(OP_BR);
-                            cg.emitULEB(brDepth(ef));
-                        }
-                    }
-                }
-                else
-                    cg.emit(OP_DROP);
+                branchTo(loopFrame(takenIdx), true);
+                // false => exit loop
+                if (nottakenIdx > info[takenIdx].loopEnd)
+                    branchTo(blockFrame(nottakenIdx), false);
             }
             else if (nottakenIdx <= cast(int) bi)
             {
                 // Back edge: condition false => loop continue
                 emitCondValue();
                 emitCondInvert(cg, b.Belem);
-                size_t lf = loopFrame(nottakenIdx);
-                if (lf < stack.length)
-                {
-                    cg.emit(OP_BR_IF);
-                    cg.emitULEB(brDepth(lf));
-                }
-                else
-                    cg.emit(OP_DROP);
+                branchTo(loopFrame(nottakenIdx), true);
             }
             else if (outerLoop < stack.length &&
                 (nottakenIdx == exitBlockIdx || takenIdx == exitBlockIdx))
@@ -508,29 +497,17 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
                     emitCondInvert(cg, b.Belem);
                 else
                     emitCondToI32(cg, b.Belem);
-                cg.emit(OP_BR_IF);
-                cg.emitULEB(brDepth(skipFrame));
+                branchTo(skipFrame, true);
             }
             else
             {
                 // Both targets non-immediate (e.g. `if (c) break; continue;`
                 // in a switch case): branch through frames closing exactly
                 // where each target begins.
-                bool brTo(int targetIdx, bool conditional)
-                {
-                    const size_t fi = exactFrame(targetIdx);
-                    if (fi >= stack.length)
-                        return false;
-                    cg.emit(conditional ? OP_BR_IF : OP_BR);
-                    cg.emitULEB(brDepth(fi));
-                    return true;
-                }
                 emitCondValue();
                 emitCondToI32(cg, b.Belem);
-                if (!brTo(takenIdx, true))
-                    cg.emit(OP_DROP);
-                else
-                    brTo(nottakenIdx, false);
+                branchTo(exactFrame(takenIdx), true);
+                branchTo(exactFrame(nottakenIdx), false);
             }
             continue;
         }
@@ -550,21 +527,28 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
             if (targetIdx <= bi)
             {
                 // Back edge => loop continue
-                size_t lf = loopFrame(targetIdx);
-                if (lf < stack.length)
-                {
-                    cg.emit(OP_BR);
-                    cg.emitULEB(brDepth(lf));
-                }
+                branchTo(loopFrame(targetIdx), false);
             }
             else if (targetIdx > bi + 1)
             {
                 // Forward goto that skips blocks: br out of the covering frame
-                size_t fi = blockFrame(targetIdx);
+                const size_t fi = blockFrame(targetIdx);
                 if (fi < stack.length)
                 {
-                    cg.emit(OP_BR);
-                    cg.emitULEB(brDepth(fi));
+                    branchTo(fi, false);
+                }
+                else
+                {
+                    // A jump into a loop body past its header (multi-entry
+                    // loop; blockopt creates these from unreachable code
+                    // after an infinite loop) can't be structured without
+                    // node splitting. Trap rather than fall through.
+                    bool entersLoop = false;
+                    foreach (int h; cast(int) bi + 1 .. targetIdx)
+                        if (info[h].isLoopHeader && info[h].loopEnd >= targetIdx)
+                            entersLoop = true;
+                    assert(entersLoop, "wasm blocks: branch target has no frame");
+                    cg.emit(OP_UNREACHABLE);
                 }
             }
             // targetIdx == bi+1: fall through naturally
