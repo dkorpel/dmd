@@ -1017,6 +1017,23 @@ private void emitSliceArg(ref WasmCG cg, elem* arg)
         cg.genElem(a.E1);
         return;
     }
+    // OPind: evaluate the address expression ONCE (it may have side effects,
+    // e.g. a call returning a slice via hidden sret pointer), then load the
+    // two halves through a temp.
+    if (a.Eoper == OPind && a.E1 &&
+        (tybasic(a.Ety) == TYdarray || tybasic(a.Ety) == TYdelegate))
+    {
+        cg.genElem(a.E1);
+        const uint addrTmp = cg.allocTemp(WASM_I32);
+        cg.emitLocal(OP_LOCAL_TEE, addrTmp);
+        cg.emit(OP_I32_LOAD); // length/context at offset 0
+        cg.emitMemArg(2, 0);
+        cg.emitLocal(OP_LOCAL_GET, addrTmp);
+        cg.emit(OP_I32_LOAD); // ptr/funcptr at offset 4
+        cg.emitMemArg(2, 4);
+        return;
+    }
+
     if (emitSliceHalf(cg, a, /*ptrHalf*/ false) &&
         emitSliceHalf(cg, a, /*ptrHalf*/ true))
         return;
