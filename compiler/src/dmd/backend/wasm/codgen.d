@@ -407,6 +407,25 @@ private MemOps memOpsFor(tym_t ty) @safe
     }
 }
 
+// Extend a sub-word integer constant to its type's canonical i32 form (signed →
+// sign-extended, unsigned → zero-extended), matching how memOpsFor loads it.
+private int canonicalI32Const(int v, tym_t ty)
+{
+    switch (tybasic(ty))
+    {
+    case TYbool, TYchar, TYuchar:
+        return v & 0xFF;
+    case TYschar:
+        return cast(byte) v;
+    case TYwchar_t, TYushort, TYchar16:
+        return v & 0xFFFF;
+    case TYshort:
+        return cast(short) v;
+    default:
+        return v;
+    }
+}
+
 /// Emit `memory.copy 0 0`
 private void emitMemoryCopy(ref WasmCG cg)
 {
@@ -1088,6 +1107,22 @@ private bool emitStructParAddr(ref WasmCG cg, elem* e)
         cg.emitLocal(OP_LOCAL_GET, addrTmp);
         return true;
     }
+    // A struct rvalue argument arrives as `strpar(streq(_TMP, value))`: the copy
+    // builds the value into a temporary and yields the temp's address. Emitting
+    // the streq performs the copy and leaves that address on the stack.
+    // Example: `f(S.init)` for a by-value struct parameter (structlit_rvalue.d).
+    if (e.Eoper == OPstreq)
+        return cg.genElem(e);
+    // A small struct built via a single scalar store arrives as
+    // `strpar(=(_TMP, value))` (OPeq of a TYlong, etc.). The assignment leaves
+    // the stored value on the stack, not an address — drop it and re-address the
+    // destination lvalue. Example: a nested-function 8-byte context (nested.d).
+    if (e.Eoper == OPeq && e.E1)
+    {
+        if (cg.genElem(e))
+            cg.emit(OP_DROP);
+        return emitLValueAddr(cg, e.E1);
+    }
     return emitLValueAddr(cg, e);
 }
 
@@ -1301,9 +1336,13 @@ private bool genCall(ref WasmCG cg, elem* e)
         cg.emitULEB(spIdx);
     }
 
-    // Noreturn (SFLexit) functions leave the stack empty. Emit unreachable
-    // so WASM's type checker accepts any type expectations after the call.
-    if (calleeSym && (calleeSym.Sflags & SFLexit))
+    // Noreturn functions leave the stack empty. Emit unreachable so the type
+    // checker accepts any stack expectations after the call. The call node can be
+    // typed TYnoreturn even when the callee's own signature is `void` (e.g. the
+    // assert lowering builds `_d_unittestp` as OPcall(TYnoreturn)); the optimizer
+    // then folds `assert(false)` to `OPne(call, 0)`, whose relop needs the value
+    // to come from a polymorphic stack. Example: `unittest{ assert(false); }`.
+    if ((calleeSym && (calleeSym.Sflags & SFLexit)) || tybasic(e.Ety) == TYnoreturn)
         cg.emit(OP_UNREACHABLE);
 
     // Whether the call left a value on the WASM stack depends on the
@@ -1344,6 +1383,24 @@ bool genElem(ref WasmCG cg, elem* e)
     {
         cg.genElem(e.E1);
         cg.emit(op);
+        return true;
+    }
+
+    // Evaluate E1 and call the libm routine for its operand type (WASM has no
+    // native instruction). Used by the trig/rounding opers below.
+    bool libmCall(RTLSYM f32Sym, RTLSYM f64Sym)
+    {
+        cg.genElem(e.E1);
+        Symbol* fn;
+        final switch (e.E1.wasmType)
+        {
+        case WASM_F32: fn = getRtlsym(f32Sym); break;
+        case WASM_F64: fn = getRtlsym(f64Sym); break;
+        case WASM_I32:
+        case WASM_I64:
+            assert(0);
+        }
+        cg.emitCall(cg.funcIndex(fn), fn);
         return true;
     }
 
@@ -1402,7 +1459,13 @@ bool genElem(ref WasmCG cg, elem* e)
             cg.code.write(&d, 8);
             break;
         case WASM_I32:
-            cg.emitConst(OP_I32_CONST, cast(int) e.Vlong);
+            // Sub-word integers live in an i32 canonically extended to match how
+            // a value of that type loads from memory (signed types sign-extended,
+            // unsigned types zero-extended — see memOpsFor). A constant operand
+            // must use the same representation, otherwise e.g. a `ushort` compare
+            // against `i32.load16_u` (zero-extended) mismatches a sign-extended
+            // literal. Example: `cast(ushort)s == 0xCCCC` (test15.d test39).
+            cg.emitConst(OP_I32_CONST, canonicalI32Const(cast(int) e.Vlong, e.Ety));
             break;
         default:
             assert(0);
@@ -1748,22 +1811,14 @@ bool genElem(ref WasmCG cg, elem* e)
             assert(0);
         }
 
-    case OPsin: // D `import core.math; sin(x);` -- no native wasm instruction, call libm
-    case OPcos:
-        {
-            cg.genElem(e.E1);
-            Symbol* fn;
-            final switch (e.wasmType)
-            {
-            case WASM_F32: fn = getRtlsym(op == OPsin ? RTLSYM.SINF : RTLSYM.COSF); break;
-            case WASM_F64: fn = getRtlsym(op == OPsin ? RTLSYM.SIN : RTLSYM.COS); break;
-            case WASM_I32:
-            case WASM_I64:
-                assert(0);
-            }
-            cg.emitCall(cg.funcIndex(fn), fn);
-            return true;
-        }
+    case OPsin: // `core.math.sin(x)`
+        return libmCall(RTLSYM.SINF, RTLSYM.SIN);
+    case OPcos: // `core.math.cos(x)`
+        return libmCall(RTLSYM.COSF, RTLSYM.COS);
+    case OPrint: // `core.math.rint(x)` -- round to nearest
+        return libmCall(RTLSYM.RINTF, RTLSYM.RINT);
+    case OPrndtol: // `core.math.rndtol(x)` -- round float to long
+        return libmCall(RTLSYM.RNDTOLF, RTLSYM.RNDTOL);
 
     case OPnegass:
         // `x = -x;` lowered as a single op (an in-place negation).
@@ -2021,9 +2076,12 @@ bool genElem(ref WasmCG cg, elem* e)
             cg.emit(WASM_I32);
             cg.emitConst(OP_I32_CONST, 1);
             cg.emit(OP_ELSE);
-            cg.genElem(e.E2);
-
-            if (!typeHasValue(e.E2.Ety))
+            // Decide synth-vs-coerce from whether E2 actually pushed a value, not
+            // from typeHasValue(E2.Ety): a nested OPoror/OPandand always leaves an
+            // i32 yet can be typed void, which would otherwise double-count (push
+            // the value *and* synthesise a 0). Example: `a || b || dtor()` in a
+            // struct destructor (test17246.d).
+            if (!cg.genElem(e.E2))
             {
                 // Void RHS leaves nothing on the stack; synthesise a result so
                 // the if-block type checks. Caller will typically drop it.
@@ -2044,8 +2102,7 @@ bool genElem(ref WasmCG cg, elem* e)
             emitCondToI32(cg, e.E1);
             cg.emit(OP_IF);
             cg.emit(WASM_I32);
-            cg.genElem(e.E2);
-            if (!typeHasValue(e.E2.Ety))
+            if (!cg.genElem(e.E2))
             {
                 cg.emitConst(OP_I32_CONST, 0);
             }
@@ -2652,6 +2709,17 @@ uint funcIndex(Symbol* sfunc)
 void emitCondToI32(ref WasmCG cg, elem* condElem, bool invert = false)
 {
     assert(condElem);
+
+    // A void/noreturn-typed operand that nonetheless left a value on the stack is
+    // a short-circuit result (OPoror/OPandand always push a 0/1 i32) — already a
+    // boolean, so only apply the optional inversion.
+    const tb = tybasic(condElem.Ety);
+    if (tb == TYvoid || tb == TYnoreturn)
+    {
+        if (invert)
+            cg.emit(OP_I32_EQZ);
+        return;
+    }
 
     switch (condElem.wasmType)
     {
