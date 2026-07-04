@@ -1254,6 +1254,14 @@ private bool sameDataSym(const(Symbol)* a, const(Symbol)* b)
         return true;
     if (!a || !b || !a.Sident.ptr || !b.Sident.ptr)
         return false;
+    // immutable uint[] a = [0]; // dt.d payload Symbol named "internal"
+    // immutable uint[] b = [1]; // also "internal", must not collapse onto a
+    static bool visible(const(Symbol)* s)
+    {
+        return s.Sclass == SC.comdat || s.Sclass == SC.global || s.Sclass == SC.extern_;
+    }
+    if (!visible(a) || !visible(b))
+        return false;
     return a.identifier == b.identifier;
 }
 
@@ -1670,21 +1678,8 @@ int WasmObj_data_start(Symbol* sdata, targ_size_t datasize, int seg)
     uint mask = align_ - 1;
     uint base = (wmod.dataHeap + mask) & ~mask;
 
-    if (seg == WASM_UDATA)
-    {
-        // BSS: just reserve address space. WASM linear memory is zero-initialized,
-        // so no bytes need to be emitted. Deactivate the data buffer so subsequent
-        // lidata/write calls (which don't exist for BSS) are ignored.
-        wmod.activeSegIdx = -1;
-        if (sdata)
-            sdata.Soffset = base;
-        wmod.dataHeap = base + cast(uint) datasize;
-        return seg;
-    }
 
-    // One WASM data segment per data symbol (LDC-style). Its own offset is
-    // the symbol's linear-memory address; the segment's bytes are exactly
-    // the symbol's payload.
+    // One WASM data segment per data symbol (LDC-style)
     WasmDataSeg ds;
     ds.data = new OutBuffer();
     ds.offset = base;
@@ -1693,7 +1688,10 @@ int WasmObj_data_start(Symbol* sdata, targ_size_t datasize, int seg)
         ds.name = sdata.identifier;
     uint a = 1;
     int log2 = 0;
-    while (a < align_) { a <<= 1; log2++; }
+    while (a < align_)
+    {
+        a <<= 1; log2++;
+    }
     ds.alignLog2 = cast(uint) log2;
 
     wmod.dataSegs ~= ds;
@@ -1782,9 +1780,7 @@ int WasmObj_common_block(Symbol* s, int flag, targ_size_t size, targ_size_t coun
 
 void WasmObj_lidata(int seg, targ_size_t offset, targ_size_t count)
 {
-    // BSS segment: WASM linear memory is zero-initialized by the runtime; address
-    // space was already reserved in data_start, so nothing to emit.
-    if (seg == WASM_UDATA || !wmod.activeSeg)
+    if (!wmod.activeSeg)
         return;
     foreach (_; 0 .. count)
         wmod.activeSeg.data.writeByte(0);
@@ -1792,7 +1788,7 @@ void WasmObj_lidata(int seg, targ_size_t offset, targ_size_t count)
 
 void WasmObj_write_zeros(seg_data* pseg, targ_size_t count)
 {
-    if (pseg.SDseg == WASM_UDATA || !wmod.activeSeg)
+    if (!wmod.activeSeg)
         return;
     foreach (_; 0 .. count)
         wmod.activeSeg.data.writeByte(0);

@@ -296,6 +296,25 @@ private int runWasmLINK(bool verbose, ref Param params, ErrorSink eSink)
         pushLPathEarly(argv0DruntimeDir());
     }
 
+    // Default shadow stack of 1 MiB (wasm-ld's default is 64 KiB; wasi-sdk and
+    // Rust default to 1 MiB).
+    {
+        // Skipped when the user passes their own -L-z -Lstack-size=N.
+        bool userStackSize = false;
+        foreach (pi, p; params.linkswitches)
+        {
+            if (!p || params.linkswitchIsForCC[pi])
+                continue;
+            if (startsWith(p[0 .. strlen(p)], "stack-size="))
+                userStackSize = true;
+        }
+        if (!userStackSize)
+        {
+            argv.push("-z");
+            argv.push("stack-size=1048576");
+        }
+    }
+
     // Link switches: pass directly to wasm-ld, filtering out switches that
     // are host-native only (e.g. -rpath, which wasm-ld rejects or ignores).
     foreach (pi, p; params.linkswitches)

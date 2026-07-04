@@ -271,24 +271,13 @@ nothrow:
         code.writeuLEB128_5(addr);
     }
 
-    // Relocatable (-> 5-byte padded i32.const + MEMORY_ADDR reloc):
-    //   __gshared int g = 9;        // FL.data,    Sseg == DATA
-    //   int tls = 7;                // FL.tlsdata,  Sseg == DATA (TLS mapped to data)
-    //   template T(U){ U x = 4; }   // comdat data, Sseg == DATA
-    //   extern __gshared int e;     // FL.extern_  (undefined data ref)
-    //
-    // Non-relocatable (-> plain i32.const of the raw segment offset):
-    //   __gshared int bss;          // FL.udata,   no DATA symtab entry (BSS)
-    //   int tlsBss;                 // FL.tlsdata, Sseg == UDATA (TLS-BSS)
+    // All named data symbols relocate (-> 5-byte padded i32.const + MEMORY_ADDR
+    // reloc). Zero-initialized (BSS) symbols included: WasmObj_data_start gives
+    // them a real zero-filled segment and symtab entry, so a raw unrelocated
+    // offset would be wrong once wasm-ld moves the data section.
     static bool symCanRelocate(const Symbol* sym)
     {
-        if (sym.Sident.ptr is null)
-            return false;
-        if (sym.Sfl == FL.udata)
-            return false;
-        if (sym.Sfl == FL.tlsdata)
-            return sym.Sseg == DATA;
-        return true;
+        return sym.Sident.ptr !is null;
     }
 
     // Emit OP_I32_CONST with a data-segment address.
@@ -2245,9 +2234,15 @@ bool genElem(ref WasmCG cg, elem* e)
 
     case OPpopcnt:
         {
+            // popcnt at the operand's width; the result may be narrower
+            // (core.bitop.popcnt(ulong) returns int).
+            const opnd = e.E1.wasmType;
             cg.genElem(e.E1);
-            cg.emit(e.wasmType == WASM_I64 ? OP_I64_POPCNT : OP_I32_POPCNT);
-            // result matches input width (int for uint, long for ulong)
+            cg.emit(opnd == WASM_I64 ? OP_I64_POPCNT : OP_I32_POPCNT);
+            if (opnd == WASM_I64 && e.wasmType == WASM_I32)
+                cg.emit(OP_I32_WRAP_I64);
+            else if (opnd == WASM_I32 && e.wasmType == WASM_I64)
+                cg.emit(OP_I64_EXTEND_I32_U);
             return true;
         }
 
