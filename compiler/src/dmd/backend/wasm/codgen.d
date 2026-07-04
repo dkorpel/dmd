@@ -415,6 +415,20 @@ private int canonicalI32Const(int v, tym_t ty)
     }
 }
 
+/// Emit a saturating float→int truncation (0xFC-prefixed trunc_sat family).
+/// The plain trunc opcodes trap on NaN/out-of-range input, where native
+/// targets produce an unspecified value without trapping.
+/// ---
+/// double d = 1e300;
+/// int i = cast(int) d; // i32.trunc_f64_s → "wasm trap: integer overflow"
+/// ---
+private void emitTruncSat(ref WasmCG cg, WASM_TYPE from, WASM_TYPE to, bool uns)
+{
+    const subop = (to == WASM_I64 ? 4 : 0) | (from == WASM_F64 ? 2 : 0) | (uns ? 1 : 0);
+    cg.emit(OP_FC_PREFIX);
+    cg.emitULEB(subop);
+}
+
 /// Emit `memory.copy 0 0`
 private void emitMemoryCopy(ref WasmCG cg)
 {
@@ -486,6 +500,8 @@ private void emitCoerce(ref WasmCG cg, WASM_TYPE from, WASM_TYPE to)
         cg.emit(OP_F32_REINTERPRET_I32);
         return;
     }
+    if ((from == WASM_F32 || from == WASM_F64) && (to == WASM_I32 || to == WASM_I64))
+        return cg.emitTruncSat(from, to, false);
 
     static ubyte coerceOp(WASM_TYPE from, WASM_TYPE to)
     {
@@ -501,9 +517,6 @@ private void emitCoerce(ref WasmCG cg, WASM_TYPE from, WASM_TYPE to)
             case X(WASM_I32, WASM_F32): return OP_F32_CONVERT_I32_S;
             case X(WASM_I32, WASM_F64): return OP_F64_CONVERT_I32_S;
             case X(WASM_I64, WASM_F64): return OP_F64_CONVERT_I64_S;
-            case X(WASM_F32, WASM_I32): return OP_I32_TRUNC_F32_S;
-            case X(WASM_F64, WASM_I32): return OP_I32_TRUNC_F64_S;
-            case X(WASM_F64, WASM_I64): return OP_I64_TRUNC_F64_S;
             default: assert(0);
         }
     }
@@ -1391,6 +1404,13 @@ bool genElem(ref WasmCG cg, elem* e)
         return true;
     }
 
+    bool truncSat(WASM_TYPE from, WASM_TYPE to, bool uns)
+    {
+        cg.genElem(e.E1);
+        cg.emitTruncSat(from, to, uns);
+        return true;
+    }
+
     // Evaluate E1 and call the libm routine for its operand type (WASM has no
     // native instruction). Used by the trig/rounding opers below.
     bool libmCall(RTLSYM f32Sym, RTLSYM f64Sym)
@@ -1936,10 +1956,10 @@ bool genElem(ref WasmCG cg, elem* e)
     case OPf_d: return unaryOp(OP_F64_PROMOTE_F32);
 
     // Float to integer (D `int i = cast(int) d;` etc.).
-    case OPd_s32: return unaryOp(OP_I32_TRUNC_F64_S);
-    case OPd_u32: return unaryOp(OP_I32_TRUNC_F64_U);
-    case OPd_s64: return unaryOp(OP_I64_TRUNC_F64_S);
-    case OPd_u64: return unaryOp(OP_I64_TRUNC_F64_U);
+    case OPd_s32: return truncSat(WASM_F64, WASM_I32, false);
+    case OPd_u32: return truncSat(WASM_F64, WASM_I32, true);
+    case OPd_s64: return truncSat(WASM_F64, WASM_I64, false);
+    case OPd_u64: return truncSat(WASM_F64, WASM_I64, true);
 
     // Integer to float (D `double d = cast(double) i;` etc.).
     case OPs32_d: return unaryOp(OP_F64_CONVERT_I32_S);
@@ -1963,13 +1983,12 @@ bool genElem(ref WasmCG cg, elem* e)
         return true;
     case OPd_s16:
         cg.genElem(e.E1);
-        cg.emit(OP_I32_TRUNC_F64_S);
-        cg.emitConst(OP_I32_CONST, 0xFFFF);
-        cg.emit(OP_I32_AND);
+        cg.emitTruncSat(WASM_F64, WASM_I32, false);
+        cg.emit(OP_I32_EXTEND16_S);
         return true;
     case OPd_u16:
         cg.genElem(e.E1);
-        cg.emit(OP_I32_TRUNC_F64_U);
+        cg.emitTruncSat(WASM_F64, WASM_I32, false);
         cg.emitConst(OP_I32_CONST, 0xFFFF);
         cg.emit(OP_I32_AND);
         return true;
@@ -1984,7 +2003,7 @@ bool genElem(ref WasmCG cg, elem* e)
         return true;
     case OPld_u64:
         // D `ulong u = cast(ulong)r;` with real==double on WASM.
-        return unaryOp(OP_I64_TRUNC_F64_U);
+        return truncSat(WASM_F64, WASM_I64, true);
 
     case OPmsw:
         {
@@ -2613,6 +2632,12 @@ private ubyte pickByKindSigned(tym_t ty, ubyte f32, ubyte f64, ubyte i64, ubyte 
 // Binary operation opcode selection by IR operator
 private void emitBinop(ref WasmCG cg, int op, tym_t ty)
 {
+    if (op == OPmod && tyfloating(ty))
+    {
+        Symbol* fn = getRtlsym(tybasic(ty).wasmType == WASM_F32 ? RTLSYM.FMODF : RTLSYM.FMOD);
+        cg.emitCall(cg.funcIndex(fn), fn);
+        return;
+    }
     static ubyte binOp(int op, tym_t ty)
     {
         alias U = OP_UNREACHABLE;
