@@ -76,6 +76,15 @@ runnable/test21515.d
 runnable/testc22259.c
 runnable/testcomplexinit.c
 
+# --- ImportC K&R default-argument promotion not implemented ---
+# exe1.c defines `void paramtest(c,i,f,d) ... float f;` old-style (K&R) but calls
+# it through a prototype declaring `double`. C requires the float parameter of an
+# unprototyped definition to be passed as a promoted double; ImportC does not yet
+# do this (see the test's own `#if 0 // TODO ImportC`), so the K&R definition's
+# WASM signature keeps an f32 param while callers push f64. Native tolerates the
+# mismatch via lax calling conventions; WASM's strict validation rejects it.
+runnable/exe1.c
+
 # --- Require exception handling (try/catch, throw, synchronized) ---
 # The WASM backend has no working exception-handling runtime: `throw` lowers to
 # a `_d_throwc` call and `synchronized` to `_d_criticalenter2`, neither of which
@@ -99,7 +108,6 @@ runnable/test19251.d
 runnable/test19393.d
 runnable/test19639.d
 runnable/test20809.d
-runnable/test23710.d
 runnable/test711.d
 
 # --- gdb debugger tests (cannot run under WASM) ---
