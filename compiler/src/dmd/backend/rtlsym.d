@@ -347,8 +347,11 @@ private type* wasmRtlsymType(RTLSYM i) @trusted
             return fn([ptrTo(tstypes[TYfloat]), tstypes[TYfloat], tsize], ptrTo(tstypes[TYfloat]));
         case RTLSYM.MEMSETDOUBLE:
             return fn([ptrTo(tstypes[TYdouble]), tstypes[TYdouble], tsize], ptrTo(tstypes[TYdouble]));
+        case RTLSYM.MEMSET128:
+            return fn([voidPtr(), voidPtr(), tsize], voidPtr());
+        case RTLSYM.MEMSET128ii:
+            return fn([voidPtr(), voidArr(), tsize], voidPtr());
         case RTLSYM.MEMSETN:
-            // void* _memsetn(void* p, void* value, int count, size_t sizelem)
             return fn([voidPtr(), voidPtr(), tint, tsize], voidPtr());
         case RTLSYM.ALLOCMEMORY:
         case RTLSYM.TRACEALLOCMEMORY:
@@ -356,16 +359,16 @@ private type* wasmRtlsymType(RTLSYM i) @trusted
 
         case RTLSYM.ARRAYAPPENDCD:
         case RTLSYM.ARRAYAPPENDWD:
-            return fn([voidPtr(), tdchar], voidArr()); // ref byte[] x, dchar c
+            return fn([voidPtr(), tdchar], voidArr());
         case RTLSYM.ARRAYCOPY:
             return fn([tsize, voidArr(), voidArr()], voidArr());
 
-        case RTLSYM.C_ASSERT:   // _assert(msg, file, line)
-        case RTLSYM.C__ASSERT:  // __assert(msg, file, line)
+        case RTLSYM.C_ASSERT:
+        case RTLSYM.C__ASSERT:
             return fn([charPtr(), charPtr(), tint], tvoid);
-        case RTLSYM.C__ASSERT_FAIL: // __assert_fail(exp, file, line, func)
+        case RTLSYM.C__ASSERT_FAIL:
             return fn([charPtr(), charPtr(), tuint, charPtr()], tvoid);
-        case RTLSYM.C__ASSERT_RTN:  // __assert_rtn(func, file, line, msg)
+        case RTLSYM.C__ASSERT_RTN:
             return fn([charPtr(), charPtr(), tint, charPtr()], tvoid);
 
         case RTLSYM.FMODF:

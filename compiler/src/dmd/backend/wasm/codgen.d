@@ -1238,10 +1238,12 @@ private bool genCall(ref WasmCG cg, elem* e)
     }
 
     // C variadic requires Tparamtypes set (bare TYnfunc/TYjfunc with no
-    // params is an unprototyped RTL decl, not a real variadic).
+    // params is an unprototyped RTL decl, not a real variadic). `void arr3(...)`
+    // (dstyle, no fixed params) has null Tparamtypes but still spills varargs.
     CallCtx ctx;
     ctx.remainingParams = (fty && fty.Tparamtypes) ? *fty.Tparamtypes : null;
-    ctx.isCVariadic = fty !is null && fty.Tparamtypes !is null && variadic(fty);
+    ctx.isCVariadic = fty !is null && variadic(fty) &&
+        (fty.Tparamtypes !is null || dstyleVariadic(fty));
 
     // Hidden-ret pointer (struct/array return) and ethis/nested static link
     // are prepended to the WASM signature by buildFuncType, but they don't
@@ -1345,19 +1347,8 @@ private bool genCall(ref WasmCG cg, elem* e)
     if ((calleeSym && (calleeSym.Sflags & SFLexit)) || tybasic(e.Ety) == TYnoreturn)
         cg.emit(OP_UNREACHABLE);
 
-    // Whether the call left a value on the WASM stack depends on the
-    // callee's WASM signature, not e.Ety. For direct calls to a function
-    // defined in this module, e.Ety can disagree with the function's
-    // actual return type (e.g. a void member call appearing in an
-    // OPcomma chain): trust the callee's Stype.Tnext.
-    const retTy = tybasic(e.Ety);
-    bool pushedValue = typeHasValue(e.Ety);
-    if (e.E1.Eoper == OPvar && e.E1.Vsym && e.E1.Vsym.Stype && e.E1.Vsym.Stype.Tnext)
-    {
-        const tym_t calleeRet = tybasic(e.E1.Vsym.Stype.Tnext.Tty);
-        pushedValue = typeHasValue(calleeRet);
-    }
-    return pushedValue;
+    // DO NOT check e.E1.Vsym, if the type is incorrect fix that instead of overriding it
+    return typeHasValue(e.Ety);
 }
 
 /// Code generation for an element

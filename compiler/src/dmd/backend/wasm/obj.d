@@ -1707,19 +1707,6 @@ int WasmObj_data_start(Symbol* sdata, targ_size_t datasize, int seg)
     return 1;
 }
 
-// Update an import's WASM function type. Called from codgen when the actual
-// Returns the number of WASM parameters for a function at index fidx.
-// Used to detect variadic-style extra args (pushed count > WASM param count).
-uint wmod_func_param_count(uint fidx)
-{
-    if (fidx >= wmod.funcs.length)
-        return 0;
-    const typeIdx = wmod.funcs[fidx].typeIdx;
-    if (typeIdx >= wmod.funcTypes.length)
-        return 0;
-    return cast(uint) wmod.funcTypes[typeIdx].params.length;
-}
-
 // Returns the WASM signature computed for `sfunc` at func_start time, when
 // the backend type is still in its "raw" form.  After func_start the glue
 // layer injects the `this` pointer into `Tparamtypes`, which would make a
