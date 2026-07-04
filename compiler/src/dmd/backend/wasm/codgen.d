@@ -754,12 +754,37 @@ void emitShadowEpilogue(ref WasmCG cg)
     cg.emitULEB(spIdx);
 }
 
-/// Mask result of small integer operation, since WASM operations are at least 32-bit
-/// For a 16-bit or 8-bit type `ty`, generate code to truncate to that size
+/// Truncate the result of a small integer operation back to the canonical
+/// i32 form of `ty` (signed → sign-extended, unsigned → zero-extended,
+/// matching memOpsFor loads), since WASM operations are at least 32-bit.
+/// ---
+/// char toUpper(char c) => (c >= 'a' && c <= 'z') ? cast(char)(c + ('A' - 'a')) : c;
+/// // i32.add leaves bit 8 set for 'r'; a switch on the result then misses every case
+/// ---
 private void maskSmallInt(ref WasmCG cg, tym_t ty)
 {
     if (tyfloating(ty))
         return;
+    if (tyuns(ty))
+        return zeroExtendSmallInt(cg, ty);
+    switch (tysize(ty))
+    {
+    case 1:
+        cg.emit(OP_I32_EXTEND8_S);
+        break;
+    case 2:
+        cg.emit(OP_I32_EXTEND16_S);
+        break;
+    default:
+        break;
+    }
+}
+
+/// Zero-extend a small integer on the stack regardless of its type's sign
+/// (for logical right shifts, where the sign-extended canonical form of a
+/// signed operand would shift garbage bits in).
+private void zeroExtendSmallInt(ref WasmCG cg, tym_t ty)
+{
     switch (tysize(ty))
     {
     case 1:
@@ -1584,6 +1609,8 @@ bool genElem(ref WasmCG cg, elem* e)
             auto lv = saveLValueAddr(cg, e.E1);
             uint loadOff = replayAddr(cg, lv);
             cg.emitLoad(e.E1.Ety, loadOff);
+            if (op == OPshrass && wasmType(e.E1.Ety) == WASM_I32 && !tyuns(e.E1.Ety))
+                cg.zeroExtendSmallInt(e.E1.Ety);
             cg.genElem(e.E2, wasmType(e));
             cg.emitBinop(opeqtoop(op), e.Ety);
             cg.maskSmallInt(e.E1.Ety);
@@ -1613,8 +1640,18 @@ bool genElem(ref WasmCG cg, elem* e)
         {
             const rty = wasmType(e.Ety);
             cg.genElem(e.E1, rty);
+            if (op == OPshr && rty == WASM_I32 && !tyuns(e.Ety))
+                cg.zeroExtendSmallInt(e.Ety);
             cg.genElem(e.E2, rty);
             cg.emitBinop(op, e.Ety);
+            switch (op)
+            {
+            case OPadd, OPmin, OPmul, OPshl, OPshr:
+                cg.maskSmallInt(e.Ety);
+                break;
+            default:
+                break;
+            }
             return true;
         }
 
@@ -1739,6 +1776,7 @@ bool genElem(ref WasmCG cg, elem* e)
             cg.emitConst(OP_I32_CONST, 0);
             cg.genElem(e.E1);
             cg.emit(OP_I32_SUB);
+            cg.maskSmallInt(e.Ety);
             return true;
         default:
             assert(0);
@@ -1870,6 +1908,7 @@ bool genElem(ref WasmCG cg, elem* e)
             cg.genElem(e.E1);
             cg.emitConst(OP_I32_CONST, -1);
             cg.emit(OP_I32_XOR);
+            cg.maskSmallInt(e.Ety);
             return true;
         case WASM_F32:
         case WASM_F64:
