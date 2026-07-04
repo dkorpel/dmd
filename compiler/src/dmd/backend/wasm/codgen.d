@@ -2179,17 +2179,78 @@ bool genElem(ref WasmCG cg, elem* e)
 
     case OPmemset:
         {
-            // IR: OPmemset(dst, OPparam(count, val)). Result is dst.
+            // IR: OPmemset(dst, OPparam(nelems, val)). Result is dst.
+            // struct BB { ulong bits; }
+            // BB[8] arr; arr[] = BB(0); // val is 8 bytes wide, nelems is 8
+            assert(e.E2.Eoper == OPparam);
+            elem* enelems = e.E2.E1;
+            elem* evalue = e.E2.E2;
+            const width = cast(uint) tysize(evalue.Ety);
+
             uint dstTmp = cg.allocTemp(WASM_I32);
             cg.genElem(e.E1);
-            cg.emit(OP_LOCAL_TEE);
-            cg.emitULEB(dstTmp); // stack: dst
-            assert(e.E2.Eoper == OPparam);
+            cg.emitLocal(OP_LOCAL_SET, dstTmp);
 
-            cg.genElem(e.E2.E2, WASM_I32); // val
-            cg.genElem(e.E2.E1, WASM_I32); // count
+            ulong splat(ulong v)
+            {
+                const b = v & 0xFF;
+                return b * 0x0101_0101_0101_0101;
+            }
+            const ulong mask = width >= 8 ? ulong.max : (1UL << (width * 8)) - 1;
 
-            emitMemoryFill(cg);
+            if (width <= 1)
+            {
+                cg.emitLocal(OP_LOCAL_GET, dstTmp);
+                cg.genElem(evalue, WASM_I32); // val
+                cg.genElem(enelems, WASM_I32); // count
+                emitMemoryFill(cg);
+            }
+            else if (evalue.Eoper == OPconst && !tyfloating(evalue.Ety) &&
+                (evalue.Vullong & mask) == (splat(evalue.Vullong) & mask))
+            {
+                cg.emitLocal(OP_LOCAL_GET, dstTmp);
+                cg.emitConst(OP_I32_CONST, evalue.Vullong & 0xFF);
+                cg.genElem(enelems, WASM_I32);
+                cg.emitConst(OP_I32_CONST, width);
+                cg.emit(OP_I32_MUL);
+                emitMemoryFill(cg);
+            }
+            else
+            {
+                const vt = evalue.wasmType;
+                uint valTmp = cg.allocTemp(vt);
+                uint curTmp = cg.allocTemp(WASM_I32);
+                uint endTmp = cg.allocTemp(WASM_I32);
+                cg.genElem(evalue);
+                cg.emitLocal(OP_LOCAL_SET, valTmp);
+                cg.emitLocal(OP_LOCAL_GET, dstTmp);
+                cg.emitLocal(OP_LOCAL_TEE, curTmp);
+                cg.genElem(enelems, WASM_I32);
+                cg.emitConst(OP_I32_CONST, width);
+                cg.emit(OP_I32_MUL);
+                cg.emit(OP_I32_ADD);
+                cg.emitLocal(OP_LOCAL_SET, endTmp);
+                cg.emit(OP_BLOCK);
+                cg.emit(WASM_VOID_BLOCK);
+                cg.emit(OP_LOOP);
+                cg.emit(WASM_VOID_BLOCK);
+                cg.emitLocal(OP_LOCAL_GET, curTmp);
+                cg.emitLocal(OP_LOCAL_GET, endTmp);
+                cg.emit(OP_I32_GE_U);
+                cg.emit(OP_BR_IF);
+                cg.emitULEB(1);
+                cg.emitLocal(OP_LOCAL_GET, curTmp);
+                cg.emitLocal(OP_LOCAL_GET, valTmp);
+                emitStore(cg, evalue.Ety);
+                cg.emitLocal(OP_LOCAL_GET, curTmp);
+                cg.emitConst(OP_I32_CONST, width);
+                cg.emit(OP_I32_ADD);
+                cg.emitLocal(OP_LOCAL_SET, curTmp);
+                cg.emit(OP_BR);
+                cg.emitULEB(0);
+                cg.emit(OP_END);
+                cg.emit(OP_END);
+            }
             cg.emitLocal(OP_LOCAL_GET, dstTmp);
             return true;
         }
