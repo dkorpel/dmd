@@ -576,9 +576,38 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
             block_setLoc(blx.curblock, s.loc);
             block_next(blx, bc, null);
         }
+
+        /* On wasm without exception support, try/finally is emitted as
+         * straight-line code (see visitTryFinally), so a return inside a try
+         * block must run the enclosing finally bodies inline before leaving
+         * the function.
+         */
+        bool hasEnclosingFinally()
+        {
+            for (auto ss = stmtstate; ss; ss = ss.prev)
+                if (ss.statement && ss.statement.isTryFinallyStatement())
+                    return true;
+            return false;
+        }
+        const bool wasmInlineFinallies = target.isWasm && config.ehmethod == EHmethod.EH_NONE
+            && hasEnclosingFinally();
+        void wasmEmitFinallies()
+        {
+            for (auto ss = stmtstate; ss; ss = ss.prev)
+            {
+                if (!ss.statement)
+                    continue;
+                if (auto tfs = ss.statement.isTryFinallyStatement())
+                    if (tfs.finalbody)
+                        Statement_toIR(tfs.finalbody, irs, ss.prev ? ss.prev : ss);
+            }
+        }
+
         if (!s.exp)
         {
             bc = BC.ret;
+            if (wasmInlineFinallies)
+                wasmEmitFinallies();
             return finish();
         }
 
@@ -675,6 +704,29 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
         }
     L1:
         elem_setLoc(e, s.loc);
+        if (wasmInlineFinallies)
+        {
+            // Evaluate the return value into a temp first: the finally
+            // bodies may destroy what it was computed from.
+            if (tybasic(e.Ety) != TYvoid)
+            {
+                elem* evalue = el_copytotmp(e);
+                block_appendexp(blx.curblock, e);
+                wasmEmitFinallies();
+                e = evalue;
+            }
+            else
+            {
+                block_appendexp(blx.curblock, e);
+                wasmEmitFinallies();
+                e = null;
+            }
+            if (e)
+                block_appendexp(blx.curblock, e);
+            bc = BC.retexp;
+            finish();
+            return;
+        }
         block_appendexp(blx.curblock, e);
         bc = BC.retexp;
 //        if (type_zeroCopy(Type_toCtype(s.exp.type)))

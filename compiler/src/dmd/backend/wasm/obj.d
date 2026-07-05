@@ -1843,12 +1843,35 @@ size_t WasmObj_bytes(int seg, targ_size_t offset, const(void)[] data)
 
 void WasmObj_reftodatseg(int seg, targ_size_t offset, targ_size_t val, uint targetdatum, int flags)
 {
-    // Write `val` (an address in linear memory) as a 4-byte LE integer
-    // into the active data segment at the current position.
-    // In WASM single-segment layout, val IS the linear memory address.
+    // Write a pointer into the active data segment. `val` is the pre-link
+    // linear-memory address of the target (e.g. anonymous rodata backing a
+    // hexstring or array literal). wasm-ld moves segments when linking, so
+    // the pointer needs a relocation against the target's segment; anonymous
+    // segments get a lazily-created local anchor symbol to relocate against.
     if (!wmod.activeSeg)
         return;
-    uint addr = cast(uint) val;
+    const uint addr = cast(uint) val;
+    foreach (size_t i, ref WasmDataSeg ds; wmod.dataSegs)
+    {
+        const uint len = cast(uint) ds.data.length();
+        if (!(addr >= ds.offset && addr < ds.offset + len))
+            continue;
+        if (!ds.sym)
+        {
+            import dmd.backend.symbol : symbol_name;
+            import core.stdc.stdio : snprintf;
+            char[32] buf = void;
+            const n = snprintf(buf.ptr, buf.length, ".rodata.%u", cast(uint) i);
+            ds.sym = symbol_name(buf[0 .. n], SC.static_, tstypes[TYint]);
+            ds.sym.Sfl = FL.data;
+        }
+        const uint segIdx = cast(uint) wmod.activeSegIdx;
+        const uint dataOff = cast(uint) wmod.activeSeg.data.length();
+        uint zero = 0;
+        wmod.activeSeg.data.write(&zero, 4);
+        wmod.dataRelocations ~= WasmModule.DataReloc(segIdx, dataOff, ds.sym, addr - ds.offset);
+        return;
+    }
     wmod.activeSeg.data.write(&addr, 4);
 }
 

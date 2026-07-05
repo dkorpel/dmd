@@ -1711,12 +1711,18 @@ bool genElem(ref WasmCG cg, elem* e)
                 cg.genElem(e.E2);
                 return true;
             }
+            // The RHS is evaluated before the LHS value is read: a call in
+            // the RHS may modify the lvalue, and the updated value must be
+            // the one combined (e.g. `val += add8ret3(val)` in evalorder.d).
             auto lv = saveLValueAddr(cg, e.E1);
+            cg.genElem(e.E2, wasmType(e));
+            uint rTmp = cg.allocTemp(wasmType(e));
+            cg.emitLocal(OP_LOCAL_SET, rTmp);
             uint loadOff = replayAddr(cg, lv);
             cg.emitLoad(e.E1.Ety, loadOff);
             if (op == OPshrass && wasmType(e.E1.Ety) == WASM_I32 && !tyuns(e.E1.Ety))
                 cg.zeroExtendSmallInt(e.E1.Ety);
-            cg.genElem(e.E2, wasmType(e));
+            cg.emitLocal(OP_LOCAL_GET, rTmp);
             cg.emitBinop(opeqtoop(op), e.Ety);
             cg.maskSmallInt(e.E1.Ety);
             // Save new value, store, leave on stack as result.
@@ -3179,6 +3185,17 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
         import core.stdc.stdio : printf;
         if (getenv("WASM_BLOCKS"))
             printf("=== func %s\n", &sfunc.Sident[0]);
+        // WASM_ELEMS=1: dump each block's elem tree for debugging codegen bugs
+        if (getenv("WASM_ELEMS"))
+        {
+            printf("=== elems of func %s\n", &sfunc.Sident[0]);
+            for (block* b = startblock; b; b = b.Bnext)
+            {
+                printf("--- block bc=%d\n", cast(int) b.bc);
+                if (b.Belem)
+                    elem_print(b.Belem);
+            }
+        }
         genBlocksProper(cg, startblock, hasReturn);
     }
 

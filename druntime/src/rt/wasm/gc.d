@@ -104,7 +104,11 @@ uint gc_setAttr(void* p, uint a) @nogc { return 0; }
 uint gc_clrAttr(void* p, uint a) @nogc { return 0; }
 
 void* _d_allocmemory(size_t sz) { return gc_malloc(sz, 0, null); }
-void _d_callfinalizer(void* p) {}
+
+// Run a class instance's destructor chain (used by `scope` classes and
+// explicit destroy). rt_finalize lives in rt.wasm.extra.
+private extern (C) void rt_finalize(void* p, bool det = true) nothrow;
+void _d_callfinalizer(void* p) { rt_finalize(p); }
 void _d_callinterfacefinalizer(void* p) {}
 
 // Capacity growth helper used by array append operations.

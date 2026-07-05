@@ -49,6 +49,7 @@ runnable/ctorpowtests.d
 runnable/dhry.d
 runnable/link11069b.d
 runnable/paranoia.d
+runnable/test12197.d
 runnable/test13117.d
 runnable/test13117b.d
 runnable/test19.d
