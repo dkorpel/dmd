@@ -6029,6 +6029,14 @@ elem* callfunc(Loc loc,
                 assert(length < ubyte.max); // 254 should be enough for anybody
                 e.numParams = cast(ubyte)(tf.parameterList.length + 1); // +1 means variadic
             }
+            // The wasm backend can't see whether an indirect variadic call
+            // carries a hidden context-pointer argument (delegate context /
+            // static link); tell it via numParams = 1 + that count.
+            // ---
+            // void foo2(void delegate(int, ...) dg) { dg(20, 3.14); }
+            // ---
+            if (target.isWasm)
+                e.numParams = cast(ubyte)(1 + ((ethis2 !is null || ethis !is null) ? 1 : 0));
         }
     }
 

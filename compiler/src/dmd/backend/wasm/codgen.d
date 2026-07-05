@@ -1296,11 +1296,47 @@ private bool genCall(ref WasmCG cg, elem* e)
         if (calleeSym && calleeSym.Sfunc &&
             (calleeSym.Sfunc.Fflags3 & (Fmember | Fnested)))
             ctx.skipCount++;
+        // Indirect variadic call: the leaf count can't reveal a hidden
+        // context-pointer argument (varargs make it ambiguous), so e2ir's
+        // callfunc records it in numParams as 1 + count.
+        // ---
+        // void foo2(void delegate(int, ...) dg) { dg(20, 3.14); }
+        // ---
+        else if (!calleeSym && e.numParams)
+            ctx.skipCount += e.numParams - 1;
         // extern(D) variadics push a leading `_arguments` (TypeInfo_Tuple
         // pointer, single i32) before the declared params; emit it as a plain
         // arg, not a spilled vararg value (buildFuncType reserves a slot).
         if (fty && dstyleVariadic(fty))
             ctx.skipCount++;
+    }
+
+    // e2ir builds rtlsym calls returning a slice (e.g. _d_arraycopy) without
+    // an ehidden argument: the native ABI returns slices in a register pair.
+    // The WASM signature has a hidden sret pointer as first param, so when no
+    // hidden leaf was supplied, bump the stack pointer for a scratch buffer
+    // and pass its address; restore the stack pointer after the call.
+    // ---
+    // struct S { this(inout ref S) inout {} ~this() {} }
+    // struct T { S[3] ss; this(int) { ss[] = makeStaticArray(); } }
+    // ---
+    const bool retByPtrCall = fty && fty.Tnext && returnByPtr(fty.Tnext);
+    uint sretLocal = uint.max;
+    uint sretSize;
+    if (retByPtrCall && !ctx.isCVariadic && ctx.skipCount == 0)
+    {
+        sretSize = cast(uint)((type_size(fty.Tnext) + 15) & ~15);
+        const uint spIdx = cg.stackPtrGlobal();
+        sretLocal = cg.allocTemp(WASM_I32);
+        cg.emit(OP_GLOBAL_GET);
+        cg.emitULEB(spIdx);
+        cg.emitConst(OP_I32_CONST, cast(int) sretSize);
+        cg.emit(OP_I32_SUB);
+        cg.emit(OP_LOCAL_TEE);
+        cg.emitULEB(sretLocal);
+        cg.emit(OP_GLOBAL_SET);
+        cg.emitULEB(spIdx);
+        cg.emitLocal(OP_LOCAL_GET, sretLocal);
     }
 
     // Walk the OPparam tree via genElem natural recursion; consumeCallArg
@@ -1339,9 +1375,13 @@ private bool genCall(ref WasmCG cg, elem* e)
         // already re-adds the hidden return pointer via returnByPtr, so pass
         // the remainder so the call_indirect signature matches what is
         // actually pushed.
+        // skipCount also covers the hidden-ret pointer and the dstyle
+        // `_arguments` leaf, both of which buildFuncType re-adds from the
+        // type itself — only the remainder is hidden *leading* pointers.
         const bool retPtr = fty.Tnext && returnByPtr(fty.Tnext);
-        const uint hiddenLeading = ctx.skipCount > (retPtr ? 1 : 0)
-            ? ctx.skipCount - (retPtr ? 1 : 0) : 0;
+        const uint nonLeading = (retPtr ? 1 : 0) + (dstyleVariadic(fty) ? 1 : 0);
+        const uint hiddenLeading = ctx.skipCount > nonLeading
+            ? ctx.skipCount - nonLeading : 0;
         typeIdx = cg.internType(buildFuncType(fty, null, hiddenLeading));
 
         // Function pointer source: strip an outer OPind (fptr table index
@@ -1352,6 +1392,19 @@ private bool genCall(ref WasmCG cg, elem* e)
         cg.emit(OP_CALL_INDIRECT);
         cg.emitCallIndirectType(typeIdx);
         cg.emitULEB(0); // table index 0
+    }
+
+    // Free the synthesized sret buffer. The returned pointer (still on the
+    // value stack) stays readable until the next stack-pointer decrement,
+    // which is always after the immediate consumer's loads.
+    if (sretLocal != uint.max)
+    {
+        const uint spIdx = cg.stackPtrGlobal();
+        cg.emitLocal(OP_LOCAL_GET, sretLocal);
+        cg.emitConst(OP_I32_CONST, cast(int) sretSize);
+        cg.emit(OP_I32_ADD);
+        cg.emit(OP_GLOBAL_SET);
+        cg.emitULEB(spIdx);
     }
 
     // Restore __stack_pointer after a variadic call that spilled args.
