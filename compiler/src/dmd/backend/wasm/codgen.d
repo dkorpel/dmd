@@ -1574,9 +1574,21 @@ bool genElem(ref WasmCG cg, elem* e)
         if (emitSymLoad(cg, e.Vsym, cast(uint) e.Voffset, e.Ety))
             return true;
 
+        // Reading through a dereferenced function pointer, e.g.
+        // `*cast(int*)&func`. Functions have no linear-memory address on
+        // wasm; load from the table index so the (meaningless) read at
+        // least compiles and runs, matching native code reading code bytes.
+        if (e.Vsym.Sfl == FL.func)
+        {
+            cg.emitTableIndex(cg.funcIndex(e.Vsym), e.Vsym);
+            cg.emitLoad(e.Ety, cast(uint) e.Voffset);
+            return true;
+        }
+
+        import core.stdc.stdio : printf;
+        printf("wasm codegen OPvar symbol neither data nor shadow: %s\n", &e.Vsym.Sident[0]);
+        elem_print(e);
         assert(0);
-        // cg.emitLocal(OP_LOCAL_GET, cg.localFor(e.Vsym));
-        // return true;
 
     case OPrelconst:
         if (Symbol* rs = e.Vsym)

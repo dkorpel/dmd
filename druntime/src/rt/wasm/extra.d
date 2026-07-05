@@ -118,6 +118,31 @@ extern (C) void[] _d_arrayappendcd(ref byte[] x, dchar c)
     return x;
 }
 
+// rt.lifetime._d_arrayappendwd — append a dchar to a wchar[] (UTF-16 encode,
+// then regular array append).
+extern (C) void[] _d_arrayappendwd(ref byte[] x, dchar c)
+{
+    wchar[2] buf = void;
+    wchar[] appendthis;
+    if (c <= 0xFFFF)
+    {
+        buf[0] = cast(wchar) c;
+        appendthis = buf[0 .. 1];
+    }
+    else
+    {
+        const n = c - 0x10000;
+        buf[0] = cast(wchar)((n >> 10) + 0xD800);
+        buf[1] = cast(wchar)((n & 0x3FF) + 0xDC00);
+        appendthis = buf[0 .. 2];
+    }
+
+    auto xx = cast(wchar[]) x;
+    xx ~= appendthis;
+    x = cast(byte[]) xx;
+    return x;
+}
+
 // rt.minfo.moduleinfos_apply — module ctors are not iterated in this runtime.
 pragma(mangle, "_D2rt5minfo17moduleinfos_applyFMDFyPS6object10ModuleInfoZiZi")
 int _wasm_moduleinfos_apply(scope int delegate(immutable(ModuleInfo*)) dg)

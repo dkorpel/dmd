@@ -18,8 +18,18 @@ void _d_monitor_staticdtor() @nogc {}
 void _d_critical_init() @nogc {}
 void _d_critical_term() @nogc {}
 
-// synchronized(obj) enter / exit
-void _d_monitorenter(Object h) {}
+// synchronized(obj) enter / exit. Locking is elided, but user code can
+// observe `obj.__monitor` inside a synchronized block, so lazily install a
+// dummy allocation (never freed; the monitor slot is the pointer after the
+// vptr).
+private extern (C) void* gc_calloc(size_t sz, uint ba = 0, const scope TypeInfo ti = null) @nogc nothrow;
+
+void _d_monitorenter(Object h)
+{
+    auto pmon = cast(void**) cast(void*) h + 1;
+    if (*pmon is null)
+        *pmon = gc_calloc(3 * (void*).sizeof);
+}
 void _d_monitorexit(Object h) {}
 
 // synchronized-statement critical sections

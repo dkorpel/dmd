@@ -1686,7 +1686,8 @@ int WasmObj_data_start(Symbol* sdata, targ_size_t datasize, int seg)
     if (!datasize)
         return 0;
 
-    // Align to natural alignment of the data type (max 8 bytes).
+    // Align to natural alignment of the data type (max 8 bytes), or the
+    // symbol's explicit align(N) if larger.
     uint align_ = 4;
     if (sdata && sdata.Stype)
     {
@@ -1694,6 +1695,8 @@ int WasmObj_data_start(Symbol* sdata, targ_size_t datasize, int seg)
         if (sz > 0 && sz <= 8)
             align_ = sz;
     }
+    if (sdata && sdata.Salignment > cast(int) align_)
+        align_ = cast(uint) sdata.Salignment;
     uint mask = align_ - 1;
     uint base = (wmod.dataHeap + mask) & ~mask;
 

@@ -154,5 +154,8 @@ runnable/testargtypes.d
 # double values is currently disabled".
 # test6423.d calls main() through a mismatched `extern(C) int function()`
 # pointer; wasm call_indirect strictly validates the signature and traps.
+# test42.d also formats a real with %Lg (and D real is f64 on wasm32 while
+# wasi-libc long double is f128, so the vararg layout can never match).
 runnable/test22.d
+runnable/test42.d
 runnable/test6423.d
