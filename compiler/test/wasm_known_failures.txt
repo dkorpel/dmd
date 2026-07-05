@@ -102,13 +102,6 @@ runnable/test22427.d
 # layout-sensitive codegen bugs in these tests (each fails an assert on a wrong
 # computed value, not on the ctor machinery itself). They pass only under the
 # old layout; the underlying codegen bugs need separate fixes.
-runnable/b20890.d
-runnable/test17899.d
-runnable/test19251.d
-runnable/test19393.d
-runnable/test19639.d
-runnable/test20809.d
-runnable/test711.d
 
 # --- gdb debugger tests (cannot run under WASM) ---
 # The harness drives gdb against a native executable; the emitted .wasm gives

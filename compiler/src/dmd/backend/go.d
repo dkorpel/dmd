@@ -384,7 +384,15 @@ void optfunc(ref GlobalOptimizer go, ref BlockOpt bo)
             blockopt(go, bo);           // do block optimization
         out_regcand(globsym[]);         // recompute register candidates
         go.changes = 0;                 // no changes yet
-        sliceStructs(globsym, bo.startblock);
+        /* WASM: SROA splits an 8-byte symbol into two 4-byte symbols, which
+         * breaks the wasm param-to-local mapping (a double param is a single
+         * f64 local, never two 4-byte stack slots).
+         * ---
+         * double test(double x) { ulong p = *cast(ulong*)&x; return x; }
+         * ---
+         */
+        if (config.objfmt != OBJ_WASM)
+            sliceStructs(globsym, bo.startblock);
         if (go.mfoptim & MFcnp)
             constprop(go, bo);              /* make relationals unsigned     */
         if (go.mfoptim & (MFli | MFliv))

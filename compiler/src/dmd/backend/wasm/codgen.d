@@ -1428,6 +1428,26 @@ private bool genCall(ref WasmCG cg, elem* e)
         cg.emit(OP_UNREACHABLE);
 
     // DO NOT check e.E1.Vsym, if the type is incorrect fix that instead of overriding it
+
+    // Report what the callee's signature actually left on the stack — e.Ety
+    // can disagree: a `ref void` return is typed as a pointer by the frontend
+    // but produces no WASM result. For direct calls prefer the *defining*
+    // symbol's type: a C block-scope redeclaration may differ from it.
+    // ---
+    // struct S { this(ref inout typeof(this)) {} ref opAssign(typeof(this)) {} }
+    // void emplace(S chunk, S args) { chunk = args; } // drop after resultless call
+    //
+    // void cdnot() { int testbool(int,int); testbool(-1,0); } // decl says int,
+    // void testbool(int val, int expect) {}                   // definition void
+    // ---
+    if (calleeSym)
+    {
+        if (Symbol* def = definedFuncByName(calleeSym))
+            if (def.Stype && tyfunc(def.Stype.Tty))
+                return buildFuncType(def.Stype, def).results.length != 0;
+    }
+    if (fty)
+        return buildFuncType(fty, calleeSym).results.length != 0;
     return typeHasValue(e.Ety);
 }
 
@@ -2145,15 +2165,39 @@ bool genElem(ref WasmCG cg, elem* e)
             else
                 cg.emit(e.wasmType);
 
-            const bool thenPushed = cg.genElem(e.E2.E1);
-            if (voidCond && thenPushed)
-                cg.emit(OP_DROP);
+            // An arm can push a different width than the cond's own type, or
+            // nothing at all: e2ir types an AA struct-assign cond as the
+            // 8-byte struct (i64) while its arms yield an opAssign ref (i32)
+            // or a plain store. Pad/coerce so the if-block type checks; a
+            // consumer of such a struct-as-i64 "value" never reads it.
+            // ---
+            // void main()
+            // {
+            //     struct Bar { int id; this(this) {} ~this() {} }
+            //     Bar[string] bars;
+            //     bars["test"] = Bar(42);
+            // }
+            // ---
+            void fitArm(bool pushed, elem* arm)
+            {
+                if (voidCond)
+                {
+                    if (pushed)
+                        cg.emit(OP_DROP);
+                    return;
+                }
+                if (!pushed)
+                {
+                    cg.emitConst(OP_I32_CONST, 0);
+                    emitCoerce(cg, WASM_I32, e.wasmType);
+                    return;
+                }
+                emitCoerce(cg, wasmType(arm.Ety), e.wasmType);
+            }
 
+            fitArm(cg.genElem(e.E2.E1), e.E2.E1);
             cg.emit(OP_ELSE);
-            const bool elsePushed = cg.genElem(e.E2.E2);
-            if (voidCond && elsePushed)
-                cg.emit(OP_DROP);
-
+            fitArm(cg.genElem(e.E2.E2), e.E2.E2);
             cg.emit(OP_END);
             return !voidCond;
         }
@@ -2845,6 +2889,17 @@ uint funcIndex(ref WasmCG cg, Symbol* sfunc)
     return funcIndex(sfunc);
 }
 
+/// Find the function defined in this module with the same name as `sfunc`,
+/// which may be a distinct redeclaration symbol (C block-scope declarations).
+/// Returns: the defining symbol, or null if the function isn't defined here.
+Symbol* definedFuncByName(Symbol* sfunc)
+{
+    foreach (ref const fb; wasmFuncBodies)
+        if (fb.sym == sfunc || sameFuncName(fb.sym, sfunc))
+            return cast(Symbol*) fb.sym;
+    return null;
+}
+
 uint funcIndex(Symbol* sfunc)
 {
     // Imports come first in wmod.funcs; defined functions come after.
@@ -2856,9 +2911,11 @@ uint funcIndex(Symbol* sfunc)
             return cast(uint) i;
     }
 
-    // Defined functions follow imports.
+    // Defined functions follow imports. Match by name too: a C block-scope
+    // declaration is a distinct Symbol from the definition, and must not
+    // become a self-import of the module's own function.
     foreach (size_t i, ref const fb; wasmFuncBodies)
-        if (fb.sym == sfunc)
+        if (fb.sym == sfunc || sameFuncName(fb.sym, sfunc))
             return nimports + cast(uint) i;
 
     if (sfunc && sfunc.Stype)
@@ -2867,6 +2924,12 @@ uint funcIndex(Symbol* sfunc)
         return cast(uint) idx;
     }
     return 0;
+}
+
+private bool sameFuncName(const(Symbol)* a, const(Symbol)* b)
+{
+    import core.stdc.string : strcmp;
+    return a && b && strcmp(&a.Sident[0], &b.Sident[0]) == 0;
 }
 
 // Ensure a condition value on the WASM stack is an i32 suitable for br_if.
