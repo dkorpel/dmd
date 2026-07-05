@@ -991,9 +991,14 @@ private bool emitRelocDataSection(ref OutBuffer out_, ref WasmModule wmod, uint 
     {
         if (rel.segIdx >= wmod.dataSegs.length)
             continue;
+        // Match imports too (externally-defined functions referenced from
+        // vtables), and match by name: the reloc's Symbol may be a distinct
+        // declaration of an already-registered function.
+        const(char)[] relName = rel.sym ? rel.sym.identifier : null;
         uint funcIdx = uint.max;
-        foreach (size_t fi; wmod.numImports .. wmod.funcs.length)
-            if (wmod.funcs[fi].sym == rel.sym)
+        foreach (size_t fi; 0 .. wmod.funcs.length)
+            if (wmod.funcs[fi].sym == rel.sym ||
+                (relName.length && funcName(wmod.funcs[fi]) == relName))
             {
                 funcIdx = cast(uint) fi;
                 break;
@@ -1413,6 +1418,20 @@ void WasmObj_term2(const(char)[] objfilename, ref WasmModule wmod, ref OutBuffer
             block* b = fb.sym.Sfunc.Fstartblock;
             for (; b; b = b.Bnext)
                 preRegisterExternals(b.Belem);
+        }
+        // Data segments (vtables) also hold function pointers to functions
+        // defined in other objects; register those as imports so reloc.DATA
+        // has a function symbol wasm-ld can assign a table slot to.
+        // ---
+        // class C { int x; }
+        // void main() { Object o = new C; assert(o.toString() != ""); }
+        // // C's vtable slot for the inherited Object.toString
+        // ---
+        {
+            import dmd.backend.wasm.codgen : funcIndex;
+            foreach (ref rel; wmod.funcRelocations)
+                if (rel.sym)
+                    funcIndex(rel.sym);
         }
         // Intern types of defined functions now that all import types are
         // registered. Imports occupy indices 0..numImports-1; defined-function

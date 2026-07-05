@@ -69,20 +69,6 @@ extern (C) void rt_finalize(void* p, bool det = true) nothrow
     rt_finalize2(p, det, true);
 }
 
-// core.demangle.demangleType — diagnostic only; return empty.
-pragma(mangle, "_D4core8demangle12demangleTypeFNaNbNfAxaAaZQd")
-char[] _wasm_demangleType(const(char)[] buf, char[] dst = null) nothrow pure @trusted
-{
-    return null;
-}
-
-// core.demangle.reencodeMangled — diagnostic only; return the input unchanged.
-pragma(mangle, "_D4core8demangle15reencodeMangledFNaNbNfNkMAxaZAa")
-char[] _wasm_reencodeMangled(return scope const(char)[] mangled) nothrow pure @trusted
-{
-    return cast(char[]) mangled;
-}
-
 // rt.minfo.moduleinfos_apply — module ctors are not iterated in this runtime.
 pragma(mangle, "_D2rt5minfo17moduleinfos_applyFMDFyPS6object10ModuleInfoZiZi")
 int _wasm_moduleinfos_apply(scope int delegate(immutable(ModuleInfo*)) dg)

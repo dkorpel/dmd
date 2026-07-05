@@ -476,6 +476,7 @@ WASM_DRT_SRCS := \
 	src/core/internal/convert.d \
 	src/core/internal/utf.d \
 	src/core/interpolation.d \
+	src/core/demangle.d \
 	src/core/stdc/stdarg.d \
 	src/rt/wasm/minfo.d \
 	src/rt/wasm/extra.d
@@ -502,6 +503,10 @@ $(WASM_ROOT)/drt_$(notdir $(basename $(1))).wasm : $(1) $(DMD)
 	$(WASM_DMD) $(WASM_DRT_FLAGS) -of$$@ $(1)
 endef
 $(foreach s,$(WASM_DRT_SRCS),$(eval $(call WASM_DRT_RULE,$(s))))
+
+# Coarse dependencies: these modules cross-import each other and the core.stdc
+# bindings, so rebuild all of them when any druntime source changes.
+$(WASM_DRT_OBJS) $(WASM_OBJS): $(WASM_DRT_SRCS) $(wildcard src/core/stdc/*.d) $(wildcard src/core/internal/*.d) $(wildcard src/rt/wasm/*.d)
 
 $(WASM_LIB): $(WASM_OBJS) $(WASM_DRT_OBJS)
 	rm -f $@
