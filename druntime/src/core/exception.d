@@ -797,6 +797,13 @@ version (D_BetterC)
         assert(0, "Invalid memory operation");
     }
 }
+else version (WebAssembly)
+{
+    // rt.wasm.errors provides the trapping bodies; declare them here so
+    // importers of core.exception still see the names.
+    extern (C) noreturn onOutOfMemoryError(void* pretend_sideffect = null, string file = __FILE__, size_t line = __LINE__) @trusted pure nothrow @nogc;
+    extern (C) noreturn onOutOfMemoryErrorNoGC(string file = __FILE__, size_t line = __LINE__) @trusted nothrow @nogc;
+}
 else
 {
     /**
@@ -827,6 +834,9 @@ else
  * Throws:
  *  $(LREF InvalidMemoryOperationError).
  */
+version (WebAssembly)
+    extern (C) noreturn onInvalidMemoryOperationError(void* pretend_sideffect = null, string file = __FILE__, size_t line = __LINE__) @trusted pure nothrow @nogc;
+else
 extern (C) noreturn onInvalidMemoryOperationError(void* pretend_sideffect = null, string file = __FILE__, size_t line = __LINE__) @trusted pure nothrow @nogc /* dmd @@@BUG11461@@@ */
 {
     // The same restriction applies as for onOutOfMemoryError. The GC is in an
@@ -862,6 +872,9 @@ extern (C) noreturn onForkError( string file = __FILE__, size_t line = __LINE__ 
  * Throws:
  *  $(LREF UnicodeException).
  */
+version (WebAssembly)
+    extern (C) noreturn onUnicodeError( string msg, size_t idx, string file = __FILE__, size_t line = __LINE__ ) @trusted pure;
+else
 extern (C) noreturn onUnicodeError( string msg, size_t idx, string file = __FILE__, size_t line = __LINE__ ) @safe pure
 {
     throw new UnicodeException( msg, idx, file, line );
@@ -884,6 +897,9 @@ extern (C) void onHiddenFuncError(Object o);
  * the object code.
  */
 
+// On WebAssembly these hooks come from rt.wasm.errors, which prints a
+// diagnostic and traps instead of throwing (no exception support).
+version (WebAssembly) {} else
 extern (C)
 {
     /* One of these three is called upon an assert() fail.

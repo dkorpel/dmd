@@ -479,6 +479,8 @@ WASM_DRT_SRCS := \
 	src/core/demangle.d \
 	src/core/stdc/stdarg.d \
 	src/core/stdc/stdlib.d \
+	src/core/stdc/math.d \
+	src/core/exception.d \
 	src/rt/util/typeinfo.d \
 	src/rt/wasm/minfo.d \
 	src/rt/wasm/extra.d

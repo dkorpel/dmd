@@ -22,6 +22,10 @@ void _d_critical_term() @nogc {}
 void _d_monitorenter(Object h) {}
 void _d_monitorexit(Object h) {}
 
+// synchronized-statement critical sections
+void _d_criticalenter2(void** pcs) @nogc {}
+void _d_criticalexit(void* cs) @nogc {}
+
 // Monitor destruction
 void _d_monitordelete(Object h, bool det) {}
 void _d_monitordelete_nogc(Object h) @nogc {}

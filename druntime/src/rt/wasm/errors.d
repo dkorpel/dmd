@@ -58,6 +58,11 @@ noreturn _d_arraybounds_slicep(immutable(char)* file, uint line,
 noreturn _d_arraybounds_indexp(immutable(char)* file, uint line,
     size_t index, size_t length) @nogc { wasm_abort(); }
 
+noreturn _d_arraybounds_slice(string file, uint line,
+    size_t lower, size_t upper, size_t length) @nogc { dbgAssert("BOUNDS", file, line); wasm_abort(); }
+noreturn _d_arraybounds_index(string file, uint line,
+    size_t index, size_t length) @nogc { dbgAssert("BOUNDS", file, line); wasm_abort(); }
+
 noreturn _d_nullpointerp(immutable(char)* file, uint line) @nogc { wasm_abort(); }
 
 noreturn onOutOfMemoryError(void* pretend_sideffect = null, string file = null, size_t line = 0) @trusted @nogc nothrow

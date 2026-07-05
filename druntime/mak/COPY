@@ -588,6 +588,7 @@ COPY=\
 	$(IMPDIR)\core\thread\threadbase.d \
 	$(IMPDIR)\core\thread\osthread.d \
 	$(IMPDIR)\core\thread\posix_impl.d \
+	$(IMPDIR)\core\thread\wasi_impl.d \
 	$(IMPDIR)\core\thread\windows_impl.d \
 	$(IMPDIR)\core\thread\package.d \
 	\

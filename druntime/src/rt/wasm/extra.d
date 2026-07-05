@@ -69,6 +69,47 @@ extern (C) void rt_finalize(void* p, bool det = true) nothrow
     rt_finalize2(p, det, true);
 }
 
+// rt.lifetime._d_arrayappendcd — append a dchar to a char[] (UTF-8 encode,
+// then regular array append). Invalid code points trap instead of throwing.
+extern (C) void[] _d_arrayappendcd(ref byte[] x, dchar c)
+{
+    char[4] buf = void;
+    char[] appendthis;
+    if (c <= 0x7F)
+    {
+        buf[0] = cast(char) c;
+        appendthis = buf[0 .. 1];
+    }
+    else if (c <= 0x7FF)
+    {
+        buf[0] = cast(char)(0xC0 | (c >> 6));
+        buf[1] = cast(char)(0x80 | (c & 0x3F));
+        appendthis = buf[0 .. 2];
+    }
+    else if (c <= 0xFFFF)
+    {
+        buf[0] = cast(char)(0xE0 | (c >> 12));
+        buf[1] = cast(char)(0x80 | ((c >> 6) & 0x3F));
+        buf[2] = cast(char)(0x80 | (c & 0x3F));
+        appendthis = buf[0 .. 3];
+    }
+    else if (c <= 0x10FFFF)
+    {
+        buf[0] = cast(char)(0xF0 | (c >> 18));
+        buf[1] = cast(char)(0x80 | ((c >> 12) & 0x3F));
+        buf[2] = cast(char)(0x80 | ((c >> 6) & 0x3F));
+        buf[3] = cast(char)(0x80 | (c & 0x3F));
+        appendthis = buf[0 .. 4];
+    }
+    else
+        assert(0, "Invalid UTF-8 sequence");
+
+    auto xx = cast(char[]) x;
+    xx ~= appendthis;
+    x = cast(byte[]) xx;
+    return x;
+}
+
 // rt.minfo.moduleinfos_apply — module ctors are not iterated in this runtime.
 pragma(mangle, "_D2rt5minfo17moduleinfos_applyFMDFyPS6object10ModuleInfoZiZi")
 int _wasm_moduleinfos_apply(scope int delegate(immutable(ModuleInfo*)) dg)
