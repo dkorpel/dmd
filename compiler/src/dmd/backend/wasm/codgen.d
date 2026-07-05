@@ -2526,6 +2526,9 @@ bool genElem(ref WasmCG cg, elem* e)
     case OPf16p_np:
     case OPvecfill: // No SIMD yet
     case OPoffset: // segmented-address offset extraction, not applicable.
+        import core.stdc.stdio : printf;
+        printf("wasm codegen non-goal Eoper: %s\n", oper_str(e.Eoper));
+        elem_print(e);
         assert(0);
 
     default:

@@ -61,6 +61,20 @@ runnable/wc3.d
 runnable/xtest46.d
 runnable/xtest46_gc.d
 
+# --- Bitfield layout tests encode host-specific ABIs ---
+# wasm32 is ILP32 (4-byte pointers and C long) but aligns long long and double
+# to 8 bytes like the clang wasm32 ABI, so its struct layout matches none of
+# the DM/MS/posix32/posix64 layouts these tests hardcode in RUN_OUTPUT (and
+# dbitfieldsposix64.d derives an expected offset from pointer size, which
+# diverges from wasm32's 8-byte `long :0` padding).
+runnable/bitfieldsms.c
+runnable/bitfieldsposix32.c
+runnable/bitfieldsposix64.c
+runnable/dbitfieldsdm.d
+runnable/dbitfieldsms.d
+runnable/dbitfieldsposix32.d
+runnable/dbitfieldsposix64.d
+
 # --- Require complex types (cfloat/cdouble/creal) ---
 # Hit `assert(0)` in backend/wasm/codgen.d wasmType for the deprecated complex
 # types, which the WASM backend does not support.
@@ -70,7 +84,9 @@ compilable/test19227.d
 compilable/test21514.d
 compilable/testcomplex.c
 compilable/testcomplex.i
+runnable/complex.d
 runnable/complex3.d
+runnable/test34.d
 runnable/test18054.d
 runnable/test21515.d
 runnable/testc22259.c
@@ -116,4 +132,27 @@ runnable/gdb14313.d
 runnable/gdb14330.d
 runnable/gdb18504.d
 runnable/gdb22590.c
+runnable/gdb22905.d
 runnable/gdb_baseclass_fields.d
+runnable/gdb_slice_debuginfo_32.d
+runnable/gdb_slice_debuginfo_64.d
+
+# --- x86-/ELF-specific tests ---
+# bitops.d tests x86 port I/O intrinsics (inp/outp); mars1.d needs mmap and
+# x86 codegen details; sectiondefs.d checks ELF section symbols
+# (__start_/__stop_ of custom sections); ice21727.d needs SIMD (float4);
+# testargtypes.d checks the x86-64 argtypes ABI classification.
+runnable/bitops.d
+runnable/ice21727.d
+runnable/mars1.d
+runnable/sectiondefs.d
+runnable/testargtypes.d
+
+# --- Host C library behavior the WASM target cannot match ---
+# test22.d formats `real` with %Lg: wasi-libc is built without long-double
+# printf support and aborts at runtime with "Support for formatting long
+# double values is currently disabled".
+# test6423.d calls main() through a mismatched `extern(C) int function()`
+# pointer; wasm call_indirect strictly validates the signature and traps.
+runnable/test22.d
+runnable/test6423.d

@@ -69,6 +69,14 @@ extern (C) void rt_finalize(void* p, bool det = true) nothrow
     rt_finalize2(p, det, true);
 }
 
+// alloca cannot bump the wasm shadow stack (epilogues restore it by a
+// compile-time constant), so hand out heap memory instead. It outlives the
+// frame and leaks — consistent with this runtime's no-collection GC.
+extern (C) void* alloca(size_t size) nothrow
+{
+    return gc_calloc(size);
+}
+
 // rt.lifetime._d_arrayappendcd — append a dchar to a char[] (UTF-8 encode,
 // then regular array append). Invalid code points trap instead of throwing.
 extern (C) void[] _d_arrayappendcd(ref byte[] x, dchar c)
