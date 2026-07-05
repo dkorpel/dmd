@@ -79,8 +79,11 @@ GC.BlkInfo gc_query(return scope void* p) pure @nogc { return GC.BlkInfo.init; }
 GC.Stats gc_stats() @nogc { return GC.Stats.init; }
 GC.ProfileStats gc_profileStats() @nogc { return GC.ProfileStats.init; }
 
-// Stub: in a leaking GC, "expanding used" always succeeds (no real capacity tracking).
-bool gc_expandArrayUsed(void[] slice, size_t newUsed, bool atomic) @nogc { return true; }
+// No capacity tracking: an in-place extension can never be verified, so report
+// failure and let append allocate a fresh block and copy. Reporting success
+// here makes appends write past the block (or through a null ptr for empty
+// arrays), silently corrupting neighbouring allocations.
+bool gc_expandArrayUsed(void[] slice, size_t newUsed, bool atomic) @nogc { return false; }
 
 // This GC tracks no per-block capacity, so report none reserved: callers then
 // reallocate rather than write past the exact bump-allocated size.

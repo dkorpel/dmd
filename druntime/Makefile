@@ -478,6 +478,8 @@ WASM_DRT_SRCS := \
 	src/core/interpolation.d \
 	src/core/demangle.d \
 	src/core/stdc/stdarg.d \
+	src/core/stdc/stdlib.d \
+	src/rt/util/typeinfo.d \
 	src/rt/wasm/minfo.d \
 	src/rt/wasm/extra.d
 WASM_DRT_FLAGS := -c -mwasm32 -os=wasm -conf= -Isrc -Iimport -w -de
