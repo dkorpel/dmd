@@ -6308,6 +6308,14 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
                      */
                     if (token.value != TOK.semicolon && peek(&token).value == TOK.semicolon)
                         error("found `%s` when expecting `;` following expression", token.toChars());
+                    else if (exp.op == EXP.error &&
+                        (token.value == TOK.rightCurly || token.value == TOK.endOfFile))
+                    {
+                        // A parse error was already reported for this expression and
+                        // the current token closes the enclosing scope; leave it in
+                        // place so the rest of the file parses normally (e.g. an
+                        // incomplete expression at the end of a block while editing).
+                    }
                     else
                     {
                         if (token.value != TOK.semicolon)
@@ -9398,7 +9406,11 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
                     continue;
                 }
                 error("identifier or `new` expected following `.`, not `%s`", token.toChars());
-                break;
+                // Don't consume the offending token: it likely terminates the
+                // enclosing expression, statement or block (e.g. an incomplete
+                // `e.` at the end of a line while editing) and is needed for
+                // the parser to recover.
+                return new AST.ErrorExp();
 
             case TOK.plusPlus:
                 e = new AST.PostExp(EXP.plusPlus, loc, e);
