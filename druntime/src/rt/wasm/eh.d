@@ -28,6 +28,12 @@ noreturn _d_throwdwarf(Throwable o) @nogc
     _wasm_trap(1);
 }
 
+// Same lowering when config.ehmethod is EH_NONE (e.g. some -release paths).
+noreturn _d_throwc(Throwable o) @nogc
+{
+    _d_throwdwarf(o);
+}
+
 // No-op: stack trace capture unsupported on WASM.
 Throwable.TraceInfo _d_traceContext(void* ptr = null) @nogc
 {

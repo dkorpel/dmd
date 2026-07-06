@@ -112,6 +112,16 @@ extern(C) void rt_moduleCtor()
             (cast(CtorFn) f)();
 }
 
+// Run each module's aggregated unittest function (present when compiled with
+// -unittest). Native druntime runs these after module construction and, in
+// the default run-main test mode, still calls main afterwards; mirror that.
+extern(C) void rt_moduleUnitTests()
+{
+    foreach (m; _modules)
+        if (auto f = m.unitTest)
+            (cast(CtorFn) f)();
+}
+
 extern(C) void rt_moduleDtor()
 {
     if (!_orderLen)

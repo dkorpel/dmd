@@ -4434,7 +4434,12 @@ elem* Dsymbol_toElem(Dsymbol s, ref IRState irs)
         else
         {
             Symbol* sp = toSymbol(s);
-            symbol_add(sp);
+            // The wasm EH_NONE lowering inlines finally bodies at each early
+            // exit (see s2ir's wasmEmitFinallies), so a declaration inside a
+            // finally can be lowered more than once; the copies share the
+            // frame slot, which each initializes before use.
+            if (!target.isWasm || sp.Ssymnum == SYMIDX.max)
+                symbol_add(sp);
             //printf("\tadding symbol '%s'\n", sp.Sident);
             if (vd._init)
             {

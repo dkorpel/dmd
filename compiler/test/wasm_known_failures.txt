@@ -108,18 +108,51 @@ runnable/testcomplexinit.c
 runnable/exe1.c
 
 # --- Require exception handling (try/catch, throw, synchronized) ---
-# The WASM backend has no working exception-handling runtime: `throw` lowers to
-# a `_d_throwc` call and `synchronized` to `_d_criticalenter2`, neither of which
-# is provided. These tests fundamentally rely on catching thrown exceptions, so
-# they cannot pass until EH is implemented for the WASM target.
+# The WASM backend has no working exception-handling runtime: `throw` and the
+# assert/bounds/null failure hooks abort instead of throwing a catchable
+# Error/Exception. These tests fundamentally rely on catching, so they cannot
+# pass until EH is implemented for the WASM target. (Contract inheritance —
+# testcontracts, inclusive_incontracts, test_dip1006* — is also try/catch
+# based: a failing derived in-contract must be caught to try the base one.)
+runnable/bug12928.d
+runnable/closure.d
 runnable/eh.d
 runnable/eh2.d
+runnable/fix22372.d
+runnable/foreach5.d
+runnable/loopunroll.d
+runnable/noreturn2.d
+runnable/opover2.d
+runnable/inclusive_incontracts.d
 runnable/inline7625.d
+runnable/issue16995.d
 runnable/noreturn1.d
+runnable/nullderefcheck.d
+runnable/nullderefcheck_safeonly.d
 runnable/sdtor.d
+runnable/test12874.d
+runnable/test17559.d
+runnable/test19086.d
+runnable/test19317.d
+runnable/test22205.d
 runnable/test22427.d
 runnable/test4.d
+runnable/test41.d
 runnable/test17906.d
+runnable/testscope.d
+runnable/testassert.d
+runnable/testassert_debug.d
+runnable/testbounds.d
+runnable/testbounds_on.d
+runnable/testbounds_safeonly.d
+runnable/testcontracts.d
+runnable/test_dip1006.d
+runnable/test_dip1006b.d
+runnable/test_dip1006c.d
+runnable/testdstress.d
+runnable/testinvariant.d
+runnable/testline.d
+runnable/testswitch.d
 
 # --- Latent codegen bugs exposed by module-ctor/dtor support ---
 # Wiring module ctors/dtors emits a ModuleInfo + "minfo" pointer per module and
@@ -191,7 +224,15 @@ compilable/test23679.d
 # wasi-libc long double is f128, so the vararg layout can never match).
 # exe3.c calls fabsl/expl/...: ImportC types long double as D real (f64), but
 # wasi-libc's l-suffixed math functions take f128 ((i32, i64, i64) -> void).
+# test11.d formats a real with %Lg (test17).
 runnable/exe3.c
+runnable/test11.d
 runnable/test22.d
 runnable/test42.d
 runnable/test6423.d
+
+# --- Require threads / fibers (WASM is single-threaded) ---
+# core.thread (Thread, Fiber) has no WASM implementation; these tests spawn
+# threads or fibers as their core scenario.
+runnable/test15779.d
+runnable/testthread.d

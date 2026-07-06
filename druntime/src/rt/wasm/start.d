@@ -49,6 +49,7 @@ export void _start() nothrow
 // rt_moduleDtor), driven off the wasm-ld "minfo" segment brackets.  The TLS
 // variants are folded into those (WASM is single-threaded), so they stay no-ops.
 extern(C) void rt_moduleCtor();
+extern(C) void rt_moduleUnitTests();
 extern(C) void rt_moduleDtor();
 void rt_moduleTlsCtor() @nogc {}
 void rt_moduleTlsDtor() @nogc {}
@@ -60,6 +61,7 @@ int _d_run_main(int argc, char** argv, MainFunc mainFunc)
 {
     gc_init();
     rt_moduleCtor();
+    rt_moduleUnitTests();
     // WASI argv is not yet wired (its staging interacts badly with the wasm
     // backend's cross-object data layout); programs that read args see none.
     char[][] args = null;
