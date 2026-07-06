@@ -16323,8 +16323,9 @@ Expression dotIdSemanticProp(DotIdExp exp, Scope* sc, bool gag)
                 {
                     if (!eleft)
                         eleft = new ThisExp(exp.loc);
-                    e = new DotVarExp(exp.loc, eleft, v);
-                    e = e.expressionSemantic(sc);
+                    auto dve = new DotVarExp(exp.loc, eleft, v);
+                    dve.identLoc = exp.identLoc;
+                    e = dve.expressionSemantic(sc);
                 }
                 else
                 {
@@ -16349,8 +16350,9 @@ Expression dotIdSemanticProp(DotIdExp exp, Scope* sc, bool gag)
                 {
                     if (!eleft)
                         eleft = new ThisExp(exp.loc);
-                    e = new DotVarExp(exp.loc, eleft, f, true);
-                    e = e.expressionSemantic(sc);
+                    auto dve = new DotVarExp(exp.loc, eleft, f, true);
+                    dve.identLoc = exp.identLoc;
+                    e = dve.expressionSemantic(sc);
                 }
                 else
                 {
