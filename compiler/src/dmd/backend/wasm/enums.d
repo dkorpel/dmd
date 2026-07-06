@@ -290,13 +290,8 @@ enum WASM_SYM : uint
     BINDING_LOCAL = 0x02,
     VISIBILITY_HIDDEN = 0x04,
     UNDEFINED = 0x10,
-    // Real WASM_SYMBOL_EXPORTED: force wasm-ld to export the symbol without
-    // --export-dynamic. The neighbouring EXPORTED/EXPLICIT_NAME/NO_STRIP
-    // members below are historically offset by one bit from the LLVM values;
-    // they are not renamed here to avoid disturbing the symbol-table logic
-    // that depends on them.
-    FORCE_EXPORTED = 0x20,
-    EXPORTED = 0x40,
-    EXPLICIT_NAME = 0x80,
-    NO_STRIP = 0x100,
+    EXPORTED = 0x20,      // force wasm-ld to export the symbol without --export-dynamic
+    EXPLICIT_NAME = 0x40, // symbol-table entry carries its own name field
+    NO_STRIP = 0x80,      // retain even without a reference (no --gc-sections stripping)
+    TLS = 0x100,
 }

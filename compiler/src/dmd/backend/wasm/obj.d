@@ -907,9 +907,9 @@ private bool emitLinkingSection(ref OutBuffer out_, ref WasmModule wmod)
 
         // For UNDEFINED (import) symbols the name comes from the import
         // section; do NOT include a name field in the symbol table entry.
-        // For defined symbols, provide an explicit name. Use global binding
-        // (no WASM_SYM.BINDING_LOCAL) so wasm-ld accepts these symbols as
-        // targets for R_WASM.TYPE_INDEX_LEB relocations.
+        // Defined function symbols always carry a name field (wasm-ld reads it
+        // unconditionally), and use global binding (no WASM_SYM.BINDING_LOCAL)
+        // so wasm-ld accepts them as R_WASM.TYPE_INDEX_LEB relocation targets.
         uint flags;
         if (f.isImport)
         {
@@ -917,27 +917,27 @@ private bool emitLinkingSection(ref OutBuffer out_, ref WasmModule wmod)
         }
         else
         {
-            flags = WASM_SYM.EXPLICIT_NAME;
-            if (f.exported)
-                flags |= WASM_SYM.EXPORTED;
+            // NO_STRIP: retain every defined function; DMD does not rely on
+            // wasm-ld dead-stripping for correctness.
+            flags = WASM_SYM.NO_STRIP;
             // @wasmExportName: real EXPORTED bit so wasm-ld keeps and exports
             // it (under the export-section name) without --export-dynamic.
             if (f.exportName.length)
-                flags |= WASM_SYM.FORCE_EXPORTED;
+                flags |= WASM_SYM.EXPORTED;
             if (f.comdat)
                 flags |= WASM_SYM.BINDING_WEAK;
             // C `static` functions: LOCAL binding, so same-named statics in
             // other objects don't clash at link time.
             else if (f.sym && f.sym.Sclass == SC.static_)
                 flags |= WASM_SYM.BINDING_LOCAL;
-            // Other defined non-exported functions: global binding by default
+            // Other defined functions: global binding by default
             // (omit WASM_SYM.BINDING_LOCAL so wasm-ld can use them for type relocs)
         }
 
         symtab.writeuLEB128(flags);
         symtab.writeuLEB128(cast(uint) i); // function index
-        if (flags & WASM_SYM.EXPLICIT_NAME)
-            appendName(symtab, name); // only for defined symbols
+        if (!f.isImport)
+            appendName(symtab, name); // defined symbols always carry a name
     }
 
     // Emit WASM_SYMTAB.DATA entries in buildDataSymtabOrder order.
@@ -957,7 +957,8 @@ private bool emitLinkingSection(ref OutBuffer out_, ref WasmModule wmod)
         if (segIdx == uint.max)
         {
             // Extern data symbol: no segment in this object; linker will resolve.
-            symtab.writeuLEB128(WASM_SYM.UNDEFINED | WASM_SYM.EXPLICIT_NAME);
+            // Data symbols always carry a name field (read unconditionally).
+            symtab.writeuLEB128(WASM_SYM.UNDEFINED);
             appendName(symtab, sym.identifier);
             // UNDEFINED data symbols carry no segment/offset/size payload.
         }
@@ -972,7 +973,7 @@ private bool emitLinkingSection(ref OutBuffer out_, ref WasmModule wmod)
             //  - everything else (SC.static_ rodata _TMP temporaries, etc.):
             //    LOCAL — object-private, and names (e.g. _TMP0) collide across
             //    objects so they must not be global.
-            uint dflags = WASM_SYM.EXPLICIT_NAME;
+            uint dflags = WASM_SYM.NO_STRIP;
             if (sym.Sclass == SC.comdat)
                 dflags |= WASM_SYM.BINDING_WEAK;
             else if (sym.Sclass != SC.global)
