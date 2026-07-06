@@ -3170,15 +3170,13 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
     // signature cached at func_start: recomputing buildFuncType here would
     // double-count the `this` pointer, which the glue layer injects into
     // Tparamtypes after func_start (see wmod_funcTypeForSym).
+    WasmFuncType ft = wmod_funcTypeForSym(sfunc);
+    while (cg.locals.length < ft.params.length)
     {
-        WasmFuncType ft = wmod_funcTypeForSym(sfunc);
-        while (cg.locals.length < ft.params.length)
-        {
-            ubyte v = ft.params[cg.locals.length];
-            cg.locals ~= WasmLocal(cast(WASM_TYPE) v);
-        }
-        cg.numParams = cast(uint) ft.params.length;
+        ubyte v = ft.params[cg.locals.length];
+        cg.locals ~= WasmLocal(cast(WASM_TYPE) v);
     }
+    cg.numParams = cast(uint) ft.params.length;
 
     // Register every non-param local in the shadow frame.
     foreach (s; globsym[])
@@ -3191,7 +3189,10 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
 
     type* retType = sfunc.Stype.Tnext;
     assert(retType);
-    const bool hasReturn = tybasic(retType.Tty) != TYvoid;
+    // Judge by the WASM signature, not the D return type: `void main` is
+    // forced to the runtime's `(i32, i32) -> i32` ABI, so its bare BC.ret
+    // blocks still need the `unreachable` guard to satisfy the validator.
+    const bool hasReturn = ft.results.length != 0;
     // Slices/delegates return via hidden sret pointer too (returnByPtr keys off
     // the type's Tnext to tell a real slice from a plain ulong/long).
     cg.retByHiddenPtr = returnByPtr(retType);
