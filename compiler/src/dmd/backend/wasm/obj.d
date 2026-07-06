@@ -56,9 +56,57 @@ private void pushSegData(int idx) nothrow
 
 nothrow:
 
+// Wasm names must be valid UTF-8, but pragma(mangle) permits arbitrary bytes;
+// escape every non-ASCII byte of an invalid name as $XX. Sanitization is
+// deterministic, so defining and referencing objects still agree on the name.
+private const(char)[] utf8SanitizeName(const(char)[] name)
+{
+    static bool validUtf8(const(char)[] s)
+    {
+        size_t i = 0;
+        while (i < s.length)
+        {
+            const ubyte c = s[i];
+            uint n;
+            if (c < 0x80) n = 1;
+            else if ((c & 0xE0) == 0xC0 && c >= 0xC2) n = 2;
+            else if ((c & 0xF0) == 0xE0) n = 3;
+            else if ((c & 0xF8) == 0xF0 && c <= 0xF4) n = 4;
+            else return false;
+            if (i + n > s.length) return false;
+            foreach (j; 1 .. n)
+                if ((s[i + j] & 0xC0) != 0x80) return false;
+            const ubyte c1 = n > 1 ? cast(ubyte) s[i + 1] : 0;
+            if (n == 3 && ((c == 0xE0 && c1 < 0xA0) || (c == 0xED && c1 >= 0xA0)))
+                return false;
+            if (n == 4 && ((c == 0xF0 && c1 < 0x90) || (c == 0xF4 && c1 >= 0x90)))
+                return false;
+            i += n;
+        }
+        return true;
+    }
+    if (validUtf8(name))
+        return name;
+    char[] r;
+    foreach (char ch; name)
+    {
+        if (ch < 0x80)
+            r ~= ch;
+        else
+        {
+            enum hex = "0123456789ABCDEF";
+            r ~= '$';
+            r ~= hex[(ch >> 4) & 15];
+            r ~= hex[ch & 15];
+        }
+    }
+    return r;
+}
+
 // Append a name string (length-prefixed)
 private void appendName(ref OutBuffer buf, const(char)[] name)
 {
+    name = utf8SanitizeName(name);
     buf.writeuLEB128(cast(uint) name.length);
     buf.write(name.ptr[0 .. name.length]);
 }
@@ -409,9 +457,9 @@ public WasmFuncType buildFuncType(type* t, Symbol* sfunc, uint hiddenLeadingPtrs
         }
         // For `main`, the WASI _start shim calls it as `(i32, i32) -> i32`.
         // Pad user-written `int main()` or `int main(int)` to the runtime ABI
-        // so wasm-ld doesn't warn.  Non-standard signatures (e.g. void main
-        // with 3 args) are left alone — those users won't be linking with
-        // the default WASI shim anyway.
+        // so wasm-ld doesn't warn.  A 3-arg POSIX `main(argc, argv, env)` is
+        // normalised too: WASI has no env pointer, so the third param becomes
+        // a zero-initialised local (see wasm_codgen2's signature padding).
         if (sfunc.identifier == "main")
         {
             int paramCount = 0;
@@ -436,8 +484,9 @@ public WasmFuncType buildFuncType(type* t, Symbol* sfunc, uint hiddenLeadingPtrs
             }
             const type* retM = t.Tnext;
             const bool retOK = retM && (tybasic(retM.Tty) == TYvoid ||
+                                        tybasic(retM.Tty) == TYnoreturn ||
                                         (typeHasValue(retM.Tty) && wasmType(retM.Tty) == WASM_I32));
-            if (allI32 && paramCount <= 2 && retOK)
+            if (allI32 && paramCount <= 3 && retOK)
                 return WasmFuncType([WASM_I32, WASM_I32], [WASM_I32]);
         }
     }
@@ -920,6 +969,9 @@ private bool emitLinkingSection(ref OutBuffer out_, ref WasmModule wmod)
         foreach (size_t i, ref const WasmDataSeg ds; wmod.dataSegs)
         {
             const(char)[] segName = ds.name.length ? ds.name : ".rodata";
+            // Segment names must be valid UTF-8 per the wasm spec, but D
+            // symbol names can hold arbitrary bytes via pragma(mangle).
+            segName = utf8SanitizeName(segName);
             seginfo.writeuLEB128(cast(uint) segName.length);
             seginfo.write(segName.ptr, cast(uint) segName.length);
             seginfo.writeuLEB128(ds.alignLog2);

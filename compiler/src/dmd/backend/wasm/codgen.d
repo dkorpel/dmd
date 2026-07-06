@@ -251,11 +251,13 @@ nothrow:
         code.writesLEB128(v);
     }
 
-    /// Write constant value `v`
+    /// Write constant value `v`. i32.const takes a signed LEB128 in i32 range,
+    /// so an unsigned value with bit 31 set (e.g. a frame size > 2GB) must be
+    /// re-encoded as the equivalent negative i32 or the LEB is malformed.
     void emitConst(WASM_OP op, long v)
     {
         emit(op);
-        emitSLEB(v);
+        emitSLEB(op == OP_I32_CONST ? cast(int) v : v);
     }
 
     /// Access local at index `v`
@@ -3140,13 +3142,17 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
             paramSpills ~= ParamSpill(i0, s, 0, pty);
         }
     }
-    // The WASM signature may have more params than the D source declared
-    // (e.g. `_Dmain` is normalised to (i32, i32) -> i32 regardless of the
-    // user's source).  Pad cg.locals with placeholder params so the implicit
-    // WASM locals 0..numParams-1 don't get clobbered by subsequent allocTemp()
-    // calls.  Use the signature cached at func_start: recomputing buildFuncType
-    // here would double-count the `this` pointer, which the glue layer injects
-    // into Tparamtypes after func_start (see wmod_funcTypeForSym).
+    // The WASM signature may differ from the D source's parameter list
+    // (e.g. `main` is normalised to (i32, i32) -> i32 regardless of the
+    // user's source).  Pad cg.locals with placeholder params when the
+    // signature has more, so locals 0..numParams-1 aren't clobbered by
+    // allocTemp() calls.  When the source declares more (e.g. a 3-arg C
+    // `main` whose env pointer doesn't exist on WASI), the excess entries
+    // become zero-initialised wasm locals instead.  numParams must follow
+    // the signature — the locals section starts right after it.  Use the
+    // signature cached at func_start: recomputing buildFuncType here would
+    // double-count the `this` pointer, which the glue layer injects into
+    // Tparamtypes after func_start (see wmod_funcTypeForSym).
     {
         WasmFuncType ft = wmod_funcTypeForSym(sfunc);
         while (cg.locals.length < ft.params.length)
@@ -3154,8 +3160,8 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
             ubyte v = ft.params[cg.locals.length];
             cg.locals ~= WasmLocal(cast(WASM_TYPE) v);
         }
+        cg.numParams = cast(uint) ft.params.length;
     }
-    cg.numParams = cast(uint) cg.locals.length;
 
     // Register every non-param local in the shadow frame.
     foreach (s; globsym[])

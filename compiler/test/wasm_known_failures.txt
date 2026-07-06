@@ -41,6 +41,10 @@ runnable/link20802.sh
 # --- Require Phobos (std.* not ported to the WASM target) ---
 # These fail at compile with "unable to read module" for std.math / std.file /
 # std.stdio / std.conv / std.algorithm / std.traits / std.string etc.
+# b19294.d and compile1.d use `^^`, whose druntime lowering static-asserts
+# without std.math.pow.
+compilable/b19294.d
+compilable/compile1.d
 compilable/paranoia_ctfe.d
 compilable/test5227.d
 runnable/argufilem.d
@@ -81,6 +85,7 @@ runnable/dbitfieldsposix64.d
 # types, which the WASM backend does not support.
 compilable/fix20425.c
 compilable/sw_transition_complex.d
+compilable/test18251.d
 compilable/test19227.d
 compilable/test21514.d
 compilable/testcomplex.c
@@ -155,6 +160,23 @@ runnable/testargtypes.d
 # cvttss2si result); wasm uses saturating truncation, which yields 0x7FFFFFFF.
 # The test itself documents this as architecture-dependent UB.
 runnable/constfold.d
+
+# --- Test harness / expected output encode host specifics ---
+# testos.d's PERMUTE_ARGS include -os=host, producing an ELF object that the
+# wasm harness then rejects with wasm-validate ("bad magic value").
+# json2.d's expected JSON encodes the host predefined-versions list.
+# makedeps_exe.d's expected -makedeps output encodes the exact druntime module
+# set an executable pulls in, which differs for the minimal wasm druntime.
+compilable/testos.d
+compilable/json2.d
+compilable/makedeps_exe.d
+
+# --- Data too large for wasm object format ---
+# test23679.d declares a 2GB global; ELF puts it in .bss without materializing
+# bytes, but wasm object data segments must carry their contents, so the 2GB
+# write fails. A BSS-style segment encoding does not exist in the wasm object
+# format.
+compilable/test23679.d
 
 # --- Host C library behavior the WASM target cannot match ---
 # test22.d formats `real` with %Lg: wasi-libc is built without long-double
