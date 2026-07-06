@@ -131,6 +131,7 @@ runnable/nullderefcheck.d
 runnable/nullderefcheck_safeonly.d
 runnable/sdtor.d
 runnable/test12874.d
+runnable/test14903.d
 runnable/test17559.d
 runnable/test19086.d
 runnable/test19317.d
@@ -153,6 +154,7 @@ runnable/testdstress.d
 runnable/testinvariant.d
 runnable/testline.d
 runnable/testswitch.d
+runnable/testtypeid.d
 
 # --- Latent codegen bugs exposed by module-ctor/dtor support ---
 # Wiring module ctors/dtors emits a ModuleInfo + "minfo" pointer per module and

@@ -51,22 +51,50 @@ export void _start() nothrow
 extern(C) void rt_moduleCtor();
 extern(C) void rt_moduleUnitTests();
 extern(C) void rt_moduleDtor();
+extern(C) void rt_coverWrite();
 void rt_moduleTlsCtor() @nogc {}
 void rt_moduleTlsDtor() @nogc {}
 
 // Called by the compiler-generated `main` wrapper (for D main).
 private alias MainFunc = extern(C) int function(char[][] args);
 
+private extern(C) void* calloc(size_t, size_t) @nogc nothrow;
+
+// Fetch program arguments from WASI (heap-staged: the buffers must not live
+// in static data, where cross-object layout is fragile). Runtime arguments
+// (--DRT-*) are consumed here like native druntime does, so user code never
+// sees them.
+private char[][] wasiArgs() @nogc nothrow
+{
+    size_t nargs, buflen;
+    if (args_sizes_get(&nargs, &buflen) != 0 || nargs == 0)
+        return null;
+    auto ptrs = cast(char**) calloc(nargs, (char*).sizeof);
+    auto buf = cast(char*) calloc(1, buflen ? buflen : 1);
+    auto arr = cast(char[]*) calloc(nargs, (char[]).sizeof);
+    if (!ptrs || !buf || !arr || args_get(ptrs, buf) != 0)
+        return null;
+    size_t n = 0;
+    foreach (i; 0 .. nargs)
+    {
+        char* p = ptrs[i];
+        size_t len = 0;
+        while (p[len]) len++;
+        if (len >= 6 && p[0 .. 6] == "--DRT-")
+            continue;
+        arr[n++] = p[0 .. len];
+    }
+    return arr[0 .. n];
+}
+
 int _d_run_main(int argc, char** argv, MainFunc mainFunc)
 {
     gc_init();
     rt_moduleCtor();
     rt_moduleUnitTests();
-    // WASI argv is not yet wired (its staging interacts badly with the wasm
-    // backend's cross-object data layout); programs that read args see none.
-    char[][] args = null;
-    int result = mainFunc(args);
+    int result = mainFunc(wasiArgs());
     rt_moduleDtor();
+    rt_coverWrite();
     gc_term();
     return result;
 }
@@ -79,6 +107,12 @@ import core.attribute : wasmImportModule;
 // Single declaration avoids duplicate-import linker errors.
 @wasmImportModule("wasi_snapshot_preview1")
 private extern(C) void proc_exit(int code) @nogc nothrow;
+
+@wasmImportModule("wasi_snapshot_preview1")
+private extern(C) int args_sizes_get(size_t* argc, size_t* buflen) @nogc nothrow;
+
+@wasmImportModule("wasi_snapshot_preview1")
+private extern(C) int args_get(char** argv, char* buf) @nogc nothrow;
 
 private extern(C) int fflush(void* stream) @nogc nothrow;
 

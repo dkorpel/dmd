@@ -483,6 +483,7 @@ WASM_DRT_SRCS := \
 	src/core/exception.d \
 	src/rt/util/typeinfo.d \
 	src/rt/wasm/minfo.d \
+	src/rt/wasm/cover.d \
 	src/rt/wasm/extra.d
 WASM_DRT_FLAGS := -c -mwasm32 -os=wasm -conf= -Isrc -Iimport -w -de
 WASM_DRT_OBJS := $(foreach s,$(WASM_DRT_SRCS),$(WASM_ROOT)/drt_$(notdir $(basename $(s))).wasm)

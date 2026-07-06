@@ -685,7 +685,12 @@ string[string] getEnvironment()
         // REQUIRED_ARGS: inject WASM target flags; honour extra user args.
         const extra = environment.get("REQUIRED_ARGS", "");
         env["REQUIRED_ARGS"] = "-mwasm32 -os=wasm" ~ (extra.length ? " " ~ extra : "");
-        env.setDefault("EXEC_BINARY_WRAPPER", "wasmtime run");
+        // --dir=/ preopens the host filesystem so absolute paths resolve
+        // (RESULTS_DIR in EXECUTE_ARGS). WASI has no working directory, so
+        // relative guest paths resolve against "/"; PWD lets the coverage
+        // runtime absolutize relative source paths (rt.wasm.cover).
+        env.setDefault("EXEC_BINARY_WRAPPER",
+            "wasmtime run --dir=/ --env PWD=" ~ std.file.getcwd());
         // Provide druntime import path (used when -conf= is passed, which strips dmd.conf).
         auto druntimePath = environment.get("DRUNTIME_PATH", testPath(`../../druntime`));
         env["DFLAGS"] = "-I%s/import".format(druntimePath);

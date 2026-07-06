@@ -252,7 +252,7 @@ Symbol* getRtlsym(RTLSYM i) @trusted
 
         case RTLSYM.FMODF:                  symbolz(ps,FL.func,FREGSAVED,"fmodf", 0, t); break;  // C library function fmodf()
         case RTLSYM.FMOD:                   symbolz(ps,FL.func,FREGSAVED,"fmod",  0, t); break;  // C library function fmod()
-        case RTLSYM.FMODL:                  symbolz(ps,FL.func,FREGSAVED,"fmodl", 0, t); break;  // C library function fmodl()
+        case RTLSYM.FMODL:                  symbolz(ps,FL.func,FREGSAVED,config.objfmt == OBJ_WASM ? "fmod" : "fmodl", 0, t); break;  // C library function fmodl(); f64 fmod on WASM where real is f64
 
         case RTLSYM.SINF:                   symbolz(ps,FL.func,FREGSAVED,"sinf",  0, t); break;  // C library function sinf()
         case RTLSYM.SIN:                    symbolz(ps,FL.func,FREGSAVED,"sin",   0, t); break;  // C library function sin()
@@ -297,6 +297,9 @@ private type* wasmRtlsymType(RTLSYM i) @trusted
     type* tuint = tstypes[TYuint];
     type* tsize = tstypes[TYuint];   // size_t on wasm32
     type* tdchar = tstypes[TYdchar];
+    type* tshort = tstypes[TYshort];
+    type* tfloat = tstypes[TYfloat];
+    type* tdouble = tstypes[TYdouble];
 
     static type* ptrTo(type* tn) => type_pointer(tn);
     type* voidPtr()  => ptrTo(tvoid);
@@ -304,9 +307,9 @@ private type* wasmRtlsymType(RTLSYM i) @trusted
     type* str()      => type_dyn_array(tstypes[TYchar]); // immutable(char)[]
     type* voidArr()  => type_dyn_array(tvoid);           // void[]
 
-    type* fn(type*[] params, type* ret) => type_function(TYnfunc, params, false, ret);
+    type* fn(scope type*[] params, type* ret) => type_function(TYnfunc, params, false, ret);
 
-    switch (i)
+    final switch (i)
     {
         case RTLSYM.THROWC:
         case RTLSYM.THROWDWARF:
@@ -338,9 +341,9 @@ private type* wasmRtlsymType(RTLSYM i) @trusted
         case RTLSYM.MEMSET8:
             return fn([voidPtr(), tint, tsize], voidPtr());
         case RTLSYM.MEMSET16:
-            return fn([ptrTo(tstypes[TYshort]), tstypes[TYshort], tsize], ptrTo(tstypes[TYshort]));
+            return fn([ptrTo(tshort), tshort, tsize], ptrTo(tshort));
         case RTLSYM.MEMSET32:
-            return fn([ptrTo(tstypes[TYint]), tint, tsize], ptrTo(tstypes[TYint]));
+            return fn([ptrTo(tint), tint, tsize], ptrTo(tint));
         case RTLSYM.MEMSET64:
             return fn([ptrTo(tstypes[TYllong]), tstypes[TYllong], tsize], ptrTo(tstypes[TYllong]));
         case RTLSYM.MEMSETFLOAT:
@@ -357,14 +360,27 @@ private type* wasmRtlsymType(RTLSYM i) @trusted
         case RTLSYM.MEMSETN:
             return fn([voidPtr(), voidPtr(), tint, tsize], voidPtr());
         case RTLSYM.ALLOCMEMORY:
-        case RTLSYM.TRACEALLOCMEMORY:
             return fn([tsize], voidPtr());
+
+        case RTLSYM.DCOVER2:
+            return fn([str(), type_dyn_array(tsize), type_dyn_array(tuint), tstypes[TYuchar]], tvoid);
 
         case RTLSYM.ARRAYAPPENDCD:
         case RTLSYM.ARRAYAPPENDWD:
             return fn([voidPtr(), tdchar], voidArr());
         case RTLSYM.ARRAYCOPY:
             return fn([tsize, voidArr(), voidArr()], voidArr());
+
+        // -profile=gc variants prefix (string file, int line, string funcname)
+        // before the base symbol's arguments (see rt.tracegc / toTraceGC).
+        case RTLSYM.TRACECALLFINALIZER:
+        case RTLSYM.TRACECALLINTERFACEFINALIZER:
+            return fn([str(), tint, str(), voidPtr()], tvoid);
+        case RTLSYM.TRACEARRAYAPPENDCD:
+        case RTLSYM.TRACEARRAYAPPENDWD:
+            return fn([str(), tint, str(), voidPtr(), tdchar], voidArr());
+        case RTLSYM.TRACEALLOCMEMORY:
+            return fn([str(), tint, str(), tsize], voidPtr());
 
         case RTLSYM.C_ASSERT:
         case RTLSYM.C__ASSERT:
@@ -375,26 +391,69 @@ private type* wasmRtlsymType(RTLSYM i) @trusted
             return fn([charPtr(), charPtr(), tint, charPtr()], tvoid);
 
         case RTLSYM.FMODF:
-            return fn([tstypes[TYfloat], tstypes[TYfloat]], tstypes[TYfloat]);
+            return fn([tfloat, tfloat], tfloat);
         case RTLSYM.FMOD:
-            return fn([tstypes[TYdouble], tstypes[TYdouble]], tstypes[TYdouble]);
+        // FMODL is renamed to fmod on WASM: D `real` is f64 there, while
+        // wasi-libc's fmodl takes the C long double, which is f128.
+        case RTLSYM.FMODL:
+            return fn([tdouble, tdouble], tdouble);
 
         case RTLSYM.SINF:
         case RTLSYM.COSF:
-            return fn([tstypes[TYfloat]], tstypes[TYfloat]);
+            return fn([tfloat], tfloat);
         case RTLSYM.SIN:
         case RTLSYM.COS:
-            return fn([tstypes[TYdouble]], tstypes[TYdouble]);
+            return fn([tdouble], tdouble);
         case RTLSYM.RINTF:
-            return fn([tstypes[TYfloat]], tstypes[TYfloat]);
+            return fn([tfloat], tfloat);
         case RTLSYM.RINT:
-            return fn([tstypes[TYdouble]], tstypes[TYdouble]);
+            return fn([tdouble], tdouble);
         case RTLSYM.RNDTOLF:
-            return fn([tstypes[TYfloat]], tstypes[TYllong]);
+            return fn([tfloat], tstypes[TYllong]);
         case RTLSYM.RNDTOL:
-            return fn([tstypes[TYdouble]], tstypes[TYllong]);
+            return fn([tdouble], tstypes[TYllong]);
 
-        default:
+        case RTLSYM.CXA_ATEXIT:
+            return fn([voidPtr(), voidPtr(), voidPtr()], tint);
+
+        // Never emitted on WASM: Win32 SEH (monitor/unwind/setjmp), dwarf EH
+        // (WASM uses EH_NONE, and future wasm EH won't go through these),
+        // Windows TLS, 16-bit DOS helpers, x86 stack probing/-profile ABI,
+        // 80-bit complex and SIMD memset (non-goals), and dead enum members.
+        // Keeping the (void)->void placeholder makes any accidental use a
+        // loud wasm-ld / validation failure instead of silent corruption.
+        case RTLSYM.MONITOR_HANDLER:
+        case RTLSYM.MONITOR_PROLOG:
+        case RTLSYM.MONITOR_EPILOG:
+        case RTLSYM.D_HANDLER:
+        case RTLSYM.D_LOCAL_UNWIND2:
+        case RTLSYM.LOCAL_UNWIND2:
+        case RTLSYM.UNWIND_RESUME:
+        case RTLSYM.PERSONALITY:
+        case RTLSYM.BEGIN_CATCH:
+        case RTLSYM.CXA_BEGIN_CATCH:
+        case RTLSYM.CXA_END_CATCH:
+        case RTLSYM.TLS_INDEX:
+        case RTLSYM.TLS_ARRAY:
+        case RTLSYM.AHSHIFT:
+        case RTLSYM.HDIFFN:
+        case RTLSYM.HDIFFF:
+        case RTLSYM.INTONLY:
+        case RTLSYM.EXCEPT_LIST:
+        case RTLSYM.SETJMP3:
+        case RTLSYM.LONGJMP:
+        case RTLSYM.ALLOCA:
+        case RTLSYM.PTRCHK:
+        case RTLSYM.CHKSTK:
+        case RTLSYM.TRACE_PRO_N:
+        case RTLSYM.TRACE_PRO_F:
+        case RTLSYM.TRACE_EPI_N:
+        case RTLSYM.TRACE_EPI_F:
+        case RTLSYM.MEMSET160:
+        case RTLSYM.MEMSETSIMD:
+        case RTLSYM.ARRAYASSIGN_R:
+        case RTLSYM.ARRAYASSIGN_L:
+        case RTLSYM.ARRAYEQ2:
             return null;
     }
 }
