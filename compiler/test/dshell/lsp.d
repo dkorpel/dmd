@@ -69,14 +69,36 @@ immutable Case[] cases = [
         name: "definition-funcall",
         source: "module def_test;\n\nint foo() { return 1; }\nvoid main() { foo(); }\n",
         script: (ref c) { c.definition(3, 14); },
-        expected: [`"uri":"file://`, `"line": 2`, `"character": 4`],
+        expected: [`"uri":"file://`, `"line":2`, `"character":4`],
     },
-    // textDocument/completion currently emits a hard-coded list
+    // textDocument/definition on a member access jumps to the field declaration
     {
-        name: "completion-stub",
-        source: "module comp_test;\n\nstruct S { int field; }\n",
-        script: (ref c) { c.completion(2, 0); },
-        expected: [`"label":"alpha"`, `"label":"beta"`, `"label":"gamma"`],
+        name: "definition-field",
+        source: "module def_field;\n\nstruct S { int field; }\nvoid main() { S s; s.field = 3; }\n",
+        script: (ref c) { c.definition(3, 21); },
+        expected: [`"uri":"file://`, `"line":2`, `"character":15`],
+    },
+    // textDocument/definition on a type name jumps to the type declaration
+    {
+        name: "definition-type",
+        source: "module def_type;\n\nstruct Other { int x; }\nvoid main() { Other o; }\n",
+        script: (ref c) { c.definition(3, 15); },
+        expected: [`"uri":"file://`, `"line":2`, `"character":7`],
+    },
+    // Member completion after `s.` lists the struct's fields and methods,
+    // even though `s.` at the end of a block is incomplete source
+    {
+        name: "completion-member",
+        source: "module comp_test;\n\nstruct S { int field; void method() {} }\nvoid main() {\n    S s;\n    s.\n}\n",
+        script: (ref c) { c.completion(5, 6); },
+        expected: [`"label":"field","kind":5`, `"label":"method","kind":2`],
+    },
+    // Completion without a leading `.` lists module-level types and functions
+    {
+        name: "completion-module-scope",
+        source: "module comp_glob;\n\nstruct Point { int x; }\nenum Color { red }\nint area() { return 1; }\nvoid main() {\n    \n}\n",
+        script: (ref c) { c.completion(6, 4); },
+        expected: [`"label":"Point","kind":22`, `"label":"Color","kind":13`, `"label":"area","kind":3`],
     },
     // textDocument/signatureHelp currently emits a hard-coded signature
     {
@@ -98,6 +120,14 @@ immutable Case[] cases = [
         source: "module diag_ok;\n\nint x = 1;\n",
         script: (ref c) {},
         expected: [`"method":"textDocument/publishDiagnostics"`, `"diagnostics":[]`],
+    },
+    // didChange reanalyzes: the error from didOpen disappears once the
+    // document is edited to something valid (exercises repeated analysis)
+    {
+        name: "diagnostics-didchange",
+        source: "module diag_change;\n\nint x = undefinedSymbol;\n",
+        script: (ref c) { c.didChange("module diag_change;\n\nint x = 1;\n"); },
+        expected: [`undefined identifier`, `"diagnostics":[]`],
     },
 ];
 
@@ -171,6 +201,14 @@ struct LspClient
     void signatureHelp(int line, int character)
     {
         request("textDocument/signatureHelp", positionParams(line, character));
+    }
+
+    // Replace the document's content (textDocumentSync Full)
+    void didChange(string newText)
+    {
+        notify("textDocument/didChange", format(
+            `{"textDocument":{"uri":"%s","version":2},"contentChanges":[{"text":%s}]}`,
+            uri, jsonEscape(newText)));
     }
 
     private string positionParams(int line, int character)
