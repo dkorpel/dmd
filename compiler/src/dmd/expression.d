@@ -2187,6 +2187,7 @@ extern (C++) final class ThrowExp : UnaExp
 extern (C++) final class DotIdExp : UnaExp
 {
     Identifier ident;
+    Loc identLoc;       // location of `ident`; `loc` points at the `.`
     bool noderef;       // true if the result of the expression will never be dereferenced
     bool wantsym;       // do not replace Symbol with its initializer during semantic()
     bool arrow;         // ImportC: if -> instead of .
@@ -2195,6 +2196,14 @@ extern (C++) final class DotIdExp : UnaExp
     {
         super(loc, EXP.dotIdentifier, e);
         this.ident = ident;
+        this.identLoc = loc;
+    }
+
+    extern (D) this(Loc loc, Expression e, Identifier ident, Loc identLoc) @safe
+    {
+        super(loc, EXP.dotIdentifier, e);
+        this.ident = ident;
+        this.identLoc = identLoc;
     }
 
     static DotIdExp create(Loc loc, Expression e, Identifier ident) @safe
@@ -2232,6 +2241,7 @@ extern (C++) final class DotTemplateExp : UnaExp
 extern (C++) final class DotVarExp : UnaExp
 {
     Declaration var;
+    Loc identLoc;       // location of the member identifier; `loc` is the whole expression
     bool hasOverloads;
 
     extern (D) this(Loc loc, Expression e, Declaration var, bool hasOverloads = true) @safe
@@ -2242,6 +2252,7 @@ extern (C++) final class DotVarExp : UnaExp
         super(loc, EXP.dotVariable, e);
         //printf("DotVarExp()\n");
         this.var = var;
+        this.identLoc = loc;
         this.hasOverloads = hasOverloads;
     }
 
