@@ -14,12 +14,38 @@ nothrow:
 
 private extern(C) void* calloc(size_t, size_t) @nogc nothrow;
 
+import core.attribute : wasmImportModule;
+private struct Ciovec { const(void)* buf; size_t len; }
+@wasmImportModule("wasi_snapshot_preview1")
+private extern(C) int fd_write(int fd, const(Ciovec)* iovs, size_t n, size_t* nw) @nogc nothrow;
+
 private void bump_init() @nogc nothrow {}
 
 private void* bump_alloc(size_t sz) @nogc nothrow
 {
     if (sz == 0) sz = 1;
-    return calloc(1, sz); // wasi-libc calloc returns zeroed, aligned storage
+    void* p = calloc(1, sz); // wasi-libc calloc returns zeroed, aligned storage
+    if (!p)
+        dbgAllocFail(sz);
+    return p;
+}
+
+// Diagnostic for the failure path only: print the requested size so a bogus
+// huge allocation (usually caused by memory corruption elsewhere) is visible.
+private void dbgAllocFail(size_t sz) @nogc nothrow
+{
+    size_t nw;
+    static immutable char[11] pre = "ALLOCFAIL ";
+    Ciovec io1 = Ciovec(pre.ptr, 10);
+    fd_write(2, &io1, 1, &nw);
+    char[32] buf = void;
+    size_t i = buf.length;
+    buf[--i] = '\n';
+    size_t v = sz;
+    if (v == 0) buf[--i] = '0';
+    else while (v) { buf[--i] = cast(char)('0' + v % 10); v /= 10; }
+    Ciovec io2 = Ciovec(buf.ptr + i, buf.length - i);
+    fd_write(2, &io2, 1, &nw);
 }
 
 // Zero-fill [p, p+sz).

@@ -69,9 +69,10 @@ extern (C) void rt_finalize(void* p, bool det = true) nothrow
     rt_finalize2(p, det, true);
 }
 
-// alloca cannot bump the wasm shadow stack (epilogues restore it by a
-// compile-time constant), so hand out heap memory instead. It outlives the
-// frame and leaks — consistent with this runtime's no-collection GC.
+// Fallback only: the wasm backend lowers direct alloca() calls to a dynamic
+// shadow-stack bump. This is reached only through a function pointer, where
+// per-frame reclamation is impossible; the heap block leaks like all other
+// allocations in this no-collection runtime.
 extern (C) void* alloca(size_t size) nothrow
 {
     return gc_calloc(size);

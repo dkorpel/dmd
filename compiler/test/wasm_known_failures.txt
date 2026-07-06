@@ -110,6 +110,7 @@ runnable/exe1.c
 runnable/eh.d
 runnable/eh2.d
 runnable/inline7625.d
+runnable/sdtor.d
 runnable/test22427.d
 
 # --- Latent codegen bugs exposed by module-ctor/dtor support ---
@@ -148,6 +149,12 @@ runnable/ice21727.d
 runnable/mars1.d
 runnable/sectiondefs.d
 runnable/testargtypes.d
+
+# --- Architecture-dependent undefined behavior ---
+# constfold.d test2 asserts cast(int)float.infinity == 0x80000000 (the x86
+# cvttss2si result); wasm uses saturating truncation, which yields 0x7FFFFFFF.
+# The test itself documents this as architecture-dependent UB.
+runnable/constfold.d
 
 # --- Host C library behavior the WASM target cannot match ---
 # test22.d formats `real` with %Lg: wasi-libc is built without long-double

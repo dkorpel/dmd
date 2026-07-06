@@ -78,8 +78,13 @@ import core.attribute : wasmImportModule;
 @wasmImportModule("wasi_snapshot_preview1")
 private extern(C) void proc_exit(int code) @nogc nothrow;
 
+private extern(C) int fflush(void* stream) @nogc nothrow;
+
 noreturn _wasm_trap(int code) @nogc nothrow
 {
+    // proc_exit skips wasi-libc's atexit flushing; flush explicitly so
+    // buffered stdout (printf) isn't lost on the abort path.
+    fflush(null);
     proc_exit(code);
     while (true) {} // noreturn: proc_exit never returns
 }

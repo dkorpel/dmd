@@ -1238,6 +1238,31 @@ private bool genCall(ref WasmCG cg, elem* e)
     // E1 is the function. Direct call: E1 is OPvar of a function symbol.
     Symbol* calleeSym = e.E1.Vsym;
 
+    // Lower alloca(n) to a dynamic shadow-stack bump: the epilogue restores
+    // __stack_pointer from shadowBaseLocal (fixed at entry), so the memory is
+    // reclaimed at function exit exactly like native alloca.
+    {
+        import core.stdc.string : strcmp;
+        if (calleeSym && e.E1.Eoper == OPvar && e.E2 && e.E2.Eoper != OPparam &&
+            strcmp(&calleeSym.Sident[0], "alloca") == 0)
+        {
+            const uint spIdx = cg.stackPtrGlobal();
+            cg.emit(OP_GLOBAL_GET);
+            cg.emitULEB(spIdx);
+            cg.genElem(e.E2, WASM_I32);
+            cg.emit(OP_I32_SUB);
+            cg.emitConst(OP_I32_CONST, ~15);
+            cg.emit(OP_I32_AND);
+            const uint tmp = cg.allocTemp(WASM_I32);
+            cg.emit(OP_LOCAL_TEE);
+            cg.emitULEB(tmp);
+            cg.emit(OP_GLOBAL_SET);
+            cg.emitULEB(spIdx);
+            cg.emitLocal(OP_LOCAL_GET, tmp);
+            return true;
+        }
+    }
+
     type* fty = calleeSym ? calleeSym.Stype : null;
     // Indirect call: e2ir's callfunc stashes the pointed-to function type on
     // e.E1.ET. Needed so slice/delegate args still split into (length, ptr)

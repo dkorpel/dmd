@@ -14,7 +14,8 @@ private extern(C) noreturn _wasm_trap(int code) @nogc nothrow;
 
 private noreturn wasm_abort() @nogc nothrow { _wasm_trap(1); }
 
-// ── debug diagnostics (temporary): print "TAG file:line\n" to stderr ──────────
+// Failure markers ("TAG file:line\n" on stderr) go through raw fd_write so
+// they survive even when libc state or the heap is unusable.
 import core.attribute : wasmImportModule;
 struct WasmCiovec { const(void)* buf; size_t len; }
 @wasmImportModule("wasi_snapshot_preview1")
@@ -47,36 +48,39 @@ noreturn _d_assertp(immutable(char)* file, uint line) @nogc {
 }
 noreturn _d_assert_msg(string msg, string file, uint line) @nogc { dbgAssert("ASSERTMSG", file, line); wasm_abort(); }
 
-void _d_unittest(string file, uint line) @nogc          { wasm_abort(); }
-void _d_unittestp(immutable(char)* file, uint line) @nogc { wasm_abort(); }
-void _d_unittest_msg(string msg, string file, uint line) @nogc { wasm_abort(); }
+void _d_unittest(string file, uint line) @nogc          { dbgAssert("UNITTEST", file, line); wasm_abort(); }
+void _d_unittestp(immutable(char)* file, uint line) @nogc { dbgWrite("UNITTESTP\n"); wasm_abort(); }
+void _d_unittest_msg(string msg, string file, uint line) @nogc { dbgAssert("UNITTESTMSG", file, line); wasm_abort(); }
 
 noreturn _d_arraybounds(string file, uint line) @nogc { dbgAssert("BOUNDS", file, line); wasm_abort(); }
 noreturn _d_arrayboundsp(immutable(char)* file, uint line) @nogc { dbgWrite("BOUNDSP\n"); wasm_abort(); }
 noreturn _d_arraybounds_slicep(immutable(char)* file, uint line,
-    size_t lower, size_t upper, size_t length) @nogc { wasm_abort(); }
+    size_t lower, size_t upper, size_t length) @nogc { dbgWrite("BOUNDSP slice\n"); wasm_abort(); }
 noreturn _d_arraybounds_indexp(immutable(char)* file, uint line,
-    size_t index, size_t length) @nogc { wasm_abort(); }
+    size_t index, size_t length) @nogc { dbgWrite("BOUNDSP index\n"); wasm_abort(); }
 
 noreturn _d_arraybounds_slice(string file, uint line,
     size_t lower, size_t upper, size_t length) @nogc { dbgAssert("BOUNDS", file, line); wasm_abort(); }
 noreturn _d_arraybounds_index(string file, uint line,
     size_t index, size_t length) @nogc { dbgAssert("BOUNDS", file, line); wasm_abort(); }
 
-noreturn _d_nullpointerp(immutable(char)* file, uint line) @nogc { wasm_abort(); }
+noreturn _d_nullpointerp(immutable(char)* file, uint line) @nogc { dbgWrite("NULLPTR\n"); wasm_abort(); }
 
 noreturn onOutOfMemoryError(void* pretend_sideffect = null, string file = null, size_t line = 0) @trusted @nogc nothrow
 {
+    dbgWrite("OUTOFMEM\n");
     wasm_abort();
 }
 
 noreturn onOutOfMemoryErrorNoGC(string file = null, size_t line = 0) @trusted @nogc nothrow
 {
+    dbgWrite("OUTOFMEM\n");
     wasm_abort();
 }
 
 noreturn onInvalidMemoryOperationError(void* pretend_sideffect = null, string file = null, size_t line = 0) @trusted @nogc nothrow
 {
+    dbgWrite("INVALIDMEMOP\n");
     wasm_abort();
 }
 
@@ -84,6 +88,7 @@ noreturn onInvalidMemoryOperationError(void* pretend_sideffect = null, string fi
 // runtime can't throw, so trap (the error never fires for well-formed input).
 noreturn onUnicodeError(string msg, size_t idx, string file = null, size_t line = 0) @trusted @nogc nothrow
 {
+    dbgWrite("UNICODEERR\n");
     wasm_abort();
 }
 
@@ -92,11 +97,12 @@ noreturn onUnicodeError(string msg, size_t idx, string file = null, size_t line 
 pragma(mangle, "_D4core9exception__T11staticErrorTCQBhQBf16OutOfMemoryErrorTAyaTkZQBuFNaNbNiKQrKkZQBw")
 Throwable _wasm_staticError_OOM(ref string file, ref uint line) @trusted @nogc nothrow
 {
+    dbgWrite("OUTOFMEM\n");
     wasm_abort();
 }
 
-noreturn __assert(const(char)* file, int line, const(char)* msg) @nogc nothrow { wasm_abort(); }
-noreturn __assert_fail(const(char)* msg, const(char)* file, uint line, const(char)* func) @nogc nothrow { wasm_abort(); }
+noreturn __assert(const(char)* file, int line, const(char)* msg) @nogc nothrow { dbgWrite("__ASSERT\n"); wasm_abort(); }
+noreturn __assert_fail(const(char)* msg, const(char)* file, uint line, const(char)* func) @nogc nothrow { dbgWrite("__ASSERT_FAIL\n"); wasm_abort(); }
 
 private extern(C) extern __gshared int errno;
 ref int __errno_location() @nogc nothrow { return errno; }
