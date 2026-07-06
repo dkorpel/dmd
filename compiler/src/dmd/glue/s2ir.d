@@ -281,32 +281,6 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
     /****************************************
      */
 
-    /* On wasm without exception support, try/finally is emitted as
-     * straight-line code (see visitTryFinally), so a break/continue jumping
-     * out of a try block must run the finally bodies it exits inline first —
-     * innermost out — up to and including the construct owning the target
-     * block (a labeled try/finally has its own break block).
-     * ---
-     * loop: while (1) { try { break loop; } finally { cleanup(); } }
-     * ---
-     */
-    void wasmEmitFinalliesUntil(block* breakTarget, block* contTarget)
-    {
-        if (!(target.isWasm && config.ehmethod == EHmethod.EH_NONE))
-            return;
-        for (auto ss = stmtstate; ss; ss = ss.prev)
-        {
-            if (ss.statement)
-                if (auto tfs = ss.statement.isTryFinallyStatement())
-                    if (tfs.finalbody)
-                        Statement_toIR(tfs.finalbody, irs, ss.prev ? ss.prev : ss);
-            if (breakTarget && ss.breakBlock is breakTarget)
-                return;
-            if (contTarget && ss.contBlock is contTarget)
-                return;
-        }
-    }
-
     void visitBreak(BreakStatement s)
     {
         block* bbreak;
@@ -315,7 +289,6 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
 
         bbreak = stmtstate.getBreakBlock(s.ident);
         assert(bbreak);
-        wasmEmitFinalliesUntil(bbreak, null);
         b = blx.curblock;
         incUsage(irs, s.loc);
 
@@ -344,7 +317,6 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
         //printf("ContinueStatement.toIR() %p\n", this);
         bcont = stmtstate.getContBlock(s.ident);
         assert(bcont);
-        wasmEmitFinalliesUntil(null, bcont);
         b = blx.curblock;
         incUsage(irs, s.loc);
 
@@ -593,7 +565,10 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
         void finish()
         {
             block* finallyBlock;
+            // EH_NONE lowers finallys with insertFinallyBlockGotos, which
+            // requires return blocks to have no successors yet
             if (config.ehmethod != EHmethod.EH_DWARF &&
+                config.ehmethod != EHmethod.EH_NONE &&
                 !irs.isNothrow() &&
                 (finallyBlock = stmtstate.getFinallyBlock()) != null)
             {
@@ -605,37 +580,9 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
             block_next(blx, bc, null);
         }
 
-        /* On wasm without exception support, try/finally is emitted as
-         * straight-line code (see visitTryFinally), so a return inside a try
-         * block must run the enclosing finally bodies inline before leaving
-         * the function.
-         */
-        bool hasEnclosingFinally()
-        {
-            for (auto ss = stmtstate; ss; ss = ss.prev)
-                if (ss.statement && ss.statement.isTryFinallyStatement())
-                    return true;
-            return false;
-        }
-        const bool wasmInlineFinallies = target.isWasm && config.ehmethod == EHmethod.EH_NONE
-            && hasEnclosingFinally();
-        void wasmEmitFinallies()
-        {
-            for (auto ss = stmtstate; ss; ss = ss.prev)
-            {
-                if (!ss.statement)
-                    continue;
-                if (auto tfs = ss.statement.isTryFinallyStatement())
-                    if (tfs.finalbody)
-                        Statement_toIR(tfs.finalbody, irs, ss.prev ? ss.prev : ss);
-            }
-        }
-
         if (!s.exp)
         {
             bc = BC.ret;
-            if (wasmInlineFinallies)
-                wasmEmitFinallies();
             return finish();
         }
 
@@ -732,29 +679,6 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
         }
     L1:
         elem_setLoc(e, s.loc);
-        if (wasmInlineFinallies)
-        {
-            // Evaluate the return value into a temp first: the finally
-            // bodies may destroy what it was computed from.
-            if (tybasic(e.Ety) != TYvoid)
-            {
-                elem* evalue = el_copytotmp(e);
-                block_appendexp(blx.curblock, e);
-                wasmEmitFinallies();
-                e = evalue;
-            }
-            else
-            {
-                block_appendexp(blx.curblock, e);
-                wasmEmitFinallies();
-                e = null;
-            }
-            if (e)
-                block_appendexp(blx.curblock, e);
-            bc = BC.retexp;
-            finish();
-            return;
-        }
         block_appendexp(blx.curblock, e);
         bc = BC.retexp;
 //        if (type_zeroCopy(Type_toCtype(s.exp.type)))
@@ -1250,17 +1174,6 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
         //printf("TryFinallyStatement.toIR()\n");
 
         BlockState* blx = irs.blx;
-
-        if (target.isWasm && config.ehmethod == EHmethod.EH_NONE)
-        {
-            // No exception unwinding. Emit try body, then finally body sequentially.
-            StmtState mystate = StmtState(stmtstate, s);
-            if (s._body)
-                Statement_toIR(s._body, irs, &mystate);
-            if (s.finalbody)
-                Statement_toIR(s.finalbody, irs, &mystate);
-            return;
-        }
 
         if (config.ehmethod == EHmethod.EH_WIN32 && !(blx.funcsym.Sfunc.Fflags3 & Feh_none))
             nteh_declarvars(blx);
