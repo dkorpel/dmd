@@ -144,6 +144,23 @@ extern (C) void[] _d_arrayappendwd(ref byte[] x, dchar c)
     return x;
 }
 
+import core.attribute : wasmImportModule;
+
+@wasmImportModule("wasi_snapshot_preview1")
+private extern (C) int clock_time_get(uint clockId, ulong precision, ulong* timestamp) @nogc nothrow;
+
+// C `clock()` matching core.sys.wasi.posix.stdc.time: clock_t is long,
+// CLOCKS_PER_SEC is 1e9, so return nanoseconds. Prefers WASI clockid 2
+// (process cputime) with a monotonic fallback for hosts that don't
+// implement cputime clocks.
+extern (C) long clock() @nogc nothrow
+{
+    ulong t;
+    if (clock_time_get(2, 1, &t) != 0 && clock_time_get(1, 1, &t) != 0)
+        return -1;
+    return cast(long) t;
+}
+
 // rt.minfo.moduleinfos_apply — module ctors are not iterated in this runtime.
 pragma(mangle, "_D2rt5minfo17moduleinfos_applyFMDFyPS6object10ModuleInfoZiZi")
 int _wasm_moduleinfos_apply(scope int delegate(immutable(ModuleInfo*)) dg)

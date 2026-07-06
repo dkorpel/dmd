@@ -481,7 +481,12 @@ WASM_DRT_SRCS := \
 	src/core/stdc/stdlib.d \
 	src/core/stdc/math.d \
 	src/core/exception.d \
+	src/core/internal/container/common.d \
+	src/core/internal/profile_gc.d \
 	src/rt/util/typeinfo.d \
+	src/rt/trace.d \
+	src/rt/profilegc.d \
+	src/rt/tracegc.d \
 	src/rt/wasm/minfo.d \
 	src/rt/wasm/cover.d \
 	src/rt/wasm/extra.d

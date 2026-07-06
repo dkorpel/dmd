@@ -156,6 +156,14 @@ runnable/testline.d
 runnable/testswitch.d
 runnable/testtypeid.d
 
+# --- Depend on the conservative GC's allocation geometry ---
+# -profile=gc reports allocation sizes as deltas of allocatedInCurrentThread,
+# and the expected output hardcodes the native GC's bin size (96 bytes for
+# `new ubyte[64]`). The WASM bump allocator honestly reports the requested
+# size (64), so the byte counts can only match once the real collecting GC
+# is ported to WASM.
+runnable/profilegc_stdout.d
+
 # --- Latent codegen bugs exposed by module-ctor/dtor support ---
 # Wiring module ctors/dtors emits a ModuleInfo + "minfo" pointer per module and
 # moves the GC heap from a fixed static buffer to wasi-libc calloc (memory.grow).
@@ -186,12 +194,14 @@ runnable/gdb_slice_debuginfo_64.d
 # bitops.d tests x86 port I/O intrinsics (inp/outp); mars1.d needs mmap and
 # x86 codegen details; sectiondefs.d checks ELF section symbols
 # (__start_/__stop_ of custom sections); ice21727.d needs SIMD (float4);
-# testargtypes.d checks the x86-64 argtypes ABI classification.
+# testargtypes.d checks the x86-64 argtypes ABI classification;
+# testprofile.d's test15754 uses x86 inline asm (bsf EAX).
 runnable/bitops.d
 runnable/ice21727.d
 runnable/mars1.d
 runnable/sectiondefs.d
 runnable/testargtypes.d
+runnable/testprofile.d
 
 # --- Architecture-dependent undefined behavior ---
 # constfold.d test2 asserts cast(int)float.infinity == 0x80000000 (the x86

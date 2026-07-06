@@ -859,7 +859,9 @@ void FuncDeclaration_toObjFile(FuncDeclaration fd, bool multiobj)
         se.type = Type.tstring;
         se.type = se.type.typeSemantic(Loc.initial, null);
         Expressions* exps = new Expressions(se);
-        FuncDeclaration fdpro = genCfunc(null, Type.tvoid, "trace_pro");
+        auto proParams = new Parameters();
+        proParams.push(new Parameter(Loc.initial, STC.none, se.type, null, null, null));
+        FuncDeclaration fdpro = genCfunc(proParams, Type.tvoid, "trace_pro");
         Expression ec = VarExp.create(Loc.initial, fdpro);
         Expression e = CallExp.create(Loc.initial, ec, exps);
         e.type = Type.tvoid;
