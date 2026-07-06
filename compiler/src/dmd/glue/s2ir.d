@@ -281,6 +281,32 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
     /****************************************
      */
 
+    /* On wasm without exception support, try/finally is emitted as
+     * straight-line code (see visitTryFinally), so a break/continue jumping
+     * out of a try block must run the finally bodies it exits inline first —
+     * innermost out — up to and including the construct owning the target
+     * block (a labeled try/finally has its own break block).
+     * ---
+     * loop: while (1) { try { break loop; } finally { cleanup(); } }
+     * ---
+     */
+    void wasmEmitFinalliesUntil(block* breakTarget, block* contTarget)
+    {
+        if (!(target.isWasm && config.ehmethod == EHmethod.EH_NONE))
+            return;
+        for (auto ss = stmtstate; ss; ss = ss.prev)
+        {
+            if (ss.statement)
+                if (auto tfs = ss.statement.isTryFinallyStatement())
+                    if (tfs.finalbody)
+                        Statement_toIR(tfs.finalbody, irs, ss.prev ? ss.prev : ss);
+            if (breakTarget && ss.breakBlock is breakTarget)
+                return;
+            if (contTarget && ss.contBlock is contTarget)
+                return;
+        }
+    }
+
     void visitBreak(BreakStatement s)
     {
         block* bbreak;
@@ -289,6 +315,7 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
 
         bbreak = stmtstate.getBreakBlock(s.ident);
         assert(bbreak);
+        wasmEmitFinalliesUntil(bbreak, null);
         b = blx.curblock;
         incUsage(irs, s.loc);
 
@@ -317,6 +344,7 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
         //printf("ContinueStatement.toIR() %p\n", this);
         bcont = stmtstate.getContBlock(s.ident);
         assert(bcont);
+        wasmEmitFinalliesUntil(null, bcont);
         b = blx.curblock;
         incUsage(irs, s.loc);
 

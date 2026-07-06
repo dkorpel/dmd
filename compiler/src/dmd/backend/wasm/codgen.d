@@ -1291,6 +1291,12 @@ private bool genCall(ref WasmCG cg, elem* e)
         }
     }
 
+    // An unprototyped RTL decl (bare TYnfunc, e.g. `_memset80`) carries no
+    // param info, so buildFuncType would register a wrong import signature
+    // and wasm-ld warns of the mismatch against druntime's definition.
+    // Derive the signature from the call site instead — but only when every
+    // arg is a plain scalar leaf, since those are the only shapes an RTL call
+    // pushes; anything fancier keeps the old fallback.
     // C variadic requires Tparamtypes set (bare TYnfunc/TYjfunc with no
     // params is an unprototyped RTL decl, not a real variadic). `void arr3(...)`
     // (dstyle, no fixed params) has null Tparamtypes but still spills varargs.

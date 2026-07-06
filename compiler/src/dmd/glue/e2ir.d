@@ -6466,7 +6466,10 @@ Lagain:
 
         case Tstruct:
         {
-            if (target.isX86)
+            // The argtypes register classification can turn a plain struct
+            // into a complex type (e.g. 4 ints -> Tcomplex64), which the wasm
+            // backend cannot pass by value; use the size-based helpers.
+            if (target.isX86 || target.isWasm)
                 goto default;
 
             TypeStruct tc = cast(TypeStruct)tb2;
@@ -6490,7 +6493,12 @@ Lagain:
                 case 2:      r = RTLSYM.MEMSET16;   break;
                 case 4:      r = RTLSYM.MEMSET32;   break;
                 case 8:      r = RTLSYM.MEMSET64;   break;
-                case 16:     r = (target.isX86_64 || target.isAArch64) ? RTLSYM.MEMSET128ii : RTLSYM.MEMSET128; break;
+                case 16:
+                    if (target.isWasm)
+                        r = RTLSYM.MEMSETN;
+                    else
+                        r = (target.isX86_64 || target.isAArch64) ? RTLSYM.MEMSET128ii : RTLSYM.MEMSET128;
+                    break;
                 default:     r = RTLSYM.MEMSETN;    break;
             }
 
