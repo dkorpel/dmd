@@ -3341,6 +3341,8 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
         if (token.value == TOK.identifier)
         {
             id = token.ident;
+            // Point the declaration's loc at its name, not at the `enum` keyword
+            loc = token.loc;
             nextToken();
         }
 
@@ -3545,6 +3547,7 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
         //printf("Parser::parseAggregate()\n");
         nextToken();
         Identifier id;
+        Loc idLoc;
         if (token.value != TOK.identifier)
         {
             id = null;
@@ -3552,6 +3555,7 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
         else
         {
             id = token.ident;
+            idLoc = token.loc;
             nextToken();
 
             if (token.value == TOK.leftParenthesis)
@@ -3620,13 +3624,17 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
             error(token.loc, "{ } expected following `%s` declaration", Token.toChars(tok));
         }
 
+        // Point the declaration's loc at its name (like functions and
+        // variables do), not at the `struct`/`class`/... keyword
+        const declLoc = id ? idLoc : loc;
+
         AST.AggregateDeclaration a;
         switch (tok)
         {
         case TOK.interface_:
             if (!id)
                 error(loc, "anonymous interfaces not allowed");
-            a = new AST.InterfaceDeclaration(loc, id, baseclasses);
+            a = new AST.InterfaceDeclaration(declLoc, id, baseclasses);
             a.members = members;
             break;
 
@@ -3634,14 +3642,14 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
             if (!id)
                 error(loc, "anonymous classes not allowed");
             bool inObject = md && !md.packages && md.id == Id.object;
-            a = new AST.ClassDeclaration(loc, id, baseclasses, members, inObject);
+            a = new AST.ClassDeclaration(declLoc, id, baseclasses, members, inObject);
             break;
 
         case TOK.struct_:
             if (id)
             {
                 bool inObject = md && !md.packages && md.id == Id.object;
-                a = new AST.StructDeclaration(loc, id, inObject);
+                a = new AST.StructDeclaration(declLoc, id, inObject);
                 a.members = members;
             }
             else
@@ -3656,7 +3664,7 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
         case TOK.union_:
             if (id)
             {
-                a = new AST.UnionDeclaration(loc, id);
+                a = new AST.UnionDeclaration(declLoc, id);
                 a.members = members;
             }
             else

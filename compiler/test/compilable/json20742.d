@@ -13,7 +13,7 @@ TEST_OUTPUT:
     "kind" : "struct",
     "protection" : "private",
     "line" : 52,
-    "char" : 13,
+    "char" : 20,
     "members" : []
    },
    {
@@ -21,7 +21,7 @@ TEST_OUTPUT:
     "kind" : "struct",
     "protection" : "private",
     "line" : 59,
-    "char" : 13,
+    "char" : 20,
     "members" : []
    },
    {
@@ -29,7 +29,7 @@ TEST_OUTPUT:
     "kind" : "struct",
     "protection" : "private",
     "line" : 62,
-    "char" : 13,
+    "char" : 20,
     "members" : []
    },
    {
@@ -37,7 +37,7 @@ TEST_OUTPUT:
     "kind" : "struct",
     "protection" : "private",
     "line" : 69,
-    "char" : 13,
+    "char" : 20,
     "members" : []
    }
   ]

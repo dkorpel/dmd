@@ -123,7 +123,7 @@
                 "protection": "public"
             },
             {
-                "char": 1,
+                "char": 7,
                 "kind": "class",
                 "line": 23,
                 "members": [
@@ -206,7 +206,7 @@
                 "line": 21,
                 "members": [
                     {
-                        "char": 1,
+                        "char": 8,
                         "kind": "struct",
                         "line": 21,
                         "members": [
@@ -237,7 +237,7 @@
                 "line": 22,
                 "members": [
                     {
-                        "char": 1,
+                        "char": 8,
                         "kind": "class",
                         "line": 22,
                         "members": [
@@ -270,7 +270,7 @@
                 "line": 23,
                 "members": [
                     {
-                        "char": 1,
+                        "char": 11,
                         "kind": "interface",
                         "line": 23,
                         "members": [
@@ -311,7 +311,7 @@
             },
             {
                 "base": "json.Bar!1.Bar",
-                "char": 1,
+                "char": 7,
                 "interfaces": [
                     "json.Baz!(int, 2, null).Baz"
                 ],
@@ -394,7 +394,7 @@
             },
             {
                 "base": "json.Bar2",
-                "char": 1,
+                "char": 7,
                 "kind": "class",
                 "line": 36,
                 "members": [
@@ -445,7 +445,7 @@
                 "protection": "public"
             },
             {
-                "char": 1,
+                "char": 8,
                 "kind": "struct",
                 "line": 43,
                 "members": [
@@ -460,7 +460,7 @@
                         "protection": "public"
                     },
                     {
-                        "char": 5,
+                        "char": 11,
                         "kind": "union",
                         "line": 45,
                         "members": [
@@ -506,7 +506,7 @@
                 "line": 54,
                 "members": [
                     {
-                        "char": 1,
+                        "char": 8,
                         "kind": "struct",
                         "line": 54,
                         "members": [
@@ -625,7 +625,7 @@
                 "protection": "private"
             },
             {
-                "char": 1,
+                "char": 8,
                 "kind": "struct",
                 "line": 104,
                 "members": [
@@ -669,7 +669,7 @@
                 "line": 111,
                 "members": [
                     {
-                        "char": 9,
+                        "char": 16,
                         "kind": "struct",
                         "line": 111,
                         "members": [],
@@ -692,7 +692,7 @@
                 "line": 112,
                 "members": [
                     {
-                        "char": 9,
+                        "char": 16,
                         "kind": "struct",
                         "line": 112,
                         "members": [],
@@ -710,7 +710,7 @@
                 "protection": "package"
             },
             {
-                "char": 1,
+                "char": 7,
                 "kind": "class",
                 "line": 114,
                 "members": [
@@ -720,7 +720,7 @@
                         "line": 116,
                         "members": [
                             {
-                                "char": 22,
+                                "char": 28,
                                 "kind": "class",
                                 "line": 116,
                                 "members": [],
@@ -756,7 +756,7 @@
             },
             {
                 "baseDeco": "i",
-                "char": 1,
+                "char": 6,
                 "kind": "enum",
                 "line": 123,
                 "members": [
@@ -977,7 +977,7 @@
                 "protection": "public"
             },
             {
-                "char": 1,
+                "char": 8,
                 "kind": "struct",
                 "line": 164,
                 "members": [
