@@ -22,6 +22,7 @@ import dmd.attrib;
 import dmd.builtin;
 import dmd.constfold;
 import dmd.ctfeexpr;
+import dmd.ctfememory;
 import dmd.dcast;
 import dmd.dclass;
 import dmd.declaration;
@@ -100,6 +101,10 @@ public Expression ctfeInterpret(Expression e)
         return ErrorExp.get();
 
     auto rgnpos = ctfeGlobals.region.savePos();
+    // Nested CTFE invocations release LIFO, so a mark suffices to reclaim
+    // linear memory of variables pushed outside any function frame.
+    const linearMark = ctfeGlobals.linearMem.markStack();
+    ++ctfeGlobals.linearNest;
 
     import dmd.timetrace;
     timeTraceBeginEvent(TimeTraceEventType.ctfe);
@@ -123,6 +128,17 @@ public Expression ctfeInterpret(Expression e)
         result = ErrorExp.get();
 
     ctfeGlobals.region.release(rgnpos);
+    // Slice payloads live in the heap arena and survive function frames, so
+    // they are only reclaimed when the outermost CTFE invocation ends. No
+    // linear value can survive past this point: results were converted to
+    // AST nodes and the stack slot tables were popped.
+    if (--ctfeGlobals.linearNest == 0)
+    {
+        ctfeGlobals.linearMem.reset();
+        ctfeGlobals.escapedPayloads.setDim(0);
+    }
+    else
+        ctfeGlobals.linearMem.releaseStack(linearMark);
 
     return result;
 }
@@ -221,11 +237,39 @@ private:
 /***************
  * Collect together globals used by CTFE
  */
+/// A slice return value handed over as a linear handle (see
+/// `CtfeGlobals.linearReturnDest`).
+struct CtfeLinearReturn
+{
+    LinearSlice slice;
+    bool set = false;
+}
+
 struct CtfeGlobals
 {
     Region region;
 
     CtfeStack stack;
+
+    CtfeMemory linearMem;     // linear (flat byte) storage for values, -preview=ctfeLinearMemory
+    int linearNest = 0;       // nesting depth of ctfeInterpret invocations
+
+    /* Payloads that were materialized as a canonical AST node ("escaped").
+     * A payload's header holds `payloadEscaped` and the index into this
+     * array; every handle to it is redirected to the canonical node before
+     * its next use, so there is never more than one AST node per array.
+     */
+    Array!Expression escapedPayloads;
+
+    /* Hand-over channel for slice return values: when a call's result is
+     * about to be stored straight into a slice-eligible variable, the caller
+     * points this at a local CtfeLinearReturn before interpreting the
+     * CallExp; visit(CallExp) takes it (and clears it, so nested calls do
+     * not see it) and the callee's return statement transfers the handle
+     * instead of materializing an AST array. Payloads live in the heap
+     * arena, so the handle outlives the callee's frame.
+     */
+    CtfeLinearReturn* linearReturnDest = null;
 
     int callDepth = 0;        // current number of recursive calls
 
@@ -275,8 +319,16 @@ private:
     VarDeclarations vars;       // corresponding variables
     Array!(void*) savedId;      // id of the previous state of that var
 
+    /* With -preview=ctfeLinearMemory, scalar values are stored as raw bytes
+     * in `ctfeGlobals.linearMem` rather than as AST nodes. For each stack
+     * entry, either `values[i]` holds an AST value, or `slotPtrs[i]` points
+     * at the variable's bytes (a null CtfePtr means no linear value).
+     */
+    Array!CtfePtr slotPtrs;     // linear memory slots, parallel to values[]
+
     Array!(void*) frames;       // all previous frame pointers
     Expressions savedThis;      // all previous values of localThis
+    Array!StackMark frameMarks; // linear stack arena state at frame entry
 
     /* Global constants get saved here after evaluation, so we never
      * have to redo them. This saves a lot of time and memory.
@@ -308,8 +360,17 @@ public:
     // Start a new stack frame, using the provided 'this'.
     void startFrame(Expression thisexp)
     {
+        startFrame(thisexp, ctfeGlobals.linearMem.markStack());
+    }
+
+    /* Start a new stack frame whose linear memory extends down to an
+     * earlier mark (so staged arguments die with this frame).
+     */
+    void startFrame(Expression thisexp, StackMark linearMark)
+    {
         frames.push(cast(void*)cast(size_t)framepointer);
         savedThis.push(localThis);
+        frameMarks.push(linearMark);
         framepointer = stackPointer();
         localThis = thisexp;
     }
@@ -319,9 +380,11 @@ public:
         size_t oldframe = cast(size_t)frames[frames.length - 1];
         localThis = savedThis[savedThis.length - 1];
         popAll(framepointer);
+        ctfeGlobals.linearMem.releaseStack(frameMarks[frameMarks.length - 1]);
         framepointer = oldframe;
         frames.setDim(frames.length - 1);
         savedThis.setDim(savedThis.length - 1);
+        frameMarks.setDim(frameMarks.length - 1);
     }
 
     bool isInCurrentFrame(VarDeclaration v)
@@ -340,7 +403,17 @@ public:
             return globalValues[v.ctfeAdrOnStack];
         }
         assert(v.ctfeAdrOnStack < stackPointer());
-        return values[v.ctfeAdrOnStack];
+        if (auto e = values[v.ctfeAdrOnStack])
+            return e;
+        // The value may live in linear memory; materialize an AST node in the region
+        UnionExp ue = void;
+        if (auto e = getLinear(v, v.loc, v.type, &ue))
+            return e == ue.exp() ? regionUeCopy(ue) : e;
+        // A linear slice value flips to the AST representation when loaded,
+        // because the loaded node could be aliased
+        if (auto e = materializeLinearSlice(v))
+            return e;
+        return null;
     }
 
     void setValue(VarDeclaration v, Expression e)
@@ -348,7 +421,343 @@ public:
         //printf("setValue() %s : %s\n", v.toChars(), e.toChars());
         assert(!v.isDataseg() || v.isCTFE());
         assert(v.ctfeAdrOnStack < stackPointer());
+        if (storeLinear(v, e))
+            return;
+        slotPtrs[v.ctfeAdrOnStack] = CtfePtr.init; // representation switches to AST
         values[v.ctfeAdrOnStack] = e;
+    }
+
+    /* How may v's value be stored in linear memory? The answer only depends
+     * on the declaration, so it is cached on it (see the values of
+     * `VarDeclaration.ctfeLinearKind`). Kinds 2 and 3 imply: local (indexes
+     * values[], not globalValues[]) and not a reference, so v owns its
+     * stack entry.
+     */
+    static ubyte linearKind(VarDeclaration v)
+    {
+        if (v.ctfeLinearKind == 0)
+        {
+            ubyte compute()
+            {
+                if (v.isBitFieldDeclaration())
+                    return 1;
+                const scalar = isLinearScalarType(v.type);
+                const slice = !scalar && isLinearSliceType(v.type);
+                if (!scalar && !slice)
+                    return 1;
+                // `ref`/`out` parameters do not own their entry, but the
+                // aliased caller variable's entry may hold a slice handle
+                if (v.storage_class & (STC.ref_ | STC.out_))
+                    return slice ? 4 : 1;
+                if (v.storage_class & (STC.lazy_ | STC.manifest))
+                    return 1;
+                if (v.isDataseg() && !v.isCTFE())
+                    return 1; // indexes globalValues[], never linear
+                return scalar ? 2 : 3;
+            }
+            v.ctfeLinearKind = compute();
+        }
+        return v.ctfeLinearKind;
+    }
+
+    // Is v a local whose value may be stored as raw scalar bytes in linear memory?
+    bool canStoreLinear(VarDeclaration v)
+    {
+        if (!global.params.ctfeLinearMemory)
+            return false;
+        if (linearKind(v) != 2)
+            return false;
+        return v.ctfeAdrOnStack != VarDeclaration.AdrOnStackNone && v.ctfeAdrOnStack < stackPointer();
+    }
+
+    // Is v a local whose value may be stored as a linear slice handle?
+    bool canStoreLinearSlice(VarDeclaration v)
+    {
+        if (!global.params.ctfeLinearMemory)
+            return false;
+        if (linearKind(v) != 3)
+            return false;
+        return v.ctfeAdrOnStack != VarDeclaration.AdrOnStackNone && v.ctfeAdrOnStack < stackPointer();
+    }
+
+    // Does v currently hold an AST-node value (as opposed to a linear-memory
+    // value or nothing)?
+    bool hasAstValue(VarDeclaration v)
+    {
+        return values[v.ctfeAdrOnStack] !is null;
+    }
+
+    /* v's raw scalar slot, or CtfePtr.init if v's value does not currently
+     * live in linear memory as scalar bytes.
+     */
+    CtfePtr scalarSlot(VarDeclaration v)
+    {
+        // check the address first: linearKind() calls isDataseg(), which must
+        // not run on special variables like __ctfe (never pushed)
+        const adr = v.ctfeAdrOnStack;
+        if (adr == VarDeclaration.AdrOnStackNone || adr >= values.length)
+            return CtfePtr.init;
+        if (linearKind(v) != 2) // kind 3 slots hold slice handles, not scalars
+            return CtfePtr.init;
+        if (values[adr] !is null)
+            return CtfePtr.init;
+        return slotPtrs[adr];
+    }
+
+    /* The AST value of v's entry, or null if v has no value or the value
+     * lives in linear memory. Unlike getValue, never materializes a linear
+     * value (no side effects).
+     */
+    Expression astValue(VarDeclaration v)
+    {
+        const adr = v.ctfeAdrOnStack;
+        // check the address first: isDataseg() must not be called on
+        // special variables like __ctfe (which are never pushed)
+        if (adr == VarDeclaration.AdrOnStackNone || adr >= values.length)
+            return null;
+        if ((v.isDataseg() || v.storage_class & STC.manifest) && !v.isCTFE())
+            return null;
+        return values[adr];
+    }
+
+    /* Does v's value currently live in linear memory?
+     *
+     * Note: the representation is a property of the stack entry, not of the
+     * declaration — a `ref` parameter can alias the entry of an eligible
+     * caller variable (see the ref parameter aliasing in interpretFunction).
+     */
+    bool hasLinearValue(VarDeclaration v)
+    {
+        const adr = v.ctfeAdrOnStack;
+        // check the address first: isDataseg() must not be called on
+        // special variables like __ctfe (which are never pushed)
+        if (adr == VarDeclaration.AdrOnStackNone || adr >= values.length)
+            return false;
+        if ((v.isDataseg() || v.storage_class & STC.manifest) && !v.isCTFE())
+            return false; // indexes globalValues[], never linear
+        if (values[adr] !is null)
+            return false;
+        return ctfeGlobals.linearMem.isValid(slotPtrs[adr]);
+    }
+
+    /* Try to store scalar literal e as raw bytes in v's linear memory slot.
+     * Returns: false if v is not eligible or e is not a scalar literal;
+     * the caller stores the AST node instead.
+     */
+    bool storeLinear(VarDeclaration v, Expression e)
+    {
+        if (e is null || (e.op != EXP.int64 && e.op != EXP.float64))
+            return false;
+        if (!canStoreLinear(v))
+            return false;
+        const adr = v.ctfeAdrOnStack;
+        CtfePtr slot = slotPtrs[adr];
+        if (slot.isNull)
+        {
+            if (adr < framepointer)
+                return false; // a slot allocated now would die with the current frame
+            slot = allocateSlot(v);
+            if (slot.isNull)
+                return false;
+            slotPtrs[adr] = slot;
+        }
+        if (!encodeInto(ctfeGlobals.linearMem, e, v.type, slot))
+            return false;
+        values[adr] = null;
+        return true;
+    }
+
+    /* Like storeLinear, but takes the value as raw bytes at src (encoded
+     * with a type equivalent to v's). Used to bind staged arguments.
+     */
+    bool storeLinearRaw(VarDeclaration v, CtfePtr src, uint n)
+    {
+        if (!canStoreLinear(v))
+            return false;
+        const adr = v.ctfeAdrOnStack;
+        CtfePtr slot = slotPtrs[adr];
+        if (slot.isNull)
+        {
+            if (adr < framepointer)
+                return false; // a slot allocated now would die with the current frame
+            slot = allocateSlot(v);
+            if (slot.isNull)
+                return false;
+            slotPtrs[adr] = slot;
+        }
+        if (!ctfeGlobals.linearMem.copy(slot, src, n))
+            return false;
+        values[adr] = null;
+        return true;
+    }
+
+    private CtfePtr allocateSlot(VarDeclaration v)
+    {
+        const sz = v.type.size();
+        if (sz == SIZE_INVALID || sz > 64)
+            return CtfePtr.init;
+        return CtfePtr(ctfeGlobals.linearMem.allocate(ArenaKind.stack, cast(uint) sz), 0);
+    }
+
+    /* If v's stack entry currently holds a linear slice handle, return the
+     * slot it is stored in, otherwise a null pointer.
+     *
+     * Like getLinear, this is entry-based: a `ref` parameter (kind 4) may
+     * alias the entry of an eligible caller variable.
+     */
+    CtfePtr sliceSlot(VarDeclaration v)
+    {
+        const adr = v.ctfeAdrOnStack;
+        // check the address first: linearKind must not compute isDataseg()
+        // on special variables like __ctfe (which are never pushed)
+        if (adr == VarDeclaration.AdrOnStackNone || adr >= values.length)
+            return CtfePtr.init;
+        const kind = linearKind(v);
+        if (kind != 3 && kind != 4)
+            return CtfePtr.init;
+        if (values[adr] !is null)
+            return CtfePtr.init;
+        const slot = slotPtrs[adr];
+        if (!ctfeGlobals.linearMem.isValid(slot))
+            return CtfePtr.init;
+        // If the payload escaped to a canonical AST node, the raw bytes are
+        // stale: fast paths must not use this handle. The regular path they
+        // fall back to redirects it (see materializeLinearSlice).
+        LinearSlice s;
+        PayloadHeader h;
+        if (readSlice(ctfeGlobals.linearMem, slot, s) && s.alloc != 0 &&
+            readPayloadHeader(ctfeGlobals.linearMem, s.alloc, h) &&
+            (h.flags & payloadEscaped))
+            return CtfePtr.init;
+        return slot;
+    }
+
+    // Does v's entry have a linear slot allocated (whatever the current
+    // representation)? A handle can be stored without a new allocation.
+    bool hasLinearSlot(VarDeclaration v)
+    {
+        const adr = v.ctfeAdrOnStack;
+        return adr != VarDeclaration.AdrOnStackNone && adr < slotPtrs.length &&
+               !slotPtrs[adr].isNull;
+    }
+
+    /* Store slice handle s as v's value. Allocates the (16 byte) slot on
+     * first use. Returns: false if v is not eligible (the caller keeps the
+     * AST representation).
+     */
+    bool storeLinearSlice(VarDeclaration v, LinearSlice s)
+    {
+        if (!canStoreLinearSlice(v))
+            return false;
+        const adr = v.ctfeAdrOnStack;
+        CtfePtr slot = slotPtrs[adr];
+        if (slot.isNull)
+        {
+            if (adr < framepointer)
+                return false; // a slot allocated now would die with the current frame
+            slot = CtfePtr(ctfeGlobals.linearMem.allocate(ArenaKind.stack, LinearSlice.sizeof), 0);
+            if (slot.isNull)
+                return false;
+            slotPtrs[adr] = slot;
+        }
+        if (!writeSlice(ctfeGlobals.linearMem, slot, s))
+            return false;
+        values[adr] = null;
+        return true;
+    }
+
+    /* If v's stack entry holds a linear slice handle, materialize the array
+     * as an AST node, store that as the entry's value and abandon the handle
+     * ("flip to AST"). The payload's canonical node is created at most once
+     * and recorded in `ctfeGlobals.escapedPayloads`; other handles into the
+     * same payload are redirected to it (as the node itself, or a SliceExp
+     * of it) when they get here, which preserves reference semantics: there
+     * is never more than one AST node per array object.
+     * Returns: null if the entry does not hold a linear slice value.
+     */
+    Expression materializeLinearSlice(VarDeclaration v)
+    {
+        const adr = v.ctfeAdrOnStack;
+        if (adr == VarDeclaration.AdrOnStackNone || adr >= values.length)
+            return null;
+        const kind = linearKind(v);
+        if (kind != 3 && kind != 4)
+            return null;
+        if (values[adr] !is null)
+            return null;
+        const slot = slotPtrs[adr];
+        LinearSlice s;
+        if (!readSlice(ctfeGlobals.linearMem, slot, s))
+            return null;
+
+        Expression e;
+        if (s.alloc == 0)
+        {
+            e = decodeSlice(ctfeGlobals.linearMem, s, v.type, v.loc); // NullExp
+        }
+        else
+        {
+            PayloadHeader h;
+            if (!readPayloadHeader(ctfeGlobals.linearMem, s.alloc, h))
+                return null;
+            Expression eWhole;
+            if (h.flags & payloadEscaped)
+            {
+                // once escaped, `capacity` holds the escapedPayloads index
+                eWhole = ctfeGlobals.escapedPayloads[h.capacity];
+            }
+            else
+            {
+                const whole = LinearSlice(s.alloc, PayloadHeader.sizeof, h.used);
+                eWhole = decodeSlice(ctfeGlobals.linearMem, whole, v.type, v.loc);
+                if (eWhole is null)
+                    return null;
+                h.flags |= payloadEscaped;
+                h.capacity = cast(uint) ctfeGlobals.escapedPayloads.length;
+                writePayloadHeader(ctfeGlobals.linearMem, s.alloc, h);
+                ctfeGlobals.escapedPayloads.push(eWhole);
+            }
+            if (s.offset == PayloadHeader.sizeof && s.length == h.used)
+                e = eWhole;
+            else
+            {
+                // a sub-slice of the array object
+                const lo = (s.offset - PayloadHeader.sizeof) / h.elemSize;
+                auto se = new SliceExp(v.loc, eWhole,
+                    new IntegerExp(v.loc, lo, Type.tsize_t),
+                    new IntegerExp(v.loc, lo + s.length, Type.tsize_t));
+                se.type = v.type;
+                e = se;
+            }
+        }
+        if (e is null)
+            return null;
+        values[adr] = e;
+        slotPtrs[adr] = CtfePtr.init;
+        return e;
+    }
+
+    /* If v's value lives in linear memory, rebuild an AST node for it in
+     * caller storage `*pue`, with type t painted on.
+     * Returns: null if v's value does not live in linear memory.
+     */
+    Expression getLinear(VarDeclaration v, Loc loc, Type t, UnionExp* pue)
+    {
+        // entry-based, not declaration-based: a `ref` parameter may alias
+        // the linear entry of an eligible caller variable
+        const adr = v.ctfeAdrOnStack;
+        // check the address first: isDataseg() must not be called on
+        // special variables like __ctfe (which are never pushed)
+        if (adr == VarDeclaration.AdrOnStackNone || adr >= values.length)
+            return null;
+        if ((v.isDataseg() || v.storage_class & STC.manifest) && !v.isCTFE())
+            return null; // indexes globalValues[], never linear
+        if (values[adr] !is null)
+            return null;
+        const slot = slotPtrs[adr];
+        if (slot.isNull)
+            return null;
+        return decodeScalar(ctfeGlobals.linearMem, slot, t, loc, pue);
     }
 
     void push(VarDeclaration v)
@@ -359,12 +768,14 @@ public:
         {
             // Already exists in this frame, reuse it.
             values[v.ctfeAdrOnStack] = null;
+            slotPtrs[v.ctfeAdrOnStack] = CtfePtr.init;
             return;
         }
         savedId.push(cast(void*)cast(size_t)v.ctfeAdrOnStack);
         v.ctfeAdrOnStack = cast(uint)values.length;
         vars.push(v);
         values.push(null);
+        slotPtrs.push(CtfePtr.init);
     }
 
     void pop(VarDeclaration v)
@@ -378,6 +789,7 @@ public:
             values.pop();
             vars.pop();
             savedId.pop();
+            slotPtrs.pop();
         }
     }
 
@@ -394,6 +806,7 @@ public:
         values.setDim(stackpointer);
         vars.setDim(stackpointer);
         savedId.setDim(stackpointer);
+        slotPtrs.setDim(stackpointer);
     }
 
     void saveGlobalConstant(VarDeclaration v, Expression e)
@@ -401,6 +814,488 @@ public:
         assert(v._init && (v.isConst() || v.isImmutable() || v.storage_class & STC.manifest) && !v.isCTFE());
         v.ctfeAdrOnStack = cast(uint)globalValues.length;
         globalValues.push(copyRegionExp(e));
+    }
+}
+
+/* If e is `v`, `v[]` or `v[l..u]` where v's slice value lives in linear
+ * memory, evaluate it to handle `s` (bounds evaluated and checked).
+ * Returns: 0 if not linear (guaranteed: nothing was evaluated yet), 1 if `s`
+ * was set, -1 on an error or exception while evaluating the bounds (`*perr`
+ * is set to the exception or CTFEExp.cantexp).
+ */
+private int readLinearSliceValue(Expression e, InterState* istate, out LinearSlice s, Expression* perr)
+{
+    Expression lwr;
+    Expression upr;
+    VarDeclaration lengthVar;
+    Expression base = e;
+    if (auto se = e.isSliceExp())
+    {
+        base = se.e1;
+        lwr = se.lwr;
+        upr = se.upr;
+        lengthVar = se.lengthVar;
+        if ((lwr is null) != (upr is null))
+            return 0; // half-bounded slices should not occur; be safe
+    }
+    if (base.type.toBasetype().ty != Tarray)
+        return 0;
+    auto ve = base.isVarExp();
+    if (!ve)
+        return 0;
+    auto v = ve.var.isVarDeclaration();
+    if (!v)
+        return 0;
+    const slot = ctfeGlobals.stack.sliceSlot(v);
+    if (slot.isNull || !readSlice(ctfeGlobals.linearMem, slot, s))
+        return 0;
+    if (lwr is null)
+        return 1;
+
+    // committed from here: evaluating the bounds may have side effects
+    const esz = cast(uint) base.type.toBasetype().isTypeDArray().next.size();
+    if (lengthVar)
+    {
+        Expression dollarExp = ctfeEmplaceExp!IntegerExp(e.loc, s.length, Type.tsize_t);
+        ctfeGlobals.stack.push(lengthVar);
+        setValue(lengthVar, dollarExp);
+    }
+    UnionExp ueLwr = void;
+    UnionExp ueUpr = void;
+    Expression elwr = interpret(&ueLwr, lwr, istate);
+    Expression eupr = CTFEExp.cantexp;
+    if (!exceptionOrCantInterpret(elwr))
+        eupr = interpret(&ueUpr, upr, istate);
+    if (lengthVar)
+        ctfeGlobals.stack.pop(lengthVar); // $ is defined only inside [ ]
+    if (exceptionOrCantInterpret(elwr))
+    {
+        *perr = elwr;
+        return -1;
+    }
+    if (exceptionOrCantInterpret(eupr))
+    {
+        *perr = eupr;
+        return -1;
+    }
+    if (elwr.op != EXP.int64 || eupr.op != EXP.int64)
+    {
+        error(e.loc, "CTFE internal error: non-integral slice bounds `%s`", e.toErrMsg());
+        *perr = CTFEExp.cantexp;
+        return -1;
+    }
+    const ilwr = elwr.toInteger();
+    const iupr = eupr.toInteger();
+    if (ilwr > iupr || iupr > s.length)
+    {
+        error(e.loc, "slice `[%llu..%llu]` exceeds array bounds `[0..%llu]`",
+            ilwr, iupr, cast(ulong) s.length);
+        *perr = CTFEExp.cantexp;
+        return -1;
+    }
+    s.offset += cast(uint)(ilwr * esz);
+    s.length = cast(uint)(iupr - ilwr);
+    return 1;
+}
+
+/// Mark the payload of `s` as referenced by more than one handle.
+private void markPayloadShared(ref LinearSlice s)
+{
+    if (s.alloc == 0)
+        return;
+    PayloadHeader h;
+    if (!readPayloadHeader(ctfeGlobals.linearMem, s.alloc, h))
+        return;
+    if (h.flags & payloadShared)
+        return;
+    h.flags |= payloadShared;
+    writePayloadHeader(ctfeGlobals.linearMem, s.alloc, h);
+}
+
+/* ------------- byte-native scalar expression evaluation -------------
+ *
+ * The linear representation's profiled time cost is intermediate node
+ * traffic: every scalar read used to decode bytes into a fresh IntegerExp
+ * so the generic (AST-based) evaluator could consume it. The functions
+ * below evaluate whole side-effect-free integral expression trees directly
+ * on raw 64-bit values instead, so `x + a[i] * 2 < n` builds no nodes at
+ * all; only the root of a hooked expression materializes one result node.
+ *
+ * The safety discipline is total bail-out: every function returns false at
+ * any node it does not fully understand, *before* anything observable
+ * happens — no writes, no `$` binding, no errors. Error cases (division by
+ * zero, out-of-range shift, out-of-bounds index) also return false: the
+ * generic path re-evaluates the expression and reports. Since supported
+ * nodes are all side-effect-free, re-evaluation is unobservable.
+ */
+
+/// Size in bytes of an integral basetype `ty` the raw tier supports, else 0.
+/// (A `ty` switch avoids the generic Type.size()/isIntegral() dispatch, which
+/// profiles as a large share of raw evaluation.)
+private uint rawIntSize(TY ty)
+{
+    switch (ty)
+    {
+    case Tbool, Tint8, Tuns8, Tchar:  return 1;
+    case Tint16, Tuns16, Twchar:      return 2;
+    case Tint32, Tuns32, Tdchar:      return 4;
+    case Tint64, Tuns64:              return 8;
+    default:                          return 0;
+    }
+}
+
+/// Is integral basetype `ty` unsigned (matching Type.isUnsigned)?
+private bool rawIntUnsigned(TY ty)
+{
+    switch (ty)
+    {
+    case Tbool, Tuns8, Tchar, Tuns16, Twchar, Tuns32, Tdchar, Tuns64:
+        return true;
+    default:
+        return false;
+    }
+}
+
+/// Truncate + sign-extend `v` like `IntegerExp.normalize` for integral basetype `ty`.
+private ulong normalizeRawInt(ulong v, TY ty)
+{
+    switch (ty)
+    {
+    case Tbool:           return v != 0;
+    case Tint8:           return cast(ulong) cast(byte) v;
+    case Tuns8, Tchar:    return cast(ubyte) v;
+    case Tint16:          return cast(ulong) cast(short) v;
+    case Tuns16, Twchar:  return cast(ushort) v;
+    case Tint32:          return cast(ulong) cast(int) v;
+    case Tuns32, Tdchar:  return cast(uint) v;
+    default:              return v;
+    }
+}
+
+/// Read the integral value of type `t` at `p`, normalized, into `val`.
+private bool readRawScalar(CtfePtr p, Type t, out ulong val)
+{
+    const ty = t.toBasetype().ty;
+    const sz = rawIntSize(ty);
+    if (sz == 0)
+        return false;
+    auto s = ctfeGlobals.linearMem.slice(p, sz);
+    if (s is null)
+        return false;
+    ulong raw = 0;
+    memcpy(&raw, s.ptr, sz);
+    val = normalizeRawInt(raw, ty);
+    return true;
+}
+
+/// Read variable v's integral value, chasing `ref` bindings. No side effects.
+private bool rawVarValue(VarDeclaration v, out ulong val)
+{
+    for (int depth = 0; depth < 8; ++depth)
+    {
+        if (v is null)
+            return false;
+        if (auto ev = ctfeGlobals.stack.astValue(v))
+        {
+            if (auto ie = ev.isIntegerExp())
+            {
+                val = ie.toInteger();
+                return true;
+            }
+            if (auto ve2 = ev.isVarExp()) // a `ref` bound to a caller variable
+            {
+                v = ve2.var.isVarDeclaration();
+                continue;
+            }
+            if (ev.op == EXP.index || ev.op == EXP.dotVariable)
+            {
+                // a `ref` bound to an array element or a field within one
+                CtfePtr p;
+                Type t;
+                return tryResolveRawLoc(ev, p, t) && readRawScalar(p, t, val);
+            }
+            return false;
+        }
+        const slot = ctfeGlobals.stack.scalarSlot(v);
+        return !slot.isNull && readRawScalar(slot, v.type, val);
+    }
+    return false;
+}
+
+/* Resolve a side-effect-free lvalue chain — IndexExp / DotVarExp nodes and
+ * CTFE references held by `ref` variables, rooted in a slice in linear
+ * memory — to a location, like tryResolveLinearLoc but committing to
+ * nothing. `$` is not supported (its lengthVar is only bound on the
+ * generic path).
+ */
+private bool tryResolveRawLoc(Expression e, out CtfePtr p, out Type t)
+{
+    if (auto ve = e.isVarExp())
+    {
+        auto v = ve.var.isVarDeclaration();
+        if (!v || !(v.storage_class & (STC.ref_ | STC.out_)))
+            return false;
+        Expression ev = ctfeGlobals.stack.astValue(v);
+        if (ev is null)
+            return false;
+        if (ev.op == EXP.index || ev.op == EXP.dotVariable || ev.op == EXP.variable)
+            return tryResolveRawLoc(ev, p, t);
+        return false;
+    }
+
+    if (auto ie = e.isIndexExp())
+    {
+        if (ie.e1.type.toBasetype().ty != Tarray)
+            return false;
+        auto bve = ie.e1.isVarExp();
+        auto bv = bve ? bve.var.isVarDeclaration() : null;
+        if (!bv)
+            return false;
+        const slot = ctfeGlobals.stack.sliceSlot(bv);
+        LinearSlice s;
+        if (slot.isNull || !readSlice(ctfeGlobals.linearMem, slot, s))
+            return false;
+        ulong idx;
+        if (!tryEvalScalarRaw(ie.e2, idx))
+            return false;
+        if (idx >= s.length)
+            return false; // the generic path reports the bounds error
+        Type telem = bv.type.toBasetype().isTypeDArray().next;
+        p = CtfePtr(s.alloc, cast(uint)(s.offset + idx * cast(uint) telem.size()));
+        t = telem;
+        return true;
+    }
+
+    if (auto dve = e.isDotVarExp())
+    {
+        if (dve.e1.type.toBasetype().ty != Tstruct)
+            return false;
+        auto fv = dve.var.isVarDeclaration();
+        if (!fv || fv.isBitFieldDeclaration())
+            return false;
+        if (!tryResolveRawLoc(dve.e1, p, t))
+            return false;
+        if (t.toBasetype().isTypeStruct() is null)
+            return false;
+        p.offset += fv.offset;
+        t = fv.type;
+        return true;
+    }
+
+    return false;
+}
+
+/* The integer core of constfold's Add..Ushr on normalized raw values of
+ * operand basetypes `ty1`/`ty2`; `val` is normalized to result basetype
+ * `tyRes`. Returns false for anything constfold reports as an error
+ * (division by zero, signed overflow, out-of-range shift) — the generic
+ * path reports.
+ */
+private bool rawBinOp(EXP op, TY ty1, TY ty2, ulong u1, ulong u2, TY tyRes, out ulong val)
+{
+    switch (op)
+    {
+    case EXP.add: val = u1 + u2; break;
+    case EXP.min: val = u1 - u2; break;
+    case EXP.mul: val = u1 * u2; break;
+    case EXP.and: val = u1 & u2; break;
+    case EXP.or:  val = u1 | u2; break;
+    case EXP.xor: val = u1 ^ u2; break;
+
+    case EXP.div:
+    case EXP.mod:
+    {
+        if (u2 == 0)
+            return false;
+        const uns = rawIntUnsigned(ty1) || rawIntUnsigned(ty2);
+        if (!uns && u2 == cast(ulong)-1L)
+            return false; // covers the int.min/-1 overflow errors
+        if (op == EXP.div)
+            val = uns ? u1 / u2 : cast(ulong)(cast(long) u1 / cast(long) u2);
+        else
+            val = uns ? u1 % u2 : cast(ulong)(cast(long) u1 % cast(long) u2);
+        break;
+    }
+
+    case EXP.leftShift:
+    case EXP.rightShift:
+    case EXP.unsignedRightShift:
+    {
+        const bits = rawIntSize(ty1) * 8;
+        if (u2 >= bits)
+            return false;
+        if (op == EXP.leftShift)
+            val = u1 << u2;
+        else if (op == EXP.rightShift)
+            val = rawIntUnsigned(ty1) ? u1 >> u2 : cast(ulong)(cast(long) u1 >> u2);
+        else // >>>: zero-extend to the operand type's width, then shift
+            val = (bits >= 64 ? u1 : u1 & ((1UL << bits) - 1)) >> u2;
+        break;
+    }
+
+    default:
+        return false;
+    }
+    val = normalizeRawInt(val, tyRes);
+    return true;
+}
+
+/* Evaluate the integral expression `e` byte-natively into `val`, normalized
+ * like IntegerExp. Returns false at any unsupported node, having evaluated
+ * nothing observable. Only reached under -preview=ctfeLinearMemory.
+ */
+private bool tryEvalScalarRaw(Expression e, out ulong val)
+{
+    Type tb = e.type ? e.type.toBasetype() : null;
+    if (tb is null || rawIntSize(tb.ty) == 0)
+        return false;
+
+    switch (e.op)
+    {
+    case EXP.int64:
+        val = e.isIntegerExp().toInteger();
+        return true;
+
+    case EXP.variable:
+        return rawVarValue(e.isVarExp().var.isVarDeclaration(), val);
+
+    case EXP.index:
+    case EXP.dotVariable:
+    {
+        CtfePtr p;
+        Type t;
+        return tryResolveRawLoc(e, p, t) && readRawScalar(p, t, val);
+    }
+
+    case EXP.arrayLength:
+    {
+        auto ve = e.isArrayLengthExp().e1.isVarExp();
+        auto v = ve ? ve.var.isVarDeclaration() : null;
+        if (!v)
+            return false;
+        const slot = ctfeGlobals.stack.sliceSlot(v);
+        LinearSlice s;
+        if (slot.isNull || !readSlice(ctfeGlobals.linearMem, slot, s))
+            return false;
+        val = s.length;
+        return true;
+    }
+
+    case EXP.negate:
+    case EXP.tilde:
+    case EXP.not:
+    {
+        ulong u;
+        if (!tryEvalScalarRaw(e.isUnaExp().e1, u))
+            return false;
+        val = e.op == EXP.negate ? -u : e.op == EXP.tilde ? ~u : (u == 0);
+        val = normalizeRawInt(val, tb.ty);
+        return true;
+    }
+
+    case EXP.cast_:
+    {
+        // integral -> integral only: the operand's type is checked on recursion
+        ulong u;
+        if (!tryEvalScalarRaw(e.isCastExp().e1, u))
+            return false;
+        val = normalizeRawInt(u, tb.ty);
+        return true;
+    }
+
+    case EXP.add:
+    case EXP.min:
+    case EXP.mul:
+    case EXP.and:
+    case EXP.or:
+    case EXP.xor:
+    case EXP.div:
+    case EXP.mod:
+    case EXP.leftShift:
+    case EXP.rightShift:
+    case EXP.unsignedRightShift:
+    {
+        auto be = e.isBinExp();
+        ulong u1, u2;
+        if (!tryEvalScalarRaw(be.e1, u1) || !tryEvalScalarRaw(be.e2, u2))
+            return false;
+        return rawBinOp(e.op, be.e1.type.toBasetype().ty, be.e2.type.toBasetype().ty,
+            u1, u2, tb.ty, val);
+    }
+
+    case EXP.lessThan:
+    case EXP.lessOrEqual:
+    case EXP.greaterThan:
+    case EXP.greaterOrEqual:
+    case EXP.equal:
+    case EXP.notEqual:
+    case EXP.identity:
+    case EXP.notIdentity:
+    {
+        auto be = e.isBinExp();
+        auto t1 = be.e1.type.toBasetype();
+        // semantic equalizes operand types; bail on anything unusual
+        if (t1.ty != be.e2.type.toBasetype().ty)
+            return false;
+        ulong u1, u2;
+        if (!tryEvalScalarRaw(be.e1, u1) || !tryEvalScalarRaw(be.e2, u2))
+            return false;
+        bool r;
+        switch (e.op)
+        {
+        case EXP.equal:
+        case EXP.identity:
+            r = u1 == u2; // normalized values of equal types
+            break;
+        case EXP.notEqual:
+        case EXP.notIdentity:
+            r = u1 != u2;
+            break;
+        default:
+        {
+            const lt = rawIntUnsigned(t1.ty) ? u1 < u2 : cast(long) u1 < cast(long) u2;
+            const eq = u1 == u2;
+            r = e.op == EXP.lessThan ? lt :
+                e.op == EXP.lessOrEqual ? lt || eq :
+                e.op == EXP.greaterThan ? !lt && !eq : !lt;
+            break;
+        }
+        }
+        val = r;
+        return true;
+    }
+
+    case EXP.andAnd:
+    case EXP.orOr:
+    {
+        auto be = e.isLogicalExp();
+        ulong u1;
+        if (!tryEvalScalarRaw(be.e1, u1))
+            return false;
+        if (e.op == EXP.andAnd ? u1 == 0 : u1 != 0)
+        {
+            // short-circuit: e2 is not evaluated, exactly like the language
+            val = e.op == EXP.orOr;
+            return true;
+        }
+        ulong u2;
+        if (!tryEvalScalarRaw(be.e2, u2)) // bails when e2 is void-typed (assert)
+            return false;
+        val = u2 != 0;
+        return true;
+    }
+
+    case EXP.question:
+    {
+        auto ce = e.isCondExp();
+        ulong uc;
+        if (!tryEvalScalarRaw(ce.econd, uc))
+            return false;
+        return tryEvalScalarRaw(uc ? ce.e1 : ce.e2, val);
+    }
+
+    default:
+        return false;
     }
 }
 
@@ -415,6 +1310,13 @@ private struct InterState
      * CTFEExp. (null if no label).
      */
     Statement gotoTarget;
+
+    /* If non-null, the caller stores this function's slice return value
+     * straight into a slice-eligible variable: a return statement may hand
+     * the value over as a linear handle here instead of materializing it
+     * (returning CTFEExp.voidexp as the marker).
+     */
+    CtfeLinearReturn* returnSlice;
 }
 
 /*************************************
@@ -430,7 +1332,8 @@ private struct InterState
  * result expression if successful, EXP.cantExpression if not,
  * or CTFEExp if function returned void.
  */
-private Expression interpretFunction(UnionExp* pue, FuncDeclaration fd, InterState* istate, Expressions* arguments, Expression thisarg)
+private Expression interpretFunction(UnionExp* pue, FuncDeclaration fd, InterState* istate, Expressions* arguments, Expression thisarg,
+    CtfeLinearReturn* linearReturn = null)
 {
     debug (LOG)
     {
@@ -511,6 +1414,19 @@ private Expression interpretFunction(UnionExp* pue, FuncDeclaration fd, InterSta
      * store the results in eargs[]
      */
     Expressions eargs = Expressions(dim);
+
+    /* With -preview=ctfeLinearMemory, scalar argument values are staged as
+     * raw bytes in the caller's linear stack frame instead of AST nodes in
+     * the region (a staged arg has eargs[i] set to null). They are copied
+     * into the parameters' slots once the new frame has started.
+     */
+    CtfePtr argStage;
+    enum argStageSlotSize = 16; // bytes per staged argument, fits any scalar
+    const linearMark = ctfeGlobals.linearMem.markStack(); // staging dies with the new frame
+    if (global.params.ctfeLinearMemory && dim > 0)
+        argStage = CtfePtr(ctfeGlobals.linearMem.allocate(ArenaKind.stack,
+            cast(uint)(dim * argStageSlotSize)), 0);
+
     for (size_t i = 0; i < dim; i++)
     {
         Expression earg = (*arguments)[i];
@@ -531,6 +1447,79 @@ private Expression interpretFunction(UnionExp* pue, FuncDeclaration fd, InterSta
         }
         else if (fparam.isLazy())
         {
+        }
+        else if (!argStage.isNull && isLinearScalarType(fparam.type))
+        {
+            /* Scalar value parameters: evaluate into stack storage and stage
+             * the value as raw bytes, so no AST node has to be allocated
+             */
+            const stageSlot = CtfePtr(argStage.alloc, cast(uint)(i * argStageSlotSize));
+
+            // integral arguments byte-natively, without even a temporary node
+            const pty = fparam.type.toBasetype().ty;
+            const psz = rawIntSize(pty);
+            ulong rawArg = void;
+            if (psz && tryEvalScalarRaw(earg, rawArg))
+            {
+                rawArg = normalizeRawInt(rawArg, pty);
+                if (auto sb = ctfeGlobals.linearMem.slice(stageSlot, psz))
+                {
+                    memcpy(sb.ptr, &rawArg, psz);
+                    eargs[i] = null; // marks the arg as staged
+                    continue;
+                }
+            }
+
+            UnionExp ue = void;
+            earg = interpret(&ue, earg, istate);
+            if (CTFEExp.isCantExp(earg))
+                return earg;
+            if (!exceptionOrCantInterpret(earg) &&
+                encodeInto(ctfeGlobals.linearMem, earg, fparam.type, stageSlot))
+            {
+                eargs[i] = null; // marks the arg as staged
+                continue;
+            }
+            if (earg == ue.exp())
+                earg = regionUeCopy(ue);
+        }
+        else if (!argStage.isNull && isLinearSliceType(fparam.type) &&
+                 earg.type.toBasetype().isTypeDArray() &&
+                 earg.type.toBasetype().isTypeDArray().next.size() ==
+                     fparam.type.toBasetype().isTypeDArray().next.size())
+        {
+            /* Slice value parameters whose argument value lives in linear
+             * memory: stage the 16-byte handle; the payload becomes shared
+             * between the caller's and the callee's handle
+             */
+            LinearSlice s;
+            Expression err;
+            const rc = readLinearSliceValue(earg, istate, s, &err);
+            if (rc < 0)
+            {
+                if (CTFEExp.isCantExp(err))
+                    return err;
+                earg = err; // a thrown exception, handled below
+            }
+            else if (rc > 0)
+            {
+                const stageSlot = CtfePtr(argStage.alloc, cast(uint)(i * argStageSlotSize));
+                if (writeSlice(ctfeGlobals.linearMem, stageSlot, s))
+                {
+                    markPayloadShared(s);
+                    eargs[i] = null; // marks the arg as staged
+                    continue;
+                }
+                error(fd.loc, "%s `%s` CTFE internal error: cannot stage argument %zu", fd.kind, fd.toPrettyChars, i);
+                return CTFEExp.cantexp;
+            }
+            else
+            {
+                // not a linear value; evaluate normally
+                earg = interpretRegion(earg, istate);
+                if (CTFEExp.isCantExp(earg))
+                    return earg;
+            }
         }
         else
         {
@@ -571,6 +1560,8 @@ private Expression interpretFunction(UnionExp* pue, FuncDeclaration fd, InterSta
     InterState istatex;
     istatex.caller = istate;
     istatex.fd = fd;
+    if (linearReturn && !tf.isRef && tf.next && isLinearSliceType(tf.next))
+        istatex.returnSlice = linearReturn;
 
     if (fd.hasDualContext)
     {
@@ -591,7 +1582,7 @@ private Expression interpretFunction(UnionExp* pue, FuncDeclaration fd, InterSta
         thisarg.type = t2.pointerTo();
     }
 
-    ctfeGlobals.stack.startFrame(thisarg);
+    ctfeGlobals.stack.startFrame(thisarg, linearMark);
     if (fd.vthis && thisarg)
     {
         ctfeGlobals.stack.push(fd.vthis);
@@ -603,6 +1594,39 @@ private Expression interpretFunction(UnionExp* pue, FuncDeclaration fd, InterSta
         Expression earg = eargs[i];
         Parameter fparam = tf.parameterList[i];
         VarDeclaration v = (*fd.parameters)[i];
+
+        if (earg is null)
+        {
+            // Staged argument: move the bytes into the parameter's linear
+            // memory slot
+            ctfeGlobals.stack.push(v);
+            const stageSlot = CtfePtr(argStage.alloc, cast(uint)(i * argStageSlotSize));
+            if (isLinearSliceType(v.type))
+            {
+                LinearSlice s;
+                if (readSlice(ctfeGlobals.linearMem, stageSlot, s) &&
+                    ctfeGlobals.stack.storeLinearSlice(v, s))
+                    continue;
+                error(fd.loc, "%s `%s` CTFE internal error: cannot bind staged argument %zu", fd.kind, fd.toPrettyChars, i);
+                return CTFEExp.cantexp;
+            }
+            const vsize = v.type.size();
+            if (vsize == SIZE_INVALID ||
+                !ctfeGlobals.stack.storeLinearRaw(v, stageSlot, cast(uint) vsize))
+            {
+                // fall back to an AST value in the region
+                UnionExp ue = void;
+                Expression ev = decodeScalar(ctfeGlobals.linearMem, stageSlot, v.type, v.loc, &ue);
+                if (!ev)
+                {
+                    error(fd.loc, "%s `%s` CTFE internal error: cannot bind staged argument %zu", fd.kind, fd.toPrettyChars, i);
+                    return CTFEExp.cantexp;
+                }
+                setValueWithoutChecking(v, ev == ue.exp() ? regionUeCopy(ue) : ev);
+            }
+            continue;
+        }
+
         debug (LOG)
         {
             printf("arg[%u] = %s\n", cast(uint)i, earg.toChars());
@@ -1015,6 +2039,59 @@ Expression interpretStatement(UnionExp* pue, Statement s, InterState* istate)
             eSink.error(s.loc, "closures are not yet supported in CTFE");
             result = CTFEExp.cantexp;
             return;
+        }
+
+        /* Hand a slice return value over as a linear handle instead of
+         * materializing an AST array, when the caller asked for it (see
+         * CtfeGlobals.linearReturnDest). Payloads live in the heap arena,
+         * so the handle stays valid after this frame is popped. Semantics
+         * match the AST path: a return does not copy CTFE-owned literals,
+         * so both representations return a live reference to the same
+         * array object.
+         */
+        if (istate.returnSlice)
+        {
+            if (auto ve = s.exp.isVarExp())
+            {
+                if (auto v = ve.var.isVarDeclaration())
+                {
+                    const slot = ctfeGlobals.stack.sliceSlot(v);
+                    LinearSlice lsl;
+                    if (!slot.isNull && readSlice(ctfeGlobals.linearMem, slot, lsl))
+                    {
+                        istate.returnSlice.slice = lsl;
+                        istate.returnSlice.set = true;
+                        result = CTFEExp.voidexp;
+                        return;
+                    }
+                }
+            }
+            else if (s.exp.op == EXP.call)
+            {
+                // `return f(...)`: let the inner call return through the
+                // same channel (e.g. thin wrappers around builders)
+                ctfeGlobals.linearReturnDest = istate.returnSlice;
+                Expression ce = interpret(pue, s.exp, istate);
+                ctfeGlobals.linearReturnDest = null;
+                if (exceptionOrCant(ce))
+                    return;
+                if (istate.returnSlice.set)
+                {
+                    result = CTFEExp.voidexp;
+                    return;
+                }
+                // The inner call produced a normal value; finish like the
+                // generic path below
+                if (!stopPointersEscaping(s.loc, ce))
+                {
+                    result = CTFEExp.cantexp;
+                    return;
+                }
+                if (needToCopyLiteral(ce))
+                    ce = copyLiteral(ce).copy();
+                result = ce;
+                return;
+            }
         }
 
         // We need to treat pointers specially, because EXP.symbolOffset can be used to
@@ -2019,6 +3096,32 @@ public:
         if (exceptionOrCant(er))
             return;
 
+        // A reference into a linear slice keeps the variable as aggregate,
+        // but pointer arithmetic needs an array literal to point into:
+        // materialize the array and rebase the reference on it
+        if (global.params.ctfeLinearMemory)
+        {
+            if (auto ie = er.isIndexExp())
+                if (auto bve = ie.e1.isVarExp())
+                    if (bve.type.toBasetype().ty == Tarray && ie.e2.op == EXP.int64)
+                        if (auto v = bve.var.isVarDeclaration())
+                        {
+                            if (Expression ev = getValue(v)) // flips to AST
+                            {
+                                uinteger_t ofs = ie.e2.toInteger();
+                                if (auto se = ev.isSliceExp())
+                                {
+                                    ofs += se.lwr.toInteger();
+                                    ev = se.e1;
+                                }
+                                auto ei = ctfeEmplaceExp!IntegerExp(ie.e2.loc, ofs, Type.tsize_t);
+                                auto nie = ctfeEmplaceExp!IndexExp(ie.loc, ev, ei);
+                                nie.type = ie.type;
+                                er = nie;
+                            }
+                        }
+        }
+
         // Return a simplified address expression
         emplaceExp!(AddrExp)(pue, e.loc, er, e.type);
         result = pue.exp();
@@ -2293,16 +3396,25 @@ public:
             result = e;
             return;
         }
-        result = getVarExp(e.loc, istate, e.var, goal);
-        if (exceptionOrCant(result))
-            return;
-
-        // Visit the default initializer for noreturn variables
-        // (Custom initializers would abort the current function call and exit above)
-        if (result.type.ty == Tnoreturn)
+        // Linear-memory fast path: decode the value into caller storage
+        // `*pue`, so a load performs no allocation at all
+        result = null;
+        if (global.params.ctfeLinearMemory)
+            if (auto v = e.var.isVarDeclaration())
+                result = ctfeGlobals.stack.getLinear(v, e.loc, e.type, pue);
+        if (!result)
         {
-            result.accept(this);
-            return;
+            result = getVarExp(e.loc, istate, e.var, goal);
+            if (exceptionOrCant(result))
+                return;
+
+            // Visit the default initializer for noreturn variables
+            // (Custom initializers would abort the current function call and exit above)
+            if (result.type.ty == Tnoreturn)
+            {
+                result.accept(this);
+                return;
+            }
         }
 
         if ((e.var.storage_class & (STC.ref_ | STC.out_)) == 0 && e.type.baseElemOf().ty != Tstruct)
@@ -2385,10 +3497,24 @@ public:
             {
                 if (ExpInitializer ie = v._init.isExpInitializer())
                 {
-                    result = interpretRegion(ie.exp, istate, goal);
+                    UnionExp ue = void;
+                    result = interpret(&ue, ie.exp, istate, goal);
                     if (result !is null && v.ctfeAdrOnStack != VarDeclaration.AdrOnStackNone)
-                        if (!getValue(v))
+                        if (!hasValue(v))
+                        {
+                            if (result == ue.exp())
+                                result = regionUeCopy(ue);
                             setValueWithoutChecking(v, result); // a temporary from extractSideEffects can be a ref
+                        }
+                    if (result == ue.exp())
+                    {
+                        // initialization was stored by the assignment; only
+                        // persist the node if the caller wants a value
+                        if (goal == CTFEGoal.Nothing && !exceptionOrCantInterpret(result))
+                            result = null;
+                        else
+                            result = regionUeCopy(ue);
+                    }
                     return;
                 }
                 else if (v._init.isVoidInitializer())
@@ -3014,12 +4140,28 @@ public:
         result = CTFEExp.cantexp;
     }
 
+    /* Byte-native fast path for a whole integral expression tree over
+     * linear memory (see tryEvalScalarRaw): one result node, no
+     * intermediates. Returns false having evaluated nothing.
+     */
+    private bool rawScalarResult(Expression e)
+    {
+        ulong rawVal = void;
+        if (!global.params.ctfeLinearMemory || !tryEvalScalarRaw(e, rawVal))
+            return false;
+        emplaceExp!(IntegerExp)(pue, e.loc, rawVal, e.type);
+        result = pue.exp();
+        return true;
+    }
+
     override void visit(UnaExp e)
     {
         debug (LOG)
         {
             printf("%s UnaExp::interpret() %s\n", e.loc.toChars(), e.toChars());
         }
+        if (rawScalarResult(e))
+            return;
         UnionExp ue = void;
         Expression e1 = interpret(&ue, e.e1, istate);
         if (exceptionOrCant(e1))
@@ -3073,6 +4215,8 @@ public:
         {
             printf("%s BinExp::interpretCommon() %s\n", e.loc.toChars(), e.toChars());
         }
+        if (rawScalarResult(e))
+            return;
         if (e.e1.type.ty == Tpointer && e.e2.type.ty == Tpointer && e.op == EXP.min)
         {
             UnionExp ue1 = void;
@@ -3220,6 +4364,8 @@ public:
         {
             printf("%s BinExp::interpretCompareCommon() %s\n", e.loc.toChars(), e.toChars());
         }
+        if (rawScalarResult(e))
+            return;
         UnionExp ue1 = void;
         UnionExp ue2 = void;
         if (e.e1.type.ty == Tpointer && e.e2.type.ty == Tpointer)
@@ -3459,6 +4605,25 @@ public:
             }
         }
 
+        // Linear-memory fast paths (only when no cast was stripped off above):
+        // `v = e2`, `v op= e2`, `v++` on scalar locals, and scalar stores
+        // through element/field chains rooted in a linear slice
+        if (global.params.ctfeLinearMemory && e1 is e.e1)
+        {
+            if (auto ve = e1.isVarExp())
+            {
+                if (interpretScalarVarAssign(e, ve, fp, post))
+                    return;
+                if (fp is null && interpretSliceHandleAssign(e, ve))
+                    return;
+            }
+            else if (e1.op == EXP.index || e1.op == EXP.dotVariable)
+            {
+                if (interpretLinearLocAssign(e, fp, post))
+                    return;
+            }
+        }
+
         // ---------------------------------------
         //      Interpret left hand side
         // ---------------------------------------
@@ -3512,9 +4677,62 @@ public:
         // ---------------------------------------
         //      Interpret right hand side
         // ---------------------------------------
+        /* `v = f(...)` where v is a slice-eligible local: ask the callee to
+         * hand its slice return value over as a linear handle, avoiding the
+         * whole-array AST materialization and re-encode round trip. When the
+         * callee does not take the offer (lr.set stays false), newval holds
+         * the normally evaluated result and the generic path continues
+         * unchanged.
+         */
+        CtfeLinearReturn lr;
+        VarDeclaration linearRetVar = null;
+        if (global.params.ctfeLinearMemory && fp is null &&
+            e.e2.op == EXP.call &&
+            (e.op == EXP.assign || e.op == EXP.construct || e.op == EXP.blit))
+        {
+            if (auto ve = e1.isVarExp())
+            {
+                VarDeclaration v = ve.var.isVarDeclaration();
+                // Assignment through a ref/out parameter assigns the caller's
+                // variable: follow the CTFE reference to the ultimate entry
+                for (int depth = 0; v && depth < 8; ++depth)
+                {
+                    if (!(v.storage_class & (STC.ref_ | STC.out_)))
+                        break;
+                    auto ev = ctfeGlobals.stack.astValue(v);
+                    if (ev is null || ev.op != EXP.variable)
+                    {
+                        v = null;
+                        break;
+                    }
+                    v = ev.isVarExp().var.isVarDeclaration();
+                }
+                if (v && ctfeGlobals.stack.canStoreLinearSlice(v) &&
+                    (ctfeGlobals.stack.hasLinearSlot(v) || ctfeGlobals.stack.isInCurrentFrame(v)))
+                {
+                    linearRetVar = v;
+                    ctfeGlobals.linearReturnDest = &lr;
+                }
+            }
+        }
         Expression newval = interpretRegion(e.e2, istate);
+        ctfeGlobals.linearReturnDest = null; // taken by visit(CallExp); clear on error paths
         if (exceptionOrCant(newval))
             return;
+        if (lr.set)
+        {
+            if (interpretLinearReturnAssign(e, e1.isVarExp(), linearRetVar, lr.slice))
+                return;
+            // fall back: materialize the handed-over value and continue the
+            // generic assignment with it
+            newval = decodeSlice(ctfeGlobals.linearMem, lr.slice, linearRetVar.type, e.loc);
+            if (newval is null)
+            {
+                error(e.loc, "CTFE internal error: cannot interpret `%s` at compile time", e.toErrMsg());
+                result = CTFEExp.cantexp;
+                return;
+            }
+        }
         if (e.op == EXP.blit && newval.op == EXP.int64)
         {
             Type tbn = e.type.baseElemOf();
@@ -3542,6 +4760,16 @@ public:
         // ----------------------------------------------------
         if (fp)
         {
+            // Linear-memory fast path for `v ~= e2` on eligible slice locals:
+            // append to the payload instead of copying the whole array.
+            // Bailing out (false) is always safe: nothing was mutated yet and
+            // loading `oldval` below flips any linear value back to an AST node.
+            if (global.params.ctfeLinearMemory && e1 is e.e1 && !oldval &&
+                (e.op == EXP.concatenateAssign || e.op == EXP.concatenateElemAssign))
+                if (auto ve = e1.isVarExp())
+                    if (interpretSliceCatAssign(e, ve, newval))
+                        return;
+
             if (!oldval)
             {
                 // Load the left hand side after interpreting the right hand side.
@@ -3627,6 +4855,14 @@ public:
                 result = CTFEExp.cantexp;
                 return;
             }
+
+            // Linear-memory fast path: resize the payload in place instead
+            // of building a new array literal (result was determined above)
+            if (global.params.ctfeLinearMemory)
+                if (auto ve = e1.isVarExp())
+                    if (interpretLinearLengthAssign(e, ve, cast(size_t) oldlen, cast(size_t) newlen))
+                        return;
+
             e1 = interpretRegion(e1, istate, CTFEGoal.LValue);
             if (exceptionOrCant(e1))
                 return;
@@ -3718,6 +4954,846 @@ public:
             result = ex;
 
         return;
+    }
+
+    /* Assignment fast path for a scalar variable whose value lives in linear
+     * memory (or is still uninitialized): evaluates everything through
+     * stack-allocated UnionExps and stores raw bytes, so a scalar assignment
+     * makes no allocation at all.
+     *
+     * Returns: false if not eligible (nothing was evaluated yet, the caller
+     * continues on the regular path), true if fully handled — `result` is
+     * set, possibly to a thrown exception.
+     */
+    private bool interpretScalarVarAssign(BinExp e, VarExp ve, fp_t fp, int post)
+    {
+        VarDeclaration v = ve.var.isVarDeclaration();
+        if (!v || !ctfeGlobals.stack.canStoreLinear(v))
+            return false;
+        // If an AST value is stored (e.g. void initialization), the regular
+        // path handles the diagnostics
+        if (ctfeGlobals.stack.hasAstValue(v))
+            return false;
+
+        if (interpretRawScalarAssign(e, ve, v, fp, post))
+            return true;
+
+        // Interpret the right hand side
+        UnionExp ueRhs = void;
+        Expression newval = interpret(&ueRhs, e.e2, istate);
+        if (exceptionOrCant(newval))
+            return true;
+
+        // Read-modify-write assignments; load the left hand side after
+        // interpreting the right hand side
+        UnionExp ueOld = void;
+        UnionExp ueFp = void;
+        Expression oldval = null;
+        if (fp)
+        {
+            oldval = interpret(&ueOld, ve, istate);
+            if (exceptionOrCant(oldval))
+                return true;
+            // concatenation and pointer arithmetic cannot get here:
+            // the variable's type is scalar
+            ueFp = (*fp)(e.loc, e.type, oldval, newval);
+            newval = ueFp.exp();
+            if (exceptionOrCant(newval))
+                return true;
+        }
+
+        UnionExp ueCast = void;
+        newval = ctfeCast(&ueCast, e.loc, e.type, e.type, newval);
+        if (exceptionOrCant(newval))
+            return true;
+
+        if (!ctfeGlobals.stack.storeLinear(v, newval))
+        {
+            // Not a scalar literal after all; persist the node and store it
+            // as an AST value
+            newval = persistUe(newval, ueCast);
+            newval = persistUe(newval, ueFp);
+            newval = persistUe(newval, ueRhs);
+            setValue(v, newval);
+        }
+
+        // Determine the return value
+        if (goal == CTFEGoal.LValue) // https://issues.dlang.org/show_bug.cgi?id=14371
+            result = ve;
+        else
+        {
+            result = ctfeCast(pue, e.loc, e.type, e.type, fp && post ? oldval : newval);
+            if (exceptionOrCant(result))
+                return true;
+            result = relocateUe(result, ueOld);
+            result = relocateUe(result, ueFp);
+            result = relocateUe(result, ueCast);
+            result = relocateUe(result, ueRhs);
+        }
+        return true;
+    }
+
+    /* `x = expr`, `x op= expr` and ++/-- entirely on raw bytes: eligible
+     * when v's value already lives in a linear scalar slot, the type is
+     * integral, and the RHS evaluates byte-natively — then no AST node is
+     * built at all (except a result node when one is demanded). Bails with
+     * false having evaluated nothing (supported RHS trees are
+     * side-effect-free), so the caller runs the regular path.
+     */
+    private bool interpretRawScalarAssign(BinExp e, VarExp ve, VarDeclaration v, fp_t fp, int post)
+    {
+        const tyRes = e.type.toBasetype().ty;
+        if (rawIntSize(tyRes) == 0)
+            return false;
+        const slot = ctfeGlobals.stack.scalarSlot(v);
+        if (slot.isNull)
+            return false; // no linear value bound yet: regular path allocates
+        ulong rhs;
+        if (!tryEvalScalarRaw(e.e2, rhs))
+            return false;
+        ulong oldval;
+        ulong newval;
+        if (fp)
+        {
+            EXP binop;
+            switch (e.op)
+            {
+            case EXP.addAssign:
+            case EXP.plusPlus:                 binop = EXP.add;                break;
+            case EXP.minAssign:
+            case EXP.minusMinus:               binop = EXP.min;                break;
+            case EXP.mulAssign:                binop = EXP.mul;                break;
+            case EXP.divAssign:                binop = EXP.div;                break;
+            case EXP.modAssign:                binop = EXP.mod;                break;
+            case EXP.andAssign:                binop = EXP.and;                break;
+            case EXP.orAssign:                 binop = EXP.or;                 break;
+            case EXP.xorAssign:                binop = EXP.xor;                break;
+            case EXP.leftShiftAssign:          binop = EXP.leftShift;          break;
+            case EXP.rightShiftAssign:         binop = EXP.rightShift;         break;
+            case EXP.unsignedRightShiftAssign: binop = EXP.unsignedRightShift; break;
+            default:
+                return false;
+            }
+            if (!readRawScalar(slot, v.type, oldval))
+                return false;
+            // operand types as the regular path's IntegerExps would carry them
+            if (!rawBinOp(binop, v.type.toBasetype().ty, e.e2.type.toBasetype().ty,
+                    oldval, rhs, tyRes, newval))
+                return false;
+        }
+        else
+            newval = normalizeRawInt(rhs, tyRes); // ctfeCast to the same type = paint
+
+        const sz = rawIntSize(v.type.toBasetype().ty);
+        if (sz == 0)
+            return false;
+        auto s = ctfeGlobals.linearMem.slice(slot, sz);
+        if (s is null)
+            return false;
+        memcpy(s.ptr, &newval, sz); // little endian
+
+        if (goal == CTFEGoal.LValue) // https://issues.dlang.org/show_bug.cgi?id=14371
+            result = ve;
+        else
+        {
+            emplaceExp!(IntegerExp)(pue, e.loc, fp && post ? oldval : newval, e.type);
+            result = pue.exp();
+        }
+        return true;
+    }
+
+    /* Try to resolve the lvalue chain `e` — IndexExp / DotVarExp nodes and
+     * CTFE references held by `ref` variables, rooted in a slice whose value
+     * lives in linear memory — to the location `p` of a value of type `t`
+     * (an array element, or a field within one).
+     *
+     * Returns: 1 if resolved; 0 if the chain is not rooted in linear memory
+     * (guaranteed: nothing was evaluated yet, so the caller can safely fall
+     * back to the regular path); -1 on an error or exception while
+     * evaluating an index (`result` is set, the caller returns).
+     */
+    private int tryResolveLinearLoc(Expression e, out CtfePtr p, out Type t)
+    {
+        if (auto ve = e.isVarExp())
+        {
+            // a `ref` variable holds a CTFE reference expression; chase it
+            auto v = ve.var.isVarDeclaration();
+            if (!v || !(v.storage_class & (STC.ref_ | STC.out_)))
+                return 0;
+            Expression ev = ctfeGlobals.stack.astValue(v);
+            if (ev is null)
+                return 0;
+            if (ev.op == EXP.index || ev.op == EXP.dotVariable || ev.op == EXP.variable)
+                return tryResolveLinearLoc(ev, p, t);
+            return 0;
+        }
+
+        if (auto ie = e.isIndexExp())
+        {
+            if (ie.e1.type.toBasetype().ty != Tarray)
+                return 0;
+            auto bve = ie.e1.isVarExp();
+            if (!bve)
+                return 0;
+            auto bv = bve.var.isVarDeclaration();
+            if (!bv)
+                return 0;
+            const slot = ctfeGlobals.stack.sliceSlot(bv);
+            LinearSlice s;
+            if (slot.isNull || !readSlice(ctfeGlobals.linearMem, slot, s))
+                return 0;
+            Type telem = bv.type.toBasetype().isTypeDArray().next;
+
+            // committed from here: evaluating the index may have side effects
+            if (ie.lengthVar)
+            {
+                Expression dollarExp = ctfeEmplaceExp!IntegerExp(ie.loc, s.length, Type.tsize_t);
+                ctfeGlobals.stack.push(ie.lengthVar);
+                setValue(ie.lengthVar, dollarExp);
+            }
+            UnionExp ue2 = void;
+            Expression e2 = interpret(&ue2, ie.e2, istate);
+            if (ie.lengthVar)
+                ctfeGlobals.stack.pop(ie.lengthVar); // $ is defined only inside []
+            if (exceptionOrCant(e2))
+                return -1;
+            if (e2.op != EXP.int64)
+            {
+                error(ie.loc, "CTFE internal error: non-integral index `[%s]`", ie.e2.toErrMsg());
+                result = CTFEExp.cantexp;
+                return -1;
+            }
+            const idx = e2.toInteger();
+            if (idx >= s.length)
+            {
+                error(ie.loc, "array index %lld is out of bounds `[0..%lld]`", idx, cast(ulong) s.length);
+                result = CTFEExp.cantexp;
+                return -1;
+            }
+            const esz = cast(uint) telem.size();
+            p = CtfePtr(s.alloc, cast(uint)(s.offset + idx * esz));
+            t = telem;
+            return 1;
+        }
+
+        if (auto dve = e.isDotVarExp())
+        {
+            // a field within a struct element
+            if (dve.e1.type.toBasetype().ty != Tstruct)
+                return 0;
+            // overlapped (union) members are fine: the bytes at the member's
+            // offset are the value, reads just reinterpret them
+            auto fv = dve.var.isVarDeclaration();
+            if (!fv || fv.isBitFieldDeclaration())
+                return 0;
+            const rc = tryResolveLinearLoc(dve.e1, p, t);
+            if (rc != 1)
+                return rc;
+            if (t.toBasetype().isTypeStruct() is null)
+            {
+                error(e.loc, "CTFE internal error: `%s`", e.toErrMsg());
+                result = CTFEExp.cantexp;
+                return -1;
+            }
+            p.offset += fv.offset;
+            t = fv.type;
+            return 1;
+        }
+
+        return 0;
+    }
+
+    /* Fast path for scalar assignments through an lvalue chain rooted in a
+     * slice whose value lives in linear memory: `a[i] = e2`, `a[i] op= e2`,
+     * `a[i].field op= e2`, `p.field = e2` (p a ref into an element),
+     * including ++/--. Mirrors interpretScalarVarAssign: everything runs
+     * through stack-allocated UnionExps and raw byte stores.
+     *
+     * Returns: false if not eligible (nothing evaluated yet, the caller
+     * continues on the regular path), true if fully handled — `result` is
+     * set, possibly to a thrown exception.
+     */
+    private bool interpretLinearLocAssign(BinExp e, fp_t fp, int post)
+    {
+        // Scalar-typed lvalues, and plain assignments of whole POD struct
+        // elements; decided by shape before anything runs
+        const scalar = isLinearScalarType(e.e1.type);
+        if (!scalar && !(fp is null && isLinearPodStruct(e.e1.type)))
+            return false;
+        CtfePtr p;
+        Type t;
+        const rc = tryResolveLinearLoc(e.e1, p, t);
+        if (rc == 0)
+            return false;
+        if (rc < 0)
+            return true; // result is set
+
+        // The left hand side is resolved (indexes evaluated);
+        // interpret the right hand side
+        UnionExp ueRhs = void;
+        Expression newval = interpret(&ueRhs, e.e2, istate);
+        if (exceptionOrCant(newval))
+            return true;
+
+        UnionExp ueOld = void;
+        UnionExp ueFp = void;
+        Expression oldval = null;
+        if (fp)
+        {
+            oldval = decodeScalar(ctfeGlobals.linearMem, p, e.e1.type, e.e1.loc, &ueOld);
+            if (oldval is null)
+            {
+                error(e.loc, "cannot interpret `%s` at compile time", e.toErrMsg());
+                result = CTFEExp.cantexp;
+                return true;
+            }
+            // concatenation and pointer arithmetic cannot get here:
+            // the lvalue's type is scalar
+            ueFp = (*fp)(e.loc, e.type, oldval, newval);
+            newval = ueFp.exp();
+            if (exceptionOrCant(newval))
+                return true;
+        }
+
+        UnionExp ueCast = void;
+        newval = ctfeCast(&ueCast, e.loc, e.type, e.type, newval);
+        if (exceptionOrCant(newval))
+            return true;
+
+        if (!encodeInto(ctfeGlobals.linearMem, newval, t, p))
+        {
+            error(e.loc, "cannot interpret `%s` at compile time", e.toErrMsg());
+            result = CTFEExp.cantexp;
+            return true;
+        }
+
+        // Determine the return value
+        if (goal == CTFEGoal.LValue)
+            result = e.e1; // the chain is a CTFE reference
+        else
+        {
+            result = ctfeCast(pue, e.loc, e.type, e.type, fp && post ? oldval : newval);
+            if (exceptionOrCant(result))
+                return true;
+            result = relocateUe(result, ueOld);
+            result = relocateUe(result, ueFp);
+            result = relocateUe(result, ueCast);
+            result = relocateUe(result, ueRhs);
+        }
+        return true;
+    }
+
+    /* Fast path for reference assignments producing linear slice values:
+     * `b = a`, `b = a[]`, `b = a[l..u]` (a's value linear) copy or narrow the
+     * 16-byte handle and mark the payload shared — the payload itself is not
+     * copied, preserving aliasing. `b = new T[](n)` creates a payload of
+     * default-initialized elements without ever building an array node.
+     *
+     * Returns: false if not eligible (nothing evaluated yet, the caller
+     * continues on the regular path), true if fully handled — `result` is
+     * set, possibly to a thrown exception.
+     */
+    private bool interpretSliceHandleAssign(BinExp e, VarExp ve)
+    {
+        if (e.op != EXP.assign && e.op != EXP.construct && e.op != EXP.blit)
+            return false;
+        VarDeclaration v = ve.var.isVarDeclaration();
+        if (!v || !ctfeGlobals.stack.canStoreLinearSlice(v))
+            return false;
+        // the handle store below must not need a new slot in an outer frame
+        if (!ctfeGlobals.stack.hasLinearSlot(v) && !ctfeGlobals.stack.isInCurrentFrame(v))
+            return false;
+        auto ta = v.type.toBasetype().isTypeDArray();
+        if (!ta)
+            return false;
+        const eszl = ta.next.size();
+        if (eszl == SIZE_INVALID || eszl == 0)
+            return false;
+        const esz = cast(uint) eszl;
+        auto lmem = &ctfeGlobals.linearMem;
+
+        LinearSlice s;
+        bool stored = false;
+
+        // Case 1: the right hand side is an existing linear slice value
+        if (auto ta2 = e.e2.type.toBasetype().isTypeDArray())
+        {
+            if (ta2.next.size() == esz)
+            {
+                Expression err;
+                const rc = readLinearSliceValue(e.e2, istate, s, &err);
+                if (rc < 0)
+                {
+                    result = err;
+                    return true;
+                }
+                if (rc > 0)
+                {
+                    // both v and the source now reference the payload
+                    markPayloadShared(s);
+                    if (!ctfeGlobals.stack.storeLinearSlice(v, s))
+                    {
+                        error(e.loc, "cannot interpret `%s` at compile time", e.toErrMsg());
+                        result = CTFEExp.cantexp;
+                        return true;
+                    }
+                    stored = true;
+                }
+            }
+        }
+
+        // Case 2: the right hand side is `new T[](n)`
+        if (!stored)
+        {
+            auto ne = e.e2.isNewExp();
+            if (ne is null || ne.placement !is null || ne.member !is null ||
+                ne.arguments is null || ne.arguments.length != 1)
+                return false;
+            auto tan = ne.newtype.toBasetype().isTypeDArray();
+            if (!tan || tan.next.size() != esz || !isLinearSliceType(ne.newtype))
+                return false;
+            Type telem = tan.next;
+
+            // committed from here
+            UnionExp uePre = void;
+            Expression epre = interpret(&uePre, ne.argprefix, istate, CTFEGoal.Nothing);
+            if (exceptionOrCant(epre))
+                return true;
+            UnionExp ueLen = void;
+            Expression elen = interpret(&ueLen, (*ne.arguments)[0], istate);
+            if (exceptionOrCant(elen))
+                return true;
+            if (elen.op != EXP.int64)
+            {
+                error(e.loc, "CTFE internal error: non-integral array length `%s`", e.toErrMsg());
+                result = CTFEExp.cantexp;
+                return true;
+            }
+            const len = elen.toInteger();
+            if (ulong(esz) * len + PayloadHeader.sizeof > CtfeMemory.maxAllocSize)
+            {
+                error(e.loc, "array dimension %llu exceeds maximum CTFE array size", cast(ulong) len);
+                result = CTFEExp.cantexp;
+                return true;
+            }
+            s = allocatePayload(*lmem, esz, cast(uint) len, cast(uint) len);
+            Expression defaultElem = telem.defaultInitLiteral(e.loc);
+            if (s.alloc == 0 || defaultElem is null || defaultElem.op == EXP.error)
+            {
+                error(e.loc, "cannot interpret `%s` at compile time", e.toErrMsg());
+                result = CTFEExp.cantexp;
+                return true;
+            }
+            foreach (i; 0 .. cast(size_t) len)
+            {
+                const dst = CtfePtr(s.alloc, cast(uint)(PayloadHeader.sizeof + i * esz));
+                if (!encodeInto(*lmem, defaultElem, telem, dst))
+                {
+                    error(e.loc, "cannot interpret `%s` at compile time", e.toErrMsg());
+                    result = CTFEExp.cantexp;
+                    return true;
+                }
+            }
+            if (!ctfeGlobals.stack.storeLinearSlice(v, s))
+            {
+                error(e.loc, "cannot interpret `%s` at compile time", e.toErrMsg());
+                result = CTFEExp.cantexp;
+                return true;
+            }
+        }
+
+        // Determine the return value
+        if (goal == CTFEGoal.RValue)
+        {
+            // The array value escapes into the expression; flipping to the
+            // AST representation keeps aliasing correct
+            result = ctfeGlobals.stack.getValue(v);
+            if (result is null)
+                result = CTFEExp.cantexp;
+        }
+        else
+            result = ve; // VarExp is a CTFE reference
+        return true;
+    }
+
+    /* Store a slice return value handed over as a linear handle (see
+     * CtfeGlobals.linearReturnDest) into v. No sharing mark is needed: any
+     * aliasing event before the hand-over (handle assignment, argument
+     * staging) already set the sticky payloadShared flag on the payload.
+     *
+     * Returns: false if the handle could not be stored (the caller
+     * materializes the value and continues generically); true if the
+     * assignment completed (result is set).
+     */
+    private bool interpretLinearReturnAssign(BinExp e, VarExp ve, VarDeclaration v, LinearSlice s)
+    {
+        auto ta = v.type.toBasetype().isTypeDArray();
+        if (!ta)
+            return false;
+        if (s.alloc != 0)
+        {
+            PayloadHeader h;
+            if (!readPayloadHeader(ctfeGlobals.linearMem, s.alloc, h) ||
+                h.elemSize != ta.next.size())
+                return false;
+        }
+        if (!ctfeGlobals.stack.storeLinearSlice(v, s))
+            return false;
+        if (goal == CTFEGoal.RValue)
+        {
+            // The array value escapes into the expression; flipping to the
+            // AST representation keeps aliasing correct
+            result = ctfeGlobals.stack.getValue(v);
+            if (result is null)
+                result = CTFEExp.cantexp;
+        }
+        else
+            result = ve; // VarExp is a CTFE reference
+        return true;
+    }
+
+    /* Fast path for `v.length = n` when v's value can live in linear memory:
+     * shrinks by adjusting the handle, grows in place (or by moving the
+     * payload), filling new elements with the element type's default
+     * initializer. The caller has already determined `result`.
+     *
+     * Returns: false if not eligible or a value shape is unsupported;
+     * nothing observable was mutated in that case, so the caller continues
+     * on the regular path.
+     */
+    private bool interpretLinearLengthAssign(BinExp e, VarExp ve, size_t oldlen, size_t newlen)
+    {
+        VarDeclaration v = ve.var.isVarDeclaration();
+        if (!v || !ctfeGlobals.stack.canStoreLinearSlice(v))
+            return false;
+        auto ta = v.type.toBasetype().isTypeDArray();
+        if (!ta)
+            return false;
+        Type telem = ta.next;
+        const esz = cast(uint) telem.size();
+        auto lmem = &ctfeGlobals.linearMem;
+
+        if (ulong(esz) * newlen + PayloadHeader.sizeof > CtfeMemory.maxAllocSize)
+            return false; // out of linear memory; the regular path errors out
+
+        // Get the current value, like in interpretSliceCatAssign
+        LinearSlice s;
+        const slot = ctfeGlobals.stack.sliceSlot(v);
+        if (!slot.isNull)
+        {
+            if (!readSlice(*lmem, slot, s))
+                return false;
+        }
+        else
+        {
+            if (!ctfeGlobals.stack.isInCurrentFrame(v))
+                return false;
+            /* Only adopt empty arrays into linear memory here. Encoding an
+             * existing AST array would pay off only if later operations stay
+             * linear, but the common shape of resize-and-return functions is
+             * that the result escapes straight back to an AST consumer (a
+             * struct field, a global), turning every call into a whole-array
+             * encode + decode round trip that loses to the plain AST resize.
+             */
+            if (oldlen != 0)
+                return false;
+            Expression oldval = ctfeGlobals.stack.getValue(v);
+            if (oldval is null)
+                return false;
+            if (!encodeSlice(*lmem, oldval, v.type, s))
+                return false;
+        }
+        if (s.length != oldlen)
+            return false; // e.g. modified by a side effect of the length expression
+
+        PayloadHeader h;
+        if (s.alloc != 0)
+        {
+            if (!readPayloadHeader(*lmem, s.alloc, h))
+                return false;
+            // must cover the whole array object
+            if (s.offset != PayloadHeader.sizeof || s.length != h.used || h.elemSize != esz)
+                return false;
+            if (h.flags & payloadShared)
+            {
+                /* Detach with a copy. This matches the AST semantics of
+                 * changeArrayLiteralLength, which gives the resized array
+                 * fresh element storage: element nodes stay shared, but for
+                 * scalar elements node sharing is unobservable (assignment
+                 * replaces the node). Struct/sarray elements keep observable
+                 * node aliasing, so those stay on the AST path.
+                 */
+                if (!isLinearScalarType(telem))
+                    return false;
+                const keep = oldlen < newlen ? oldlen : newlen;
+                auto ns = allocatePayload(*lmem, esz, cast(uint) keep, cast(uint) newlen);
+                if (ns.alloc == 0)
+                    return false;
+                if (keep && !lmem.copy(CtfePtr(ns.alloc, ns.offset), CtfePtr(s.alloc, s.offset), cast(uint)(keep * esz)))
+                    return false;
+                s = LinearSlice(ns.alloc, ns.offset, cast(uint) keep);
+                if (!readPayloadHeader(*lmem, s.alloc, h))
+                    return false;
+            }
+        }
+
+        if (newlen > oldlen)
+        {
+            // Grow, and default-initialize the new elements
+            Expression defaultElem = telem.defaultInitLiteral(e.loc);
+            if (defaultElem is null || defaultElem.op == EXP.error)
+                return false;
+            if (s.alloc == 0)
+            {
+                s = allocatePayload(*lmem, esz, cast(uint) newlen, cast(uint) newlen);
+                if (s.alloc == 0 || !readPayloadHeader(*lmem, s.alloc, h))
+                    return false;
+            }
+            else if (newlen > h.capacity)
+            {
+                const newBytes = cast(uint)(ulong(esz) * newlen + PayloadHeader.sizeof);
+                if (lmem.extendInPlace(s.alloc, newBytes))
+                {
+                    h.capacity = cast(uint) newlen;
+                }
+                else
+                {
+                    auto ns = allocatePayload(*lmem, esz, cast(uint) newlen, cast(uint) newlen);
+                    if (ns.alloc == 0)
+                        return false;
+                    if (!lmem.copy(CtfePtr(ns.alloc, ns.offset), CtfePtr(s.alloc, s.offset), cast(uint)(oldlen * esz)))
+                        return false;
+                    s.alloc = ns.alloc;
+                    s.offset = ns.offset;
+                    if (!readPayloadHeader(*lmem, s.alloc, h))
+                        return false;
+                }
+            }
+            foreach (i; oldlen .. newlen)
+            {
+                const dst = CtfePtr(s.alloc, cast(uint)(PayloadHeader.sizeof + i * esz));
+                if (!encodeInto(*lmem, defaultElem, telem, dst))
+                    return false; // header/slot untouched, safe to fall back
+            }
+        }
+        // else: shrink, just narrow the handle and the header below
+
+        // Publish the new array object
+        h.used = cast(uint) newlen;
+        if (!writePayloadHeader(*lmem, s.alloc, h))
+            return false;
+        s.offset = PayloadHeader.sizeof;
+        s.length = cast(uint) newlen;
+        if (!slot.isNull)
+        {
+            if (!writeSlice(*lmem, slot, s))
+                return false;
+        }
+        else if (!ctfeGlobals.stack.storeLinearSlice(v, s))
+            return false;
+        return true;
+    }
+
+    /* Fast path for `v ~= e2` when v's value can live in linear memory:
+     * appends to the slice payload in place (amortizing reallocations with
+     * capacity doubling) instead of concatenating into a whole new array node.
+     *
+     * `newval` is the already interpreted right hand side. Returns: false if
+     * not eligible or a value shape is unsupported; nothing observable was
+     * mutated in that case (at worst payload bytes not yet published to the
+     * variable's slot), so the caller continues on the regular path, which
+     * flips any linear value of v back to an AST node when loading it.
+     */
+    private bool interpretSliceCatAssign(BinExp e, VarExp ve, Expression newval)
+    {
+        VarDeclaration v = ve.var.isVarDeclaration();
+        if (!v || !ctfeGlobals.stack.canStoreLinearSlice(v))
+            return false;
+        auto ta = v.type.toBasetype().isTypeDArray();
+        if (!ta)
+            return false;
+        Type telem = ta.next;
+        const esz = cast(uint) telem.size();
+        auto lmem = &ctfeGlobals.linearMem;
+
+        // Get the current value: either already a linear handle, or an AST
+        // value worth encoding because subsequent appends then stay linear
+        LinearSlice s;
+        const slot = ctfeGlobals.stack.sliceSlot(v);
+        if (!slot.isNull)
+        {
+            if (!readSlice(*lmem, slot, s))
+                return false;
+        }
+        else
+        {
+            // The slot has yet to be allocated, which storeLinearSlice below
+            // only does for entries of the current frame
+            if (!ctfeGlobals.stack.isInCurrentFrame(v))
+                return false;
+            Expression oldval = ctfeGlobals.stack.getValue(v);
+            if (oldval is null)
+                return false; // not initialized; let the regular path diagnose
+            if (!encodeSlice(*lmem, oldval, v.type, s))
+                return false; // e.g. a SliceExp value, keep the AST representation
+        }
+
+        PayloadHeader h;
+        if (s.alloc != 0)
+        {
+            if (!readPayloadHeader(*lmem, s.alloc, h))
+                return false;
+            // must be the sole handle, covering the whole array object
+            if (s.offset != PayloadHeader.sizeof || s.length != h.used || h.elemSize != esz)
+                return false;
+        }
+
+        // Classify the right hand side before mutating anything
+        uint n;
+        StringExp rhsStr = null;
+        ArrayLiteralExp rhsArr = null;
+        UnionExp ueSlice = void;
+        if (e.op == EXP.concatenateElemAssign)
+        {
+            n = 1;
+        }
+        else
+        {
+            newval = resolveSlice(newval, &ueSlice);
+            if (newval.op == EXP.null_)
+                n = 0;
+            else if (auto se = newval.isStringExp())
+            {
+                if (se.sz != esz)
+                    return false;
+                n = cast(uint) se.len;
+                rhsStr = se;
+            }
+            else if (auto ale = newval.isArrayLiteralExp())
+            {
+                n = cast(uint)(ale.elements ? ale.elements.length : 0);
+                rhsArr = ale;
+            }
+            else
+                return false;
+        }
+
+        const oldUsed = s.length;
+        const newUsed = ulong(oldUsed) + n;
+        if (ulong(esz) * newUsed + PayloadHeader.sizeof > CtfeMemory.maxAllocSize)
+            return false; // out of linear memory; the regular path errors out
+
+        // Make room for the new elements. A shared payload must be detached
+        // first: `~=` gives the variable a new array object, like the AST
+        // representation's concatenation does.
+        const mustDetach = (h.flags & payloadShared) != 0;
+        if (s.alloc == 0)
+        {
+            s = allocatePayload(*lmem, esz, cast(uint) newUsed, cast(uint)(newUsed < 8 ? 8 : newUsed));
+            if (s.alloc == 0 || !readPayloadHeader(*lmem, s.alloc, h))
+                return false;
+        }
+        else if (mustDetach || newUsed > h.capacity)
+        {
+            ulong newCapL = ulong(h.capacity) * 2;
+            if (newCapL < newUsed)
+                newCapL = newUsed;
+            if (newCapL < 8)
+                newCapL = 8;
+            if (ulong(esz) * newCapL + PayloadHeader.sizeof > CtfeMemory.maxAllocSize)
+                newCapL = newUsed; // known to fit from the check above
+            const newCap = cast(uint) newCapL;
+            const newBytes = cast(uint)(ulong(esz) * newCap + PayloadHeader.sizeof);
+            if (!mustDetach && lmem.extendInPlace(s.alloc, newBytes))
+            {
+                h.capacity = newCap;
+            }
+            else
+            {
+                // detach from other handles, or move a full payload
+                auto ns = allocatePayload(*lmem, esz, cast(uint) newUsed, newCap);
+                if (ns.alloc == 0)
+                    return false;
+                if (!lmem.copy(CtfePtr(ns.alloc, ns.offset), CtfePtr(s.alloc, s.offset), oldUsed * esz))
+                    return false;
+                s.alloc = ns.alloc;
+                s.offset = ns.offset;
+                if (!readPayloadHeader(*lmem, s.alloc, h))
+                    return false;
+            }
+        }
+
+        // Serialize the new elements after the existing ones
+        const dstOff = cast(uint)(PayloadHeader.sizeof + oldUsed * esz);
+        if (e.op == EXP.concatenateElemAssign)
+        {
+            if (!encodeInto(*lmem, newval, telem, CtfePtr(s.alloc, dstOff)))
+                return false;
+        }
+        else if (rhsStr)
+        {
+            auto b = lmem.slice(CtfePtr(s.alloc, dstOff), n * esz);
+            if (b is null)
+                return false;
+            const data = rhsStr.peekData();
+            memcpy(b.ptr, data.ptr, n * esz);
+        }
+        else if (rhsArr)
+        {
+            foreach (i; 0 .. n)
+            {
+                Expression el = (*rhsArr.elements)[i];
+                if (el is null)
+                    el = rhsArr.basis;
+                if (el is null ||
+                    !encodeInto(*lmem, el, telem, CtfePtr(s.alloc, dstOff + i * esz)))
+                    return false;
+            }
+        }
+
+        // Publish the new array object
+        h.used = cast(uint) newUsed;
+        if (!writePayloadHeader(*lmem, s.alloc, h))
+            return false;
+        s.offset = PayloadHeader.sizeof;
+        s.length = h.used;
+        if (!slot.isNull)
+        {
+            if (!writeSlice(*lmem, slot, s))
+                return false;
+        }
+        else if (!ctfeGlobals.stack.storeLinearSlice(v, s))
+            return false;
+
+        // Determine the return value
+        if (goal == CTFEGoal.RValue)
+        {
+            // The array value escapes into the expression; flipping to the
+            // AST representation keeps aliasing correct
+            result = ctfeGlobals.stack.getValue(v);
+            if (result is null)
+                result = CTFEExp.cantexp;
+        }
+        else
+            result = ve; // VarExp is a CTFE reference
+        return true;
+    }
+
+    // If x still lives in local UnionExp u, move it into the caller-owned
+    // result storage `*pue` (expression nodes are relocatable).
+    private Expression relocateUe(Expression x, ref UnionExp u)
+    {
+        if (x != u.exp())
+            return x;
+        *pue = u;
+        return pue.exp();
+    }
+
+    // If x lives in local UnionExp u, copy it into the CTFE region so it
+    // survives this call.
+    private static Expression persistUe(Expression x, ref UnionExp u)
+    {
+        return x == u.exp() ? regionUeCopy(u) : x;
     }
 
     /* Set all sibling fields which overlap with v to VoidExp.
@@ -4686,6 +6762,12 @@ public:
         {
             printf("%s CallExp::interpret() %s\n", e.loc.toChars(), e.toChars());
         }
+        // Take the linear-return destination before anything else is
+        // interpreted, so nested calls (in e1 or the arguments) cannot
+        // consume it; it applies to this call only.
+        CtfeLinearReturn* linearRet = ctfeGlobals.linearReturnDest;
+        ctfeGlobals.linearReturnDest = null;
+
         Expression pthis = null;
         FuncDeclaration fd = null;
 
@@ -4838,7 +6920,7 @@ public:
             return;
         }
 
-        result = interpretFunction(pue, fd, istate, e.arguments, pthis);
+        result = interpretFunction(pue, fd, istate, e.arguments, pthis, linearRet);
         if (result.op == EXP.voidExpression)
             return;
         if (!exceptionOrCantInterpret(result))
@@ -4984,6 +7066,23 @@ public:
         {
             printf("%s ArrayLengthExp::interpret() %s\n", e.loc.toChars(), e.toChars());
         }
+        // Linear-memory fast path: read the length from the slice handle
+        // without materializing the array
+        if (global.params.ctfeLinearMemory)
+        {
+            if (auto ve = e.e1.isVarExp())
+                if (auto v = ve.var.isVarDeclaration())
+                {
+                    const slot = ctfeGlobals.stack.sliceSlot(v);
+                    LinearSlice s;
+                    if (!slot.isNull && readSlice(ctfeGlobals.linearMem, slot, s))
+                    {
+                        emplaceExp!(IntegerExp)(pue, e.loc, s.length, e.type);
+                        result = pue.exp();
+                        return;
+                    }
+                }
+        }
         UnionExp ue1;
         Expression e1 = interpret(&ue1, e.e1, istate);
         assert(e1);
@@ -5118,7 +7217,9 @@ public:
             if (exceptionOrCantInterpret(e1))
                 return false;
 
-            Expression e2 = interpretRegion(e.e2, istate);
+            // the index doesn't escape this function, no need to persist it
+            UnionExp ue2 = void;
+            Expression e2 = interpret(&ue2, e.e2, istate);
             if (exceptionOrCantInterpret(e2))
                 return false;
             sinteger_t indx = e2.toInteger();
@@ -5196,7 +7297,9 @@ public:
             ctfeGlobals.stack.push(e.lengthVar);
             setValue(e.lengthVar, dollarExp);
         }
-        Expression e2 = interpretRegion(e.e2, istate);
+        // the index doesn't escape this function, no need to persist it
+        UnionExp ue2 = void;
+        Expression e2 = interpret(&ue2, e.e2, istate);
         if (e.lengthVar)
             ctfeGlobals.stack.pop(e.lengthVar); // $ is defined only inside []
         if (exceptionOrCantInterpret(e2))
@@ -5278,6 +7381,80 @@ public:
         if (e.e1.type.toBasetype().ty == Taarray)
         {
             assert(false, "indexing AA should have been lowered in semantic analysis");
+        }
+
+        // Linear-memory fast paths: index into a slice whose value lives in
+        // linear memory without materializing the array
+        if (global.params.ctfeLinearMemory && e.e1.type.toBasetype().ty == Tarray)
+        {
+            if (goal == CTFEGoal.LValue)
+            {
+                auto ve = e.e1.isVarExp();
+                auto v = ve ? ve.var.isVarDeclaration() : null;
+                const slot = v ? ctfeGlobals.stack.sliceSlot(v) : CtfePtr.init;
+                LinearSlice s;
+                if (!slot.isNull && readSlice(ctfeGlobals.linearMem, slot, s))
+                {
+                    // committed: evaluate the index against the handle
+                    if (e.lengthVar)
+                    {
+                        Expression dollarExp = ctfeEmplaceExp!IntegerExp(e.loc, s.length, Type.tsize_t);
+                        ctfeGlobals.stack.push(e.lengthVar);
+                        setValue(e.lengthVar, dollarExp);
+                    }
+                    UnionExp ue2 = void;
+                    Expression e2 = interpret(&ue2, e.e2, istate);
+                    if (e.lengthVar)
+                        ctfeGlobals.stack.pop(e.lengthVar); // $ is defined only inside []
+                    if (exceptionOrCant(e2))
+                        return;
+                    if (e2.op != EXP.int64)
+                    {
+                        error(e.loc, "CTFE internal error: non-integral index `[%s]`", e.e2.toErrMsg());
+                        result = CTFEExp.cantexp;
+                        return;
+                    }
+                    const idx = e2.toInteger();
+                    if (idx >= s.length)
+                    {
+                        error(e.loc, "array index %lld is out of bounds `[0..%lld]`", idx, cast(ulong) s.length);
+                        result = CTFEExp.cantexp;
+                        return;
+                    }
+                    // A reference to the element, re-interpretable later; the
+                    // base stays the variable so its value can stay linear
+                    Expression ei = ctfeEmplaceExp!IntegerExp(e.e2.loc, idx, Type.tsize_t);
+                    emplaceExp!(IndexExp)(pue, e.loc, e.e1, ei);
+                    result = pue.exp();
+                    result.type = e.type;
+                    return;
+                }
+            }
+            else
+            {
+                CtfePtr p;
+                Type t;
+                const rc = tryResolveLinearLoc(e, p, t);
+                if (rc < 0)
+                    return; // result is set (error or exception)
+                if (rc > 0)
+                {
+                    result = decodeScalar(ctfeGlobals.linearMem, p, e.type, e.loc, pue);
+                    if (result)
+                        return;
+                    // non-scalar element (e.g. a struct): materialize a copy,
+                    // fine for an rvalue
+                    result = decode(ctfeGlobals.linearMem, p, t, e.loc);
+                    if (result)
+                    {
+                        result = paintTypeOntoLiteral(pue, e.type, result);
+                        return;
+                    }
+                    error(e.loc, "cannot interpret `%s` at compile time", e.toErrMsg());
+                    result = CTFEExp.cantexp;
+                    return;
+                }
+            }
         }
 
         Expression agg;
@@ -5647,6 +7824,8 @@ public:
         {
             printf("%s CastExp::interpret() %s\n", e.loc.toChars(), e.toChars());
         }
+        if (goal != CTFEGoal.LValue && rawScalarResult(e))
+            return;
         Expression e1 = interpretRegion(e.e1, istate, goal);
         if (exceptionOrCant(e1))
             return;
@@ -6082,6 +8261,27 @@ public:
         {
             printf("%s DotVarExp::interpret() %s, goal = %d\n", e.loc.toChars(), e.toChars(), goal);
         }
+        // Linear-memory fast path: read a scalar field of a struct stored in
+        // a linear slice payload (e.g. `arr[i].x`, or through a `ref`
+        // element) without materializing the array
+        if (global.params.ctfeLinearMemory && goal != CTFEGoal.LValue &&
+            isLinearScalarType(e.type))
+        {
+            CtfePtr p;
+            Type t;
+            const rc = tryResolveLinearLoc(e, p, t);
+            if (rc < 0)
+                return; // result is set (error or exception)
+            if (rc > 0)
+            {
+                result = decodeScalar(ctfeGlobals.linearMem, p, e.type, e.loc, pue);
+                if (result)
+                    return;
+                error(e.loc, "cannot interpret `%s` at compile time", e.toErrMsg());
+                result = CTFEExp.cantexp;
+                return;
+            }
+        }
         Expression ex = interpretRegion(e.e1, istate);
         if (exceptionOrCant(ex))
             return;
@@ -6337,13 +8537,21 @@ Expression interpretRegion(Expression e, InterState* istate, CTFEGoal goal = CTF
 {
     UnionExp ue = void;
     auto result = interpret(&ue, e, istate, goal);
-    auto uexp = ue.exp();
-    if (result != uexp)
+    if (result != ue.exp())
         return result;
+    return regionUeCopy(ue);
+}
+
+/*****************************
+ * Copy the expression in `ue` into the CTFE region, mimicking UnionExp.copy
+ * but with region allocation.
+ */
+private Expression regionUeCopy(ref UnionExp ue)
+{
+    auto uexp = ue.exp();
     if (mem.isGCEnabled)
         return ue.copy();
 
-    // mimicking UnionExp.copy, but with region allocation
     switch (uexp.op)
     {
         case EXP.cantExpression: return CTFEExp.cantexp;
@@ -7604,8 +9812,12 @@ private Expression evaluateDtor(InterState* istate, Expression e)
  */
 private bool hasValue(VarDeclaration vd)
 {
-    return vd.ctfeAdrOnStack != VarDeclaration.AdrOnStackNone &&
-           getValue(vd) !is null;
+    if (vd.ctfeAdrOnStack == VarDeclaration.AdrOnStackNone)
+        return false;
+    // Check for a linear-memory value first so no AST node gets materialized
+    if (ctfeGlobals.stack.hasLinearValue(vd))
+        return true;
+    return getValue(vd) !is null;
 }
 
 // Don't check for validity

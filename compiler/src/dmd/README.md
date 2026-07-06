@@ -153,6 +153,7 @@ Note that these groups have no strict meaning, the category assignments are a bi
 |-------------------------------------------------------------------------------|-------------------------------------------------------------------------------------|
 | [dinterpret.d](https://github.com/dlang/dmd/blob/master/compiler/src/dmd/dinterpret.d) | CTFE entry point                                                                    |
 | [ctfeexpr.d](https://github.com/dlang/dmd/blob/master/compiler/src/dmd/ctfeexpr.d)     | CTFE for expressions involving pointers, slices, array concatenation etc.           |
+| [ctfememory.d](https://github.com/dlang/dmd/blob/master/compiler/src/dmd/ctfememory.d) | Linear (flat byte) memory for CTFE intermediate values                              |
 | [builtin.d](https://github.com/dlang/dmd/blob/master/compiler/src/dmd/builtin.d)       | Allow CTFE of certain external functions (`core.math`, `std.math` and `core.bitop`) |
 
 ### Specific language features

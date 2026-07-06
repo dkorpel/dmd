@@ -1937,8 +1937,13 @@ bool isCtfeReferenceValid(Expression newval)
 
         case EXP.index:
         {
-            const Expression eagg = newval.isIndexExp().e1;
-            return eagg.op == EXP.string_ || eagg.op == EXP.arrayLiteral || eagg.op == EXP.assocArrayLiteral;
+            Expression eagg = newval.isIndexExp().e1;
+            if (eagg.op == EXP.string_ || eagg.op == EXP.arrayLiteral || eagg.op == EXP.assocArrayLiteral)
+                return true;
+            // -preview=ctfeLinearMemory: a reference into a slice whose
+            // value lives in linear memory keeps the variable as aggregate
+            return global.params.ctfeLinearMemory && eagg.op == EXP.variable &&
+                   eagg.type.toBasetype().ty == Tarray;
         }
 
         case EXP.dotVariable:

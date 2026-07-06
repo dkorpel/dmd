@@ -443,6 +443,12 @@ extern (C++) class VarDeclaration : Declaration
     enum AdrOnStackNone = ~0u;
     uint ctfeAdrOnStack;
 
+    // Cached by the CTFE interpreter with -preview=ctfeLinearMemory:
+    // can this variable's value be stored as raw bytes in linear memory?
+    // 0 = not yet computed, 1 = no, 2 = scalar, 3 = dynamic array (slice),
+    // 4 = slice readable through this reference, but the entry is not owned
+    ubyte ctfeLinearKind;
+
     // `bool` fields that are compacted into bit fields in a string mixin
     private extern (D) static struct BitFields
     {
