@@ -416,12 +416,6 @@ private type* wasmRtlsymType(RTLSYM i) @trusted
         case RTLSYM.CXA_ATEXIT:
             return fn([voidPtr(), voidPtr(), voidPtr()], tint);
 
-        // Never emitted on WASM: Win32 SEH (monitor/unwind/setjmp), dwarf EH
-        // (WASM uses EH_NONE, and future wasm EH won't go through these),
-        // Windows TLS, 16-bit DOS helpers, x86 stack probing/-profile ABI,
-        // 80-bit complex and SIMD memset (non-goals), and dead enum members.
-        // Keeping the (void)->void placeholder makes any accidental use a
-        // loud wasm-ld / validation failure instead of silent corruption.
         case RTLSYM.MONITOR_HANDLER:
         case RTLSYM.MONITOR_PROLOG:
         case RTLSYM.MONITOR_EPILOG:
