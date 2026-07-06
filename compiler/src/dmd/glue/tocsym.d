@@ -478,7 +478,10 @@ Symbol* toSymbol(Dsymbol s)
             s.prettyIdent = fd.toPrettyChars(true);
 
             if (target.isWasm)
+            {
                 registerWasmImportModule(fd, id[0 .. strlen(id)]);
+                registerWasmExportName(fd, id[0 .. strlen(id)]);
+            }
 
             /* Make C static functions SCstatic
              */
@@ -983,6 +986,31 @@ private void registerWasmImportModule(FuncDeclaration fd, const(char)[] mangledN
         auto se = (*lit.elements)[0].isStringExp();
         assert(se);
         WasmObj_registerImportModule(mangledName, se.peekString());
+        return 1;
+    });
+}
+
+/**
+ * If `fd` has a `@wasmExportName("name")` UDA from `core.attribute`,
+ * register the export name in the WASM backend's export-name table so the
+ * function is emitted into the export section and kept by the linker.
+ * Called only when targeting WebAssembly.
+ */
+private void registerWasmExportName(FuncDeclaration fd, const(char)[] mangledName)
+{
+    import dmd.attrib : foreachUdaNoSemantic, isCoreUda;
+    import dmd.backend.wasm.obj : WasmObj_registerExportName;
+
+    foreachUdaNoSemantic(fd, (Expression e) {
+        auto lit = e.isStructLiteralExp();
+        if (!lit || !lit.sd)
+            return 0;
+        if (!isCoreUda(lit.sd, Id.udaWasmExportName))
+            return 0;
+        assert(lit.elements.length == 1);
+        auto se = (*lit.elements)[0].isStringExp();
+        assert(se);
+        WasmObj_registerExportName(mangledName, se.peekString());
         return 1;
     });
 }

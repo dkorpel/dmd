@@ -498,6 +498,7 @@ immutable Msgtable[] msgtable =
     { "udaStandalone", "standalone" },
     { "udaSection", "section" },
     { "udaWasmImportModule", "wasmImportModule" },
+    { "udaWasmExportName", "wasmExportName" },
 
     // Editions
     { "__edition_latest_do_not_use", },

@@ -50,6 +50,20 @@ import ldc.attributes;
 extern (C) void proc_exit(int code);
 ```
 
+To export a function to the host under a chosen name, use the `wasmExportName`
+attribute. The function is kept by the linker and exported without
+`--export-dynamic`, and the export name may differ from the symbol name:
+
+```D
+import core.attribute : wasmExportName;
+@wasmExportName("windowStep") extern (C) void internalStep() { }
+
+// LDC way:
+import ldc.attributes;
+@llvmAttr("wasm-export-name", "windowStep")
+extern (C) void internalStep() { }
+```
+
 Limitations:
 - No phobos
 - No Exceptions

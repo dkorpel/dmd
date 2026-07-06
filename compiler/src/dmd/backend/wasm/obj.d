@@ -229,6 +229,7 @@ struct WasmFunc
     bool comdat; // duplicate copies across objects merge instead of colliding
     const(char)[] importModule; // for imports: module name
     const(char)[] importName; // for imports: field name
+    const(char)[] exportName; // for @wasmExportName: export section name (overrides funcName)
     // string name; // for synthesized functions with no Symbol and no importName
 }
 
@@ -400,6 +401,34 @@ private __gshared const(char)[][string] g_importModuleTable;
 void WasmObj_registerImportModule(const(char)[] mangledName, const(char)[] moduleName) nothrow
 {
     g_importModuleTable[cast(string) mangledName] = moduleName;
+}
+
+/// Maps mangled function name to the WebAssembly export name it should be exported under.
+private __gshared const(char)[][string] g_exportNameTable;
+
+/**
+ * Register a WebAssembly export name for the given mangled function name.
+ * Called from the frontend glue for @wasmExportName("exportName"). The
+ * function is emitted into the export section under `exportName` and marked
+ * so the linker keeps it without `--export-dynamic`.
+ */
+void WasmObj_registerExportName(const(char)[] mangledName, const(char)[] exportName) nothrow
+{
+    g_exportNameTable[cast(string) mangledName] = exportName;
+}
+
+// If `s` was tagged with @wasmExportName, apply the registered export name to
+// `f` and force it exported so wasm-ld keeps it. Called when a function is
+// first registered.
+private void applyWasmExportName(ref WasmFunc f, Symbol* s) nothrow
+{
+    if (!s)
+        return;
+    if (auto p = cast(string) s.identifier in g_exportNameTable)
+    {
+        f.exportName = *p;
+        f.exported = true;
+    }
 }
 
 
@@ -708,7 +737,7 @@ private bool emitExportSection(ref OutBuffer out_, ref WasmModule wmod)
     {
         if (!f.exported)
             continue;
-        appendName(*s, funcName(f));
+        appendName(*s, f.exportName.length ? f.exportName : funcName(f));
         s.writeByte(WASM_EXPORT.FUNC);
         s.writeuLEB128(cast(uint) i);
     }
@@ -891,6 +920,10 @@ private bool emitLinkingSection(ref OutBuffer out_, ref WasmModule wmod)
             flags = WASM_SYM.EXPLICIT_NAME;
             if (f.exported)
                 flags |= WASM_SYM.EXPORTED;
+            // @wasmExportName: real EXPORTED bit so wasm-ld keeps and exports
+            // it (under the export-section name) without --export-dynamic.
+            if (f.exportName.length)
+                flags |= WASM_SYM.FORCE_EXPORTED;
             if (f.comdat)
                 flags |= WASM_SYM.BINDING_WEAK;
             // C `static` functions: LOCAL binding, so same-named statics in
@@ -1698,6 +1731,7 @@ int WasmObj_comdat(Symbol* s)
     f.sym = s;
     f.exported = (s.Sclass == SC.global);
     f.comdat = true;
+    applyWasmExportName(f, s);
 
     s.Sseg = cast(int) wmod.funcs.length;
     wmod.funcs ~= f;
@@ -2195,6 +2229,7 @@ void WasmObj_func_start(Symbol* sfunc)
     f.sym = sfunc;
     f.exported = (sfunc.Sclass == SC.global);
     f.comdat = (sfunc.Sclass == SC.comdat);
+    applyWasmExportName(f, sfunc);
     wmod.funcs ~= f;
     sfunc.Sseg = cast(int)(wmod.funcs.length - 1);
 

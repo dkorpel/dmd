@@ -139,6 +139,34 @@ else
 }
 
 /**
+ * When applied to an `extern(C)` function definition targeting WebAssembly,
+ * exports the function to the host under `name` and marks it so the linker
+ * keeps it without `--export-dynamic` and even under `--gc-sections`. The
+ * export name may differ from the symbol's mangled link name.
+ *
+ * Counterpart to $(D wasmImportModule), which names the import side.
+ *
+ * Examples:
+ * ---
+ * import core.attribute : wasmExportName;
+ *
+ * @wasmExportName("windowStep")
+ * extern (C) void windowStep(void* w) { ... }
+ * ---
+ */
+version (DigitalMars)
+{
+    struct wasmExportName
+    {
+        string name;
+    }
+}
+else
+{
+    // LDC uses @llvmAttr("wasm-export-name", ...) for the same purpose.
+}
+
+/**
  * Use this attribute to attach an Objective-C selector to a method.
  *
  * This is a special compiler recognized attribute, it has several
