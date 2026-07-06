@@ -1139,6 +1139,8 @@ dmd -cov -unittest myprog.d
             "https://dlang.org/spec/attribute.html#system-variables"),
         Feature("fastdfa", "useFastDFA",
             "Fast dataflow analysis engine, experimental"),
+        Feature("ctfeLinearMemory", "ctfeLinearMemory",
+            "store CTFE intermediate values in linear memory, experimental"),
     ];
 }
 
