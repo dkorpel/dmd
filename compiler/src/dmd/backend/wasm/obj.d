@@ -1550,6 +1550,28 @@ void WasmObj_term2(const(char)[] objfilename, ref WasmModule wmod, ref OutBuffer
     emitRelocDataSection(out_, wmod, dataSectionIdx);
     emitRelocElemSection(out_, wmod, elemSectionIdx);
     emitRelocCodeSection(out_, wmod, codeSectionIdx);
+    emitTargetFeaturesSection(out_);
+}
+
+// Emit the "target_features" custom section. wasm-ld refuses --shared-memory
+// unless every input object declares '+atomics' and '+bulk-memory', so this
+// marks the features codegen actually relies on (memory.copy/fill, trunc_sat,
+// the mutable imported __stack_pointer) plus atomics: the objects contain no
+// TLS segments and no thread-unsafe wasm constructs, so they are valid under
+// shared memory as-is, unlike clang/LLVM where -matomics changes codegen.
+private void emitTargetFeaturesSection(ref OutBuffer out_)
+{
+    static immutable string[5] features =
+        ["atomics", "bulk-memory", "mutable-globals", "nontrapping-fptoint", "sign-ext"];
+    OutBuffer payload;
+    payload.writeuLEB128(features.length);
+    foreach (f; features)
+    {
+        payload.writeByte('+');
+        payload.writeuLEB128(cast(uint) f.length);
+        payload.write(f);
+    }
+    writeCustomSection(out_, "target_features", &payload);
 }
 
 void WasmObj_linnum(Srcpos srcpos, int seg, targ_size_t offset)

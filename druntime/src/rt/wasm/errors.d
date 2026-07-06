@@ -101,8 +101,10 @@ Throwable _wasm_staticError_OOM(ref string file, ref uint line) @trusted @nogc n
     wasm_abort();
 }
 
+// __assert_fail is deliberately NOT defined here: wasi-libc's assert.o always
+// provides it, and a second strong definition collides when a threads-enabled
+// libc.a pulls its assert.c.obj internally (wasm-ld has no weak-def override).
 noreturn __assert(const(char)* file, int line, const(char)* msg) @nogc nothrow { dbgWrite("__ASSERT\n"); wasm_abort(); }
-noreturn __assert_fail(const(char)* msg, const(char)* file, uint line, const(char)* func) @nogc nothrow { dbgWrite("__ASSERT_FAIL\n"); wasm_abort(); }
 
 private extern(C) extern __gshared int errno;
 ref int __errno_location() @nogc nothrow { return errno; }
