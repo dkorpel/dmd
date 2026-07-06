@@ -96,6 +96,28 @@ void semantic3(Dsymbol dsym, Scope* sc)
     dsym.accept(v);
 }
 
+/*************************************
+ * Check whether semantic analysis of a function body failed.
+ *
+ * A statement that failed is replaced with an `ErrorStatement`, but a
+ * function's top-level compound statement keeps its other statements for
+ * further analysis (e.g. for IDE tooling), so look through the top level too.
+ */
+private bool hasErrorStatement(Statement fbody)
+{
+    if (fbody.isErrorStatement())
+        return true;
+    if (auto cs = fbody.isCompoundStatement())
+    {
+        foreach (s; cs.statements)
+        {
+            if (s && s.isErrorStatement())
+                return true;
+        }
+    }
+    return false;
+}
+
 private extern(C++) final class Semantic3Visitor : Visitor
 {
     alias visit = Visitor.visit;
@@ -644,7 +666,7 @@ private extern(C++) final class Semantic3Visitor : Visitor
                 if (f.next !is null)
                     f.next.checkComplexTransition(funcdecl.loc, sc);
 
-                if (funcdecl.returns && !funcdecl.fbody.isErrorStatement())
+                if (funcdecl.returns && !hasErrorStatement(funcdecl.fbody))
                 {
                     for (size_t i = 0; i < funcdecl.returns.length;)
                     {
@@ -674,7 +696,7 @@ private extern(C++) final class Semantic3Visitor : Visitor
                 if (!target.isReturnOnStack(f, funcdecl.needThis()) || !funcdecl.checkNRVO())
                     funcdecl.isNRVO = false;
 
-                if (funcdecl.fbody.isErrorStatement())
+                if (hasErrorStatement(funcdecl.fbody))
                 {
                 }
                 else if (funcdecl.isStaticCtorDeclaration())
@@ -794,7 +816,7 @@ private extern(C++) final class Semantic3Visitor : Visitor
                     f.isNothrow = !(blockexit & BE.throw_);
                 }
 
-                if (funcdecl.fbody.isErrorStatement())
+                if (hasErrorStatement(funcdecl.fbody))
                 {
                 }
                 else if (ad2 && funcdecl.isCtorDeclaration())
@@ -1130,7 +1152,7 @@ private extern(C++) final class Semantic3Visitor : Visitor
                 if (global.params.useOut == CHECKENABLE.off)
                     fens = null;
             }
-            if (funcdecl.fbody && funcdecl.fbody.isErrorStatement())
+            if (funcdecl.fbody && hasErrorStatement(funcdecl.fbody))
             {
             }
             else
@@ -1459,6 +1481,7 @@ private extern(C++) final class Semantic3Visitor : Visitor
 
         // Do live analysis
         if (sc.previews.dip1021 && funcdecl.fbody && funcdecl.type.ty != Terror &&
+            !hasErrorStatement(funcdecl.fbody) &&
             funcdecl.type.isTypeFunction().isLive)
         {
             oblive(funcdecl);
@@ -1479,7 +1502,7 @@ private extern(C++) final class Semantic3Visitor : Visitor
          * Otherwise, error gagging should be temporarily ungagged by functionSemantic3.
          */
         funcdecl.semanticRun = PASS.semantic3done;
-        if ((global.errors != oldErrors) || (funcdecl.fbody && funcdecl.fbody.isErrorStatement()))
+        if ((global.errors != oldErrors) || (funcdecl.fbody && hasErrorStatement(funcdecl.fbody)))
             funcdecl.hasSemantic3Errors = true;
         else
             funcdecl.hasSemantic3Errors = false;

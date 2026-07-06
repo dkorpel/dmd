@@ -503,15 +503,26 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
          */
         flattenStatements(cs.statements);
 
-        foreach (s; cs.statements)
+        /* When a statement has an error, replace the whole compound statement
+         * with a single ErrorStatement so surrounding constructs (e.g. a
+         * `switch` inspecting its body) don't report follow-on errors.
+         * Keep a function's top-level body intact though: the error was
+         * already reported, and discarding the sibling statements throws away
+         * perfectly good semantic information (which e.g. IDE tooling still
+         * wants for the unaffected statements).
+         */
+        if (!(sc.func && sc.func.fbody is cs))
         {
-            if (!s)
-                continue;
-
-            if (auto se = s.isErrorStatement())
+            foreach (s; cs.statements)
             {
-                result = se;
-                return;
+                if (!s)
+                    continue;
+
+                if (auto se = s.isErrorStatement())
+                {
+                    result = se;
+                    return;
+                }
             }
         }
 
