@@ -33,7 +33,7 @@ import dmd.identifier;
 import dmd.lexer;
 import dmd.location;
 import dmd.mtype;
-import dmd.typesem : Type_init;
+import dmd.typesem : Type_init, toBasetype;
 import dmd.root.filename;
 import dmd.root.string;
 import dmd.rootobject;
@@ -91,7 +91,9 @@ class ErrorSinkLsp : ErrorSinkCompiler
 
     extern(C++) override:
 
-    void verror(Loc loc, const(char)* format, va_list ap)             { add(loc, 1, format, ap); }
+    // Increment global.errors like ErrorSinkCompiler does: semantic passes rely
+    // on it to know an error was already reported (e.g. ErrorStatement asserts it)
+    void verror(Loc loc, const(char)* format, va_list ap)             { global.errors++; add(loc, 1, format, ap); }
     void vwarning(Loc loc, const(char)* format, va_list ap)           { add(loc, 2, format, ap); }
     void verrorSupplemental(Loc loc, const(char)* format, va_list ap) { appendToLast(format, ap); }
     void vwarningSupplemental(Loc loc, const(char)* format, va_list ap) { appendToLast(format, ap); }
@@ -148,6 +150,17 @@ extern(C++) class LspVisitor : SemanticTimeTransitiveVisitor
     {
         if (inLoc(d.loc, d.ident))
             this.result = d;
+        // The variable's type may be written as a named type (e.g. `S s;`);
+        // if the cursor is on the type name, resolve to the type's declaration
+        else if (auto ti = d.originalType ? d.originalType.isTypeIdentifier() : null)
+        {
+            if (inLoc(ti.loc, ti.ident))
+            {
+                if (auto s = typeSymbolOf(d.type))
+                    this.result = s;
+            }
+        }
+        super.visit(d);
     }
 
     override void visit(VarExp e)
@@ -155,6 +168,61 @@ extern(C++) class LspVisitor : SemanticTimeTransitiveVisitor
         if (inLoc(e.loc, e.var.ident))
             this.result = e;
     }
+
+    override void visit(DotVarExp e)
+    {
+        if (e.var && e.var.ident && inLoc(e.identLoc, e.var.ident))
+            this.result = e;
+        super.visit(e);
+    }
+}
+
+/// Returns: the declaration of a struct/class/interface/enum type (following
+/// one level of pointer indirection), or null for other types.
+Dsymbol typeSymbolOf(Type t)
+{
+    if (!t)
+        return null;
+    t = t.toBasetype();
+    if (auto tp = t.isTypePointer())
+        t = tp.next.toBasetype();
+    if (auto ts = t.isTypeStruct())
+        return ts.sym;
+    if (auto tc = t.isTypeClass())
+        return tc.sym;
+    if (auto te = t.isTypeEnum())
+        return te.sym;
+    return null;
+}
+
+/// Resolve the AST node under the cursor to the declaration it references,
+/// for textDocument/definition. A declaration resolves to itself.
+Dsymbol definitionTarget(ASTNode obj)
+{
+    if (auto e = isExpression(obj))
+    {
+        if (auto ve = e.isVarExp())
+            return ve.var;
+        if (auto dve = e.isDotVarExp())
+            return dve.var;
+        return null;
+    }
+    return isDsymbol(obj);
+}
+
+/// Write an LSP Location JSON object pointing at s's declaration.
+/// Returns: false (and writes nothing) when s has no usable location.
+bool writeLocation(ref OutBuffer buf, Dsymbol s)
+{
+    SourceLoc sl = SourceLoc(s.loc);
+    if (sl.filename.length == 0 || sl.line == 0)
+        return false;
+    const len = s.ident ? cast(int) s.ident.toString().length : 1;
+    buf.writestring(`{"uri":"file://`);
+    buf.writeJsonString(sl.filename);
+    buf.printf(`","range":{"start":{"line":%d,"character":%d},"end":{"line":%d,"character":%d}}}`,
+        sl.line - 1, sl.column - 1, sl.line - 1, sl.column - 1 + len);
+    return true;
 }
 
 /// Run the dmd pipeline (read → parse → semantic) on the document at `uri`.
@@ -231,29 +299,38 @@ ASTNode findCursorObject(ref Lsp lsp, Params params)
 }
 
 /// LSP CompletionItemKind values for the kinds we currently emit.
-private int completionKind(Declaration d)
+private int completionKind(Dsymbol s)
 {
-    if (d.isFuncDeclaration())
-        return 3;  // Function
-    if (d.isVarDeclaration())
-        return 6;   // Variable
+    if (auto fd = s.isFuncDeclaration())
+        return fd.isThis() ? 2 : 3;        // Method : Function
+    if (s.isInterfaceDeclaration())
+        return 8;                          // Interface
+    if (s.isClassDeclaration())
+        return 7;                          // Class
+    if (s.isStructDeclaration())
+        return 22;                         // Struct
+    if (s.isEnumDeclaration())
+        return 13;                         // Enum
+    if (auto vd = s.isVarDeclaration())
+        return vd.isField() ? 5 : 6;       // Field : Variable
     return 1;                              // Text (fallback)
 }
 
-/// Convert a list of Declarations into LSP CompletionItem JSON, written
+/// Convert a list of symbols into LSP CompletionItem JSON, written
 /// comma-separated into `buf` (no enclosing brackets).
-void writeCompletionItems(ref OutBuffer buf, Declaration[] decls)
+void writeCompletionItems(ref OutBuffer buf, Dsymbol[] syms)
 {
     bool first = true;
-    foreach (d; decls)
+    foreach (s; syms)
     {
-        if (!d || !d.ident)
+        if (!s || !s.ident)
             continue;
         if (!first)
             buf.writestring(",");
         first = false;
-        buf.printf(`{"label":"%s","kind":%d`, d.ident.toChars, completionKind(d));
-        if (d.type)
+        buf.printf(`{"label":"%s","kind":%d`, s.ident.toChars, completionKind(s));
+        auto d = s.isDeclaration();
+        if (d && d.type)
         {
             buf.writestring(`,"detail":"`);
             buf.writeJsonString(d.type.toChars.toDString);
@@ -263,18 +340,143 @@ void writeCompletionItems(ref OutBuffer buf, Declaration[] decls)
     }
 }
 
-/// MVP: emit completion items derived from a hard-coded Declaration[] so the
-/// LSP plumbing can be exercised end-to-end. Replace with real struct-field
-/// lookup once the wiring is verified.
+private bool isIdentChar(char c)
+{
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+        || (c >= '0' && c <= '9') || c == '_';
+}
+
+/// What kind of completion the cursor position asks for.
+struct CompletionContext
+{
+    bool member;              // completing `base.` member access
+    const(char)[] baseIdent;  // identifier before the dot when member == true
+}
+
+/// Inspect the source text left of the cursor to see whether we're completing
+/// a member access (`ident.` possibly followed by a partial member name).
+CompletionContext completionContext(const(char)[] content, Position pos)
+{
+    // Convert (line, character), both 0-based, to a byte offset
+    size_t off = 0;
+    for (int line = 0; line < pos.line && off < content.length; off++)
+    {
+        if (content[off] == '\n')
+            line++;
+    }
+    off += pos.character;
+    if (off > content.length)
+        off = content.length;
+
+    // Skip back over the partially typed identifier, if any
+    size_t i = off;
+    while (i > 0 && isIdentChar(content[i - 1]))
+        i--;
+
+    CompletionContext result;
+    if (i > 0 && content[i - 1] == '.')
+    {
+        const end = i - 1;
+        size_t start = end;
+        while (start > 0 && isIdentChar(content[start - 1]))
+            start--;
+        if (start < end)
+        {
+            result.member = true;
+            result.baseIdent = content[start .. end];
+        }
+    }
+    return result;
+}
+
+/// Finds the last variable declaration named `name` in the module.
+extern(C++) final class VarFinder : SemanticTimeTransitiveVisitor
+{
+    alias visit = typeof(super).visit;
+
+    const(char)[] name;
+    VarDeclaration result;
+
+    extern (D) this(const(char)[] name)
+    {
+        this.name = name;
+    }
+
+    override void visit(VarDeclaration d)
+    {
+        if (d.ident && d.ident.toString() == name)
+            this.result = d;
+        super.visit(d);
+    }
+}
+
+/// Append the fields and methods of `ad` (and base classes) to `syms`,
+/// skipping compiler-generated members.
+void collectMembers(AggregateDeclaration ad, ref Dsymbol[] syms)
+{
+    while (ad)
+    {
+        if (ad.members)
+        {
+            foreach (s; *ad.members)
+            {
+                if (!s.ident || s.ident.toString().startsWith("__"))
+                    continue;
+                if (auto fd = s.isFuncDeclaration())
+                {
+                    if (!fd.isGenerated)
+                        syms ~= fd;
+                }
+                else if (auto vd = s.isVarDeclaration())
+                    syms ~= vd;
+            }
+        }
+        auto cd = ad.isClassDeclaration();
+        ad = cd ? cd.baseClass : null;
+    }
+}
+
+/// Compute completion items for the request in `params`: members of the
+/// aggregate before a `.`, or module-level types and functions otherwise.
+/// No templates; only plainly declared types and functions are offered.
 void completionItems(ref Lsp lsp, Params params, ref OutBuffer buf)
 {
-    Type_init();
-    Declaration[] decls = [
-        cast(Declaration) new VarDeclaration(Loc.initial, Type.tint32,    Identifier.idPool("alpha"), null),
-        cast(Declaration) new VarDeclaration(Loc.initial, Type.tstring,   Identifier.idPool("beta"),  null),
-        cast(Declaration) new VarDeclaration(Loc.initial, Type.tvoidptr,  Identifier.idPool("gamma"), null),
-    ];
-    writeCompletionItems(buf, decls);
+    lsp.eSink.diagnostics = null;
+    CompletionContext ctx;
+    if (auto content = params.textDocument.uri in lsp.openDocuments)
+        ctx = completionContext(*content, params.position);
+
+    Module m = analyzeModule(lsp, params.textDocument.uri);
+    if (!m)
+    {
+        deinitializeModule();
+        return;
+    }
+
+    Dsymbol[] syms;
+    if (ctx.member)
+    {
+        scope finder = new VarFinder(ctx.baseIdent);
+        finder.visit(m);
+        if (finder.result)
+        {
+            if (auto sym = typeSymbolOf(finder.result.type))
+                if (auto ad = sym.isAggregateDeclaration())
+                    collectMembers(ad, syms);
+        }
+    }
+    else if (m.members)
+    {
+        foreach (s; *m.members)
+        {
+            if (!s.ident)
+                continue;
+            if (s.isFuncDeclaration() || s.isAggregateDeclaration() || s.isEnumDeclaration())
+                syms ~= s;
+        }
+    }
+    writeCompletionItems(buf, syms);
+    deinitializeModule();
 }
 
 /// Convert a list of Parameters into LSP SignatureInformation JSON for a
@@ -434,29 +636,10 @@ void lspRespond(ref Lsp lsp, JsonRpc result)
     }
     else if (result.method == "textDocument/definition")
     {
+        Dsymbol target;
         if (auto obj = findCursorObject(lsp, result.params))
-        {
-            // fprintf(stderr, obj);
-            // TODO: add loc range for declaration
-            // if (auto d = obj.isDeclaration())
-            {
-
-            }
-
-            if (auto e = obj.isExpression())
-            {
-                if (auto ve = e.isVarExp())
-                {
-                    Declaration v = ve.var;
-                    SourceLoc sl = SourceLoc(v.loc);
-                    buf.printf(
-                        `{"uri":"file://%s","range":{"start":{"line": %d,"character": %d},"end":{"line": %d,"character": %d}}}`,
-                        sl.filename.ptr, sl.line - 1, sl.column - 1, sl.line - 1, sl.column
-                    );
-                }
-            }
-        }
-        else
+            target = definitionTarget(obj);
+        if (!target || !writeLocation(buf, target))
             buf.printf("null");
     }
     else if (result.method == "textDocument/hover")
@@ -804,8 +987,6 @@ unittest
     assert(result.params.textDocument.uri == "file:///path/to/file");
     assert(result.params.position.line == 10);
     assert(result.params.position.character == 5);
-
-    writeln(result);
 
     string initialize = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":20036,"clientInfo":{"name":"Sublime Text LSP","version":"2.3.0"},"rootUri":"file:///home/dennis/repos/dmd","rootPath":"/home/dennis/repos/dmd","workspaceFolders":[{"name":"dmd","uri":"file:///home/dennis/repos/dmd"}],"capabilities":{"general":{"regularExpressions":{"engine":"ECMAScript"},"markdown":{"parser":"Python-Markdown","version":"3.2.2"}},"textDocument":{"synchronization":{"dynamicRegistration":true,"didSave":true,"willSave":true,"willSaveWaitUntil":true},"hover":{"dynamicRegistration":true,"contentFormat":["markdown","plaintext"]},"completion":{"dynamicRegistration":true,"completionItem":{"snippetSupport":true,"deprecatedSupport":true,"documentationFormat":["markdown","plaintext"],"tagSupport":{"valueSet":[1]},"resolveSupport":{"properties":["detail","documentation","additionalTextEdits"]},"insertReplaceSupport":true,"insertTextModeSupport":{"valueSet":[2]},"labelDetailsSupport":true},"completionItemKind":{"valueSet":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25]},"insertTextMode":2,"completionList":{"itemDefaults":["editRange","insertTextFormat","data"]}},"signatureHelp":{"dynamicRegistration":true,"contextSupport":true,"signatureInformation":{"activeParameterSupport":true,"documentationFormat":["markdown","plaintext"],"parameterInformation":{"labelOffsetSupport":true}}},"references":{"dynamicRegistration":true},"documentHighlight":{"dynamicRegistration":true},"documentSymbol":{"dynamicRegistration":true,"hierarchicalDocumentSymbolSupport":true,"symbolKind":{"valueSet":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26]},"tagSupport":{"valueSet":[1]}},"documentLink":{"dynamicRegistration":true,"tooltipSupport":true},"formatting":{"dynamicRegistration":true},"rangeFormatting":{"dynamicRegistration":true,"rangesSupport":true},"declaration":{"dynamicRegistration":true,"linkSupport":true},"definition":{"dynamicRegistration":true,"linkSupport":true},"typeDefinition":{"dynamicRegistration":true,"linkSupport":true},"implementation":{"dynamicRegistration":true,"linkSupport":true},"codeAction":{"dynamicRegistration":true,"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["quickfix","refactor","refactor.extract","refactor.inline","refactor.rewrite","source.fixAll","source.organizeImports"]}},"dataSupport":true,"isPreferredSupport":true,"resolveSupport":{"properties":["edit"]}},"rename":{"dynamicRegistration":true,"prepareSupport":true,"prepareSupportDefaultBehavior":1},"colorProvider":{"dynamicRegistration":true},"publishDiagnostics":{"relatedInformation":true,"tagSupport":{"valueSet":[1,2]},"versionSupport":true,"codeDescriptionSupport":true,"dataSupport":true},"diagnostic":{"dynamicRegistration":true,"relatedDocumentSupport":true},"selectionRange":{"dynamicRegistration":true},"foldingRange":{"dynamicRegistration":true,"foldingRangeKind":{"valueSet":["comment","imports","region"]}},"codeLens":{"dynamicRegistration":true},"inlayHint":{"dynamicRegistration":true,"resolveSupport":{"properties":["textEdits","label.command"]}},"semanticTokens":{"dynamicRegistration":true,"requests":{"range":true,"full":{"delta":true}},"tokenTypes":["namespace","type","class","enum","interface","struct","typeParameter","parameter","variable","property","enumMember","event","function","method","macro","keyword","modifier","comment","string","number","regexp","operator","decorator","label"],"tokenModifiers":["declaration","definition","readonly","static","deprecated","abstract","async","modification","documentation","defaultLibrary"],"formats":["relative"],"overlappingTokenSupport":false,"multilineTokenSupport":true,"augmentsSyntaxTokens":true},"callHierarchy":{"dynamicRegistration":true},"typeHierarchy":{"dynamicRegistration":true}},"workspace":{"applyEdit":true,"didChangeConfiguration":{"dynamicRegistration":true},"executeCommand":{},"workspaceEdit":{"documentChanges":true,"failureHandling":"abort"},"workspaceFolders":true,"symbol":{"dynamicRegistration":true,"resolveSupport":{"properties":["location.range"]},"symbolKind":{"valueSet":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26]},"tagSupport":{"valueSet":[1]}},"configuration":true,"codeLens":{"refreshSupport":true},"inlayHint":{"refreshSupport":true},"semanticTokens":{"refreshSupport":true},"diagnostics":{"refreshSupport":true}},"window":{"showDocument":{"support":true},"showMessage":{"messageActionItem":{"additionalPropertiesSupport":true}},"workDoneProgress":true}},"initializationOptions":{}}}`;
     jsonParse(result, initialize, eSink);
