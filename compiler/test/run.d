@@ -689,8 +689,10 @@ string[string] getEnvironment()
         // (RESULTS_DIR in EXECUTE_ARGS). WASI has no working directory, so
         // relative guest paths resolve against "/"; PWD lets the coverage
         // runtime absolutize relative source paths (rt.wasm.cover).
+        // max-memory-size caps linear memory at 2 GiB so a runaway allocating
+        // test fails with ALLOCFAIL instead of exhausting host RAM.
         env.setDefault("EXEC_BINARY_WRAPPER",
-            "wasmtime run --dir=/ --env PWD=" ~ std.file.getcwd());
+            "wasmtime run -W max-memory-size=2147483648 --dir=/ --env PWD=" ~ std.file.getcwd());
         // Provide druntime import path (used when -conf= is passed, which strips dmd.conf).
         auto druntimePath = environment.get("DRUNTIME_PATH", testPath(`../../druntime`));
         env["DFLAGS"] = "-I%s/import".format(druntimePath);

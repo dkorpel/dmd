@@ -129,6 +129,7 @@ runnable/issue16995.d
 runnable/noreturn1.d
 runnable/nullderefcheck.d
 runnable/nullderefcheck_safeonly.d
+runnable/pragmainline.d
 runnable/sdtor.d
 runnable/test12874.d
 runnable/test14903.d
