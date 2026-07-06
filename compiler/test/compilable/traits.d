@@ -71,7 +71,7 @@ version(Windows)
 else
     static assert(__traits(getLocation, MyStruct)[0] == "compilable/traits.d");
 static assert(__traits(getLocation, MyStruct)[1] == 40);
-static assert(__traits(getLocation, MyStruct)[2] == 1);
+static assert(__traits(getLocation, MyStruct)[2] == 8);
 
 int foo();
 int foo(int);
