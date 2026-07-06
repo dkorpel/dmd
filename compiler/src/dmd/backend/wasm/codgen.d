@@ -2983,7 +2983,18 @@ uint funcIndex(Symbol* sfunc)
 private bool sameFuncName(const(Symbol)* a, const(Symbol)* b)
 {
     import core.stdc.string : strcmp;
-    return a && b && strcmp(&a.Sident[0], &b.Sident[0]) == 0;
+    if (!a || !b)
+        return false;
+    // C internal linkage: distinct `static` functions in different translation
+    // units of one compilation may share a name; only pointer identity links
+    // those, never the name.
+    // ---
+    // // a.c: static int foo(void) { return 1; }  int getA(void) { return foo(); }
+    // // b.c: static int foo(void) { return 2; }  int getB(void) { return foo(); }
+    // ---
+    if (a.Sclass == SC.static_ || b.Sclass == SC.static_)
+        return false;
+    return strcmp(&a.Sident[0], &b.Sident[0]) == 0;
 }
 
 // Ensure a condition value on the WASM stack is an i32 suitable for br_if.

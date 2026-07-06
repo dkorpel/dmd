@@ -129,11 +129,18 @@ private uint canonicalFuncForName(size_t i)
     const(char)[] name = funcName(wmod.funcs[i]);
     if (!name.length)
         return cast(uint) i;
+    // C internal linkage: same-named `static` functions from different
+    // translation units are distinct — each owns its own symbol-table entry
+    // and never shadows (or is shadowed by) another function.
+    if (wmod.funcs[i].sym && wmod.funcs[i].sym.Sclass == SC.static_)
+        return cast(uint) i;
     uint firstDefined = uint.max;
     uint firstImport = uint.max;
     foreach (size_t j, ref const WasmFunc g; wmod.funcs)
     {
         if (funcName(g) != name)
+            continue;
+        if (!g.isImport && g.sym && g.sym.Sclass == SC.static_)
             continue;
         if (g.isImport)
         {
@@ -886,7 +893,11 @@ private bool emitLinkingSection(ref OutBuffer out_, ref WasmModule wmod)
                 flags |= WASM_SYM.EXPORTED;
             if (f.comdat)
                 flags |= WASM_SYM.BINDING_WEAK;
-            // Defined non-exported functions: global binding by default
+            // C `static` functions: LOCAL binding, so same-named statics in
+            // other objects don't clash at link time.
+            else if (f.sym && f.sym.Sclass == SC.static_)
+                flags |= WASM_SYM.BINDING_LOCAL;
+            // Other defined non-exported functions: global binding by default
             // (omit WASM_SYM.BINDING_LOCAL so wasm-ld can use them for type relocs)
         }
 
@@ -1806,6 +1817,14 @@ int WasmObj_external(Symbol* s)
     {
         // Deduplicate imports: multiple D modules may declare the same extern(C) symbol.
         if (f.isImport && f.importName == id)
+        {
+            s.Sseg = cast(int) i;
+            return s.Sseg;
+        }
+        // The symbol may already be defined here (e.g. a thunk, registered by
+        // WasmObj_thunk and later referenced through the same Symbol by a
+        // vtable relocation): return the definition, never make an import.
+        if (!f.isImport && f.sym is s)
         {
             s.Sseg = cast(int) i;
             return s.Sseg;
