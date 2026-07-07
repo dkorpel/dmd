@@ -157,6 +157,7 @@ runnable/testline.d
 runnable/testswitch.d
 runnable/testtypeid.d
 runnable/xpostblit.d
+runnable/testaa.d
 
 # --- Depend on the conservative GC's allocation geometry ---
 # -profile=gc reports allocation sizes as deltas of allocatedInCurrentThread,
@@ -197,13 +198,17 @@ runnable/gdb_slice_debuginfo_64.d
 # x86 codegen details; sectiondefs.d checks ELF section symbols
 # (__start_/__stop_ of custom sections); ice21727.d needs SIMD (float4);
 # testargtypes.d checks the x86-64 argtypes ABI classification;
-# testprofile.d's test15754 uses x86 inline asm (bsf EAX).
+# testprofile.d's test15754 uses x86 inline asm (bsf EAX);
+# test_cdstrpar.d disassembles the compiled functions and asserts an exact x86
+# machine-code byte sequence (push rbp; mov rbp,rsp; ...), which the wasm
+# bytecode can never match (it is DISABLED on every arch but linux64 already).
 runnable/bitops.d
 runnable/ice21727.d
 runnable/mars1.d
 runnable/sectiondefs.d
 runnable/testargtypes.d
 runnable/testprofile.d
+runnable/test_cdstrpar.d
 
 # --- Architecture-dependent undefined behavior ---
 # constfold.d test2 asserts cast(int)float.infinity == 0x80000000 (the x86
@@ -220,6 +225,41 @@ runnable/constfold.d
 compilable/testos.d
 compilable/json2.d
 compilable/makedeps_exe.d
+
+# --- Require a real collecting GC (WASM has only a bump allocator) ---
+# The WASM GC never reclaims memory (rt/wasm/gc.d bumps linear memory via
+# memory.grow and never collects), so allocation-churning workloads exhaust the
+# 2 GiB cap and abort with ALLOCFAIL/OUTOFMEM. It also does not track per-block
+# BlkAttr flags, so GC.getAttr can't report NO_SCAN. These need the collecting
+# GC ported to WASM.
+runnable/stress.d
+runnable/test15.d
+runnable/testappend.d
+runnable/testgc2.d
+runnable/testthread2.d
+runnable/test24498.d
+
+# --- Encode ELF-style section separation ---
+# testconstsection.d asserts that string-literal data, TLS, data and BSS live in
+# disjoint address ranges (comparing bounding intervals of a few pointers). ELF
+# gives each its own section; WASM lays every symbol out as its own data segment
+# in one linear memory, so wasm-ld can interleave a string's char array between
+# two BSS variables and the bounding intervals then overlap.
+runnable/testconstsection.d
+
+# --- pragma(crt_constructor)/crt_destructor not wired for WASM ---
+# The WASM backend does not emit crt_constructor functions into the linking
+# section's WASM_INIT_FUNCS (so they never run via __wasm_call_ctors), and WASM
+# has no standard fini mechanism for crt_destructor. test17868/b expect the
+# ctor/dtor functions to print, but only main's output appears.
+runnable/test17868.d
+runnable/test17868b.d
+
+# --- Assembler symbol renaming + host open() ---
+# test23343.c renames `open` to the macho-underscored `_open` via asm("_open")
+# and calls open("/dev/null"). WASI exposes no `_open` import and the macho
+# underscore convention does not apply, so the symbol is an undefined import.
+runnable/test23343.c
 
 # --- Data too large for wasm object format ---
 # test23679.d declares a 2GB global; ELF puts it in .bss without materializing
@@ -249,6 +289,9 @@ runnable/test6423.d
 
 # --- Require threads / fibers (WASM is single-threaded) ---
 # core.thread (Thread, Fiber) has no WASM implementation; these tests spawn
-# threads or fibers as their core scenario.
+# threads or fibers as their core scenario. test17072 only calls Thread.sleep,
+# but core.thread.wasi_impl is not compiled into the minimal wasm druntime, so
+# even the static method is an undefined import at link time.
 runnable/test15779.d
 runnable/testthread.d
+runnable/test17072.d
