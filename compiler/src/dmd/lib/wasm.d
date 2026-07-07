@@ -101,26 +101,7 @@ final class LibWasm : Library
 
     void addSymbol(WasmObjModule* om, const(char)[] name, int pickAny = 0) nothrow
     {
-        auto s = tab.insert(name.ptr, name.length, null);
-        if (!s)
-        {
-            if (!pickAny)
-            {
-                s = tab.lookup(name.ptr, name.length);
-                assert(s);
-                WasmObjSymbol* os2 = s.value;
-                eSink.error(Loc.initial, "multiple definition of %s: %s and %s: %s",
-                    om.name.ptr, name.ptr, os2.om.name.ptr, os2.name.ptr);
-            }
-        }
-        else
-        {
-            auto os = new WasmObjSymbol();
-            os.name = xarraydup(name);
-            os.om = om;
-            s.value = os;
-            objsymbols.push(os);
-        }
+        arAddSymbol(tab, objsymbols, om, name, eSink, pickAny);
     }
 
     /***************************************

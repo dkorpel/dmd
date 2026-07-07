@@ -21,7 +21,9 @@ import dmd.errorsink;
 import dmd.location;
 import dmd.root.array : Array;
 import dmd.root.port : Port;
+import dmd.root.rmem : xarraydup;
 import dmd.root.string : toCStringThen;
+import dmd.root.stringtable : StringTable;
 import dmd.target : Target;
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -121,6 +123,47 @@ package(dmd.lib) struct ArObjSymbol
 {
     const(char)[] name;
     ArObjModule* om;
+}
+
+/**
+ * Record a symbol `name` defined by module `om` into the archive dictionary.
+ *
+ * Shared by the ELF and WASM libraries, which both build a GNU-ar "/" symbol
+ * table from `ArObjSymbol`s. A duplicate is an error unless `pickAny` (COMDAT).
+ *
+ * Params:
+ *  tab        = name → symbol table, deduplicating definitions
+ *  objsymbols = dictionary being built; the new symbol is appended here
+ *  om         = module defining the symbol
+ *  name       = symbol name (copied into the archive's memory)
+ *  eSink      = sink for the multiple-definition error
+ *  pickAny    = if nonzero, silently keep the first definition of a duplicate
+ */
+package(dmd.lib)
+void arAddSymbol(ref StringTable!(ArObjSymbol*) tab, ref Array!(ArObjSymbol*) objsymbols,
+    ArObjModule* om, const(char)[] name, ErrorSink eSink, int pickAny = 0) nothrow
+{
+    auto s = tab.insert(name.ptr, name.length, null);
+    if (!s)
+    {
+        // already in table
+        if (!pickAny)
+        {
+            s = tab.lookup(name.ptr, name.length);
+            assert(s);
+            ArObjSymbol* os = s.value;
+            eSink.error(Loc.initial, "multiple definition of %s: %s and %s: %s",
+                om.name.ptr, name.ptr, os.om.name.ptr, os.name.ptr);
+        }
+    }
+    else
+    {
+        auto os = new ArObjSymbol();
+        os.name = xarraydup(name);
+        os.om = om;
+        s.value = os;
+        objsymbols.push(os);
+    }
 }
 
 /**

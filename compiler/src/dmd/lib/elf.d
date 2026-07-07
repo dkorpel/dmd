@@ -317,26 +317,7 @@ final class LibElf : Library
         {
             printf("LibElf::addSymbol(%s, %s, %d)\n", om.name.ptr, name.ptr, pickAny);
         }
-        auto s = tab.insert(name.ptr, name.length, null);
-        if (!s)
-        {
-            // already in table
-            if (!pickAny)
-            {
-                s = tab.lookup(name.ptr, name.length);
-                assert(s);
-                ElfObjSymbol* os = s.value;
-                eSink.error(Loc.initial, "multiple definition of %s: %s and %s: %s", om.name.ptr, name.ptr, os.om.name.ptr, os.name.ptr);
-            }
-        }
-        else
-        {
-            auto os = new ElfObjSymbol();
-            os.name = xarraydup(name);
-            os.om = om;
-            s.value = os;
-            objsymbols.push(os);
-        }
+        arAddSymbol(tab, objsymbols, om, name, eSink, pickAny);
     }
 
 private:
