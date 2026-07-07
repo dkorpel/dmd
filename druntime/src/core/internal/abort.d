@@ -1,5 +1,12 @@
 module core.internal.abort;
 
+// The `-os=wasm` target predefines WebAssembly + WASI (not WASIp1) and links
+// wasi-libc, so route it through the same __wasi_fd_write path as WASIp1. Guard
+// against WASIp2, which has its own branch below.
+version (WASIp2) {}
+else version (WebAssembly) version = WasiFdWriteAbort;
+version (WASIp1) version = WasiFdWriteAbort;
+
 /*
  * Use instead of assert(0, msg), since this does not print a message for -release compiled
  * code, and druntime is -release compiled.
@@ -41,7 +48,7 @@ void abort(scope string msg, scope string filename = __FILE__, size_t line = __L
             }
         }
     }
-    else version (WASIp1) {
+    else version (WasiFdWriteAbort) {
         // currently depends on wasi-libc being linked in to provide these "syscalls"
         // TODO: detach this from wasi-libc
         alias ushort __wasi_errno_t;

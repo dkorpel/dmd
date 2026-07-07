@@ -161,11 +161,26 @@ extern (C) long clock() @nogc nothrow
     return cast(long) t;
 }
 
-// rt.minfo.moduleinfos_apply — module ctors are not iterated in this runtime.
-pragma(mangle, "_D2rt5minfo17moduleinfos_applyFMDFyPS6object10ModuleInfoZiZi")
-int _wasm_moduleinfos_apply(scope int delegate(immutable(ModuleInfo*)) dg)
+// rt.config reads runtime options from rt_args() (the --DRT-* command line).
+// WASI has no such argv here (rt.wasm.start strips --DRT-* before main), so
+// there are no runtime options to expose.
+extern (C) string[] rt_args() @nogc nothrow @system { return null; }
+
+// Run each module's aggregated unittest function (present when compiled with
+// -unittest). rt.minfo has no such driver, so walk the wasm-ld "minfo" segment
+// brackets directly. unitTest bodies may throw, but WASM has no EH runtime (a
+// throw traps regardless), so call them as nothrow from this nothrow driver.
+private extern(C) extern __gshared void* __start_minfo;
+private extern(C) extern __gshared void* __stop_minfo;
+
+extern (C) void rt_moduleUnitTests() nothrow
 {
-    return 0;
+    auto b = cast(immutable(ModuleInfo)**) &__start_minfo;
+    auto e = cast(immutable(ModuleInfo)**) &__stop_minfo;
+    foreach (m; b[0 .. e - b])
+        if (m !is null)
+            if (auto f = m.unitTest)
+                (cast(void function() nothrow) f)();
 }
 
 // compiler-rt builtin needed by wasi-libc internals (strtod/scanf long-double

@@ -487,7 +487,11 @@ WASM_DRT_SRCS := \
 	src/rt/trace.d \
 	src/rt/profilegc.d \
 	src/rt/tracegc.d \
-	src/rt/wasm/minfo.d \
+	src/core/bitop.d \
+	src/core/internal/abort.d \
+	src/rt/minfo.d \
+	src/rt/sections_wasm.d \
+	src/rt/config.d \
 	src/rt/wasm/cover.d \
 	src/rt/wasm/extra.d
 WASM_DRT_FLAGS := -c -mwasm32 -os=wasm -conf= -Isrc -Iimport -w -de

@@ -45,15 +45,16 @@ export void _start() nothrow
     while (true) {}
 }
 
-// Module ctor/dtor execution lives in rt.wasm.minfo (rt_moduleCtor /
-// rt_moduleDtor), driven off the wasm-ld "minfo" segment brackets.  The TLS
-// variants are folded into those (WASM is single-threaded), so they stay no-ops.
+// Module ctor/dtor execution reuses the canonical rt.minfo.ModuleGroup, bridged
+// to the wasm-ld "minfo" segment brackets by rt.sections_wasm.  initSections
+// populates the single SectionGroup from those brackets before the ctors run.
+import rt.sections : initSections;
 extern(C) void rt_moduleCtor();
+extern(C) void rt_moduleTlsCtor();
 extern(C) void rt_moduleUnitTests();
+extern(C) void rt_moduleTlsDtor();
 extern(C) void rt_moduleDtor();
 extern(C) void rt_coverWrite();
-void rt_moduleTlsCtor() @nogc {}
-void rt_moduleTlsDtor() @nogc {}
 
 // Called by the compiler-generated `main` wrapper (for D main).
 private alias MainFunc = extern(C) int function(char[][] args);
@@ -90,9 +91,12 @@ private char[][] wasiArgs() @nogc nothrow
 int _d_run_main(int argc, char** argv, MainFunc mainFunc)
 {
     gc_init();
+    initSections();
     rt_moduleCtor();
+    rt_moduleTlsCtor();
     rt_moduleUnitTests();
     int result = mainFunc(wasiArgs());
+    rt_moduleTlsDtor();
     rt_moduleDtor();
     rt_coverWrite();
     gc_term();
