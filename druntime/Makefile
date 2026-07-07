@@ -436,15 +436,15 @@ lib: $(DRUNTIME)
 # Output layout mirrors $(ROOT_OF_THEM_ALL)/<os>/<build>/<model>/ for the
 # native build, with os=wasm, build=release, model=wasm32.
 #
-# `dmd -lib -mwasm32` currently miscompiles the archive ("corrupt WASM
-# object"), so we emit per-module .wasm objects and assemble them with `ar`.
+# Objects use the .o extension (the wasm target's obj_ext) so `dmd -lib`
+# accepts them when assembling the archive.
 
 WASM_DMD    ?= $(DMD)
 WASM_ROOT   := $(ROOT_OF_THEM_ALL)/wasm/release/wasm32
 WASM_LIB    := $(WASM_ROOT)/libdruntime-wasm.a
 WASM_RT_DIR := src/rt/wasm
 WASM_MODULES := start gc sync errors eh
-WASM_OBJS   := $(addprefix $(WASM_ROOT)/rt_,$(addsuffix .wasm,$(WASM_MODULES)))
+WASM_OBJS   := $(addprefix $(WASM_ROOT)/rt_,$(addsuffix .o,$(WASM_MODULES)))
 WASM_FLAGS  := -c -mwasm32 -os=wasm -betterC -conf= -Isrc -Iimport -w -de
 
 # Real (cross-platform) druntime modules that supply non-template runtime
@@ -491,13 +491,13 @@ WASM_DRT_SRCS := \
 	src/rt/wasm/cover.d \
 	src/rt/wasm/extra.d
 WASM_DRT_FLAGS := -c -mwasm32 -os=wasm -conf= -Isrc -Iimport -w -de
-WASM_DRT_OBJS := $(foreach s,$(WASM_DRT_SRCS),$(WASM_ROOT)/drt_$(notdir $(basename $(s))).wasm)
+WASM_DRT_OBJS := $(foreach s,$(WASM_DRT_SRCS),$(WASM_ROOT)/drt_$(notdir $(basename $(s))).o)
 
 # Standalone _start shim for betterC programs (NOT part of libdruntime-wasm.a,
 # which betterC does not link).  dmd.link adds this object in betterC mode.
 WASM_BETTERC_CRT := $(WASM_ROOT)/crt1_betterc.wasm
 
-$(WASM_ROOT)/rt_%.wasm : $(WASM_RT_DIR)/%.d $(DMD)
+$(WASM_ROOT)/rt_%.o : $(WASM_RT_DIR)/%.d $(DMD)
 	@mkdir -p $(dir $@)
 	$(WASM_DMD) $(WASM_FLAGS) -of$@ $<
 
@@ -508,7 +508,7 @@ $(WASM_BETTERC_CRT) : $(WASM_RT_DIR)/start_betterc.d $(DMD)
 # One pattern-free rule per real druntime source (sources live in different
 # directories, so a static pattern rule can't map them).
 define WASM_DRT_RULE
-$(WASM_ROOT)/drt_$(notdir $(basename $(1))).wasm : $(1) $(DMD)
+$(WASM_ROOT)/drt_$(notdir $(basename $(1))).o : $(1) $(DMD)
 	@mkdir -p $$(dir $$@)
 	$(WASM_DMD) $(WASM_DRT_FLAGS) -of$$@ $(1)
 endef
@@ -520,7 +520,7 @@ $(WASM_DRT_OBJS) $(WASM_OBJS): $(WASM_DRT_SRCS) $(wildcard src/core/stdc/*.d) $(
 
 $(WASM_LIB): $(WASM_OBJS) $(WASM_DRT_OBJS)
 	rm -f $@
-	ar rcs $@ $(WASM_OBJS) $(WASM_DRT_OBJS)
+	$(WASM_DMD) -lib -mwasm32 -os=wasm -conf= -of$@ $(WASM_OBJS) $(WASM_DRT_OBJS)
 
 .PHONY: wasm
 wasm: copy $(WASM_LIB) $(WASM_BETTERC_CRT)

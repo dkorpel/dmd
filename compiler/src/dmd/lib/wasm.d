@@ -14,8 +14,8 @@
 module dmd.lib.wasm;
 
 import core.stdc.stdlib : strtoul;
-import core.stdc.string : memcmp, strlen;
-import core.stdc.time : time, time_t;
+import core.stdc.string : memcmp;
+import core.stdc.time : time;
 
 import dmd.errors : fatal;
 import dmd.lib;
@@ -23,7 +23,6 @@ import dmd.lib.scanwasm;
 import dmd.location;
 import dmd.root.array;
 import dmd.root.filename;
-import dmd.root.port;
 import dmd.root.rmem;
 import dmd.root.string;
 import dmd.root.stringtable;
@@ -39,25 +38,8 @@ package(dmd.lib) extern (C++) Library LibWasm_factory()
 private:
 nothrow:
 
-struct WasmObjSymbol
-{
-    const(char)[] name;
-    WasmObjModule* om;
-}
-
-struct WasmObjModule
-{
-    const(char)[] name;  // basename used in ar header (null-terminated)
-    const(ubyte)[] data; // raw bytes of the WASM object
-    long file_time;
-    uint user_id;
-    uint group_id;
-    uint file_mode;
-    int  name_offset; // offset into // name table, or -1 if inline
-    uint offset;      // byte offset of this member in the archive
-    uint length;      // same as data.length but kept as uint for arFillHeader
-    bool scan;        // true = scan for symbols
-}
+alias WasmObjSymbol = ArObjSymbol;
+alias WasmObjModule = ArObjModule;
 
 alias WasmObjModules = Array!(WasmObjModule*);
 alias WasmObjSymbols = Array!(WasmObjSymbol*);
@@ -106,13 +88,11 @@ final class LibWasm : Library
 
         auto om = new WasmObjModule();
         om.name = toCString(FileName.name(module_name));
-        om.data = buffer;
+        om.base = cast(ubyte*)buffer.ptr;
         om.length = cast(uint)buffer.length;
-        om.scan = true;
+        om.scan = 1;
 
-        time_t t;
-        time(&t);
-        om.file_time = cast(long)t;
+        time(&om.file_time);
         om.user_id = 0;
         om.group_id = 0;
         om.file_mode = (1 << 15) | (6 << 6) | (4 << 3) | (4 << 0); // 0100644
@@ -149,118 +129,12 @@ final class LibWasm : Library
      */
     protected override void writeLibToBuffer(ref OutBuffer libbuf)
     {
-        // 1. Scan object modules for symbols.
         foreach (om; objmodules)
         {
             if (om.scan)
                 scanObjModule(om);
         }
-
-        // 2. Assign long name offsets (// table) for names ≥ 15 chars.
-        uint noffset = 0;
-        foreach (om; objmodules)
-        {
-            // name field = 16 bytes: "name/" fits if name is ≤ 14 chars.
-            if (strlen(om.name.ptr) < AR_OBJECT_NAME_SIZE)
-                om.name_offset = -1;
-            else
-            {
-                om.name_offset = cast(int)noffset;
-                noffset += cast(uint)(strlen(om.name.ptr) + 2); // "name/\n"
-            }
-        }
-
-        // 3. Compute member offsets (symbol table first, then // table, then data).
-        //    Symbol table payload: 4-byte count + 4 bytes per symbol + symbol names + NULs.
-        uint symtabPayload = 4;
-        foreach (os; objsymbols)
-            symtabPayload += 4 + cast(uint)(os.name.length + 1);
-
-        uint moffset = 8; // "!<arch>\n"
-        moffset += ArHeader.sizeof + symtabPayload;
-        moffset += moffset & 1; // align to even
-
-        if (noffset)
-        {
-            moffset += ArHeader.sizeof + ((noffset + 1) & ~1u);
-        }
-
-        foreach (om; objmodules)
-        {
-            moffset += moffset & 1;
-            om.offset = moffset;
-            moffset += ArHeader.sizeof + om.length;
-        }
-
-        libbuf.reserve(moffset);
-
-        // 4. Write magic.
-        libbuf.write("!<arch>\n");
-
-        // 5. Write symbol table "/" member.
-        {
-            ArHeader h;
-            arFillHeader(h, "/", -1, 0, 0, 0, 0, symtabPayload);
-            // arFillHeader would turn "/" into "//", so fix the name field manually.
-            // The "/" symbol-table member is a special case: name field = "/               "
-            h.object_name[0] = '/';
-            foreach (ref c; h.object_name[1 .. $])
-                c = ' ';
-            libbuf.write((&h)[0 .. 1]);
-
-            // Payload: [count BE-u32] [offsets BE-u32...] [names NUL-terminated...]
-            char[4] tmp;
-            Port.writelongBE(cast(uint)objsymbols.length, tmp.ptr);
-            libbuf.write(tmp[0 .. 4]);
-            foreach (os; objsymbols)
-            {
-                Port.writelongBE(os.om.offset, tmp.ptr);
-                libbuf.write(tmp[0 .. 4]);
-            }
-            foreach (os; objsymbols)
-            {
-                libbuf.write(os.name);
-                libbuf.writeByte(0);
-            }
-        }
-        if (libbuf.length & 1)
-            libbuf.writeByte('\n');
-
-        // 6. Write long filename table "//" if needed.
-        if (noffset)
-        {
-            ArHeader h;
-            // "//" member: name field = "//              " (no extra '/' suffix).
-            arFillHeader(h, "/", -1, 0, 0, 0, 0, noffset);
-            h.object_name[0] = '/';
-            h.object_name[1] = '/';
-            foreach (ref c; h.object_name[2 .. $])
-                c = ' ';
-            libbuf.write((&h)[0 .. 1]);
-            foreach (om; objmodules)
-            {
-                if (om.name_offset >= 0)
-                {
-                    libbuf.writestring(om.name.ptr);
-                    libbuf.write("/\n");
-                }
-            }
-            if (noffset & 1)
-                libbuf.writeByte('\n');
-        }
-
-        // 7. Write object members.
-        foreach (om; objmodules)
-        {
-            if (libbuf.length & 1)
-                libbuf.writeByte('\n');
-
-            ArHeader h;
-            arFillHeader(h, om.name.ptr, om.name_offset,
-                om.file_time, om.user_id, om.group_id, om.file_mode, om.length);
-            libbuf.write((&h)[0 .. 1]);
-            libbuf.write(om.data);
-        }
+        writeArLibToBuffer(libbuf, objmodules, objsymbols);
     }
 
 private:
@@ -271,7 +145,7 @@ private:
         {
             this.addSymbol(om, name, pickAny);
         }
-        scanWasmObjModule(&addSym, om.data, om.name.ptr, filename, eSink);
+        scanWasmObjModule(&addSym, om.base[0 .. om.length], om.name.ptr, filename, eSink);
     }
 
     // Extract WASM object members from an existing ar archive.

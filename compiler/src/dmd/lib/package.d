@@ -14,10 +14,14 @@ module dmd.lib;
 
 import core.stdc.stdio;
 import core.stdc.string : memset, memcpy;
+import core.stdc.time : time_t;
 
 import dmd.common.outbuffer;
 import dmd.errorsink;
 import dmd.location;
+import dmd.root.array : Array;
+import dmd.root.port : Port;
+import dmd.root.string : toCStringThen;
 import dmd.target : Target;
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -95,6 +99,139 @@ void arFillHeader(ref ArHeader h, const(char)* name, int name_offset,
     assert(len == ArHeader.sizeof - 1);
     buf[len] = '\n';
     (cast(char*)&h)[0 .. ArHeader.sizeof] = buf[0 .. ArHeader.sizeof];
+}
+
+/// One object member of an ar archive, shared by the ELF and WASM libraries.
+package(dmd.lib) struct ArObjModule
+{
+    ubyte* base;        // module bytes held in memory
+    uint length;        // byte length of the module
+    uint offset;        // byte offset of this member within the archive
+    const(char)[] name; // member basename, null-terminated
+    int name_offset;    // -1, or offset into the "//" long-name string table
+    time_t file_time;
+    uint user_id;
+    uint group_id;
+    uint file_mode;
+    int scan;           // 1 = scan this module for symbols
+}
+
+/// One dictionary symbol pointing back at the module that defines it.
+package(dmd.lib) struct ArObjSymbol
+{
+    const(char)[] name;
+    ArObjModule* om;
+}
+
+/**
+ * Write `objmodules` as a GNU/SVR4 ar archive with a "/" symbol dictionary.
+ *
+ * The container is identical for ELF and WASM (only the per-module symbol
+ * scanner differs), so both libraries populate `objmodules`/`objsymbols` and
+ * share this writer. The output is what llvm-ar/wasm-ld produce and consume.
+ *
+ * Params:
+ *  libbuf      = buffer receiving the archive bytes
+ *  objmodules  = members to write; `offset`/`name_offset` are assigned here
+ *  objsymbols  = dictionary entries already collected from the members
+ */
+package(dmd.lib)
+void writeArLibToBuffer(ref OutBuffer libbuf,
+    ref Array!(ArObjModule*) objmodules, ref Array!(ArObjSymbol*) objsymbols) nothrow
+{
+    // Long file names (>= 16 chars) go into a "//" string table.
+    uint noffset = 0;
+    foreach (om; objmodules)
+    {
+        const len = om.name.length;
+        if (len >= AR_OBJECT_NAME_SIZE)
+        {
+            om.name_offset = cast(int)noffset;
+            noffset += cast(uint)(len + 2);
+        }
+        else
+            om.name_offset = -1;
+    }
+
+    // The "/" symbol-table member holds a 4-byte count, one 4-byte member
+    // offset per symbol, then the NUL-terminated symbol names.
+    uint moffset = 8 + ArHeader.sizeof + 4;
+    foreach (os; objsymbols)
+        moffset += cast(uint)(4 + os.name.length + 1);
+    const hoffset = moffset;
+    moffset += moffset & 1;
+    if (noffset)
+        moffset += ArHeader.sizeof + noffset;
+    foreach (om; objmodules)
+    {
+        moffset += moffset & 1;
+        om.offset = moffset;
+        moffset += ArHeader.sizeof + om.length;
+    }
+    libbuf.reserve(moffset);
+
+    // Magic + "/" symbol-table member (empty name → arFillHeader emits "/").
+    libbuf.write("!<arch>\n");
+    ArHeader h;
+    arFillHeader(h, "", -1, 0, 0, 0, 0, cast(uint)(hoffset - (8 + ArHeader.sizeof)));
+    libbuf.write((&h)[0 .. 1]);
+    char[4] tmp;
+    Port.writelongBE(cast(uint)objsymbols.length, tmp.ptr);
+    libbuf.write(tmp[0 .. 4]);
+    foreach (os; objsymbols)
+    {
+        Port.writelongBE(os.om.offset, tmp.ptr);
+        libbuf.write(tmp[0 .. 4]);
+    }
+    foreach (os; objsymbols)
+    {
+        libbuf.writestring(os.name);
+        libbuf.writeByte(0);
+    }
+
+    // "//" long-filename string table.
+    if (noffset)
+    {
+        if (libbuf.length & 1)
+            libbuf.writeByte('\n');
+        memset(&h, ' ', ArHeader.sizeof);
+        h.object_name[0] = '/';
+        h.object_name[1] = '/';
+        const n = snprintf(h.file_size.ptr, AR_FILE_SIZE_SIZE, "%u", noffset);
+        assert(n < AR_FILE_SIZE_SIZE);
+        h.file_size[n] = ' ';
+        h.trailer[0] = '`';
+        h.trailer[1] = '\n';
+        libbuf.write((&h)[0 .. 1]);
+        foreach (om; objmodules)
+        {
+            if (om.name_offset >= 0)
+            {
+                libbuf.writestring(om.name);
+                libbuf.writeByte('/');
+                libbuf.writeByte('\n');
+            }
+        }
+    }
+
+    // Object members.
+    foreach (om; objmodules)
+    {
+        if (libbuf.length & 1)
+            libbuf.writeByte('\n');
+        assert(libbuf.length == om.offset);
+        om.name.toCStringThen!(s => arFillHeader(h, s.ptr, om.name_offset,
+            om.file_time, om.user_id, om.group_id, om.file_mode, om.length));
+        libbuf.write((&h)[0 .. 1]);
+        libbuf.write(om.base[0 .. om.length]);
+    }
+    assert(libbuf.length == moffset);
+
+    // Members are 2-byte aligned; pad a final odd-sized member too. GNU ar
+    // tolerates a missing trailing pad, but llvm-ar/wasm-ld reject an archive
+    // that ends on an odd offset.
+    if (libbuf.length & 1)
+        libbuf.writeByte('\n');
 }
 
 import dmd.lib.elf;
