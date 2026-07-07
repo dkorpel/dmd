@@ -2948,9 +2948,9 @@ uint funcIndex(ref WasmCG cg, Symbol* sfunc)
 /// Returns: the defining symbol, or null if the function isn't defined here.
 Symbol* definedFuncByName(Symbol* sfunc)
 {
-    foreach (ref const fb; wasmFuncBodies)
-        if (fb.sym == sfunc || sameFuncName(fb.sym, sfunc))
-            return cast(Symbol*) fb.sym;
+    uint bodyIdx;
+    if (lookupDefinedFuncBody(sfunc, bodyIdx))
+        return cast(Symbol*) wasmFuncBodies[bodyIdx].sym;
     return null;
 }
 
@@ -2968,9 +2968,9 @@ uint funcIndex(Symbol* sfunc)
     // Defined functions follow imports. Match by name too: a C block-scope
     // declaration is a distinct Symbol from the definition, and must not
     // become a self-import of the module's own function.
-    foreach (size_t i, ref const fb; wasmFuncBodies)
-        if (fb.sym == sfunc || sameFuncName(fb.sym, sfunc))
-            return nimports + cast(uint) i;
+    uint bodyIdx;
+    if (lookupDefinedFuncBody(sfunc, bodyIdx))
+        return nimports + bodyIdx;
 
     if (sfunc && sfunc.Stype)
     {
@@ -2978,23 +2978,6 @@ uint funcIndex(Symbol* sfunc)
         return cast(uint) idx;
     }
     return 0;
-}
-
-private bool sameFuncName(const(Symbol)* a, const(Symbol)* b)
-{
-    import core.stdc.string : strcmp;
-    if (!a || !b)
-        return false;
-    // C internal linkage: distinct `static` functions in different translation
-    // units of one compilation may share a name; only pointer identity links
-    // those, never the name.
-    // ---
-    // // a.c: static int foo(void) { return 1; }  int getA(void) { return foo(); }
-    // // b.c: static int foo(void) { return 2; }  int getB(void) { return foo(); }
-    // ---
-    if (a.Sclass == SC.static_ || b.Sclass == SC.static_)
-        return false;
-    return strcmp(&a.Sident[0], &b.Sident[0]) == 0;
 }
 
 // Ensure a condition value on the WASM stack is an i32 suitable for br_if.

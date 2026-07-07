@@ -124,6 +124,105 @@ private const(char)[] funcName(ref const WasmFunc f)
 // Used to merge duplicate symbol-table entries that would otherwise conflict
 // for wasm-ld (e.g. import+defined twin, or several modules each defining the
 // same extern(C) symbol — drop subsequent copies from the symbol table).
+// name -> canonical func index (first defined func with that name, else first
+// import). Rebuilt whenever wmod.funcs changes length so a single pass serves
+// the O(F) callers below instead of each rescanning all funcs (O(F²)).
+private __gshared uint[string] g_canonicalByName;
+private __gshared size_t g_canonicalFuncsLen = size_t.max;
+
+private void syncCanonicalFuncNames()
+{
+    if (g_canonicalFuncsLen == wmod.funcs.length)
+        return;
+    g_canonicalByName = null;
+    uint[string] firstImport;
+    foreach (size_t j, ref const WasmFunc g; wmod.funcs)
+    {
+        const(char)[] name = funcName(g);
+        if (!name.length)
+            continue;
+        // C internal linkage: same-named `static` functions from different
+        // translation units are distinct — each owns its own entry.
+        if (!g.isImport && g.sym && g.sym.Sclass == SC.static_)
+            continue;
+        string key = cast(string) name;
+        if (g.isImport)
+        {
+            if (key !in firstImport)
+                firstImport[key] = cast(uint) j;
+        }
+        else if (key !in g_canonicalByName)
+        {
+            g_canonicalByName[key] = cast(uint) j; // first defined func wins outright
+        }
+    }
+    // Imports are canonical only for names no defined func claims.
+    foreach (key, idx; firstImport)
+        if (key !in g_canonicalByName)
+            g_canonicalByName[key] = idx;
+    g_canonicalFuncsLen = wmod.funcs.length;
+}
+
+// Symbol* / name -> current wmod.funcs index (imports first, first match wins).
+// Rebuilt whenever wmod.funcs changes length. Serves the per-relocation index
+// resolvers below, which would otherwise each rescan all funcs (O(F²) over the
+// whole relocation set).
+private __gshared uint[Symbol*] g_funcIdxBySym;
+private __gshared uint[string] g_funcIdxByName;
+private __gshared size_t g_funcIdxMapLen = size_t.max;
+
+private void syncFuncIdxMaps()
+{
+    if (g_funcIdxMapLen == wmod.funcs.length)
+        return;
+    g_funcIdxBySym = null;
+    g_funcIdxByName = null;
+    foreach (size_t k, ref const WasmFunc f; wmod.funcs)
+    {
+        if (f.sym)
+        {
+            Symbol* sym = cast(Symbol*) f.sym;
+            if (sym !in g_funcIdxBySym)
+                g_funcIdxBySym[sym] = cast(uint) k;
+        }
+        const(char)[] name = funcName(f);
+        if (name.length)
+        {
+            string key = cast(string) name;
+            if (key !in g_funcIdxByName)
+                g_funcIdxByName[key] = cast(uint) k;
+        }
+    }
+    g_funcIdxMapLen = wmod.funcs.length;
+}
+
+// Current wmod.funcs index of a function symbol, or uint.max if not registered.
+private uint funcIdxBySym(const(Symbol)* sym)
+{
+    if (!sym)
+        return uint.max;
+    syncFuncIdxMaps();
+    if (auto p = cast(Symbol*) sym in g_funcIdxBySym)
+        return *p;
+    return uint.max;
+}
+
+// As funcIdxBySym, but falls back to a name match (an RTL symbol may have been
+// deduped against a defined function of the same name, so the original Symbol*
+// never landed in funcs).
+private uint funcIdxBySymOrName(const(Symbol)* sym)
+{
+    if (!sym)
+        return uint.max;
+    syncFuncIdxMaps();
+    if (auto p = cast(Symbol*) sym in g_funcIdxBySym)
+        return *p;
+    if (sym.Sident.ptr)
+        if (auto p = cast(string) sym.identifier in g_funcIdxByName)
+            return *p;
+    return uint.max;
+}
+
 private uint canonicalFuncForName(size_t i)
 {
     const(char)[] name = funcName(wmod.funcs[i]);
@@ -134,28 +233,10 @@ private uint canonicalFuncForName(size_t i)
     // and never shadows (or is shadowed by) another function.
     if (wmod.funcs[i].sym && wmod.funcs[i].sym.Sclass == SC.static_)
         return cast(uint) i;
-    uint firstDefined = uint.max;
-    uint firstImport = uint.max;
-    foreach (size_t j, ref const WasmFunc g; wmod.funcs)
-    {
-        if (funcName(g) != name)
-            continue;
-        if (!g.isImport && g.sym && g.sym.Sclass == SC.static_)
-            continue;
-        if (g.isImport)
-        {
-            if (firstImport == uint.max)
-                firstImport = cast(uint) j;
-        }
-        else
-        {
-            if (firstDefined == uint.max)
-                firstDefined = cast(uint) j;
-        }
-    }
-    if (firstDefined != uint.max)
-        return firstDefined;
-    return firstImport;
+    syncCanonicalFuncNames();
+    if (auto p = cast(string) name in g_canonicalByName)
+        return *p;
+    return cast(uint) i;
 }
 
 // True if func i should be omitted from the symbol table because another
@@ -295,6 +376,63 @@ struct WasmFuncBody
 
 // Module-global table of function bodies (indexed same as WasmFunc)
 __gshared WasmFuncBody[] wasmFuncBodies;
+
+// Lookup accelerators for wasmFuncBodies, avoiding an O(F) name scan per
+// function reference emitted (which made codegen O(F²) — the dominant compile
+// cost). wasmFuncBodies is append-only between resets, so these maps only ever
+// grow: `syncFuncBodyIndex` folds in the entries appended since the last query.
+private __gshared uint[Symbol*] g_bodyBySym;    // Symbol* -> index in wasmFuncBodies
+private __gshared uint[string] g_bodyByName;    // non-static name -> first body index
+private __gshared size_t g_bodyIndexed;         // number of entries already folded in
+
+// Bring g_bodyBySym / g_bodyByName up to date with the current wasmFuncBodies.
+private void syncFuncBodyIndex()
+{
+    for (; g_bodyIndexed < wasmFuncBodies.length; g_bodyIndexed++)
+    {
+        Symbol* sym = cast(Symbol*) wasmFuncBodies[g_bodyIndexed].sym;
+        if (!sym)
+            continue;
+        g_bodyBySym[sym] = cast(uint) g_bodyIndexed;
+        // Only non-static functions participate in name matching; keep the
+        // first defining body for each name. C internal linkage: distinct
+        // `static` functions in different translation units of one compilation
+        // may share a name, so only pointer identity (g_bodyBySym) links those.
+        // ---
+        // // a.c: static int foo(void){return 1;} int getA(void){return foo();}
+        // // b.c: static int foo(void){return 2;} int getB(void){return foo();}
+        // ---
+        if (sym.Sclass != SC.static_)
+        {
+            string name = cast(string) sym.identifier;
+            if (name !in g_bodyByName)
+                g_bodyByName[name] = cast(uint) g_bodyIndexed;
+        }
+    }
+}
+
+/// Look up a defined function's index in wasmFuncBodies, matching by Symbol
+/// identity first and then (for non-static C redeclarations) by name.
+/// Returns: true and sets `bodyIdx` if found, else false.
+bool lookupDefinedFuncBody(Symbol* sfunc, out uint bodyIdx)
+{
+    syncFuncBodyIndex();
+    if (auto p = sfunc in g_bodyBySym)
+    {
+        bodyIdx = *p;
+        return true;
+    }
+    if (sfunc && sfunc.Sclass != SC.static_)
+    {
+        string name = cast(string) sfunc.identifier;
+        if (auto p = name in g_bodyByName)
+        {
+            bodyIdx = *p;
+            return true;
+        }
+    }
+    return false;
+}
 
 // Data segment (initialized global data). One per data symbol in the
 // LDC-style layout: each named D symbol (and each rodata literal) gets its
@@ -766,11 +904,7 @@ private bool emitCodeSection(ref OutBuffer out_, ref WasmModule wmod)
     // front, which shifts every defined-function index).
     uint curFuncIdxBySym(const(Symbol)* sym)
     {
-        if (sym)
-            foreach (size_t k, ref const WasmFunc f; wmod.funcs)
-                if (f.sym is sym)
-                    return cast(uint) k;
-        return uint.max;
+        return funcIdxBySym(sym);
     }
 
     foreach (size_t fi, ref const WasmFunc f; wmod.funcs[wmod.numImports .. $])
@@ -1049,11 +1183,11 @@ private bool emitRelocDataSection(ref OutBuffer out_, ref WasmModule wmod, uint 
         return false;
 
     uint[] funcToSymIdx = buildFuncToSymIdx();
-    Symbol*[] datasyms = buildDataSymtabOrder();
+    buildDataSymtabOrder(); // populates g_dataOrder* maps used by dataSymIndex
     const uint dataSymBase = countFuncSymtabEntries(funcToSymIdx);
     uint dataSymIdx(const(Symbol)* sym)
     {
-        return dataSymIndex(datasyms, dataSymBase, sym);
+        return dataSymIndex(dataSymBase, sym);
     }
 
     // Data section payload layout (matches emitDataSection):
@@ -1187,11 +1321,11 @@ private bool emitRelocElemSection(ref OutBuffer out_, ref WasmModule wmod, uint 
 private bool emitRelocCodeSection(ref OutBuffer out_, ref WasmModule wmod, uint codeSectionIdx)
 {
     uint[] funcToSymIdx = buildFuncToSymIdx();
-    Symbol*[] datasyms = buildDataSymtabOrder();
+    buildDataSymtabOrder(); // populates g_dataOrder* maps used by dataSymIndex
     const uint dataSymBase = countFuncSymtabEntries(funcToSymIdx);
     uint dataSymIdx(const(Symbol)* sym)
     {
-        return dataSymIndex(datasyms, dataSymBase, sym);
+        return dataSymIndex(dataSymBase, sym);
     }
 
     // Resolve a CodeReloc's funcIdx to the current wmod.funcs index. Prefers
@@ -1203,16 +1337,9 @@ private bool emitRelocCodeSection(ref OutBuffer out_, ref WasmModule wmod, uint 
     {
         if (r.sym)
         {
-            foreach (size_t k, ref const WasmFunc f; wmod.funcs)
-                if (f.sym == r.sym)
-                    return cast(uint) k;
-            if (r.sym.Sident.ptr)
-            {
-                const(char)[] rname = r.sym.identifier;
-                foreach (size_t k, ref const WasmFunc f; wmod.funcs)
-                    if (funcName(f) == rname)
-                        return cast(uint) k;
-            }
+            uint fi = funcIdxBySymOrName(r.sym);
+            if (fi != uint.max)
+                return fi;
         }
         return r.symIdx;
     }
@@ -1330,13 +1457,25 @@ private uint countFuncSymtabEntries(const uint[] funcToSymIdx)
     return n;
 }
 
-// Symtab index of a data symbol, given the buildDataSymtabOrder list and the
-// index of its first entry
-private uint dataSymIndex(Symbol*[] datasyms, uint base, const(Symbol)* sym)
+// order index (into the buildDataSymtabOrder list) of each data symbol, keyed by
+// pointer identity and — for externally visible symbols — by mangled name, so a
+// symbol matching an order entry resolves in O(1) instead of scanning the list.
+// Rebuilt by each buildDataSymtabOrder call, which the callers invoke just
+// before using dataSymIndex.
+private __gshared uint[Symbol*] g_dataOrderBySym;
+private __gshared uint[string] g_dataOrderByName;
+
+// Symtab index of a data symbol, using the maps built by buildDataSymtabOrder
+// and the index of its first data entry.
+private uint dataSymIndex(uint base, const(Symbol)* sym)
 {
-    foreach (size_t k, ds; datasyms)
-        if (sameDataSym(ds, sym))
-            return base + cast(uint) k;
+    if (!sym)
+        return uint.max;
+    if (auto p = cast(Symbol*) sym in g_dataOrderBySym)
+        return base + *p;
+    if (sym.Sident.ptr && dataSymVisible(sym))
+        if (auto p = cast(string) sym.identifier in g_dataOrderByName)
+            return base + *p;
     return uint.max;
 }
 
@@ -1350,34 +1489,37 @@ private uint dataSymIndex(Symbol*[] datasyms, uint base, const(Symbol)* sym)
 // for one logical symbol (e.g. a comdat ClassInfo's defining segment sym vs an
 // extern reference to it); they must collapse to ONE symtab entry, otherwise a
 // non-local binding produces a duplicate-symbol error at archive/link time.
-private bool sameDataSym(const(Symbol)* a, const(Symbol)* b)
+// Only externally visible symbols collapse by name; two module-internal symbols
+// with the same name are distinct:
+//   immutable uint[] a = [0]; // dt.d payload Symbol named "internal"
+//   immutable uint[] b = [1]; // also "internal", must not collapse onto a
+private bool dataSymVisible(const(Symbol)* s)
 {
-    if (a is b)
-        return true;
-    if (!a || !b || !a.Sident.ptr || !b.Sident.ptr)
-        return false;
-    // immutable uint[] a = [0]; // dt.d payload Symbol named "internal"
-    // immutable uint[] b = [1]; // also "internal", must not collapse onto a
-    static bool visible(const(Symbol)* s)
-    {
-        return s.Sclass == SC.comdat || s.Sclass == SC.global || s.Sclass == SC.extern_;
-    }
-    if (!visible(a) || !visible(b))
-        return false;
-    return a.identifier == b.identifier;
+    return s.Sclass == SC.comdat || s.Sclass == SC.global || s.Sclass == SC.extern_;
 }
 
 private Symbol*[] buildDataSymtabOrder()
 {
     Symbol*[] order;
+    g_dataOrderBySym = null;
+    g_dataOrderByName = null;
     void add(Symbol* sym)
     {
         if (!sym)
             return;
-        foreach (s; order)
-            if (sameDataSym(s, sym))
-                return;
+        // Dedup: already added (pointer identity), or an externally visible
+        // symbol whose mangled name is already claimed (see dataSymVisible).
+        if (sym in g_dataOrderBySym)
+            return;
+        const bool byName = sym.Sident.ptr && dataSymVisible(sym);
+        string name = byName ? cast(string) sym.identifier : null;
+        if (byName && name in g_dataOrderByName)
+            return;
+        uint idx = cast(uint) order.length;
         order ~= sym;
+        g_dataOrderBySym[sym] = idx;
+        if (byName)
+            g_dataOrderByName[name] = idx;
     }
     // Defined segment symbols first (so a name shared with an extern reference
     // collapses onto the DEFINED entry).
@@ -1396,13 +1538,12 @@ private Symbol*[] buildDataSymtabOrder()
 private Symbol*[] collectRelocDataSyms()
 {
     Symbol*[] datasyms;
+    bool[Symbol*] seen;
     void add(Symbol* s)
     {
-        if (!s)
+        if (!s || s in seen)
             return;
-        foreach (ds; datasyms)
-            if (ds == s)
-                return;
+        seen[s] = true;
         datasyms ~= s;
     }
     foreach (ref const WasmFuncBody fb; wasmFuncBodies)
@@ -1424,6 +1565,16 @@ Obj WasmObj_init(OutBuffer* objbuf, const(char)* filename, const(char)* csegname
     wmod = new WasmModule();
     wmod.objbuf = objbuf;
     wasmFuncBodies = null;
+    g_bodyBySym = null;
+    g_bodyByName = null;
+    g_bodyIndexed = 0;
+    g_canonicalByName = null;
+    g_canonicalFuncsLen = size_t.max;
+    g_funcIdxBySym = null;
+    g_funcIdxByName = null;
+    g_funcIdxMapLen = size_t.max;
+    g_dataOrderBySym = null;
+    g_dataOrderByName = null;
 
     // Initialize the SegData array with placeholder entries for the standard
     // segment indices (CODE=1, DATA=2, CDATA=3, UDATA=4) so the backend's
