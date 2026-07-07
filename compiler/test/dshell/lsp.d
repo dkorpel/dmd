@@ -12,8 +12,8 @@ module test.dshell.lsp;
 
 import dshell;
 
-import std.algorithm : canFind;
-import std.array : appender;
+import std.algorithm : canFind, count;
+import std.array : appender, Appender;
 import std.conv : to;
 import std.format : format;
 import std.json : JSONValue;
@@ -34,6 +34,18 @@ int main()
             failed++;
         }
     }
+
+    try
+    {
+        runStress();
+        writefln("LSP test passed: %s", "stress-memory");
+    }
+    catch (Throwable t)
+    {
+        writefln("LSP test FAILED: %s\n%s", "stress-memory", t.msg);
+        failed++;
+    }
+
     return failed == 0 ? 0 : 1;
 }
 
@@ -612,4 +624,189 @@ struct LspClient
 private string jsonEscape(string s)
 {
     return JSONValue(s).toString();
+}
+
+// ----------------------------------------------------------------------------
+// Memory stress test
+// ----------------------------------------------------------------------------
+
+/**
+Hammer a single `dmd -lsp` process with many successive edit+query rounds and
+assert its memory stays bounded and it never crashes.
+
+Each round sends a `textDocument/didChange` (full re-parse + semantic analysis)
+followed by a `textDocument/completion`, mimicking a user typing. The server is
+launched under a hard 16 GiB address-space cap (`ulimit -v`) so that if it does
+leak without bound, the allocation fails inside dmd and the process exits with
+an error — rather than growing until the OS OOM killer fires and takes down
+unrelated processes on the machine.
+
+The document keeps a fixed line layout (only a numeric literal changes) so the
+completion cursor position stays valid across every round.
+*/
+void runStress()
+{
+    version (linux)
+    {
+        enum size_t memCapKiB = 16 * 1024 * 1024; // 16 GiB RLIMIT_AS
+        enum int rounds = 600;
+        // With the per-analysis GC collection in place, peak RSS on this tiny
+        // module settles a few hundred MiB and its growth decelerates. A real
+        // unbounded leak (every analysis retained) blows past this limit within
+        // a few hundred rounds. The 16 GiB cap above is the hard backstop.
+        enum size_t peakLimitKiB = 2 * 1024 * 1024; // 2 GiB
+
+        const dir = buildPath(Vars.OUTPUT_BASE, "lsp");
+        if (!exists(dir))
+            mkdirRecurse(dir);
+        const path = buildPath(dir, "stress.d");
+        const uri = "file://" ~ path;
+
+        string sourceFor(int n)
+        {
+            return format(
+                "module stress;\n\n"
+              ~ "struct S { int field; void method() {} }\n\n"
+              ~ "int compute() { return %d; }\n\n"
+              ~ "void main() {\n    S s;\n    s.\n}\n", n);
+        }
+
+        std.file.write(path, sourceFor(0));
+
+        // exec keeps the PID stable across the shell, so /proc/<pid> below is dmd.
+        auto pipes = pipeProcess(
+            ["/bin/sh", "-c", format("ulimit -v %d; exec '%s' -lsp", memCapKiB, DMD())],
+            Redirect.stdin | Redirect.stdout);
+        const pid = pipes.pid.processID;
+
+        // Drain stdout on a background thread; if we let the OS pipe buffer fill
+        // while we keep writing requests, both sides would deadlock.
+        auto drainer = new Drainer(pipes.stdout);
+        drainer.start();
+
+        int nextId = 1;
+        void writeMessage(string body_)
+        {
+            pipes.stdin.writef("Content-Length: %d\r\n\r\n%s", body_.length, body_);
+            pipes.stdin.flush();
+        }
+        void request(string method, string paramsJson)
+        {
+            writeMessage(format(`{"jsonrpc":"2.0","id":%d,"method":"%s","params":%s}`,
+                nextId++, method, paramsJson));
+        }
+        void notify(string method, string paramsJson)
+        {
+            writeMessage(format(`{"jsonrpc":"2.0","method":"%s","params":%s}`, method, paramsJson));
+        }
+
+        request("initialize", `{"processId":1,"capabilities":{}}`);
+        notify("initialized", `{}`);
+        notify("textDocument/didOpen", format(
+            `{"textDocument":{"uri":"%s","languageId":"d","version":1,"text":%s}}`,
+            uri, jsonEscape(sourceFor(0))));
+
+        size_t peakKiB = 0;
+        foreach (i; 0 .. rounds)
+        {
+            notify("textDocument/didChange", format(
+                `{"textDocument":{"uri":"%s","version":%d},"contentChanges":[{"text":%s}]}`,
+                uri, i + 2, jsonEscape(sourceFor(i + 1))));
+            // Member completion after `s.` (line 8, char 6 — 4 spaces + "s.")
+            request("textDocument/completion", format(
+                `{"textDocument":{"uri":"%s"},"position":{"line":8,"character":6}}`, uri));
+
+            if (i % 200 == 0)
+            {
+                const rss = readVmHWM(pid);
+                if (rss == 0)
+                    assert(false, format("stress: server exited early (after ~%d rounds)", i));
+                if (rss > peakKiB)
+                    peakKiB = rss;
+                assert(rss <= peakLimitKiB, format(
+                    "stress: memory grew to %d KiB after %d rounds (limit %d KiB) — likely a leak",
+                    rss, i, peakLimitKiB));
+            }
+        }
+
+        const finalRss = readVmHWM(pid);
+        if (finalRss > peakKiB)
+            peakKiB = finalRss;
+
+        pipes.stdin.close();
+        drainer.join();
+        const status = wait(pipes.pid);
+
+        const output = drainer.data.data;
+        const completions = output.count(`"isIncomplete":false`);
+
+        assert(status == 0, format("stress: server exited with status %d", status));
+        assert(!output.canFind("out of memory"),
+            "stress: server reported out of memory");
+        assert(completions >= rounds, format(
+            "stress: got %d completion responses, expected >= %d", completions, rounds));
+        assert(output.canFind(`"label":"field"`),
+            "stress: completion stopped returning members");
+
+        writefln("  stress: %d rounds, peak RSS %.1f MiB, %d completions",
+            rounds, peakKiB / 1024.0, completions);
+    }
+    else
+    {
+        writefln("  stress: skipped (memory cap + /proc are Linux-only)");
+    }
+}
+
+version (linux)
+{
+    /// Peak resident set size (VmHWM, KiB) of `pid`, or 0 if it has exited.
+    private size_t readVmHWM(int pid)
+    {
+        import std.string : lineSplitter, startsWith, strip, split;
+        string status;
+        try
+            status = std.file.readText(format("/proc/%d/status", pid));
+        catch (Exception)
+            return 0;
+        foreach (line; status.lineSplitter)
+        {
+            if (line.startsWith("VmHWM:"))
+            {
+                auto parts = line["VmHWM:".length .. $].strip.split;
+                if (parts.length >= 1)
+                    return parts[0].to!size_t;
+            }
+        }
+        return 0;
+    }
+
+    import core.thread : Thread;
+    import std.stdio : File;
+
+    /// Background thread that drains a pipe into a buffer to avoid deadlock.
+    private final class Drainer : Thread
+    {
+        private File src;
+        private Appender!(char[]) buf;
+
+        this(File src)
+        {
+            this.src = src;
+            super(&run);
+        }
+
+        Appender!(char[]) data() { return buf; }
+
+        private void run()
+        {
+            ubyte[8192] tmp;
+            while (true)
+            {
+                auto chunk = src.rawRead(tmp[]);
+                if (chunk.length == 0)
+                    break;
+                buf.put(cast(char[]) chunk);
+            }
+        }
+    }
 }

@@ -82,6 +82,10 @@ import dmd.vsoptions;
  * right from the start, before any module ctors are run, so we need this hook
  * before druntime is initialized and `_Dmain` is called.
  *
+ * The language server (`-lsp`) is exempt: it is a long-running process that
+ * analyzes a module over and over, so it needs the collecting GC to reclaim
+ * each analysis. The bump allocator never frees and would leak without bound.
+ *
  * Returns:
  * Return code of the application
  */
@@ -90,7 +94,7 @@ extern (C) int main(int argc, char** argv)
     bool lowmem = false;
     foreach (i; 1 .. argc)
     {
-        if (strcmp(argv[i], "-lowmem") == 0)
+        if (strcmp(argv[i], "-lowmem") == 0 || strcmp(argv[i], "-lsp") == 0)
         {
             lowmem = true;
             break;

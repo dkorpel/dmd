@@ -569,6 +569,16 @@ void deinitializeModule()
     Type_init();
     Module.deinitialize();
     FuncDeclaration.lastMain = null;
+
+    // The server analyzes the module afresh on every request, so the previous
+    // analysis is now unreachable garbage. dmd runs with the collecting GC
+    // under -lsp (see main.d), but its default schedule lets that garbage pile
+    // up between collections, so a long editing session ratchets RSS upward.
+    // Collect eagerly and hand the freed pages back to the OS to keep the
+    // server's footprint flat across thousands of edits.
+    import core.memory : GC;
+    GC.collect();
+    GC.minimize();
 }
 
 /// Find the AST node under the cursor.
