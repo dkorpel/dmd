@@ -57,6 +57,7 @@ private extern(C) int fd_write(int fd, const(Ciovec)* iovs, size_t n, size_t* nw
 // BlkAttr bits this collector acts on (mirrors core.memory.GC.BlkAttr).
 private enum uint ATTR_FINALIZE    = 0b0000_0001;
 private enum uint ATTR_NO_SCAN     = 0b0000_0010;
+private enum uint ATTR_APPENDABLE  = 0b0000_1000;
 private enum uint ATTR_STRUCTFINAL = 0b0010_0000;
 
 private enum size_t HEADER = 16;
@@ -67,10 +68,10 @@ private enum uint F_DEAD = 2; // explicitly freed; reclaim at next sweep
 
 private struct BlkHeader
 {
-    size_t size;  // payload size in bytes
+    size_t size;  // payload capacity in bytes (the malloc chunk)
     uint   attr;  // BlkAttr flags
     uint   flags; // F_MARK | F_DEAD
-    uint   _pad;  // pad to 16 bytes so the payload stays 16-aligned
+    size_t used;  // appendable-array used length (only meaningful with ATTR_APPENDABLE)
 }
 static assert(BlkHeader.sizeof == HEADER);
 
@@ -80,6 +81,7 @@ private __gshared
     size_t      nblocks;
     size_t      capblocks;
     bool        sorted;         // `blocks[0 .. nblocks]` is ascending by address
+    BlkHeader*  lastFound;      // one-entry findBlock cache (see findBlock)
 
     BlkHeader** markStack;
     size_t      markTop;
@@ -148,6 +150,10 @@ private void* allocCore(size_t sz, uint ba, bool zero) @nogc nothrow
     h.size = sz;
     h.attr = ba;
     h.flags = 0;
+    // A fresh appendable block reports its whole payload as used: array append
+    // and setcapacity rely on GC.malloc setting used == requested, then call
+    // gc_shrinkArrayUsed to drop it to the real length, leaving spare capacity.
+    h.used = sz;
     registerBlock(h);
     bytesSinceCollect += total;
     totalAllocated += sz;
@@ -187,9 +193,23 @@ private void sortBlocks() @nogc nothrow
 }
 
 // Resolve a candidate address to the live block containing it, or null.
+//
+// A one-entry cache short-circuits the common case of repeated lookups of the
+// same block — most importantly the array-append hot loop, where each
+// `arr ~= x` calls gc_expandArrayUsed on the *same* block while interleaved
+// allocations keep marking the table unsorted. Without the cache every append
+// would trigger a full re-sort, making appends O(n log n) each. The cache is
+// dropped after the sweep frees blocks (and on gc_free) so it can never return
+// freed memory; a gc_free'd-but-not-yet-swept block is rejected by F_DEAD.
 private BlkHeader* findBlock(size_t v) @nogc nothrow
 {
     if (v < heapMin || v >= heapMax) return null;
+    if (BlkHeader* h = lastFound)
+    {
+        size_t base = cast(size_t) h;
+        if (v >= base && v < base + HEADER + h.size && !(h.flags & F_DEAD))
+            return h;
+    }
     if (!sorted) sortBlocks();
     size_t lo = 0, hi = nblocks;
     while (lo < hi)
@@ -201,7 +221,7 @@ private BlkHeader* findBlock(size_t v) @nogc nothrow
     if (lo == 0) return null;
     BlkHeader* h = blocks[lo - 1];
     if (h.flags & F_DEAD) return null;
-    if (v < cast(size_t) h + HEADER + h.size) return h;
+    if (v < cast(size_t) h + HEADER + h.size) { lastFound = h; return h; }
     return null;
 }
 
@@ -316,6 +336,8 @@ private void collectNow() @nogc nothrow
     nblocks = write;
     if (grew) sorted = false;
 
+    lastFound = null; // freed blocks above may have aliased it
+
     size_t thresh = liveBytes * 2;
     collectThreshold = thresh > 256 * 1024 ? thresh : 256 * 1024;
     bytesSinceCollect = 0;
@@ -405,6 +427,7 @@ void gc_free(void* p) @nogc
     // treats the payload as a class instance).
     h.attr &= ~(ATTR_FINALIZE | ATTR_STRUCTFINAL);
     h.flags |= F_DEAD;
+    if (lastFound is h) lastFound = null;
 }
 
 void* gc_addrOf(void* p) @nogc
@@ -467,11 +490,69 @@ GC.Stats gc_stats() @nogc { return GC.Stats(liveBytes, 0, totalAllocated); }
 ulong gc_allocatedInCurrentThread() @nogc { return totalAllocated; }
 GC.ProfileStats gc_profileStats() @nogc { return GC.ProfileStats.init; }
 
-// No in-place capacity tracking: report none reserved so array appends
-// allocate a fresh block and copy rather than write past the exact size.
-bool gc_expandArrayUsed(void[] slice, size_t newUsed, bool atomic) @nogc { return false; }
-size_t gc_reserveArrayCapacity(void[] slice, size_t request, bool atomic) @nogc { return 0; }
-bool gc_shrinkArrayUsed(void[] slice, size_t existingUsed, bool atomic) @nogc { return false; }
+// ── appendable-array capacity API ──────────────────────────────────────────
+//
+// A block's payload is [base, base + h.size); of that, [base, base + h.used)
+// is the array's live length and the rest is spare capacity available for
+// in-place appends. `slice.ptr` may be an interior pointer, so everything is
+// resolved back to the block and worked in block-relative offsets, matching
+// the conservative GC's arrayStart-relative arithmetic. `atomic` is ignored:
+// WASM is single-threaded. Blocks are exact malloc chunks and never extend in
+// place, so requests beyond h.size fail (the caller then reallocates).
+
+private BlkHeader* appendableBlock(void* p, out size_t offset) @nogc nothrow
+{
+    BlkHeader* h = findBlock(cast(size_t) p);
+    if (!h || !(h.attr & ATTR_APPENDABLE)) { offset = 0; return null; }
+    offset = cast(size_t) p - (cast(size_t) h + HEADER);
+    return h;
+}
+
+bool gc_expandArrayUsed(void[] slice, size_t newUsed, bool atomic) @nogc
+{
+    if (newUsed < slice.length) return false; // cannot "expand" by shrinking
+    size_t offset;
+    BlkHeader* h = appendableBlock(slice.ptr, offset);
+    if (!h) return false;
+    newUsed += offset;
+    size_t existingUsed = slice.length + offset;
+    if (h.used != existingUsed) return false; // slice must end at the used mark
+    if (newUsed > h.size) return false;        // beyond capacity: caller reallocs
+    h.used = newUsed;
+    return true;
+}
+
+size_t gc_reserveArrayCapacity(void[] slice, size_t request, bool atomic) @nogc
+{
+    size_t offset;
+    BlkHeader* h = appendableBlock(slice.ptr, offset);
+    if (!h) return 0;
+    request += offset;
+    size_t existingUsed = slice.length + offset;
+    if (h.used != existingUsed) return 0; // not an expandable slice
+    if (h.size < request) return 0;        // cannot extend an exact malloc chunk
+    return h.size - offset;
+}
+
+bool gc_shrinkArrayUsed(void[] slice, size_t existingUsed, bool atomic) @nogc
+{
+    if (existingUsed < slice.length) return false; // cannot "shrink" by growing
+    size_t offset;
+    BlkHeader* h = appendableBlock(slice.ptr, offset);
+    if (!h) return false;
+    existingUsed += offset;
+    size_t newUsed = slice.length + offset;
+    if (h.used != existingUsed) return false;
+    h.used = newUsed;
+    return true;
+}
+
+void[] gc_getArrayUsed(void* p, bool atomic) @nogc
+{
+    BlkHeader* h = findBlock(cast(size_t) p);
+    if (!h || !(h.attr & ATTR_APPENDABLE)) return null;
+    return (cast(void*) h + HEADER)[0 .. h.used];
+}
 
 size_t gc_sizeOf(void* p) @nogc
 {

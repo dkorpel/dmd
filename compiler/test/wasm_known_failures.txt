@@ -225,15 +225,6 @@ compilable/testos.d
 compilable/json2.d
 compilable/makedeps_exe.d
 
-# --- Array-append capacity tracking is stubbed ---
-# rt/wasm/gc.d now has a real conservative mark-sweep collector, but the
-# GC.extend/reserve capacity API (gc_expandArrayUsed/gc_reserveArrayCapacity)
-# is stubbed to fail, so every array append reallocates and copies -> O(n^2).
-# These append-heavy workloads then exceed the 10s per-test run timeout.
-runnable/stress.d
-runnable/test15.d
-runnable/testappend.d
-
 # --- Require catchable exceptions (WASM EH is EH_NONE) ---
 # testgc2.d catches OutOfMemoryError; on WASM a throw lowers to a trap
 # (OPhalt), so the catch never runs and the process aborts.
