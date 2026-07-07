@@ -299,6 +299,14 @@ extern (C++) final class Module : Package
     static void deinitialize()
     {
         modules = modules.init;
+        // Release references to every module analyzed so far. Without this the
+        // whole AST of each module stays reachable through these global arrays,
+        // which leaks unboundedly across repeated sessions (e.g. a language
+        // server re-analyzing a file on every keystroke).
+        amodules = amodules.init;
+        deferred = deferred.init;
+        deferred2 = deferred2.init;
+        deferred3 = deferred3.init;
     }
 
     extern (C++) __gshared AggregateDeclaration moduleinfo;
