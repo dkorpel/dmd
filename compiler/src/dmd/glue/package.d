@@ -245,8 +245,8 @@ Symbol* getBzeroSymbol()
  */
 tym_t totym(Type tx)
 {
-    // OSX AArch64 long doubles are 64 bits
-    bool RealIsDouble = target.os == Target.os.OSX && target.isAArch64;
+    // OSX AArch64 and wasm32 long doubles are 64 bits
+    bool RealIsDouble = target.realsize == 8;
 
     tym_t t;
     switch (tx.ty)

@@ -4827,8 +4827,8 @@ elem* toElemCast(CastExp ce, elem* e, bool isLvalue, ref IRState irs)
     if (ftym == ttym)
         return Lret(ce, e);
 
-    // OSX AArch64 long doubles are 64 bits
-    bool RealIsDouble = target.os == Target.os.OSX && target.isAArch64;
+    // OSX AArch64 and wasm32 long doubles are 64 bits
+    bool RealIsDouble = target.realsize == 8;
 
     /* Reduce combinatorial explosion by rewriting the 'to' and 'from' types to a
      * generic equivalent (as far as casting goes)

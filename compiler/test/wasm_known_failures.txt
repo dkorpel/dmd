@@ -238,7 +238,9 @@ compilable/test23679.d
 # exe3.c calls fabsl/expl/...: ImportC types long double as D real (f64), but
 # wasi-libc's l-suffixed math functions take f128 ((i32, i64, i64) -> void).
 # test11.d formats a real with %Lg (test17).
+# template4.d formats a real with %.20Lg (test20).
 runnable/exe3.c
+runnable/template4.d
 runnable/test11.d
 runnable/test22.d
 runnable/test42.d
