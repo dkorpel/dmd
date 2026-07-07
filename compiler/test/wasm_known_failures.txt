@@ -108,6 +108,9 @@ runnable/testcomplexinit.c
 runnable/exe1.c
 
 # --- Require exception handling (try/catch, throw, synchronized) ---
+# NOTE: WASM EH is OUT OF SCOPE until further notice (decided 2026-07-08). It is
+# a backend lift (try_table/throw opcodes + landing-pad structuring + a druntime
+# personality/unwind shim), not a bug fix. These entries stay filed as-is.
 # The WASM backend has no working exception-handling runtime: `throw` and the
 # assert/bounds/null failure hooks abort instead of throwing a catchable
 # Error/Exception. These tests fundamentally rely on catching, so they cannot
