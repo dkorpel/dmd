@@ -321,27 +321,6 @@ final class LibElf : Library
     }
 
 private:
-    /************************************
-     * Scan single object module for dictionary symbols.
-     * Send those symbols to LibElf::addSymbol().
-     */
-    void scanObjModule(ElfObjModule* om)
-    {
-        static if (LOG)
-        {
-            printf("LibElf::scanObjModule(%s)\n", om.name.ptr);
-        }
-
-        extern (D) void addSymbol(const(char)[] name, int pickAny) nothrow
-        {
-            this.addSymbol(om, name, pickAny);
-        }
-
-        scanElfObjModule(&addSymbol, om.base[0 .. om.length], om.name.ptr, filename, eSink);
-    }
-
-    /*****************************************************************************/
-    /*****************************************************************************/
     /**********************************************
      * Create and write library to libbuf.
      * The library consists of:
@@ -356,13 +335,7 @@ private:
         {
             printf("LibElf::WriteLibToBuffer()\n");
         }
-        // Scan object modules for dictionary symbols, then emit the archive.
-        foreach (om; objmodules)
-        {
-            if (om.scan)
-                scanObjModule(om);
-        }
-        writeArLibToBuffer(libbuf, objmodules, objsymbols);
+        scanAndWriteArLib!scanElfObjModule(libbuf, objmodules, objsymbols, tab, eSink, filename);
     }
 }
 

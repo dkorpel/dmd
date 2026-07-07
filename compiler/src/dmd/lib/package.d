@@ -277,6 +277,41 @@ void writeArLibToBuffer(ref OutBuffer libbuf,
         libbuf.writeByte('\n');
 }
 
+/**
+ * Scan the scannable members of an ar archive for dictionary symbols, then
+ * write the archive with its "/" symbol table.
+ *
+ * Shared by the ELF and WASM libraries, which differ only in the per-format
+ * `scan` function that extracts symbols from a member; they parameterize this
+ * helper on it and share the collect-then-write flow.
+ *
+ * Params:
+ *  scan       = per-format object scanner (scanElfObjModule / scanWasmObjModule)
+ *  libbuf     = buffer receiving the archive bytes
+ *  objmodules = members; scannable ones (`scan` flag) feed the dictionary
+ *  objsymbols = dictionary being built
+ *  tab        = name → symbol table backing the dictionary
+ *  eSink      = sink for multiple-definition errors
+ *  filename   = archive filename for error messages
+ */
+package(dmd.lib)
+void scanAndWriteArLib(alias scan)(ref OutBuffer libbuf,
+    ref Array!(ArObjModule*) objmodules, ref Array!(ArObjSymbol*) objsymbols,
+    ref StringTable!(ArObjSymbol*) tab, ErrorSink eSink, const(char)[] filename) nothrow
+{
+    foreach (om; objmodules)
+    {
+        if (!om.scan)
+            continue;
+        void addSym(const(char)[] name, int pickAny) nothrow
+        {
+            arAddSymbol(tab, objsymbols, om, name, eSink, pickAny);
+        }
+        scan(&addSym, om.base[0 .. om.length], om.name.ptr, filename, eSink);
+    }
+    writeArLibToBuffer(libbuf, objmodules, objsymbols);
+}
+
 import dmd.lib.elf;
 import dmd.lib.mach;
 import dmd.lib.mscoff;

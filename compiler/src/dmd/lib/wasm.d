@@ -99,35 +99,16 @@ final class LibWasm : Library
         objmodules.push(om);
     }
 
-    void addSymbol(WasmObjModule* om, const(char)[] name, int pickAny = 0) nothrow
-    {
-        arAddSymbol(tab, objsymbols, om, name, eSink, pickAny);
-    }
-
     /***************************************
      * Write library as a GNU/SVR4 ar archive with a symbol table.
      * Compatible with wasm-ld and llvm-ar.
      */
     protected override void writeLibToBuffer(ref OutBuffer libbuf)
     {
-        foreach (om; objmodules)
-        {
-            if (om.scan)
-                scanObjModule(om);
-        }
-        writeArLibToBuffer(libbuf, objmodules, objsymbols);
+        scanAndWriteArLib!scanWasmObjModule(libbuf, objmodules, objsymbols, tab, eSink, filename);
     }
 
 private:
-
-    void scanObjModule(WasmObjModule* om) nothrow
-    {
-        extern (D) void addSym(const(char)[] name, int pickAny) nothrow
-        {
-            this.addSymbol(om, name, pickAny);
-        }
-        scanWasmObjModule(&addSym, om.base[0 .. om.length], om.name.ptr, filename, eSink);
-    }
 
     // Extract WASM object members from an existing ar archive.
     void extractArchive(const(ubyte)[] buf, const(char)[] archiveName)
