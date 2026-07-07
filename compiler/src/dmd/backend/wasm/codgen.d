@@ -652,8 +652,6 @@ bool emitLValueAddr(ref WasmCG cg, elem* e)
     case OPind:
         cg.genElem(e.E1);
         return true;
-    case OPcomma:
-        //
     default:
         return false;
     }
@@ -730,12 +728,7 @@ uint replayAddr(ref WasmCG cg, SavedLValue r)
 void emitShadowPrologue(ref WasmCG cg)
 {
     uint spIdx = cg.stackPtrGlobal();
-
-    // Round frame size up to 16
-
-    // Allocate a new local to hold the shadow base address
     cg.shadowBaseLocal = cg.allocTemp(WASM_I32);
-
     const uint fsz = (cg.shadowFrameSize + 15) & ~15u;
 
     // Emit: shadow_base = __stack_pointer - frame_size; __stack_pointer = shadow_base

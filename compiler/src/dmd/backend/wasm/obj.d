@@ -235,7 +235,6 @@ private bool isShadowedFunc(ref WasmModule wmod, size_t i)
     return canonicalFuncForName(wmod, i) != i;
 }
 
-// Write a custom section: section id 0, size, name, then payload bytes
 // Build mapping: function index -> linking-section symbol index.
 // Functions without a name get uint.max (excluded from the symbol table).
 // Shadowed imports (same name as a defined func) alias to the defined sym idx
@@ -271,6 +270,7 @@ private uint[] buildFuncToSymIdx(ref WasmModule wmod)
     return funcToSymIdx;
 }
 
+// Write a custom section: section id 0, size, name, then payload bytes.
 private void writeCustomSection(ref OutBuffer out_, const(char)[] name, OutBuffer* payload)
 {
     OutBuffer header;
