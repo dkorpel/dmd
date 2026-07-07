@@ -156,6 +156,7 @@ runnable/testinvariant.d
 runnable/testline.d
 runnable/testswitch.d
 runnable/testtypeid.d
+runnable/xpostblit.d
 
 # --- Depend on the conservative GC's allocation geometry ---
 # -profile=gc reports allocation sizes as deltas of allocatedInCurrentThread,

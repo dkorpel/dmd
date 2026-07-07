@@ -6448,10 +6448,11 @@ Lagain:
     {
         case Tfloat80:
         case Timaginary80:
-            r = RTLSYM.MEMSET80;
+            // OSX AArch64 and wasm32 long doubles are 64 bits
+            r = target.realsize == 8 ? RTLSYM.MEMSETDOUBLE : RTLSYM.MEMSET80;
             break;
         case Tcomplex80:
-            r = RTLSYM.MEMSET160;
+            r = target.realsize == 8 ? RTLSYM.MEMSET128 : RTLSYM.MEMSET160;
             break;
         case Tcomplex64:
             r = RTLSYM.MEMSET128;
