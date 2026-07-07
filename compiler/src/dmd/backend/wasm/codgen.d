@@ -2958,19 +2958,16 @@ uint funcIndex(Symbol* sfunc)
 {
     // Imports come first in wmod.funcs; defined functions come after.
     // Check imports (registered via WasmObj_external).
-    uint nimports = wmod_numImports();
-    foreach (size_t i; 0 .. nimports)
-    {
-        if (wmod_funcs(i) == sfunc)
-            return cast(uint) i;
-    }
+    uint importIdx = importFuncIndex(sfunc);
+    if (importIdx != uint.max)
+        return importIdx;
 
     // Defined functions follow imports. Match by name too: a C block-scope
     // declaration is a distinct Symbol from the definition, and must not
     // become a self-import of the module's own function.
     uint bodyIdx;
     if (lookupDefinedFuncBody(sfunc, bodyIdx))
-        return nimports + bodyIdx;
+        return wmod_numImports() + bodyIdx;
 
     if (sfunc && sfunc.Stype)
     {
