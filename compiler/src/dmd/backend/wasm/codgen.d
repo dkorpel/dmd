@@ -3100,6 +3100,17 @@ void wasm_codgen(Symbol* sfunc)
     wasm_codgen2(sfunc, *fb);
 }
 
+// True if `t` is a struct type that is not Plain Old Data (has a destructor,
+// postblit, copy constructor, or a non-POD member). Such structs are passed by
+// invisible reference in the native extern(D) ABI.
+private bool isNonPodStruct(type* t)
+{
+    if (!t || tybasic(t.Tty) != TYstruct)
+        return false;
+    Symbol* tag = t.Ttag;
+    return tag && tag.Sstruct && (tag.Sstruct.Sflags & STRnotpod) != 0;
+}
+
 // Describes how one WASM-level param slot maps into a shadow-frame slot.
 private struct ParamSpill
 {
@@ -3141,9 +3152,22 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
             paramSpills ~= ParamSpill(i0, s, 0, TYuint);
             paramSpills ~= ParamSpill(i0 + 1, s, 4, TYuint);
         }
+        else if (pty == TYstruct && isNonPodStruct(s.Stype))
+        {
+            // Non-POD struct (dtor/postblit/copy-ctor): the native extern(D)
+            // ABI passes it by invisible reference (ISX64REF in e2ir), so the
+            // frontend hands us an i32 pointer to the caller's object and emits
+            // an explicit OPind deref for every field access. A destructive
+            // move ctor writing through the parameter therefore mutates the
+            // caller's object, and value passes get a caller-built temporary.
+            // Spill the incoming pointer as a plain i32 scalar.
+            const uint i0 = cast(uint) cg.locals.length;
+            cg.locals ~= WasmLocal(WASM_I32);
+            paramSpills ~= ParamSpill(i0, s, 0, TYuint);
+        }
         else if (pty == TYstruct || pty == TYarray)
         {
-            // Aggregate param: passed by pointer (i32). The incoming pointer
+            // POD aggregate param: passed by pointer (i32). The incoming pointer
             // addresses the caller's copy; spill by copying the bytes into this
             // param's own shadow slot so in-body field accesses (which address
             // the slot directly) see the value, not the pointer.
