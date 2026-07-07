@@ -1,10 +1,9 @@
 /**
  * WebAssembly binary module writer.
  *
- * Implements the Obj interface for the WebAssembly binary format.
- * Produces a valid .wasm file containing type, function, export, memory,
- * and data sections.  Function bodies are stubs (unreachable) until a
- * dedicated WASM code-generator is hooked in.
+ * Implements the Obj interface for the WebAssembly binary format: emits the
+ * type, function, export, memory, code and data sections plus the linking and
+ * relocation custom sections wasm-ld consumes.
  *
  * Spec: https://webassembly.github.io/spec/core/binary/index.html
  *
@@ -14,9 +13,6 @@
  */
 
 module dmd.backend.wasm.obj;
-
-import std.stdio;
-import std.string;
 
 import dmd.backend.cc;
 import dmd.backend.cdef;
@@ -34,9 +30,7 @@ import dmd.common.outbuffer;
 // Segment indices used by the backend (must match dmd/backend/cdef.d Segments enum values like DATA and UDATA)
 private enum : int
 {
-    // WASM_CODE = 1,
     WASM_DATA = 2,
-    // WASM_CDATA = 3,
     WASM_UDATA = 4
 }
 

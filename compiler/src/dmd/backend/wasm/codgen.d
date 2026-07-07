@@ -17,8 +17,6 @@
 
 module dmd.backend.wasm.codgen;
 
-import std.stdio;
-import std.string;
 import dmd.backend.debugprint;
 
 import dmd.backend.cc;
@@ -112,11 +110,8 @@ WASM_TYPE wasmType(tym_t ty)
         return WASM_I32;
 
     default:
-        try {
-            writeln("ty = ", tym_str(ty).fromStringz, ", tybasic = ", tybasic(ty));
-        } catch (Exception e) {}
+        debug { import core.stdc.stdio : printf; printf("ty = %s, tybasic = %d\n", tym_str(ty), tybasic(ty)); }
         assert(0);
-        // return WASM_I32; // aggregate / unknown: pass by pointer
     }
 }
 
@@ -507,7 +502,6 @@ private void emitCoerce(ref WasmCG cg, WASM_TYPE from, WASM_TYPE to)
 
     static ubyte coerceOp(WASM_TYPE from, WASM_TYPE to)
     {
-        debug writeln(from, to);
         static int X(WASM_TYPE from, WASM_TYPE to) { return from << 8 | to; }
 
         switch (X(from, to))
@@ -1501,8 +1495,6 @@ bool genElem(ref WasmCG cg, elem* e)
 
     const op = e.Eoper;
 
-    // elem_print(e);
-
     bool unaryOp(WASM_OP op)
     {
         cg.genElem(e.E1);
@@ -1660,8 +1652,6 @@ bool genElem(ref WasmCG cg, elem* e)
             // rather than treating the 8-byte aggregate as one value.
             // Peek through trailing OPcomma side effects on the RHS.
             const tym_t lty = tybasic(e.E1.Ety);
-
-            // unwrapComma()
 
             elem* rhsTail = e.E2;
             while (rhsTail && rhsTail.Eoper == OPcomma)
@@ -2185,7 +2175,6 @@ bool genElem(ref WasmCG cg, elem* e)
             cg.emit(OP_I64_OR);
             return true;
         }
-        // assert(0);
 
     case OP16_8:
         cg.genElem(e.E1);
@@ -2584,12 +2573,8 @@ bool genElem(ref WasmCG cg, elem* e)
 
     default:
         cg.emit(OP_UNREACHABLE);
-        try {
-            writeln("-----------------\n unimplemented e.Eoper: ", oper_str(e.Eoper).fromStringz);
-            elem_print(e);
-        } catch (Exception e) {}
+        debug { import core.stdc.stdio : printf; printf("unimplemented e.Eoper: %s\n", oper_str(e.Eoper)); elem_print(e); }
         assert(0);
-        return tybasic(e.Ety) != TYvoid;
     }
 }
 
