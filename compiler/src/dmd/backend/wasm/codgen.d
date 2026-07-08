@@ -154,6 +154,14 @@ struct WasmCG
     // Shadow stack frame
     bool hasShadowFrame;
 
+    /// True when the frame's decremented __stack_pointer is written back to the
+    /// imported global (and restored by the epilogue). Only needed when a callee
+    /// might observe the stack pointer, i.e. the function makes a call (a plain
+    /// `call`, an alloca, or a variadic/sret scratch alloc — all of which appear
+    /// as OPcall/OPucall). A call-free framed function keeps the base in a local
+    /// and never touches the global, matching LDC's -O0 output.
+    bool framePublished;
+
     uint shadowBaseLocal; /// WASM local index holding the shadow frame base address
     uint shadowFrameSize; /// total size in bytes of shadow frame
     Symbol*[] shadowEntries; /// per-symbol shadow frame offsets
@@ -387,15 +395,26 @@ nothrow:
     }
 
     /// Reserve `size` bytes on the shadow stack, leaving the new (lower) frame
-    /// base in `local`: `local = (__stack_pointer -= size)`.
-    void emitFrameAlloc(uint size, uint local)
+    /// base in `local`. When `publish` is true the new base is also written back
+    /// to __stack_pointer (`local = (__stack_pointer -= size)`) so callees see
+    /// the reserved region; when false only the local is set
+    /// (`local = __stack_pointer - size`), leaving the global untouched.
+    void emitFrameAlloc(uint size, uint local, bool publish = true)
     {
         emitSPGet();
         emitConst(OP_I32_CONST, cast(int) size);
         emit(OP_I32_SUB);
-        emit(OP_LOCAL_TEE);
-        emitULEB(local);
-        emitSPSet();
+        if (publish)
+        {
+            emit(OP_LOCAL_TEE);
+            emitULEB(local);
+            emitSPSet();
+        }
+        else
+        {
+            emit(OP_LOCAL_SET);
+            emitULEB(local);
+        }
     }
 
     /// Release a shadow-stack region reserved at base `local`:
@@ -807,6 +826,35 @@ private bool funcNeedsFrameBase(block* startblock)
     return false;
 }
 
+/// True if `e`'s tree contains a call (OPcall/OPucall). Every wasm construct
+/// that reads or mutates __stack_pointer mid-body — a plain call, an alloca, and
+/// the variadic/sret scratch-frame allocs — is emitted from an OPcall/OPucall,
+/// so a call-free function never touches the global stack pointer after entry.
+private bool elemMakesCall(elem* e)
+{
+    if (!e)
+        return false;
+    const op = e.Eoper;
+    if (op == OPcall || op == OPucall)
+        return true;
+    if (OTleaf(op))
+        return false;
+    if (OTunary(op))
+        return elemMakesCall(e.E1);
+    return elemMakesCall(e.E1) || elemMakesCall(e.E2);
+}
+
+/// Scan every block of a function for a call. Used to decide whether a framed
+/// function must publish its decremented __stack_pointer to the imported global
+/// (and restore it) or can keep the frame base in a local only.
+private bool funcMakesCall(block* startblock)
+{
+    for (block* b = startblock; b; b = b.Bnext)
+        if (elemMakesCall(b.Belem))
+            return true;
+    return false;
+}
+
 /// Emit shadow stack frame prologue (called once at function entry).
 /// Creates the shadow base local, gets __stack_pointer, subtracts frame size, stores back.
 void emitShadowPrologue(ref WasmCG cg)
@@ -814,8 +862,9 @@ void emitShadowPrologue(ref WasmCG cg)
     cg.shadowBaseLocal = cg.allocTemp(WASM_I32);
     const uint fsz = (cg.shadowFrameSize + 15) & ~15u;
 
-    // shadow_base = __stack_pointer - frame_size; __stack_pointer = shadow_base
-    cg.emitFrameAlloc(fsz, cg.shadowBaseLocal);
+    // shadow_base = __stack_pointer - frame_size; publish to __stack_pointer only
+    // when a callee might observe it (see WasmCG.framePublished).
+    cg.emitFrameAlloc(fsz, cg.shadowBaseLocal, cg.framePublished);
 }
 
 /// Emit shadow stack frame epilogue (restore __stack_pointer).
@@ -3267,6 +3316,10 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
         || paramSpills.length != 0
         || cg.retByHiddenPtr
         || funcNeedsFrameBase(startblock);
+    // Publish the frame to __stack_pointer only when a callee might observe it;
+    // a call-free framed function keeps its base in a local and skips the
+    // epilogue restore (matching LDC's -O0 output).
+    cg.framePublished = cg.hasShadowFrame && funcMakesCall(startblock);
     if (cg.hasShadowFrame)
         emitShadowPrologue(cg);
 
@@ -3304,7 +3357,7 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
     // Need to insert unreachable because wasm validator expects i32 on stack
     if (cg.reachable)
     {
-        if (cg.hasShadowFrame)
+        if (cg.framePublished)
             emitShadowEpilogue(cg);
         if (hasReturn)
             cg.emit(OP_UNREACHABLE);

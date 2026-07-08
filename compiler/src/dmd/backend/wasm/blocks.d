@@ -41,7 +41,7 @@ private bool emitBlockReturn(ref WasmCG cg, block* b, bool hasReturn)
         bool hasRetVal;
         if (b.Belem)
             hasRetVal = cg.genElem(b.Belem);
-        if (cg.hasShadowFrame)
+        if (cg.framePublished)
         {
             if (hasRetVal)
             {
@@ -70,7 +70,7 @@ private bool emitBlockReturn(ref WasmCG cg, block* b, bool hasReturn)
     {
         if (b.Belem)
             cg.genElemDiscard(b.Belem);
-        if (cg.hasShadowFrame)
+        if (cg.framePublished)
             emitShadowEpilogue(cg);
         // A value-returning function may still end in BC.ret (e.g. a call
         // to a noreturn function like __switch_error); `unreachable` gives
