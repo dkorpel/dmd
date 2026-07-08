@@ -120,18 +120,13 @@ bool ISX64REF(Declaration var)
             auto ts = var.type.isTypeStruct();
             return !(var.storage_class & STC.lazy_) && ts && ts.sym.hasMoveCtor && ts.sym.hasCopyCtor;
         }
-        else if (target.os & Target.OS.Posix)
+        else if ((target.os & Target.OS.Posix) || target.isWasm)
         {
+            // WASM shares the Posix rule: non-POD structs pass by invisible
+            // reference so a destructive move ctor can write back through the
+            // parameter. passTypeByRef is AArch64-only, hence a no-op on WASM.
             return !(var.storage_class & STC.lazy_) && var.type.isTypeStruct() && !var.type.isTypeStruct().sym.isPOD() ||
                 passTypeByRef(target, var.type);
-        }
-        else if (target.isWasm)
-        {
-            // WASM extern(D) matches the Posix rule: non-POD structs (with a
-            // destructor/postblit/copy-ctor) are passed by invisible reference
-            // so a destructive move ctor can write back through the parameter.
-            return !(var.storage_class & STC.lazy_) &&
-                var.type.isTypeStruct() && !var.type.isTypeStruct().sym.isPOD();
         }
     }
 
@@ -153,13 +148,9 @@ bool ISX64REF(ref IRState irs, Expression exp)
         auto ts = exp.type.isTypeStruct();
         return ts && ts.sym.hasMoveCtor && ts.sym.hasCopyCtor;
     }
-    else if (irs.target.os & Target.OS.Posix)
+    else if ((irs.target.os & Target.OS.Posix) || irs.target.isWasm)
     {
         return exp.type.isTypeStruct() && !exp.type.isTypeStruct().sym.isPOD() || passTypeByRef(*irs.target, exp.type);
-    }
-    else if (irs.target.isWasm)
-    {
-        return exp.type.isTypeStruct() && !exp.type.isTypeStruct().sym.isPOD();
     }
 
     return false;
