@@ -261,6 +261,7 @@ enum R_WASM : ubyte
     MEMORY_ADDR_I32 = 5,
     TYPE_INDEX_LEB = 6,
     GLOBAL_INDEX_LEB = 7,
+    TABLE_NUMBER_LEB = 20,
 }
 
 /// "linking" custom section subsection IDs (version 2)

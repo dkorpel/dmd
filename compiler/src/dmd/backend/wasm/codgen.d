@@ -381,24 +381,44 @@ nothrow:
         emitULEBpadded(typeIdx);
     }
 
+    // Emit the table-number operand of call_indirect (always the imported
+    // __indirect_function_table). Records a R_WASM.TABLE_NUMBER_LEB relocation
+    // so wasm-ld patches it to the table's final index rather than a fixed 0.
+    void emitCallIndirectTable()
+    {
+        codeRelocs ~= WasmFuncBody.CodeReloc(cast(uint) code.length, R_WASM.TABLE_NUMBER_LEB, 0, 0, null);
+        emitULEBpadded(0);
+    }
+
     void emitMemArg(uint align_, uint offset)
     {
         code.writeuLEB128(align_); // alignment (log2)
         code.writeuLEB128(offset); // byte offset
     }
 
+    /// Emit a global-index operand referencing __stack_pointer as a 5-byte
+    /// padded ULEB128, recording a R_WASM.GLOBAL_INDEX_LEB relocation so wasm-ld
+    /// patches the operand to the merged global's final index. DMD imports
+    /// __stack_pointer first (index 0), but a linked module may place it
+    /// elsewhere, so the operand must be relocatable rather than a fixed 0.
+    void emitStackPtrGlobal()
+    {
+        codeRelocs ~= WasmFuncBody.CodeReloc(cast(uint) code.length, R_WASM.GLOBAL_INDEX_LEB, 0, 0, null);
+        emitULEBpadded(stackPtrGlobal());
+    }
+
     /// Push the current __stack_pointer value on the value stack.
     void emitSPGet()
     {
         emit(OP_GLOBAL_GET);
-        emitULEB(stackPtrGlobal());
+        emitStackPtrGlobal();
     }
 
     /// Pop the value on top of the stack into __stack_pointer.
     void emitSPSet()
     {
         emit(OP_GLOBAL_SET);
-        emitULEB(stackPtrGlobal());
+        emitStackPtrGlobal();
     }
 
     /// Reserve `size` bytes on the shadow stack, leaving the new (lower) frame
@@ -1576,7 +1596,7 @@ private bool genCall(ref WasmCG cg, elem* e)
         cg.genElem(fn);
         cg.emit(OP_CALL_INDIRECT);
         cg.emitCallIndirectType(typeIdx);
-        cg.emitULEB(0); // table index 0
+        cg.emitCallIndirectTable();
     }
 
     // Free the synthesized sret buffer. The returned pointer (still on the

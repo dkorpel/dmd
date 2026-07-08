@@ -1338,8 +1338,14 @@ private bool emitRelocElemSection(ref OutBuffer out_, ref WasmModule wmod, uint 
 private bool emitRelocCodeSection(ref OutBuffer out_, ref WasmModule wmod, uint codeSectionIdx)
 {
     uint[] funcToSymIdx = buildFuncToSymIdx(wmod);
-    buildDataSymtabOrder(wmod); // populates wmod.symIndex.data* maps used by dataSymIndex
+    Symbol*[] datasyms = buildDataSymtabOrder(wmod); // populates wmod.symIndex.data* maps used by dataSymIndex
     const uint dataSymBase = countFuncSymtabEntries(wmod, funcToSymIdx);
+    // The synthesized TABLE (__indirect_function_table) and GLOBAL
+    // (__stack_pointer) symbols are appended last, in that order, by
+    // emitLinkingSection — mirror that ordering for TABLE_NUMBER_LEB /
+    // GLOBAL_INDEX_LEB relocation targets.
+    const uint tableSymIdx = dataSymBase + cast(uint) datasyms.length;
+    const uint globalSymIdx = tableSymIdx + 1;
     uint dataSymIdx(const(Symbol)* sym)
     {
         return dataSymIndex(wmod, dataSymBase, sym);
@@ -1367,10 +1373,14 @@ private bool emitRelocCodeSection(ref OutBuffer out_, ref WasmModule wmod, uint 
     {
         foreach (ref const WasmFuncBody.CodeReloc r; fb.codeRelocs)
         {
-            // R_WASM.TYPE_INDEX_LEB encodes a type-section index directly,
-            // not a symbol-table index. Always valid (typeIdx already chosen).
+            // R_WASM.TYPE_INDEX_LEB encodes a type-section index directly, and
+            // GLOBAL_INDEX_LEB / TABLE_NUMBER_LEB target the synthesized
+            // __stack_pointer / __indirect_function_table symbols — all always
+            // valid (no function-symbol lookup needed).
             uint fi = currentFuncIdx(r);
             if (r.type == R_WASM.TYPE_INDEX_LEB ||
+                r.type == R_WASM.GLOBAL_INDEX_LEB ||
+                r.type == R_WASM.TABLE_NUMBER_LEB ||
                 (fi < funcToSymIdx.length && funcToSymIdx[fi] != uint.max))
                 totalRelocs++;
         }
@@ -1402,6 +1412,14 @@ private bool emitRelocCodeSection(ref OutBuffer out_, ref WasmModule wmod, uint 
                 // R_WASM.TYPE_INDEX_LEB references the local type section
                 // index directly — wasm-ld remaps to the merged type table.
                 idx = r.symIdx;
+            }
+            else if (r.type == R_WASM.GLOBAL_INDEX_LEB)
+            {
+                idx = globalSymIdx;
+            }
+            else if (r.type == R_WASM.TABLE_NUMBER_LEB)
+            {
+                idx = tableSymIdx;
             }
             else
             {
