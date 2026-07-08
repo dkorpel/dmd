@@ -334,7 +334,7 @@ private int runWasmLINK(bool verbose, ref Param params, ErrorSink eSink)
         // wasmtime calls _start; proc_exit called from _start propagates exit codes.
         argv.push("--export=_start");
         argv.push("--allow-undefined"); // allow unresolved WASI imports
-        argv.push("--no-gc-sections");
+        argv.push("--gc-sections");
     }
     else
     {
@@ -343,7 +343,7 @@ private int runWasmLINK(bool verbose, ref Param params, ErrorSink eSink)
         // not `main`).  With `_start` present wasm-ld uses it as the default
         // entry, so `--no-entry` is omitted.
         argv.push("--allow-undefined");
-        argv.push("--no-gc-sections");
+        argv.push("--gc-sections");
     }
 
     // Push our vendored -L paths FIRST so `-l:libc.a` / `-l:libdruntime-wasm.a`

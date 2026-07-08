@@ -510,8 +510,6 @@ struct WasmModule
 
     uint dataHeap = 4; // next free byte offset in linear memory; starts at 4 to reserve address 0 as null
 
-    uint[] elemFuncRelocOffsets; // payload offsets of function indices in the element section
-
     // Deferred relocations in data segments. Written as 0 at emit time;
     // patched in WasmObj_term once all symbol addresses are known.
     struct FuncReloc
@@ -840,41 +838,6 @@ private bool emitFunctionSection(ref OutBuffer out_, ref WasmModule wmod)
     return true;
 }
 
-// Emit an element section populating table[0] with all defined function indices.
-// Uses 5-byte padded ULEB128 for each function index to support R_WASM.FUNCTION_INDEX_LEB
-// relocations (stored in the "reloc.ELEM" section so wasm-ld can patch them).
-// After writing, elemFuncRelocOffsets contains the reloc payload offsets of each entry.
-private bool emitElementSection(ref OutBuffer out_, ref WasmModule wmod)
-{
-    uint defined = cast(uint)(wmod.funcs.length - wmod.numImports);
-    if (!defined)
-        return false;
-    OutBuffer* s = &wmod.scratch;
-    s.reset();
-    s.writeuLEB128(1); // 1 element segment
-    // Segment payload:
-    s.writeByte(0x00); // kind: active, table 0, funcref, offset init-expr, funcidx vec
-    s.writeByte(OP_I32_CONST);
-    s.writeByte(0x00); // offset = 0
-    s.writeByte(OP_END);
-    s.writeuLEB128(defined); // count of function indices
-    // Byte offset from start of element section PAYLOAD (after section id + size bytes).
-    // Payload starts with: [count=1 ULEB] + [kind=0] + [0x41]+[0x00]+[0x0B] + [defined ULEB]
-    // = 1 + 1 + 3 + 1 = 6 bytes before the first function index.
-    uint entryOffset = 1 + 1 + 3 + ulebSize(defined);
-    wmod.elemFuncRelocOffsets.length = 0;
-    wmod.elemFuncRelocOffsets.reserve(defined);
-    foreach (size_t i; wmod.numImports .. wmod.funcs.length)
-    {
-        uint fidx = cast(uint) i;
-        wmod.elemFuncRelocOffsets ~= entryOffset; // offset of this 5-byte entry
-        (*s).writeuLEB128_5(fidx); // 5-byte padded ULEB for linker relocation patching
-        entryOffset += 5;
-    }
-    writeSection(out_, WASM_SECTION.element, s);
-    return true;
-}
-
 /// Returns: true if section was actually written.
 /// Only function exports are emitted; the linker provides the memory export.
 private bool emitExportSection(ref OutBuffer out_, ref WasmModule wmod)
@@ -1068,9 +1031,12 @@ private bool emitLinkingSection(ref OutBuffer out_, ref WasmModule wmod)
         }
         else
         {
-            // NO_STRIP: retain every defined function; DMD does not rely on
-            // wasm-ld dead-stripping for correctness.
-            flags = WASM_SYM.NO_STRIP;
+            // Defined functions are dead-strippable: wasm-ld keeps those
+            // reachable from a root (exported functions and their transitive
+            // calls, plus functions whose address is taken from a live data
+            // symbol — vtable/interface slots, ModuleInfo ctors — via
+            // R_WASM_TABLE_INDEX_* relocations).
+            flags = 0;
             // @wasmExportName: real EXPORTED bit so wasm-ld keeps and exports
             // it (under the export-section name) without --export-dynamic.
             if (f.exportName.length)
@@ -1124,7 +1090,12 @@ private bool emitLinkingSection(ref OutBuffer out_, ref WasmModule wmod)
             //  - everything else (SC.static_ rodata _TMP temporaries, etc.):
             //    LOCAL — object-private, and names (e.g. _TMP0) collide across
             //    objects so they must not be global.
-            uint dflags = WASM_SYM.NO_STRIP;
+            // Data symbols are dead-strippable under --gc-sections; the linker
+            // keeps those reached from a root. Anchor segments that are only
+            // reached through wasm-ld's synthesized __start_/__stop_ bracket
+            // symbols (the "minfo" module registry) can't be reached that way,
+            // so they carry the RETAIN segment flag instead (see SEGMENT_INFO).
+            uint dflags = 0;
             if (sym.Sclass == SC.comdat)
                 dflags |= WASM_SYM.BINDING_WEAK;
             else if (sym.Sclass != SC.global)
@@ -1171,7 +1142,11 @@ private bool emitLinkingSection(ref OutBuffer out_, ref WasmModule wmod)
             seginfo.writeuLEB128(cast(uint) segName.length);
             seginfo.write(segName.ptr, cast(uint) segName.length);
             seginfo.writeuLEB128(ds.alignLog2);
-            seginfo.writeuLEB128(0); // flags
+            // The "minfo" module registry is reachable only through wasm-ld's
+            // synthesized __start_minfo/__stop_minfo, which don't retain it
+            // under --gc-sections; mark it RETAIN so module ctors/dtors survive.
+            const uint segFlags = ds.name == "minfo" ? WASM_SEG.RETAIN : 0;
+            seginfo.writeuLEB128(segFlags);
         }
 
         body_.writeByte(WASM_LINKING.SEGMENT_INFO);
@@ -1290,46 +1265,6 @@ private bool emitRelocDataSection(ref OutBuffer out_, ref WasmModule wmod, uint 
     }
 
     writeCustomSection(out_, "reloc.DATA", &payload);
-    return true;
-}
-
-// Emit "reloc.ELEM" custom section with R_WASM.FUNCTION_INDEX_LEB entries for
-// each function index in the element section so wasm-ld can patch them when
-// the element is merged with other objects (function indices may change).
-private bool emitRelocElemSection(ref OutBuffer out_, ref WasmModule wmod, uint elemSectionIdx)
-{
-    if (!wmod.elemFuncRelocOffsets.length)
-        return false;
-
-    uint[] funcToSymIdx = buildFuncToSymIdx(wmod);
-
-    // Two-pass: count valid relocs first, then write.
-    uint relCount = 0;
-    foreach (size_t k, uint payloadOff; wmod.elemFuncRelocOffsets)
-    {
-        uint funcIdx = cast(uint)(wmod.numImports + k);
-        if (funcIdx < funcToSymIdx.length && funcToSymIdx[funcIdx] != uint.max)
-            relCount++;
-    }
-    if (!relCount)
-        return false;
-
-    OutBuffer payload;
-    payload.writeuLEB128(elemSectionIdx);
-    payload.writeuLEB128(relCount);
-
-    foreach (size_t k, uint payloadOff; wmod.elemFuncRelocOffsets)
-    {
-        uint funcIdx = cast(uint)(wmod.numImports + k);
-        uint sym = funcIdx < funcToSymIdx.length ? funcToSymIdx[funcIdx] : uint.max;
-        if (sym == uint.max)
-            continue;
-        payload.writeByte(R_WASM.FUNCTION_INDEX_LEB);
-        payload.writeuLEB128(payloadOff);
-        payload.writeuLEB128(sym);
-    }
-
-    writeCustomSection(out_, "reloc.ELEM", &payload);
     return true;
 }
 
@@ -1739,8 +1674,12 @@ void WasmObj_term2(const(char)[] objfilename, ref WasmModule wmod, ref OutBuffer
     sectionIdx += emitFunctionSection(out_, wmod);
     sectionIdx += emitExportSection(out_, wmod);
 
-    const uint elemSectionIdx = sectionIdx;
-    sectionIdx += emitElementSection(out_, wmod);
+    // No pre-populated element segment: wasm-ld builds the indirect-call table
+    // from the R_WASM_TABLE_INDEX_SLEB / R_WASM_TABLE_INDEX_I32 relocations of
+    // address-taken functions (function pointers, vtable/interface slots). A
+    // table[0]-with-every-function segment is redundant (the linker ignores it
+    // for table layout) and, by referencing every function, defeats dead-code
+    // elimination.
 
     uint codeSectionIdx = sectionIdx;
     sectionIdx += emitCodeSection(out_, wmod);
@@ -1752,7 +1691,6 @@ void WasmObj_term2(const(char)[] objfilename, ref WasmModule wmod, ref OutBuffer
     // references when linking.
     emitLinkingSection(out_, wmod);
     emitRelocDataSection(out_, wmod, dataSectionIdx);
-    emitRelocElemSection(out_, wmod, elemSectionIdx);
     emitRelocCodeSection(out_, wmod, codeSectionIdx);
     emitTargetFeaturesSection(out_);
 }

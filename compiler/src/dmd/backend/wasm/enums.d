@@ -273,6 +273,14 @@ enum WASM_LINKING : ubyte
     SYMBOL_TABLE = 8,
 }
 
+/// SEGMENT_INFO per-segment flags (linking metadata)
+enum WASM_SEG : uint
+{
+    STRINGS = 0x01,
+    TLS = 0x02,
+    RETAIN = 0x04, // keep under --gc-sections even without a reference
+}
+
 /// Symbol table entry kinds
 enum WASM_SYMTAB : ubyte
 {
