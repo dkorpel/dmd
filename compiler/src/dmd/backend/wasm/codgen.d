@@ -358,6 +358,42 @@ nothrow:
         code.writeuLEB128(align_); // alignment (log2)
         code.writeuLEB128(offset); // byte offset
     }
+
+    /// Push the current __stack_pointer value on the value stack.
+    void emitSPGet()
+    {
+        emit(OP_GLOBAL_GET);
+        emitULEB(stackPtrGlobal());
+    }
+
+    /// Pop the value on top of the stack into __stack_pointer.
+    void emitSPSet()
+    {
+        emit(OP_GLOBAL_SET);
+        emitULEB(stackPtrGlobal());
+    }
+
+    /// Reserve `size` bytes on the shadow stack, leaving the new (lower) frame
+    /// base in `local`: `local = (__stack_pointer -= size)`.
+    void emitFrameAlloc(uint size, uint local)
+    {
+        emitSPGet();
+        emitConst(OP_I32_CONST, cast(int) size);
+        emit(OP_I32_SUB);
+        emit(OP_LOCAL_TEE);
+        emitULEB(local);
+        emitSPSet();
+    }
+
+    /// Release a shadow-stack region reserved at base `local`:
+    /// `__stack_pointer = local + size`.
+    void emitFrameFree(uint local, uint size)
+    {
+        emitLocal(OP_LOCAL_GET, local);
+        emitConst(OP_I32_CONST, cast(int) size);
+        emit(OP_I32_ADD);
+        emitSPSet();
+    }
 }
 
 // Emit a typed load from the address already on the stack.
@@ -727,33 +763,20 @@ uint replayAddr(ref WasmCG cg, SavedLValue r)
 /// Creates the shadow base local, gets __stack_pointer, subtracts frame size, stores back.
 void emitShadowPrologue(ref WasmCG cg)
 {
-    uint spIdx = cg.stackPtrGlobal();
     cg.shadowBaseLocal = cg.allocTemp(WASM_I32);
     const uint fsz = (cg.shadowFrameSize + 15) & ~15u;
 
-    // Emit: shadow_base = __stack_pointer - frame_size; __stack_pointer = shadow_base
-    cg.emit(OP_GLOBAL_GET);
-    cg.emitULEB(spIdx);
-    cg.emitConst(OP_I32_CONST, fsz);
-    cg.emit(OP_I32_SUB);
-    cg.emit(OP_LOCAL_TEE);
-    cg.emitULEB(cg.shadowBaseLocal);
-    cg.emit(OP_GLOBAL_SET);
-    cg.emitULEB(spIdx);
+    // shadow_base = __stack_pointer - frame_size; __stack_pointer = shadow_base
+    cg.emitFrameAlloc(fsz, cg.shadowBaseLocal);
 }
 
 /// Emit shadow stack frame epilogue (restore __stack_pointer).
 void emitShadowEpilogue(ref WasmCG cg)
 {
-    uint spIdx = cg.stackPtrGlobal();
-    uint fsz = (cg.shadowFrameSize + 15) & ~15u;
+    const uint fsz = (cg.shadowFrameSize + 15) & ~15u;
 
-    // Emit: __stack_pointer = shadow_base + frame_size
-    cg.emitLocal(OP_LOCAL_GET, cg.shadowBaseLocal);
-    cg.emitConst(OP_I32_CONST, cast(int) fsz);
-    cg.emit(OP_I32_ADD);
-    cg.emit(OP_GLOBAL_SET);
-    cg.emitULEB(spIdx);
+    // __stack_pointer = shadow_base + frame_size
+    cg.emitFrameFree(cg.shadowBaseLocal, fsz);
 }
 
 /// Truncate the result of a small integer operation back to the canonical
@@ -895,16 +918,8 @@ private void genVarArgs(ref WasmCG cg, elem*[] varArgs, ref uint spLocal, ref ui
     vaFrameSize = (offset + 15) & ~15;
 
     // Allocate shadow stack frame for varargs.
-    uint spIdx = cg.stackPtrGlobal();
     spLocal = cg.allocTemp(WASM_I32);
-    cg.emit(OP_GLOBAL_GET);
-    cg.emitULEB(spIdx);
-    cg.emitConst(OP_I32_CONST, cast(int) vaFrameSize);
-    cg.emit(OP_I32_SUB);
-    cg.emit(OP_LOCAL_TEE);
-    cg.emitULEB(spLocal);
-    cg.emit(OP_GLOBAL_SET);
-    cg.emitULEB(spIdx);
+    cg.emitFrameAlloc(vaFrameSize, spLocal);
 
     // Store each variadic arg into the frame.
     foreach (ref sl; slots)
@@ -1235,9 +1250,7 @@ private bool genCall(ref WasmCG cg, elem* e)
         if (calleeSym && e.E1.Eoper == OPvar && e.E2 && e.E2.Eoper != OPparam &&
             strcmp(&calleeSym.Sident[0], "alloca") == 0)
         {
-            const uint spIdx = cg.stackPtrGlobal();
-            cg.emit(OP_GLOBAL_GET);
-            cg.emitULEB(spIdx);
+            cg.emitSPGet();
             cg.genElem(e.E2, WASM_I32);
             cg.emit(OP_I32_SUB);
             cg.emitConst(OP_I32_CONST, ~15);
@@ -1245,8 +1258,7 @@ private bool genCall(ref WasmCG cg, elem* e)
             const uint tmp = cg.allocTemp(WASM_I32);
             cg.emit(OP_LOCAL_TEE);
             cg.emitULEB(tmp);
-            cg.emit(OP_GLOBAL_SET);
-            cg.emitULEB(spIdx);
+            cg.emitSPSet();
             cg.emitLocal(OP_LOCAL_GET, tmp);
             return true;
         }
@@ -1346,16 +1358,8 @@ private bool genCall(ref WasmCG cg, elem* e)
     if (retByPtrCall && !ctx.isCVariadic && ctx.skipCount == 0)
     {
         sretSize = cast(uint)((type_size(fty.Tnext) + 15) & ~15);
-        const uint spIdx = cg.stackPtrGlobal();
         sretLocal = cg.allocTemp(WASM_I32);
-        cg.emit(OP_GLOBAL_GET);
-        cg.emitULEB(spIdx);
-        cg.emitConst(OP_I32_CONST, cast(int) sretSize);
-        cg.emit(OP_I32_SUB);
-        cg.emit(OP_LOCAL_TEE);
-        cg.emitULEB(sretLocal);
-        cg.emit(OP_GLOBAL_SET);
-        cg.emitULEB(spIdx);
+        cg.emitFrameAlloc(sretSize, sretLocal);
         cg.emitLocal(OP_LOCAL_GET, sretLocal);
     }
 
@@ -1418,25 +1422,11 @@ private bool genCall(ref WasmCG cg, elem* e)
     // value stack) stays readable until the next stack-pointer decrement,
     // which is always after the immediate consumer's loads.
     if (sretLocal != uint.max)
-    {
-        const uint spIdx = cg.stackPtrGlobal();
-        cg.emitLocal(OP_LOCAL_GET, sretLocal);
-        cg.emitConst(OP_I32_CONST, cast(int) sretSize);
-        cg.emit(OP_I32_ADD);
-        cg.emit(OP_GLOBAL_SET);
-        cg.emitULEB(spIdx);
-    }
+        cg.emitFrameFree(sretLocal, sretSize);
 
     // Restore __stack_pointer after a variadic call that spilled args.
     if (ctx.isCVariadic && varArgs.length)
-    {
-        uint spIdx = cg.stackPtrGlobal();
-        cg.emitLocal(OP_LOCAL_GET, spLocal);
-        cg.emitConst(OP_I32_CONST, cast(int) vaFrameSize);
-        cg.emit(OP_I32_ADD);
-        cg.emit(OP_GLOBAL_SET);
-        cg.emitULEB(spIdx);
-    }
+        cg.emitFrameFree(spLocal, vaFrameSize);
 
     // Noreturn functions leave the stack empty. Emit unreachable so the type
     // checker accepts any stack expectations after the call. The call node can be
