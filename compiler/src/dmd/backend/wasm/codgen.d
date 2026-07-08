@@ -174,6 +174,13 @@ struct WasmCG
     /// emit themselves (split slice into two i32s, queue as variadic, plain emit).
     CallCtx[] callCtxStack;
 
+    /// Set by the statement driver (via genElemDiscard) immediately before a
+    /// top-level genElem whose result is thrown away. genElem captures and
+    /// clears it on entry, so nested subexpressions never see it. Assignment
+    /// operators consult it to skip re-pushing their result value, sparing the
+    /// caller a spill-and-drop the way a discard-aware x86 retregs pass would.
+    bool discardResult;
+
 nothrow:
 
     /// Index of global used for __stack_pointer
@@ -983,8 +990,7 @@ private elem* unwrapComma(ref WasmCG cg, elem* e)
 {
     while (e && e.Eoper == OPcomma)
     {
-        if (cg.genElem(e.E1))
-            cg.emit(OP_DROP);
+        cg.genElemDiscard(e.E1);
         e = e.E2;
     }
     return e;
@@ -1477,12 +1483,32 @@ bool genElem(ref WasmCG cg, elem* e, WASM_TYPE type)
     return result;
 }
 
+/// Evaluate `e` at statement level for its side effects, discarding any result.
+/// Assignment/increment operators use the discard flag to avoid materializing
+/// their result; anything else that still leaves a value on the stack is dropped.
+/// Returns: true if a value was produced (and dropped).
+bool genElemDiscard(ref WasmCG cg, elem* e)
+{
+    if (!e)
+        return false;
+    cg.discardResult = true;
+    const v = cg.genElem(e);
+    cg.discardResult = false;
+    if (v)
+        cg.emit(OP_DROP);
+    return v;
+}
+
 bool genElem(ref WasmCG cg, elem* e)
 {
     if (!e)
         return false;
 
     const op = e.Eoper;
+    // Consume the discard flag here so it applies only to this top-level node;
+    // recursive genElem calls below start fresh with it cleared.
+    const discard = cg.discardResult;
+    cg.discardResult = false;
 
     bool unaryOp(WASM_OP op)
     {
@@ -1692,7 +1718,7 @@ bool genElem(ref WasmCG cg, elem* e)
             {
                 cg.emitLocal(OP_LOCAL_GET, valTmp);
                 cg.emitStore(e.E1.Ety, memOff);
-                if (typeHasValue(e.Ety))
+                if (typeHasValue(e.Ety) && !discard)
                 {
                     cg.emitLocal(OP_LOCAL_GET, valTmp);
                     return true;
@@ -1737,14 +1763,21 @@ bool genElem(ref WasmCG cg, elem* e)
             cg.emitLocal(OP_LOCAL_GET, rTmp);
             cg.emitBinop(opeqtoop(op), e.Ety);
             cg.maskSmallInt(e.E1.Ety);
-            // Save new value, store, leave on stack as result.
+            // Save new value, store, leave on stack as result — unless this
+            // op-assign is a statement (e.Ety == void), where materializing the
+            // result just forces the caller to emit a redundant drop (mirrors
+            // the OPeq path above).
             uint vTmp = cg.allocTemp(wasmType(e.E1.Ety));
             cg.emitLocal(OP_LOCAL_SET, vTmp);
             uint storeOff = replayAddr(cg, lv);
             cg.emitLocal(OP_LOCAL_GET, vTmp);
             cg.emitStore(e.E1.Ety, storeOff);
-            cg.emitLocal(OP_LOCAL_GET, vTmp);
-            return true;
+            if (typeHasValue(e.Ety) && !discard)
+            {
+                cg.emitLocal(OP_LOCAL_GET, vTmp);
+                return true;
+            }
+            return false;
         }
 
     case OPadd:
@@ -1840,9 +1873,14 @@ bool genElem(ref WasmCG cg, elem* e)
             cg.emitLocal(OP_LOCAL_GET, newTmp);
             cg.emitStore(e.E1.Ety, storeOff);
 
-            // Result: old value.
-            cg.emitLocal(OP_LOCAL_GET, oldTmp);
-            return true;
+            // Result: old value — skipped when the result is discarded
+            // (a bare `x++;` statement), leaving just the load/store side effect.
+            if (!discard)
+            {
+                cg.emitLocal(OP_LOCAL_GET, oldTmp);
+                return true;
+            }
+            return false;
         }
 
     case OPeqeq:
@@ -2178,8 +2216,14 @@ bool genElem(ref WasmCG cg, elem* e)
         return true;
 
     case OPcomma:
-        if (cg.genElem(e.E1))
-            cg.emit(OP_DROP); // discard left-hand result
+        cg.genElemDiscard(e.E1); // left-hand result is always unused
+        if (discard)
+        {
+            // Whole comma is discarded, so its value (E2) is too: let E2 skip
+            // materializing a result rather than push-then-drop it.
+            cg.genElemDiscard(e.E2);
+            return false;
+        }
         return cg.genElem(e.E2);
 
     case OPcond:

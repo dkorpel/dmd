@@ -69,11 +69,7 @@ private bool emitBlockReturn(ref WasmCG cg, block* b, bool hasReturn)
     else if (b.bc == BC.ret)
     {
         if (b.Belem)
-        {
-            const bool v = cg.genElem(b.Belem);
-            if (v)
-                cg.emit(OP_DROP);
-        }
+            cg.genElemDiscard(b.Belem);
         if (cg.hasShadowFrame)
             emitShadowEpilogue(cg);
         // A value-returning function may still end in BC.ret (e.g. a call
@@ -88,11 +84,7 @@ private bool emitBlockReturn(ref WasmCG cg, block* b, bool hasReturn)
     else if (b.bc == BC.exit)
     {
         if (b.Belem)
-        {
-            const bool v = cg.genElem(b.Belem);
-            if (v)
-                cg.emit(OP_DROP);
-        }
+            cg.genElemDiscard(b.Belem);
         cg.emit(OP_UNREACHABLE);
         cg.reachable = false;
         return true;
@@ -593,11 +585,7 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         {
             block* target = succ(b, 0);
             if (b.Belem)
-            {
-                const bool v = cg.genElem(b.Belem);
-                if (v)
-                    cg.emit(OP_DROP);
-            }
+                cg.genElemDiscard(b.Belem);
             if (!target)
                 continue;
 
@@ -609,11 +597,7 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
 
         // Default: emit expression, discard result
         if (b.Belem)
-        {
-            const bool hasVal = cg.genElem(b.Belem);
-            if (hasVal)
-                cg.emit(OP_DROP);
-        }
+            cg.genElemDiscard(b.Belem);
     }
 
     while (stack.length > 0)
@@ -728,22 +712,14 @@ private void genBlocksDispatch(ref WasmCG cg, block*[] blocks, bool hasReturn)
         else if (b.bc == BC.goto_)
         {
             if (b.Belem)
-            {
-                const bool v = cg.genElem(b.Belem);
-                if (v)
-                    cg.emit(OP_DROP);
-            }
+                cg.genElemDiscard(b.Belem);
             if (block* target = succ(b, 0))
                 gotoBlock(blockIdx(target), 0);
         }
         else
         {
             if (b.Belem)
-            {
-                const bool hasVal = cg.genElem(b.Belem);
-                if (hasVal)
-                    cg.emit(OP_DROP);
-            }
+                cg.genElemDiscard(b.Belem);
             if (i + 1 < N)
                 gotoBlock(i + 1, 0);
         }
