@@ -772,6 +772,41 @@ uint replayAddr(ref WasmCG cg, SavedLValue r)
     return 0;
 }
 
+/// True if any elem in `e`'s tree reads the shadow-frame base beyond ordinary
+/// frame-resident symbols: an explicit OPframeptr (nested-function context
+/// pointer, va_start, or alloca base), or an `alloca` call whose bumped
+/// __stack_pointer the epilogue must restore.
+private bool elemNeedsFrameBase(elem* e)
+{
+    if (!e)
+        return false;
+    const op = e.Eoper;
+    if (op == OPframeptr)
+        return true;
+    if (OTleaf(op))
+        return false;
+    if (op == OPcall && e.E1 && e.E1.Eoper == OPvar && e.E1.Vsym)
+    {
+        import core.stdc.string : strcmp;
+        if (strcmp(&e.E1.Vsym.Sident[0], "alloca") == 0)
+            return true;
+    }
+    if (OTunary(op))
+        return elemNeedsFrameBase(e.E1);
+    return elemNeedsFrameBase(e.E1) || elemNeedsFrameBase(e.E2);
+}
+
+/// Scan every block of a function for an elem that reads the shadow-frame base
+/// (see elemNeedsFrameBase). Used to decide whether a zero-size-frame function
+/// can omit its prologue/epilogue entirely.
+private bool funcNeedsFrameBase(block* startblock)
+{
+    for (block* b = startblock; b; b = b.Bnext)
+        if (elemNeedsFrameBase(b.Belem))
+            return true;
+    return false;
+}
+
 /// Emit shadow stack frame prologue (called once at function entry).
 /// Creates the shadow base local, gets __stack_pointer, subtracts frame size, stores back.
 void emitShadowPrologue(ref WasmCG cg)
@@ -3219,9 +3254,21 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
     // the type's Tnext to tell a real slice from a plain ulong/long).
     cg.retByHiddenPtr = returnByPtr(retType);
 
-    // Always allocate a shadow frame, even when empty — keeps code paths uniform.
-    cg.hasShadowFrame = true;
-    emitShadowPrologue(cg);
+    // The shadow frame is only needed when its base is actually read: by
+    // frame-resident symbols (shadowFrameSize > 0) or params spilled into it,
+    // by an explicit OPframeptr (nested-function context, va_start, alloca), or
+    // by an alloca call whose bumped __stack_pointer the epilogue must restore.
+    // Struct/slice returns via hidden pointer keep the frame too. A leaf
+    // function with none of these (e.g. `int getCounter() => counter;`) omits
+    // the prologue/epilogue entirely, matching LDC's -O0 output. The epilogue
+    // sites all gate on hasShadowFrame, so clearing it here suppresses them.
+    block* startblock = sfunc.Sfunc.Fstartblock;
+    cg.hasShadowFrame = cg.shadowFrameSize != 0
+        || paramSpills.length != 0
+        || cg.retByHiddenPtr
+        || funcNeedsFrameBase(startblock);
+    if (cg.hasShadowFrame)
+        emitShadowPrologue(cg);
 
     // Spill incoming WASM params into their shadow-frame slots.
     foreach (ref sp; paramSpills)
@@ -3249,7 +3296,6 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
         cg.emitMemArg(m.alignLog2, off);
     }
 
-    block* startblock = sfunc.Sfunc.Fstartblock;
     if (startblock)
         genBlocksProper(cg, startblock, hasReturn);
 
