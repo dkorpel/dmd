@@ -2446,6 +2446,22 @@ bool genElem(ref WasmCG cg, elem* e)
 
     case OPoror:
         {
+            if (discard)
+            {
+                // Result unused (e.g. the guard arm of a bounds check): render
+                // as short-circuit control flow with no value on the stack,
+                // rather than the value form below followed by a drop.
+                //   a || b  =>  block; a; br_if 0; <b side effects>; end
+                cg.emit(OP_BLOCK);
+                cg.emit(WASM_VOID_BLOCK);
+                cg.genElem(e.E1);
+                emitCondToI32(cg, e.E1); // a true → branch out, skip b
+                cg.emit(OP_BR_IF);
+                cg.emitULEB(0);
+                cg.genElemDiscard(e.E2);
+                cg.emit(OP_END);
+                return false;
+            }
             // a || b  =>  if (a) 1 else (b != 0)
             cg.genElem(e.E1);
             emitCondToI32(cg, e.E1);
@@ -2474,6 +2490,20 @@ bool genElem(ref WasmCG cg, elem* e)
 
     case OPandand:
         {
+            if (discard)
+            {
+                // Result unused: short-circuit control flow, no value produced.
+                //   a && b  =>  block; a; eqz; br_if 0; <b side effects>; end
+                cg.emit(OP_BLOCK);
+                cg.emit(WASM_VOID_BLOCK);
+                cg.genElem(e.E1);
+                emitCondToI32(cg, e.E1, true); // a false → branch out, skip b
+                cg.emit(OP_BR_IF);
+                cg.emitULEB(0);
+                cg.genElemDiscard(e.E2);
+                cg.emit(OP_END);
+                return false;
+            }
             // a && b  =>  if (a) (b != 0) else 0
             cg.genElem(e.E1);
             emitCondToI32(cg, e.E1);
