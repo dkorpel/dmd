@@ -57,25 +57,14 @@ private const(char)[] utf8SanitizeName(const(char)[] name)
 {
     static bool validUtf8(const(char)[] s)
     {
+        import dmd.root.utf : utf_decodeChar;
+
         size_t i = 0;
         while (i < s.length)
         {
-            const ubyte c = s[i];
-            uint n;
-            if (c < 0x80) n = 1;
-            else if ((c & 0xE0) == 0xC0 && c >= 0xC2) n = 2;
-            else if ((c & 0xF0) == 0xE0) n = 3;
-            else if ((c & 0xF8) == 0xF0 && c <= 0xF4) n = 4;
-            else return false;
-            if (i + n > s.length) return false;
-            foreach (j; 1 .. n)
-                if ((s[i + j] & 0xC0) != 0x80) return false;
-            const ubyte c1 = n > 1 ? cast(ubyte) s[i + 1] : 0;
-            if (n == 3 && ((c == 0xE0 && c1 < 0xA0) || (c == 0xED && c1 >= 0xA0)))
+            dchar c;
+            if (utf_decodeChar(s, i, c) !is null)
                 return false;
-            if (n == 4 && ((c == 0xF0 && c1 < 0x90) || (c == 0xF4 && c1 >= 0x90)))
-                return false;
-            i += n;
         }
         return true;
     }
