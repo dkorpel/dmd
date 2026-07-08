@@ -671,40 +671,15 @@ public WasmFuncType buildFuncType(type* t, Symbol* sfunc, uint hiddenLeadingPtrs
             enum WASM_PTR = WASM_I32; // assumes 32-bit
             return WasmFuncType([WASM_I32, WASM_PTR], [WASM_I32]);
         }
-        // For `main`, the WASI _start shim calls it as `(i32, i32) -> i32`.
-        // Pad user-written `int main()` or `int main(int)` to the runtime ABI
-        // so wasm-ld doesn't warn.  A 3-arg POSIX `main(argc, argv, env)` is
-        // normalised too: WASI has no env pointer, so the third param becomes
-        // a zero-initialised local (see wasm_codgen2's signature padding).
-        if (sfunc.identifier == "main")
-        {
-            int paramCount = 0;
-            bool allI32 = true;
-            // Tparamtypes is null for a zero-parameter function.
-            foreach (param_t p; t.Tparamtypes ? *t.Tparamtypes : null)
-            {
-                if (!p.Ptype || !typeHasValue(p.Ptype.Tty))
-                    continue;
-                paramCount++;
-                const tym_t pty = tybasic(p.Ptype.Tty);
-                if (isSliceOrDelegate(p.Ptype) || pty == TYstruct || pty == TYarray)
-                {
-                    allI32 = false;
-                    break;
-                }
-                if (wasmType(pty) != WASM_I32)
-                {
-                    allI32 = false;
-                    break;
-                }
-            }
-            const type* retM = t.Tnext;
-            const bool retOK = retM && (tybasic(retM.Tty) == TYvoid ||
-                                        tybasic(retM.Tty) == TYnoreturn ||
-                                        (typeHasValue(retM.Tty) && wasmType(retM.Tty) == WASM_I32));
-            if (allI32 && paramCount <= 3 && retOK)
-                return WasmFuncType([WASM_I32, WASM_I32], [WASM_I32]);
-        }
+        // The front end mangles an `extern(C)` main by arity into the wasi-libc
+        // crt entry names (see dmd.mangle).  Force their fixed wasi signatures
+        // regardless of the user's declared arity or return type: wasm_codgen2's
+        // param padding zero-fills or drops the surplus (a 3-arg POSIX `main`'s
+        // env pointer, a bare `void main`'s absent result).
+        if (sfunc.identifier == "__main_argc_argv")
+            return WasmFuncType([WASM_I32, WASM_I32], [WASM_I32]);
+        if (sfunc.identifier == "__main_void")
+            return WasmFuncType([], [WASM_I32]);
     }
 
     // Check for aggregate return: requires a hidden pointer as the first parameter.

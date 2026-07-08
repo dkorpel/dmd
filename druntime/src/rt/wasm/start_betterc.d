@@ -11,9 +11,10 @@
  * It is built as a standalone `.wasm` object (NOT part of libdruntime-wasm.a)
  * and linked by `dmd.link` only in betterC mode.
  *
- * The backend emits every betterC `main` (`int main()`, `void main()`, …) with
- * the uniform WASI signature `(i32, i32) -> i32` (see backend/wasm/obj.d
- * buildFuncType), so the fixed declaration below links against all of them.
+ * The front end mangles a betterC `extern(C)` main into the wasi-libc crt entry
+ * names `__main_void` / `__main_argc_argv` (by arity, see dmd.mangle); `_start`
+ * calls `__main_void`, which wasi-libc's weak wrapper bridges to
+ * `__main_argc_argv` after fetching WASI argc/argv when main declared params.
  *
  * Copyright: Copyright (C) 1999-2026 by The D Language Foundation, All Rights Reserved
  * License:   $(LINK2 https://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
@@ -28,8 +29,9 @@ extern (C):
 private extern(C) void __wasm_call_ctors() @nogc nothrow;
 private extern(C) void __wasm_call_dtors() @nogc nothrow;
 
-// The user's betterC `main`.  Uniform WASM ABI: `(i32, i32) -> i32`.
-private extern(C) int main(int argc, char** argv) nothrow;
+// wasi-libc's crt entry: the app's `int main(void)` (`__main_void`), or the
+// weak libc.a wrapper bridging to the app's `__main_argc_argv`.
+private extern(C) int __main_void() nothrow;
 
 import core.attribute : wasmImportModule;
 
@@ -40,7 +42,7 @@ private extern(C) void proc_exit(int code) @nogc nothrow;
 export void _start() nothrow
 {
     __wasm_call_ctors();
-    int rc = main(0, null);
+    int rc = __main_void();
     __wasm_call_dtors();
     proc_exit(rc);
     while (true) {}

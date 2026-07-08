@@ -163,6 +163,7 @@ import dmd.root.aav;
 import dmd.root.string;
 import dmd.root.stringtable;
 import dmd.root.utf;
+import dmd.target : target;
 import dmd.target;
 import dmd.tokens;
 import dmd.visitor;
@@ -728,19 +729,13 @@ public:
             return;
         }
 
-        version (IN_LLVM)
+        if (fd.isCMain() && target.isWasm)
         {
-            import gen.llvmhelpers : isTargetWasm;
-            bool isWasm = isTargetWasm();
-        }
-        else bool isWasm = false;
-
-        if (fd.isCMain() && isWasm)
-        {
-            if (fd.parameters)
-                buf.writestring("__main_argc_argv");
-            else
-                buf.writestring("__main_void");
+            // wasi-libc's crt dispatches to the entry by arity: an app that
+            // declares parameters provides `__main_argc_argv`, otherwise
+            // `__main_void`.  `rt.wasm.start` calls the wasi-libc entry, which
+            // bridges the two.
+            buf.writestring(fd.parameters && fd.parameters.length ? "__main_argc_argv" : "__main_void");
             return;
         }
 

@@ -7,8 +7,10 @@
  * `core.internal.entrypoint`, for D `main` only) calls.  An `extern(C)`
  * user `main` bypasses druntime init the same way it does on Linux.
  *
- * Both the user's `extern(C) int main()` and the mixin-generated `int main()`
- * use the uniform WASM signature `() -> i32` (WASI has no argc/argv).
+ * The front end mangles an `extern(C)` main into the wasi-libc crt entry names
+ * `__main_void` / `__main_argc_argv` (by arity); `_start` calls `__main_void`,
+ * which wasi-libc's weak wrapper bridges to `__main_argc_argv` after fetching
+ * WASI argc/argv when the app declared parameters.
  *
  * Copyright: Copyright (C) 1999-2026 by The D Language Foundation, All Rights Reserved
  * License:   $(LINK2 https://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
@@ -28,9 +30,11 @@ void gc_term();
 private extern(C) void __wasm_call_ctors() @nogc nothrow;
 private extern(C) void __wasm_call_dtors() @nogc nothrow;
 
-// `main` is either the user's extern(C) main or the compiler-generated
-// mixin wrapper (for D main).  Both have signature `() -> int` on WASM.
-private extern(C) int main(int argc, char** argv) nothrow;
+// wasi-libc's crt entry.  Either the app's `int main(void)` (mangled
+// `__main_void`), or the weak libc.a wrapper that fetches WASI argc/argv and
+// forwards to the app's `__main_argc_argv` (compiler-generated D-main wrapper
+// or an `extern(C) int main(int, char**)`).
+private extern(C) int __main_void() nothrow;
 
 // ── WASI _start entry point ───────────────────────────────────────────────────
 // wasmtime (WASI command ABI) calls _start, not main.  proc_exit called from
@@ -39,7 +43,7 @@ private extern(C) int main(int argc, char** argv) nothrow;
 export void _start() nothrow
 {
     __wasm_call_ctors();
-    int rc = main(0, null);
+    int rc = __main_void();
     __wasm_call_dtors();
     proc_exit(rc);
     while (true) {}
