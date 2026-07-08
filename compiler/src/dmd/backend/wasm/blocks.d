@@ -63,6 +63,7 @@ private bool emitBlockReturn(ref WasmCG cg, block* b, bool hasReturn)
             }
         }
         cg.emit(OP_RETURN);
+        cg.reachable = false;
         return true;
     }
     else if (b.bc == BC.ret)
@@ -81,6 +82,7 @@ private bool emitBlockReturn(ref WasmCG cg, block* b, bool hasReturn)
         if (hasReturn)
             cg.emit(OP_UNREACHABLE);
         cg.emit(OP_RETURN);
+        cg.reachable = false;
         return true;
     }
     else if (b.bc == BC.exit)
@@ -92,6 +94,7 @@ private bool emitBlockReturn(ref WasmCG cg, block* b, bool hasReturn)
                 cg.emit(OP_DROP);
         }
         cg.emit(OP_UNREACHABLE);
+        cg.reachable = false;
         return true;
     }
     return false;
@@ -334,6 +337,7 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         bool isLoop;
         int closeAfter; // OP_END is emitted after this block index
         int loopStart = -1; // for loops: the header block index
+        bool parentReachable; // reachability at the point this frame was opened
     }
 
     Frame[] stack;
@@ -366,7 +370,7 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
 
     void openBlock(int closeAfter)
     {
-        stack ~= Frame(false, closeAfter);
+        stack ~= Frame(false, closeAfter, -1, cg.reachable);
         cg.emit(OP_BLOCK);
         cg.emit(WASM_VOID_BLOCK);
     }
@@ -396,6 +400,8 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         assert(fi < stack.length, "wasm blocks: branch target has no frame");
         cg.emit(conditional ? OP_BR_IF : OP_BR);
         cg.emitULEB(brDepth(fi));
+        if (!conditional)
+            cg.reachable = false;
     }
 
     int currentIdx;
@@ -421,11 +427,15 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
                 cg.emitConst(OP_I32_CONST, 0);
         }
 
-        // Close frames ending before this block
+        // Close frames ending before this block. Per WASM validation, control
+        // past an OP_END resumes at the reachability the enclosing frame had
+        // when it was opened — regardless of whether the body fell through.
         while (stack.length > 0 && stack[$ - 1].closeAfter < bi)
         {
+            const Frame f = stack[$ - 1];
             cg.emit(OP_END);
             stack = stack[0 .. $ - 1];
+            cg.reachable = f.parentReachable;
         }
 
         // Open frames beginning here. At a loop header, frames ending at or
@@ -434,7 +444,7 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         {
             const int loopEnd = info[bi].loopEnd;
             openFramesAt(bi, loopEnd - 1, int.max);
-            stack ~= Frame(true, loopEnd, bi);
+            stack ~= Frame(true, loopEnd, bi, cg.reachable);
             cg.emit(OP_LOOP);
             cg.emit(WASM_VOID_BLOCK);
             openFramesAt(bi, -1, loopEnd - 1);
@@ -514,6 +524,7 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
                 {
                     cg.emit(OP_BR);
                     cg.emitULEB(destDepth(defaultIdx));
+                    cg.reachable = false;
                 }
                 continue;
             }
@@ -540,6 +551,7 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
                 cg.emitULEB(destDepth(destIdx));
             }
             cg.emitULEB(destDepth(defaultIdx)); // default label
+            cg.reachable = false; // br_table is unconditional
             continue;
         }
         else if (b.bc == BC.ifthen || b.bc == BC.iftrue)
@@ -606,8 +618,10 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
 
     while (stack.length > 0)
     {
+        const Frame f = stack[$ - 1];
         cg.emit(OP_END);
         stack = stack[0 .. $ - 1];
+        cg.reachable = f.parentReachable;
     }
 }
 
@@ -738,4 +752,5 @@ private void genBlocksDispatch(ref WasmCG cg, block*[] blocks, bool hasReturn)
     cg.emit(OP_END); // close the dispatch loop
     // Control never falls out of the loop, but the validator doesn't know
     cg.emit(OP_UNREACHABLE);
+    cg.reachable = false;
 }

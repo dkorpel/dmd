@@ -163,6 +163,12 @@ struct WasmCG
     /// emission can pick the right local type for the saved return value.
     bool retByHiddenPtr;
 
+    /// Whether the point after the last emitted instruction is reachable by
+    /// fall-through. Cleared by unconditional branches/returns, restored when a
+    /// block frame that was a branch target closes. Lets the function epilogue
+    /// skip the trailing `unreachable` when the body can't fall off the end.
+    bool reachable = true;
+
     /// Scope for an in-progress call. Pushed on entry to genCall, popped on exit.
     /// Leaves of the OPparam tree consult the top of the stack to decide how to
     /// emit themselves (split slice into two i32s, queue as variadic, plain emit).
@@ -3220,15 +3226,16 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
         genBlocksProper(cg, startblock, hasReturn);
     }
 
-    if (cg.hasShadowFrame)
-        emitShadowEpilogue(cg);
-
-    // If the function returns a value but the body falls through (e.g. an
-    // infinite loop), the implicit return at function end would underflow
-    // the value stack.  Emit `unreachable` to mark the path as dead — the
-    // WASM validator then accepts the missing return value.
-    if (hasReturn)
-        cg.emit(OP_UNREACHABLE);
+    // For:
+    // int spin() { for (;;) {} }
+    // Need to insert unreachable because wasm validator expects i32 on stack
+    if (cg.reachable)
+    {
+        if (cg.hasShadowFrame)
+            emitShadowEpilogue(cg);
+        if (hasReturn)
+            cg.emit(OP_UNREACHABLE);
+    }
 
     fb.locals = cg.locals;
     fb.numParams = cg.numParams;
