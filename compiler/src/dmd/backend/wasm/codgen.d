@@ -166,6 +166,13 @@ struct WasmCG
     uint shadowFrameSize; /// total size in bytes of shadow frame
     Symbol*[] shadowEntries; /// per-symbol shadow frame offsets
 
+    /// Read-only by-value POD struct parameters whose fields are addressed
+    /// directly through the incoming pointer instead of a copied shadow-frame
+    /// slot (see paramReadOnlyPod). Maps the parameter symbol to the WASM local
+    /// holding the caller-supplied pointer. Consulted by emitSymBase/emitSymAddr
+    /// ahead of the shadow-frame path.
+    uint[Symbol*] byRefParamLocal;
+
     /// Function return: true when this function returns via a hidden pointer
     /// (struct/array/slice/delegate). Set during wasm_codgen2 init so retexp
     /// emission can pick the right local type for the saved return value.
@@ -655,6 +662,16 @@ void emitShadowAddr(ref WasmCG cg, Symbol* s)
 /// address, so callers handle them separately.
 bool emitSymAddr(ref WasmCG cg, Symbol* s, uint off)
 {
+    if (auto p = s in cg.byRefParamLocal)
+    {
+        cg.emitLocal(OP_LOCAL_GET, *p);
+        if (off != 0)
+        {
+            cg.emitConst(OP_I32_CONST, cast(int) off);
+            cg.emit(OP_I32_ADD);
+        }
+        return true;
+    }
     if (isDataSym(s.Sfl))
     {
         cg.emitDataAddr(s, off);
@@ -679,6 +696,12 @@ bool emitSymAddr(ref WasmCG cg, Symbol* s, uint off)
 /// pattern instead of materializing the full address with `i32.add`.
 bool emitSymBase(ref WasmCG cg, Symbol* s, uint off, out uint memOff)
 {
+    if (auto p = s in cg.byRefParamLocal)
+    {
+        cg.emitLocal(OP_LOCAL_GET, *p);
+        memOff = off;
+        return true;
+    }
     if (isDataSym(s.Sfl))
     {
         cg.emitDataBase(s);
@@ -853,6 +876,48 @@ private bool funcMakesCall(block* startblock)
         if (elemMakesCall(b.Belem))
             return true;
     return false;
+}
+
+/// True if `e`'s tree uses the by-value POD struct parameter `s` in a way that
+/// requires it to own private, stable storage (a copied shadow-frame slot):
+///  - its address is taken (OPrelconst: a `ref` pass, `&p`, or indirect write),
+///  - it is used as a whole-struct value (OPvar of struct type: `return p`,
+///    `q = p`, or an onward by-value pass `g(p)` that re-hands the pointer to
+///    another callee — conservatively treated as unsafe), or
+///  - it is written (any OTassign whose destination is the parameter itself,
+///    covering `p = …`, `p.field = …`, `p.field op= …`, `p.field++`).
+/// When none of these appear the parameter is read-only and its fields can be
+/// loaded directly through the caller-supplied pointer.
+private bool elemViolatesReadOnly(elem* e, Symbol* s)
+{
+    if (!e)
+        return false;
+    const op = e.Eoper;
+    if (op == OPrelconst && e.Vsym is s)
+        return true;
+    if (op == OPvar && e.Vsym is s && tybasic(e.Ety) == TYstruct)
+        return true;
+    if (OTassign(op) && e.E1 && e.E1.Eoper == OPvar && e.E1.Vsym is s)
+        return true;
+    if (OTleaf(op))
+        return false;
+    if (OTunary(op))
+        return elemViolatesReadOnly(e.E1, s);
+    return elemViolatesReadOnly(e.E1, s) || elemViolatesReadOnly(e.E2, s);
+}
+
+/// True if the by-value POD struct parameter `s` is only ever read, so the
+/// callee can address its fields through the incoming pointer rather than
+/// copying the struct into a shadow-frame slot (matching LDC's -O0 output).
+/// The caller gates this on the function having no nested-function context
+/// (no OPframeptr), which is the one way `s` could be read at a frame offset
+/// without an explicit reference in these block trees.
+private bool paramReadOnlyPod(Symbol* s, block* startblock)
+{
+    for (block* b = startblock; b; b = b.Bnext)
+        if (elemViolatesReadOnly(b.Belem, s))
+            return false;
+    return true;
 }
 
 /// Emit shadow stack frame prologue (called once at function entry).
@@ -3213,12 +3278,24 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
     // and anonymous temporaries allocated via allocTemp.
     ParamSpill[] paramSpills;
 
+    block* startblock = sfunc.Sfunc.Fstartblock;
+    // A read-only by-value POD struct parameter can be addressed through the
+    // caller-supplied pointer instead of a copied shadow-frame slot, but only
+    // when the function has no nested-function context (no OPframeptr): a
+    // captured parameter is read at a frame offset with no explicit reference
+    // in these block trees, so paramReadOnlyPod would not observe the use.
+    const bool canElidePodParams = !funcNeedsFrameBase(startblock);
+
     foreach (s; globsym[])
     {
         if (!s.isParameter)
             continue;
-        cg.registerShadow(s);
         const tym_t pty = tybasic(s.ty());
+        const bool elidePodParam = canElidePodParams
+            && pty == TYstruct && !isNonPodStruct(s.Stype)
+            && paramReadOnlyPod(s, startblock);
+        if (!elidePodParam)
+            cg.registerShadow(s);
         // No-value params (noreturn/void) are dropped from the WASM signature by
         // buildFuncType, so allocate no local slot for them either — otherwise
         // every following local index is off by one (e.g. hashOf!(noreturn)).
@@ -3250,13 +3327,23 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
         else if (pty == TYstruct || pty == TYarray)
         {
             // POD aggregate param: passed by pointer (i32). The incoming pointer
-            // addresses the caller's copy; spill by copying the bytes into this
-            // param's own shadow slot so in-body field accesses (which address
-            // the slot directly) see the value, not the pointer.
+            // addresses the caller's copy.
             const uint i0 = cast(uint) cg.locals.length;
             cg.locals ~= WasmLocal(WASM_I32);
-            const uint sz = cast(uint) type_size(s.Stype);
-            paramSpills ~= ParamSpill(i0, s, 0, TYuint, sz);
+            if (elidePodParam)
+            {
+                // Read-only POD struct: address its fields directly through the
+                // caller-supplied pointer — no copy into a shadow-frame slot.
+                cg.byRefParamLocal[s] = i0;
+            }
+            else
+            {
+                // Spill by copying the bytes into this param's own shadow slot
+                // so in-body field accesses (which address the slot directly)
+                // see the value, not the pointer.
+                const uint sz = cast(uint) type_size(s.Stype);
+                paramSpills ~= ParamSpill(i0, s, 0, TYuint, sz);
+            }
         }
         else
         {
@@ -3311,7 +3398,6 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
     // function with none of these (e.g. `int getCounter() => counter;`) omits
     // the prologue/epilogue entirely, matching LDC's -O0 output. The epilogue
     // sites all gate on hasShadowFrame, so clearing it here suppresses them.
-    block* startblock = sfunc.Sfunc.Fstartblock;
     cg.hasShadowFrame = cg.shadowFrameSize != 0
         || paramSpills.length != 0
         || cg.retByHiddenPtr
