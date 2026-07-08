@@ -3207,24 +3207,7 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
 
     block* startblock = sfunc.Sfunc.Fstartblock;
     if (startblock)
-    {
-        import core.stdc.stdlib : getenv;
-        import core.stdc.stdio : printf;
-        if (getenv("WASM_BLOCKS"))
-            printf("=== func %s\n", &sfunc.Sident[0]);
-        // WASM_ELEMS=1: dump each block's elem tree for debugging codegen bugs
-        if (getenv("WASM_ELEMS"))
-        {
-            printf("=== elems of func %s\n", &sfunc.Sident[0]);
-            for (block* b = startblock; b; b = b.Bnext)
-            {
-                printf("--- block bc=%d\n", cast(int) b.bc);
-                if (b.Belem)
-                    elem_print(b.Belem);
-            }
-        }
         genBlocksProper(cg, startblock, hasReturn);
-    }
 
     // For:
     // int spin() { for (;;) {} }
