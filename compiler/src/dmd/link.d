@@ -234,6 +234,75 @@ private const(char)[] argv0DruntimeDir() nothrow
     return FileName.combine(exeDir, "../../../../druntime");
 }
 
+/***********************************
+ * Optimize a linked WebAssembly binary in place with Binaryen's `wasm-opt`.
+ *
+ * Invoked after a successful `wasm-ld` link when the user passed `-O`. It is
+ * best-effort: if `wasm-opt` is not installed the step is silently skipped, and
+ * if it runs but fails the already-valid linker output is kept with a warning.
+ * The enabled feature set is taken from the module's `target_features` section,
+ * so no explicit `--enable-*` flags are needed.
+ *
+ * Params:
+ *   wasmfile = path to the linked `.wasm` to rewrite in place
+ *   verbose  = print the command before executing
+ *   eSink    = sink for messages
+ */
+private void runWasmOpt(const(char)[] wasmfile, bool verbose, ErrorSink eSink)
+{
+    if (!wasmfile.length)
+        return;
+    const(char)* wasmopt = getenv("WASM_OPT");
+    const(char)* file = wasmfile.xarraydup.ptr;
+
+    Strings argv;
+    argv.push(wasmopt ? wasmopt : "wasm-opt");
+    argv.push("-O");
+    argv.push(file);
+    argv.push("-o");
+    argv.push(file);
+
+    if (verbose)
+    {
+        OutBuffer cmdbuf;
+        foreach (i; 0 .. argv.length)
+        {
+            cmdbuf.writestring(argv[i]);
+            cmdbuf.writeByte(' ');
+        }
+        eSink.message(Loc.initial, "%s", cmdbuf.peekChars());
+    }
+    argv.push(null);
+
+    version (Posix)
+    {
+        pid_t childpid = vfork();
+        if (childpid == 0)
+        {
+            execvp(argv[0], argv.tdata());
+            // exec failed (e.g. wasm-opt not installed): use the conventional
+            // 127 "command not found" status so the parent skips it silently.
+            _exit(127);
+        }
+        else if (childpid == -1)
+            return;
+        int status;
+        waitpid(childpid, &status, 0);
+        if (WIFEXITED(status))
+        {
+            const es = WEXITSTATUS(status);
+            if (es && es != 127)
+                eSink.warning(Loc.initial, "wasm-opt exited with status %d; keeping unoptimized output", es);
+        }
+    }
+    else version (Windows)
+    {
+        const int status = spawnvp(_P_WAIT, argv[0], argv.tdata());
+        if (status > 0)
+            eSink.warning(Loc.initial, "wasm-opt exited with status %d; keeping unoptimized output", status);
+    }
+}
+
 private int runWasmLINK(bool verbose, ref Param params, ErrorSink eSink)
 {
     const bool hasDruntime = !params.betterC;
@@ -431,6 +500,8 @@ private int runWasmLINK(bool verbose, ref Param params, ErrorSink eSink)
             eSink.error(Loc.initial, "linker killed by signal %d", WTERMSIG(status));
             status = 1;
         }
+        if (status == 0 && driverParams.optimize)
+            runWasmOpt(params.exefile, verbose, eSink);
         return status;
     }
     else version (Windows)
@@ -443,6 +514,8 @@ private int runWasmLINK(bool verbose, ref Param params, ErrorSink eSink)
             eSink.error(Loc.initial, "linker exited with status %d", status);
             eSink.errorSupplemental(Loc.initial, "%s", linkerCommand);
         }
+        if (status == 0 && driverParams.optimize)
+            runWasmOpt(params.exefile, verbose, eSink);
         return status;
     }
     else

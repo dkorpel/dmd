@@ -64,6 +64,11 @@ import ldc.attributes;
 extern (C) void internalStep() { }
 ```
 
+When compiling with `-O`, DMD post-processes the linked `.wasm` with Binaryen's
+`wasm-opt` if it is found on `PATH` (override with the `WASM_OPT` environment
+variable). This is best-effort: if `wasm-opt` is not installed the step is
+skipped and the ordinary linker output is kept.
+
 Limitations:
 - No phobos
 - No Exceptions
