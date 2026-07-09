@@ -1883,12 +1883,13 @@ bool genElem(ref WasmCG cg, elem* e)
                 emitLValueAddr(cg, e.E1))
             {
                 // Evaluate any leading OPcomma side effects (everything
-                // before the tail pair).
+                // before the tail pair). genElemDiscard lets discarded
+                // subtrees skip materializing a result — a `||`/`&&` bounds
+                // guard lowers to short-circuit control flow and a discarded
+                // `x = y` skips pushing its stored value — rather than emitting
+                // a value form here followed by a drop.
                 for (elem* c = e.E2; c !is rhsTail; c = c.E2)
-                {
-                    if (cg.genElem(c.E1))
-                        cg.emit(OP_DROP);
-                }
+                    cg.genElemDiscard(c.E1);
                 // Capture base addr in a temp so we can use it twice.
                 uint addrTmp = cg.allocTemp(WASM_I32);
                 cg.emit(OP_LOCAL_SET);
