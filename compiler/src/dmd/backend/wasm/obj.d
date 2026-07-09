@@ -1498,7 +1498,8 @@ private uint dataSymIndex(ref WasmModule wmod, uint base, const(Symbol)* sym)
 //   immutable uint[] b = [1]; // also "internal", must not collapse onto a
 private bool dataSymVisible(const(Symbol)* s)
 {
-    return s.Sclass == SC.comdat || s.Sclass == SC.global || s.Sclass == SC.extern_;
+    return s.Sclass == SC.comdat || s.Sclass == SC.global || s.Sclass == SC.extern_ ||
+        s.Sclass == SC.comdef;
 }
 
 private Symbol*[] buildDataSymtabOrder(ref WasmModule wmod)
