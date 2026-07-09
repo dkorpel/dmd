@@ -1910,22 +1910,47 @@ bool genElem(ref WasmCG cg, elem* e)
             }
             // Store rhs through lvalue E1, leaving the rhs value on stack
             // (unless this assignment is used as a statement, e.Ety == void).
-            //
-            // Evaluate the RHS *before* computing the destination address.
-            // The destination address may read a temp that the RHS defines
-            // (e.g. a bitfield store `*t = (*t & ~mask) | v` where the RHS
-            // subtree contains `t = &field`). Pushing the address first would
-            // capture the temp before the RHS assigns it. This matches the
-            // x86 backend (cdeq: evaluate value, then address, then store).
+            const bool needValue = typeHasValue(e.Ety) && !discard;
+            // When neither side has a side effect, push the destination address
+            // first and leave the rhs on the stack for the store (which consumes
+            // [addr][value]) — no value temp, matching ldc -O0. A side-effecting
+            // side needs the RHS evaluated *before* the destination address: the
+            // address may read a temp the RHS defines (e.g. a bitfield store
+            // `*t = (*t & ~mask) | v` whose RHS subtree contains `t = &field`),
+            // or the address may itself write something the RHS reads. Pushing
+            // the address first would reorder those; matches the x86 backend
+            // (cdeq: value, then address, then store).
+            uint memOff;
+            if (!el_sideeffect(e.E1) && !el_sideeffect(e.E2))
+            {
+                if (!cg.emitLValueBase(e.E1, memOff))
+                {
+                    elem_print(e);
+                    assert(0);
+                }
+                cg.genElem(e.E2);
+                uint vTmp;
+                if (needValue)
+                {
+                    vTmp = cg.allocTemp(wasmType(e.E1.Ety));
+                    cg.emitLocal(OP_LOCAL_TEE, vTmp);
+                }
+                cg.emitStore(e.E1.Ety, memOff);
+                if (needValue)
+                {
+                    cg.emitLocal(OP_LOCAL_GET, vTmp);
+                    return true;
+                }
+                return false;
+            }
             uint valTmp = cg.allocTemp(wasmType(e.E1.Ety));
             cg.genElem(e.E2);
             cg.emitLocal(OP_LOCAL_SET, valTmp);
-            uint memOff;
             if (cg.emitLValueBase(e.E1, memOff))
             {
                 cg.emitLocal(OP_LOCAL_GET, valTmp);
                 cg.emitStore(e.E1.Ety, memOff);
-                if (typeHasValue(e.Ety) && !discard)
+                if (needValue)
                 {
                     cg.emitLocal(OP_LOCAL_GET, valTmp);
                     return true;
