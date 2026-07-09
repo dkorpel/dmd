@@ -305,7 +305,12 @@ private void runWasmOpt(const(char)[] wasmfile, bool verbose, ErrorSink eSink)
 
 private int runWasmLINK(bool verbose, ref Param params, ErrorSink eSink)
 {
-    const bool hasDruntime = !params.betterC;
+    // `-defaultlib=` (explicitly empty) opts out of libdruntime-wasm.a and the
+    // druntime `_start`: the program brings its own runtime (custom object.d).
+    // Runtime hooks it references but does not define (e.g. _d_throwc) become
+    // host imports via --allow-undefined, like betterC.
+    const bool customRuntime = !params.betterC && finalDefaultlibname() is null;
+    const bool hasDruntime = !params.betterC && !customRuntime;
 
     Strings argv;
     const(char)* wasmld = getenv("WASM_LD");
@@ -422,9 +427,10 @@ private int runWasmLINK(bool verbose, ref Param params, ErrorSink eSink)
     }
 
     // Auto-link druntime and libc when not betterC.
-    // Always use libdruntime-wasm.a regardless of -defaultlib=: DFLAGS from
-    // the host dmd.conf may set -defaultlib=libphobos2.so (native default)
-    // which is irrelevant for WASM and would cause wasm-ld to fail.
+    // A NON-empty -defaultlib= is still replaced with libdruntime-wasm.a:
+    // DFLAGS from the host dmd.conf may set -defaultlib=libphobos2.so (native
+    // default) which is irrelevant for WASM and would cause wasm-ld to fail.
+    // Only the explicitly empty form opts out (customRuntime above).
     //
     // Resolution: rely on wasm-ld's own search path. User-supplied
     // `-L-L<dir>` flags were already forwarded above, so they take
@@ -434,7 +440,7 @@ private int runWasmLINK(bool verbose, ref Param params, ErrorSink eSink)
     // host paths a user's dmd.conf may have appended via linkswitches.
     if (hasDruntime)
         argv.push("-l:libdruntime-wasm.a");
-    else
+    else if (params.betterC)
         argv.push("-l:crt1_betterc.wasm"); // WASI _start shim for betterC `main`
     // libc.a is linked in both modes: betterC programs commonly call printf /
     // puts / memcmp, and an archive only contributes the members referenced.
