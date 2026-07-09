@@ -2401,6 +2401,38 @@ bool genElem(ref WasmCG cg, elem* e)
     case OPrndtol: // `core.math.rndtol(x)` -- round float to long
         return libmCall(RTLSYM.RNDTOLF, RTLSYM.RNDTOL);
 
+    case OPscale: // `core.math.ldexp(n, exp)` == n * 2^^exp -- x87 fscale on x86
+        {
+            // wasm has no fscale opcode, so call C ldexp(double n, int exp)
+            // (ldexpf for float). fscale semantics: E1 is the significand n,
+            // E2 the exponent. Coerce the significand to the libcall float type
+            // and the exponent to i32 (it may arrive widened to a real).
+            const resTy = e.wasmType;
+            Symbol* fn;
+            final switch (resTy)
+            {
+            case WASM_F32: fn = getRtlsym(RTLSYM.LDEXPF); break;
+            case WASM_F64: fn = getRtlsym(RTLSYM.LDEXP); break;
+            case WASM_I32:
+            case WASM_I64:
+            case WASM_TYPE.EXNREF:
+                assert(0);
+            }
+            // The e2ir OPscale rewrite is skipped for wasm, so the operands are
+            // the raw call args in ABI order: the significand is the floating
+            // operand, the exponent the integral one. Identify them by type.
+            elem* sig = tyfloating(e.E1.Ety) ? e.E1 : e.E2;
+            elem* expo = tyfloating(e.E1.Ety) ? e.E2 : e.E1;
+            cg.genElem(sig);
+            if (sig.wasmType != resTy)
+                emitCoerce(cg, sig.wasmType, resTy);
+            cg.genElem(expo);
+            if (expo.wasmType != WASM_I32)
+                emitCoerce(cg, expo.wasmType, WASM_I32);
+            cg.emitCall(cg.funcIndex(fn), fn);
+            return true;
+        }
+
     case OPnegass:
         // `x = -x;` lowered as a single op (an in-place negation).
         // Reuse the OPneg emitter for the value, then store back.

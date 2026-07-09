@@ -5914,8 +5914,12 @@ elem* callfunc(Loc loc,
                  */
                 e.E1 = el_una(OPind, e.E2.Ety | mTYvolatile, e.E1);
             }
-            if (op == OPscale)
+            if (op == OPscale && !target.isWasm)
             {
+                // x87 fscale needs both operands in FP registers, so widen the
+                // integer exponent to real. The wasm backend instead calls C
+                // ldexp(real n, int exp) and identifies the operands by type, so
+                // it must keep the exponent integral — skip this rewrite there.
                 elem* et = e.E1;
                 e.E1 = el_una(OPs32_d, TYdouble, e.E2);
                 e.E1 = el_una(OPd_ld, TYreal, e.E1);

@@ -124,6 +124,8 @@ enum RTLSYM
     RINT,
     RNDTOLF,
     RNDTOL,
+    LDEXPF,
+    LDEXP,
 
     CXA_ATEXIT,
 
@@ -264,6 +266,8 @@ Symbol* getRtlsym(RTLSYM i) @trusted
         case RTLSYM.RINT:                   symbolz(ps,FL.func,FREGSAVED,"rint",  0, t); break;  // C library function rint()
         case RTLSYM.RNDTOLF:                symbolz(ps,FL.func,FREGSAVED,"llrintf", 0, t); break; // C library function llrintf()
         case RTLSYM.RNDTOL:                 symbolz(ps,FL.func,FREGSAVED,"llrint",  0, t); break; // C library function llrint()
+        case RTLSYM.LDEXPF:                 symbolz(ps,FL.func,FREGSAVED,"ldexpf", 0, t); break;  // C library function ldexpf()
+        case RTLSYM.LDEXP:                  symbolz(ps,FL.func,FREGSAVED,"ldexp",  0, t); break;  // C library function ldexp()
 
         case RTLSYM.CXA_ATEXIT:             symbolz(ps,FL.func,FREGSAVED,"__cxa_atexit", 0, t); break;
         case RTLSYM.EHWASMMATCH:            symbolz(ps,FL.func,FREGSAVED,"_d_eh_wasm_match", 0, t); break;
@@ -415,6 +419,10 @@ private type* wasmRtlsymType(RTLSYM i) @trusted
             return fn([tfloat], tstypes[TYllong]);
         case RTLSYM.RNDTOL:
             return fn([tdouble], tstypes[TYllong]);
+        case RTLSYM.LDEXPF:
+            return fn([tfloat, tint], tfloat);
+        case RTLSYM.LDEXP:
+            return fn([tdouble, tint], tdouble);
 
         case RTLSYM.CXA_ATEXIT:
             return fn([voidPtr(), voidPtr(), voidPtr()], tint);
