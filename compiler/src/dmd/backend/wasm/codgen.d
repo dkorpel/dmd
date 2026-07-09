@@ -748,6 +748,33 @@ bool emitSymLoad(ref WasmCG cg, Symbol* s, uint off, tym_t ty)
     return true;
 }
 
+/// Fold a trailing constant into a load/store memarg offset. If `addr` is
+/// `base + const` (constant on either side, integer, non-negative, in u32
+/// range), return `base` and set `memOff` to the constant so the caller can
+/// push only the base and encode the offset in the following load/store — e.g.
+/// `p.y` becomes `<base>; i32.load offset=4` instead of `<base>; i32.const 4;
+/// i32.add; i32.load`. Otherwise return `addr` unchanged with `memOff = 0`.
+private elem* splitConstOffset(elem* addr, out uint memOff)
+{
+    memOff = 0;
+    if (!addr || addr.Eoper != OPadd)
+        return addr;
+    elem* c;
+    elem* base;
+    if (addr.E2 && addr.E2.Eoper == OPconst)      { c = addr.E2; base = addr.E1; }
+    else if (addr.E1 && addr.E1.Eoper == OPconst) { c = addr.E1; base = addr.E2; }
+    else
+        return addr;
+    const wt = c.wasmType;
+    if (wt != WASM_I32 && wt != WASM_I64)
+        return addr;
+    const long v = (wt == WASM_I64) ? c.Vllong : cast(long) c.Vlong;
+    if (v < 0 || v > uint.max)
+        return addr;
+    memOff = cast(uint) v;
+    return base;
+}
+
 /// Push the linear-memory address of an lvalue elem on the value stack.
 /// Handles OPvar (memory-backed via emitSymAddr) and OPind (recurse on E1).
 /// Returns: true on success. False means the lvalue has no memory address
@@ -780,8 +807,7 @@ bool emitLValueBase(ref WasmCG cg, elem* e, out uint memOff)
     case OPvar:
         return e.Vsym && emitSymBase(cg, e.Vsym, cast(uint) e.Voffset, memOff);
     case OPind:
-        cg.genElem(e.E1);
-        memOff = 0;
+        cg.genElem(splitConstOffset(e.E1, memOff));
         return true;
     default:
         return false;
@@ -797,6 +823,7 @@ struct SavedLValue
     Symbol* directSym;  /// OPvar: the symbol; null otherwise
     uint directOff;     /// OPvar: byte offset
     uint addrTemp;      /// non-OPvar: temp i32 local index holding the addr
+    uint memOff;        /// non-OPvar: constant offset folded out of `base + const`
 }
 
 /// Evaluate `e`'s address-producing subexpressions once and return a
@@ -810,8 +837,15 @@ SavedLValue saveLValueAddr(ref WasmCG cg, elem* e)
         r.directOff = cast(uint) e.Voffset;
         return r;
     }
-    const bool ok = emitLValueAddr(cg, e);
-    assert(ok);
+    // OPind: spill only the base address, folding a constant field/element
+    // offset into memOff (replayed into each load/store memarg).
+    if (e.Eoper == OPind)
+        cg.genElem(splitConstOffset(e.E1, r.memOff));
+    else
+    {
+        const bool ok = emitLValueAddr(cg, e);
+        assert(ok);
+    }
     r.addrTemp = cg.allocTemp(WASM_I32);
     cg.emitLocal(OP_LOCAL_SET, r.addrTemp);
     return r;
@@ -831,7 +865,7 @@ uint replayAddr(ref WasmCG cg, SavedLValue r)
         return memOff;
     }
     cg.emitLocal(OP_LOCAL_GET, r.addrTemp);
-    return 0;
+    return r.memOff;
 }
 
 /// True if any elem in `e`'s tree reads the shadow-frame base beyond ordinary
@@ -1823,9 +1857,12 @@ bool genElem(ref WasmCG cg, elem* e)
         assert(0);
 
     case OPind:
-        cg.genElem(e.E1); // address on stack
-        cg.emitLoad(e.Ety);
-        return true;
+        {
+            uint off;
+            cg.genElem(splitConstOffset(e.E1, off)); // base address on stack
+            cg.emitLoad(e.Ety, off);                 // constant offset in memarg
+            return true;
+        }
 
     case OPeq:
         {
