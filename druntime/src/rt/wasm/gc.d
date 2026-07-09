@@ -48,6 +48,8 @@ private extern(C) extern __gshared ubyte __data_end;
 
 // Run a class instance's destructor chain (lives in rt.wasm.extra).
 private extern(C) void rt_finalize(void* p, bool det = true) nothrow;
+// GC-side finalizer dispatch: class (typeInfo==null) vs struct/struct-array.
+private extern(C) void rt_finalizeFromGC(void* p, size_t size, uint attr, TypeInfo typeInfo) nothrow;
 
 import core.attribute : wasmImportModule;
 private struct Ciovec { const(void)* buf; size_t len; }
@@ -60,7 +62,7 @@ private enum uint ATTR_NO_SCAN     = 0b0000_0010;
 private enum uint ATTR_APPENDABLE  = 0b0000_1000;
 private enum uint ATTR_STRUCTFINAL = 0b0010_0000;
 
-private enum size_t HEADER = 16;
+private enum size_t HEADER = 24;
 
 // Internal per-block flags (BlkHeader.flags), disjoint from BlkAttr.
 private enum uint F_MARK = 1; // reachable this cycle
@@ -72,6 +74,8 @@ private struct BlkHeader
     uint   attr;  // BlkAttr flags
     uint   flags; // F_MARK | F_DEAD
     size_t used;  // appendable-array used length (only meaningful with ATTR_APPENDABLE)
+    TypeInfo ti;  // struct TypeInfo for ATTR_STRUCTFINAL blocks (null for classes)
+    uint   _pad;  // keep BlkHeader.sizeof == HEADER so `(BlkHeader*)payload - 1` stays valid
 }
 static assert(BlkHeader.sizeof == HEADER);
 
@@ -134,7 +138,7 @@ private void registerBlock(BlkHeader* h) @nogc nothrow
     if (hi > heapMax) heapMax = hi;
 }
 
-private void* allocCore(size_t sz, uint ba, bool zero) @nogc nothrow
+private void* allocCore(size_t sz, uint ba, bool zero, TypeInfo ti = null) @nogc nothrow
 {
     if (sz == 0) sz = 1;
     if (enabled && !collecting && bytesSinceCollect > collectThreshold)
@@ -150,6 +154,7 @@ private void* allocCore(size_t sz, uint ba, bool zero) @nogc nothrow
     h.size = sz;
     h.attr = ba;
     h.flags = 0;
+    h.ti = ti;
     // A fresh appendable block reports its whole payload as used: array append
     // and setcapacity rely on GC.malloc setting used == requested, then call
     // gc_shrinkArrayUsed to drop it to the real length, leaving spare capacity.
@@ -270,8 +275,15 @@ private void finalizeBlock(BlkHeader* h) @nogc nothrow
     if (h.attr & ATTR_FINALIZE)
     {
         inFinalizer = true;
-        auto fin = cast(void function(void*, bool) @nogc nothrow) &rt_finalize;
-        fin(cast(void*) h + HEADER, true);
+        void* p = cast(void*) h + HEADER;
+        // Class blocks read their destructor from the object's vtable
+        // (typeInfo == null). Struct / struct-array blocks (ATTR_STRUCTFINAL)
+        // have no vtable, so the stored element TypeInfo drives finalization;
+        // for appendable arrays only the used prefix holds live elements.
+        TypeInfo ti = (h.attr & ATTR_STRUCTFINAL) ? h.ti : null;
+        size_t fsize = (h.attr & ATTR_APPENDABLE) ? h.used : h.size;
+        auto fin = cast(void function(void*, size_t, uint, TypeInfo) @nogc nothrow) &rt_finalizeFromGC;
+        fin(p, fsize, h.attr, ti);
         inFinalizer = false;
     }
 }
@@ -374,23 +386,23 @@ void gc_minimize() @nogc { collectNow(); }
 
 void* gc_malloc(size_t sz, uint ba = 0, const scope TypeInfo ti = null)
 {
-    return allocCore(sz, ba, true);
+    return allocCore(sz, ba, true, cast(TypeInfo) ti);
 }
 
 void* gc_calloc(size_t sz, uint ba = 0, const scope TypeInfo ti = null)
 {
-    return allocCore(sz, ba, true);
+    return allocCore(sz, ba, true, cast(TypeInfo) ti);
 }
 
 void* gc_realloc(void* p, size_t sz, uint ba = 0, const scope TypeInfo ti = null)
 {
-    if (!p) return allocCore(sz, ba, true);
+    if (!p) return allocCore(sz, ba, true, cast(TypeInfo) ti);
     BlkHeader* oldh = (cast(BlkHeader*) p) - 1;
     size_t oldsz = oldh.size;
     // allocCore may collect; `p` is live in the caller's shadow frame, so its
     // block survives. The old block becomes garbage, reclaimed next cycle
     // (freeing it here would risk reuse while a stale copy is still scannable).
-    void* q = allocCore(sz, oldh.attr, false);
+    void* q = allocCore(sz, oldh.attr, false, oldh.ti);
     if (q)
     {
         size_t ncopy = oldsz < sz ? oldsz : sz;
@@ -405,7 +417,7 @@ void* gc_realloc(void* p, size_t sz, uint ba = 0, const scope TypeInfo ti = null
 GC.BlkInfo gc_qalloc(size_t sz, uint ba = 0, const scope TypeInfo ti = null)
 {
     GC.BlkInfo b;
-    b.base = allocCore(sz, ba, true);
+    b.base = allocCore(sz, ba, true, cast(TypeInfo) ti);
     b.size = b.base ? sz : 0;
     b.attr = ba;
     return b;

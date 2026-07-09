@@ -71,6 +71,39 @@ extern (C) void rt_finalize(void* p, bool det = true) nothrow
     rt_finalize2(p, det, true);
 }
 
+// rt.lifetime.rt_finalizeFromGC — the GC's per-block finalizer dispatch.
+// A null typeInfo means a class instance (destructor lives in the vtable);
+// otherwise typeInfo is the element TypeInfo_Struct. Appendable blocks hold an
+// array of that struct over `size` bytes (destroyed last-to-first, matching the
+// delete-operator order), a plain block holds a single struct.
+extern (C) void rt_finalizeFromGC(void* p, size_t size, uint attr, TypeInfo typeInfo) nothrow
+{
+    enum uint ATTR_APPENDABLE = 0b0000_1000; // core.memory.BlkAttr.APPENDABLE
+    if (typeInfo is null)
+    {
+        rt_finalize2(p, false, false); // class
+        return;
+    }
+    auto si = cast(TypeInfo_Struct) cast(void*) typeInfo;
+    try
+    {
+        if (attr & ATTR_APPENDABLE)
+        {
+            const tsize = si.tsize;
+            if (tsize)
+                for (auto curP = p + size - tsize; curP >= p; curP -= tsize)
+                    si.destroy(curP);
+        }
+        else
+            si.destroy(p);
+    }
+    catch (Exception e)
+    {
+        import core.exception : onFinalizeError;
+        onFinalizeError(si, e);
+    }
+}
+
 // Fallback only: the wasm backend lowers direct alloca() calls to a dynamic
 // shadow-stack bump. This is reached only through a function pointer, where
 // per-frame reclamation is impossible; the heap block leaks like all other
