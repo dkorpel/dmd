@@ -1956,30 +1956,46 @@ bool genElem(ref WasmCG cg, elem* e)
                 cg.genElem(e.E2);
                 return true;
             }
-            // The RHS is evaluated before the LHS value is read: a call in
-            // the RHS may modify the lvalue, and the updated value must be
-            // the one combined (e.g. `val += add8ret3(val)` in evalorder.d).
             auto lv = saveLValueAddr(cg, e.E1);
-            cg.genElem(e.E2, wasmType(e));
-            uint rTmp = cg.allocTemp(wasmType(e));
-            cg.emitLocal(OP_LOCAL_SET, rTmp);
-            uint loadOff = replayAddr(cg, lv);
+            // A side-effecting RHS must be evaluated before the LHS value is
+            // read — a call in the RHS may modify the lvalue and the updated
+            // value must be the one combined (e.g. `val += add8ret3(val)` in
+            // evalorder.d) — so spill it to a temp. A pure RHS (constant, plain
+            // variable read) has no observable ordering versus the load, so it
+            // is materialized inline afterwards with no temp.
+            const bool rhsPure = !el_sideeffect(e.E2);
+            uint rTmp;
+            if (!rhsPure)
+            {
+                cg.genElem(e.E2, wasmType(e));
+                rTmp = cg.allocTemp(wasmType(e));
+                cg.emitLocal(OP_LOCAL_SET, rTmp);
+            }
+            // Push the store address first so the read-modify-write value stays
+            // on the stack for the store (which consumes [addr][value]) — no
+            // value temp, matching ldc -O0.
+            const bool needValue = typeHasValue(e.Ety) && !discard;
+            const uint storeOff = replayAddr(cg, lv);
+            const uint loadOff = replayAddr(cg, lv);
             cg.emitLoad(e.E1.Ety, loadOff);
             if (op == OPshrass && wasmType(e.E1.Ety) == WASM_I32 && !tyuns(e.E1.Ety))
                 cg.zeroExtendSmallInt(e.E1.Ety);
-            cg.emitLocal(OP_LOCAL_GET, rTmp);
+            if (rhsPure)
+                cg.genElem(e.E2, wasmType(e));
+            else
+                cg.emitLocal(OP_LOCAL_GET, rTmp);
             cg.emitBinop(opeqtoop(op), e.Ety);
             cg.maskSmallInt(e.E1.Ety);
-            // Save new value, store, leave on stack as result — unless this
-            // op-assign is a statement (e.Ety == void), where materializing the
-            // result just forces the caller to emit a redundant drop (mirrors
-            // the OPeq path above).
-            uint vTmp = cg.allocTemp(wasmType(e.E1.Ety));
-            cg.emitLocal(OP_LOCAL_SET, vTmp);
-            uint storeOff = replayAddr(cg, lv);
-            cg.emitLocal(OP_LOCAL_GET, vTmp);
+            // Statement form (e.Ety == void) leaves nothing on the stack; the
+            // expression form tees the new value aside to return it afterwards.
+            uint vTmp;
+            if (needValue)
+            {
+                vTmp = cg.allocTemp(wasmType(e.E1.Ety));
+                cg.emitLocal(OP_LOCAL_TEE, vTmp);
+            }
             cg.emitStore(e.E1.Ety, storeOff);
-            if (typeHasValue(e.Ety) && !discard)
+            if (needValue)
             {
                 cg.emitLocal(OP_LOCAL_GET, vTmp);
                 return true;
@@ -2060,24 +2076,25 @@ bool genElem(ref WasmCG cg, elem* e)
             }
 
             auto lv = saveLValueAddr(cg, e.E1);
-            uint loadOff = replayAddr(cg, lv);
+            // Push the store address first so the new value stays on the stack
+            // for the store (which consumes [addr][value]) — no new-value temp.
+            // The original value (the expression result) is teed aside only when
+            // needed; a bare `x++;` statement keeps nothing.
+            const uint storeOff = replayAddr(cg, lv);
+            const uint loadOff = replayAddr(cg, lv);
             cg.emitLoad(e.E1.Ety, loadOff);
 
-            // Stash old value as the result.
-            uint oldTmp = cg.allocTemp(wasmType(e.E1));
-            cg.emit(OP_LOCAL_TEE);
-            cg.emitULEB(oldTmp);
+            uint oldTmp;
+            if (!discard)
+            {
+                oldTmp = cg.allocTemp(wasmType(e.E1));
+                cg.emitLocal(OP_LOCAL_TEE, oldTmp);
+            }
 
-            // Compute new value = old +/- E2.
+            // Compute new value = old +/- E2 and store it.
             cg.genElem(e.E2, wasmType(e.E1.Ety));
             cg.emitBinop(op == OPpostinc ? OPadd : OPmin, e.E1.Ety);
             cg.maskSmallInt(e.E1.Ety);
-
-            // Store new value back.
-            uint newTmp = cg.allocTemp(wasmType(e.E1));
-            cg.emitLocal(OP_LOCAL_SET, newTmp);
-            uint storeOff = replayAddr(cg, lv);
-            cg.emitLocal(OP_LOCAL_GET, newTmp);
             cg.emitStore(e.E1.Ety, storeOff);
 
             // Result: old value — skipped when the result is discarded
