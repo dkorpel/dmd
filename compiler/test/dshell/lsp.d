@@ -155,6 +155,16 @@ immutable Case[] cases = [
         script: (ref c) { c.completion(6, 4); },
         expected: [`"label":"Point","kind":22`, `"label":"Color","kind":13`, `"label":"area","kind":3`],
     },
+    // textDocument/semanticTokens/full returns lexer-based highlighting as
+    // delta-encoded [line, column, length, type, modifiers] runs. Expected here:
+    // `module` keyword, doc comment (documentation modifier), `int` type,
+    // number literal, then a plain line comment.
+    {
+        name: "semantic-tokens",
+        source: "module sem_tok;\n\n/// doc\nint x = 42; // hi\n",
+        script: (ref c) { c.semanticTokens(); },
+        expected: [`"data":[0,0,6,0,0,2,0,7,1,1,1,0,3,4,0,0,8,2,3,0,0,4,5,1,0]`],
+    },
     // textDocument/signatureHelp resolves the enclosing call; cursor is on
     // the second argument
     {
@@ -567,6 +577,12 @@ struct LspClient
     void references(int line, int character)
     {
         request("textDocument/references", positionParams(line, character));
+    }
+
+    void semanticTokens()
+    {
+        request("textDocument/semanticTokens/full", format(
+            `{"textDocument":{"uri":"%s"}}`, uri));
     }
 
     // Replace the document's content (textDocumentSync Full)

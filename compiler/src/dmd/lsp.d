@@ -1,7 +1,8 @@
 /**
 Implements dmd as a languag server, following the Language Server Protocol (LSP)
 
-Provides 'hover' and 'go to definition' support for variables.
+Provides 'hover', 'go to definition', completion, diagnostics, and lexer-based
+syntax highlighting (semantic tokens).
 
 See_Also: https://microsoft.github.io/language-server-protocol/
 */
@@ -38,6 +39,7 @@ import dmd.lexer;
 import dmd.location;
 import dmd.mtype;
 import dmd.typesem : Type_init, toBasetype;
+import dmd.root.file;
 import dmd.root.filename;
 import dmd.root.string;
 import dmd.rootobject;
@@ -1091,6 +1093,184 @@ private Dsymbol calleeByName(Module m, const(char)[] content, size_t nameStart, 
     return found ? found.toAlias() : null;
 }
 
+// ----------------------------------------------------------------------------
+// Syntax highlighting (textDocument/semanticTokens, lexer-based)
+// ----------------------------------------------------------------------------
+
+/// Indices into the `tokenTypes` legend sent in the initialize response;
+/// keep in sync with the string array there.
+enum SemanticTokenType : int
+{
+    keyword,
+    comment,
+    string_,
+    number,
+    type,
+}
+
+/// Bits of the `tokenModifiers` legend sent in the initialize response
+enum SemanticTokenModifier : int
+{
+    documentation = 1 << 0,
+}
+
+/// Map a lexed token to an index in the `tokenTypes` legend, or -1 when the
+/// token gets no highlighting (identifiers, operators, punctuation).
+private int semanticTokenType(const ref Token tok)
+{
+    with (TOK) switch (tok.value)
+    {
+    case comment:
+        return SemanticTokenType.comment;
+    case string_, interpolated, hexadecimalString,
+         charLiteral, wcharLiteral, dcharLiteral, wchar_tLiteral:
+        return SemanticTokenType.string_;
+    case int32Literal: .. case imaginary80Literal:
+        return SemanticTokenType.number;
+    case void_: .. case bool_:
+        return SemanticTokenType.type;
+    default:
+        return tok.isKeyword() ? SemanticTokenType.keyword : -1;
+    }
+}
+
+/// True for ddoc comments: `///`, `/**`, `/++` (but not `/**/`, `/++/`)
+private bool isDocComment(const(char)[] text)
+{
+    if (text.length < 3 || text[0] != '/')
+        return false;
+    if (text[1] == '/')
+        return text[2] == '/';
+    return text[1] == text[2] && text.length > 4;
+}
+
+/// Lex `content` and write LSP semantic token data (comma-separated integers,
+/// no enclosing brackets) into `buf`.
+///
+/// Each token is 5 integers per the LSP spec: line delta, start-character
+/// delta, length, token type (legend index), modifier bitmask. Multi-line
+/// tokens (block comments, multi-line strings) become one entry per line
+/// because not every client supports multi-line tokens. Columns are byte
+/// offsets, like everywhere else in this server.
+void writeSemanticTokens(const(char)[] content, ref OutBuffer buf)
+{
+    const text = content ~ "\0\0\0\0"; // the lexer requires a null-terminated buffer
+    // Lexing errors (e.g. unterminated strings) surface via publishDiagnostics
+    // from full analysis; here they would only produce duplicates
+    scope eSink = new ErrorSinkNull();
+    scope lexer = new Lexer("lsp", text.ptr, 0, content.length,
+        /*doDocComment*/ false, /*commentToken*/ true, eSink, &global.compileEnv);
+
+    // Cursor converting byte offsets to 0-based (line, column); tokens come
+    // in source order, so it only ever moves forward.
+    size_t cursor = 0;
+    int line = 0;
+    int column = 0;
+    void advanceTo(size_t offset)
+    {
+        for (; cursor < offset; cursor++)
+        {
+            if (text[cursor] == '\n')
+            {
+                line++;
+                column = 0;
+            }
+            else
+                column++;
+        }
+    }
+
+    int prevLine = 0;
+    int prevColumn = 0;
+    bool first = true;
+    void emit(int tokLine, int tokColumn, int length, int type, int modifiers)
+    {
+        if (!first)
+            buf.writestring(",");
+        first = false;
+        const deltaLine = tokLine - prevLine;
+        const deltaColumn = deltaLine == 0 ? tokColumn - prevColumn : tokColumn;
+        buf.printf("%d,%d,%d,%d,%d", deltaLine, deltaColumn, length, type, modifiers);
+        prevLine = tokLine;
+        prevColumn = tokColumn;
+    }
+
+    for (lexer.nextToken(); lexer.token.value != TOK.endOfFile; lexer.nextToken())
+    {
+        const type = semanticTokenType(lexer.token);
+        if (type < 0)
+            continue;
+        // lexer.p sits just past the token's last character after each scan
+        const start = cast(size_t)(lexer.token.ptr - text.ptr);
+        size_t end = cast(size_t)(lexer.p - text.ptr);
+        // A // comment token includes its terminating newline; drop it
+        while (end > start && (text[end - 1] == '\n' || text[end - 1] == '\r'))
+            end--;
+
+        const modifiers = type == SemanticTokenType.comment && isDocComment(text[start .. end])
+            ? SemanticTokenModifier.documentation : 0;
+
+        advanceTo(start);
+        // Emit one entry per source line the token covers
+        int segLine = line;
+        int segColumn = column;
+        size_t segStart = start;
+        foreach (i; start .. end + 1)
+        {
+            if (i != end && text[i] != '\n')
+                continue;
+            size_t segEnd = i;
+            if (segEnd > segStart && text[segEnd - 1] == '\r')
+                segEnd--;
+            if (segEnd > segStart)
+                emit(segLine, segColumn, cast(int)(segEnd - segStart), type, modifiers);
+            segLine++;
+            segColumn = 0;
+            segStart = i + 1;
+        }
+    }
+}
+
+/// Handle textDocument/semanticTokens/full: write the "data" array contents
+/// for the document in `params` into `buf`.
+void semanticTokens(ref Lsp lsp, Params params, ref OutBuffer buf)
+{
+    if (auto content = params.textDocument.uri in lsp.openDocuments)
+        return writeSemanticTokens(*content, buf);
+
+    // Not open in the editor (unusual, but allowed); highlight the disk version
+    SourceLoc sl = toSourceLoc(params.textDocument.uri, Position(0, 0));
+    OutBuffer fileContent;
+    if (sl.filename.length && File.read(sl.filename, fileContent))
+        writeSemanticTokens(cast(const(char)[]) fileContent.peekSlice(), buf);
+}
+
+unittest
+{
+    static string dataOf(string source)
+    {
+        OutBuffer buf;
+        writeSemanticTokens(source, buf);
+        return buf.extractSlice().idup;
+    }
+
+    // type / number / comment, delta-encoded along one line
+    assert(dataOf("int x = 5; // c\n") == "0,0,3,4,0,0,8,1,3,0,0,3,4,1,0");
+
+    // doc comments get the `documentation` modifier bit
+    assert(dataOf("/// doc\nint x;\n") == "0,0,7,1,1,1,0,3,4,0");
+
+    // multi-line tokens are split into one entry per line
+    assert(dataOf("/*a\nb*/ int x;\n") == "0,0,3,1,0,1,0,3,1,0,0,4,3,4,0");
+
+    // keywords and string literals
+    assert(dataOf(`return "s";`) == "0,0,6,0,0,0,7,3,2,0");
+
+    // no highlightable tokens at all
+    assert(dataOf("") == "");
+    assert(dataOf("x\n") == "");
+}
+
 /// Handle textDocument/signatureHelp: resolve the callee of the call
 /// enclosing the cursor and emit one SignatureInformation per overload.
 /// For a UFCS call the receiver counts as the signature's first parameter,
@@ -1643,6 +1823,7 @@ void lspRespond(ref Lsp lsp, JsonRpc result)
 
     if (result.method == "initialize")
     {
+        // The semanticTokens legend must match SemanticTokenType / SemanticTokenModifier
         buf.writestring(`{"capabilities":{
             "positionEncoding":"utf-8",
             "definitionProvider":true,
@@ -1651,6 +1832,7 @@ void lspRespond(ref Lsp lsp, JsonRpc result)
             "signatureHelpProvider":{"triggerCharacters":["(",","]},
             "documentSymbolProvider":true,
             "referencesProvider":true,
+            "semanticTokensProvider":{"legend":{"tokenTypes":["keyword","comment","string","number","type"],"tokenModifiers":["documentation"]},"full":true},
             "textDocumentSync":1
             }}`);
     }
@@ -1730,6 +1912,12 @@ void lspRespond(ref Lsp lsp, JsonRpc result)
     else if (result.method == "textDocument/signatureHelp")
     {
         signatureHelp(lsp, result.params, buf);
+    }
+    else if (result.method == "textDocument/semanticTokens/full")
+    {
+        buf.writestring(`{"data":[`);
+        semanticTokens(lsp, result.params, buf);
+        buf.writestring(`]}`);
     }
     else if (result.method == "textDocument/documentSymbol")
     {
