@@ -775,6 +775,93 @@ private elem* splitConstOffset(elem* addr, out uint memOff)
     return base;
 }
 
+/// Coalesce a discarded comma chain of contiguous 4-byte integer zero stores
+/// (a struct/array default-init such as `Point p;`, lowered to per-field
+/// `*(base+k) = 0`) into the widest aligned stores — two adjacent 4-byte stores
+/// become one i64.store, matching ldc -O0. Only the exact all-zero shape with a
+/// common side-effect-free base is accepted; anything else returns false so the
+/// caller falls back to the general comma path.
+/// Params:
+///   cg    = codegen state
+///   comma = the OPcomma being evaluated in discard context
+/// Returns: true if the chain was recognized and emitted here.
+private bool tryCoalesceZeroInit(ref WasmCG cg, elem* comma)
+{
+    elem*[16] arms;
+    uint n;
+    elem* cur = comma;
+    while (cur.Eoper == OPcomma)
+    {
+        if (n >= arms.length)
+            return false;
+        arms[n++] = cur.E2;
+        cur = cur.E1;
+    }
+    if (n >= arms.length)
+        return false;
+    arms[n++] = cur;
+    if (n < 2)
+        return false;
+
+    elem* base;
+    uint[16] offs;
+    foreach (i; 0 .. n)
+    {
+        elem* s = arms[i];
+        if (s.Eoper != OPeq)
+            return false;
+        elem* dst = s.E1;
+        if (dst.Eoper != OPind || tysize(dst.Ety) != 4 || !tyintegral(dst.Ety))
+            return false;
+        elem* rhs = s.E2;
+        if (rhs.Eoper != OPconst || !tyintegral(rhs.Ety) || el_tolong(rhs) != 0)
+            return false;
+        uint off;
+        elem* b = splitConstOffset(dst.E1, off);
+        if (el_sideeffect(b))
+            return false;
+        if (i == 0)
+            base = b;
+        else if (!el_match(base, b))
+            return false;
+        offs[i] = off;
+    }
+
+    foreach (i; 1 .. n)
+    {
+        const key = offs[i];
+        uint j = i;
+        while (j > 0 && offs[j - 1] > key)
+        {
+            offs[j] = offs[j - 1];
+            --j;
+        }
+        offs[j] = key;
+    }
+
+    uint i;
+    while (i < n)
+    {
+        if (i + 1 < n && offs[i + 1] == offs[i] + 4)
+        {
+            cg.genElem(base);
+            cg.emitConst(OP_I64_CONST, 0);
+            cg.emit(OP_I64_STORE);
+            cg.emitMemArg(2, offs[i]);
+            i += 2;
+        }
+        else
+        {
+            cg.genElem(base);
+            cg.emitConst(OP_I32_CONST, 0);
+            cg.emit(OP_I32_STORE);
+            cg.emitMemArg(2, offs[i]);
+            i += 1;
+        }
+    }
+    return true;
+}
+
 /// Push the linear-memory address of an lvalue elem on the value stack.
 /// Handles OPvar (memory-backed via emitSymAddr) and OPind (recurse on E1).
 /// Returns: true on success. False means the lvalue has no memory address
@@ -1694,6 +1781,12 @@ bool genElemDiscard(ref WasmCG cg, elem* e)
 {
     if (!e)
         return false;
+    // A discarded expression with no side effect is dead — evaluating it only
+    // to drop the result is pure overhead. Skipping it here removes stray
+    // `local.get; <load>; drop` sequences (e.g. the trailing struct-address
+    // value of a `Point p;` default-init comma `(*p=0, *(p+4)=0, p)`).
+    if (!el_sideeffect(e))
+        return false;
     cg.discardResult = true;
     const v = cg.genElem(e);
     cg.discardResult = false;
@@ -2465,6 +2558,11 @@ bool genElem(ref WasmCG cg, elem* e)
         return true;
 
     case OPcomma:
+        // A struct/array default-init (`Point p;`) lowers to a comma chain of
+        // per-field `*(base+k) = 0` stores; coalesce contiguous ones into the
+        // widest store, matching ldc -O0's single i64.store.
+        if (discard && tryCoalesceZeroInit(cg, e))
+            return false;
         cg.genElemDiscard(e.E1); // left-hand result is always unused
         if (discard)
         {
