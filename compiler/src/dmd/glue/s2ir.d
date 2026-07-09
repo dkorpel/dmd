@@ -568,6 +568,7 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
             // EH_NONE lowers finallys with insertFinallyBlockGotos, which
             // requires return blocks to have no successors yet
             if (config.ehmethod != EHmethod.EH_DWARF &&
+                config.ehmethod != EHmethod.EH_WASM &&
                 config.ehmethod != EHmethod.EH_NONE &&
                 !irs.isNothrow() &&
                 (finallyBlock = stmtstate.getFinallyBlock()) != null)
@@ -881,6 +882,92 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
 
         if (blx.funcsym.Sfunc.Fflags3 & Feh_none) printf("visit %s\n", blx.funcsym.Sident.ptr);
         if (blx.funcsym.Sfunc.Fflags3 & Feh_none) assert(0);
+
+        if (config.ehmethod == EHmethod.EH_WASM)
+        {
+            /* Lower to a wasm try_table frame (built by the wasm block
+             * structurer from the BC._try/BC.jcatch pair) with one landing pad
+             * that receives the caught Throwable pointer in jcatchvar,
+             * followed by explicit type-dispatch blocks:
+             *
+             *  BC.goto_    [BC._try]
+             *  BC._try     [body] [BC.jcatch]
+             *  body
+             *  BC.goto_    [breakblock]        (normal completion skips handlers)
+             *  BC.jcatch                       (landing pad: jcatchvar := caught ptr)
+             *  BC.iftrue   (_d_eh_wasm_match(jcatchvar, typeid(T1))) [handler1] [next]
+             *  handler1
+             *  BC.goto_    [breakblock]
+             *  ...
+             *  OPthrow(jcatchvar); BC.exit     (no clause matched: re-raise)
+             *  breakblock
+             */
+            StmtState mystate = StmtState(stmtstate, s);
+
+            block* tryblock = block_goto(blx, BC.goto_, null);
+            int previndex = blx.scope_index;
+            tryblock.Blast_index = previndex;
+            blx.scope_index = tryblock.Bscope_index = blx.next_index++;
+
+            // Filled by the landing pad with the caught Throwable pointer
+            tryblock.jcatchvar = symbol_genauto(type_fake(mTYvolatile | TYnptr));
+
+            blx.tryblock = tryblock;
+            block_goto(blx, BC._try, null);
+            if (s._body)
+                Statement_toIR(s._body, irs, &mystate);
+            blx.tryblock = tryblock.Btry;
+            blx.scope_index = previndex;
+
+            block* breakblock = block_calloc(blx);
+            blx.curblock.Bsucc.push(breakblock);
+            block_next(blx, BC.goto_, null);
+
+            block* pad = blx.curblock;
+            tryblock.Bsucc.push(pad);
+            block_goto(blx, BC.jcatch, null);
+
+            assert(s.catches);
+            foreach (cs; *s.catches)
+            {
+                if (cs.var)
+                    cs.var.csym = tryblock.jcatchvar;
+                assert(cs.type);
+                Symbol* catchtype = toSymbol(cs.type.toBasetype());
+                elem* ematch = el_bin(OPcall, TYbool,
+                    el_var(getRtlsym(RTLSYM.EHWASMMATCH)),
+                    el_param(el_ptr(catchtype), el_var(tryblock.jcatchvar)));
+                block* bmatch = blx.curblock;
+                block_appendexp(bmatch, ematch);
+                block_next(blx, BC.iftrue, null);
+                bmatch.Bsucc.push(blx.curblock);
+
+                StmtState catchState = StmtState(stmtstate, s);
+
+                /* Append to block:
+                 *   *(sclosure + cs.var.offset) = cs.var;
+                 */
+                if (cs.var && cs.var.offset) // if member of a closure
+                {
+                    tym_t tym = totym(cs.var.type);
+                    elem* ex = el_var(irs.sclosure);
+                    ex = el_bin(OPadd, TYnptr, ex, el_long(TYsize_t, cs.var.offset));
+                    ex = el_una(OPind, tym, ex);
+                    ex = el_bin(OPeq, tym, ex, el_var(toSymbol(cs.var)));
+                    block_appendexp(blx.curblock, ex);
+                }
+                if (cs.handler !is null)
+                    Statement_toIR(cs.handler, irs, &catchState);
+                blx.curblock.Bsucc.push(breakblock);
+                block_next(blx, BC.goto_, null);
+                bmatch.Bsucc.push(blx.curblock);
+            }
+
+            block_appendexp(blx.curblock,
+                el_una(OPthrow, TYnoreturn, el_var(tryblock.jcatchvar)));
+            block_next(blx, BC.exit, breakblock);
+            return;
+        }
 
         if (config.ehmethod == EHmethod.EH_WIN32)
             nteh_declarvars(blx);
@@ -1274,7 +1361,9 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
 
             block_next(blx, BC._ret, breakblock);
         }
-        else if (config.ehmethod == EHmethod.EH_NONE || blx.funcsym.Sfunc.Fflags3 & Feh_none)
+        else if (config.ehmethod == EHmethod.EH_NONE ||
+                 config.ehmethod == EHmethod.EH_WASM ||
+                 blx.funcsym.Sfunc.Fflags3 & Feh_none)
         {
             /* Build this:
              *  BC.goto_     [BC._try]
@@ -1287,6 +1376,11 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
              *  BC.goto_     [BC._ret]
              *  BC._ret
              *  breakblock
+             *
+             * For EH_WASM the block structurer wraps the try body in a
+             * try_table whose catch_all_ref lands at BC._lpad with the
+             * in-flight exnref saved in a local keyed by the flag symbol;
+             * BC._ret re-raises it via OPrethrow while the flag is still 0.
              */
             if (s.bodyFallsThru)
             {
@@ -1328,6 +1422,18 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
             assert(!finallyblock.Belem);
 
             landingPad.Belem = el_bin(OPeq, TYvoid, el_var(sflag), el_long(TYint, 0)); // __flag = 0;
+
+            if (config.ehmethod == EHmethod.EH_WASM && !(blx.funcsym.Sfunc.Fflags3 & Feh_none))
+            {
+                // (!__flag && rethrow) — re-raise the in-flight exnref
+                elem* er = el_calloc();
+                er.Eoper = OPrethrow;
+                er.Ety = TYvoid;
+                er.Vsym = sflag;
+                assert(!retblock.Belem);
+                retblock.Belem = el_bin(OPandand, TYvoid,
+                    el_una(OPnot, TYbool, el_var(sflag)), er);
+            }
 
             StmtState finallyState = StmtState(stmtstate, s);
 

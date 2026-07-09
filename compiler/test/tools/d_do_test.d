@@ -1018,7 +1018,7 @@ void validateWasmArtifact(ref File f, string path)
 {
     if (!std.file.exists(path))
         return;
-    const cmd = "wasm-validate " ~ quoteSpaces(path);
+    const cmd = "wasm-validate --enable-exceptions " ~ quoteSpaces(path);
     f.writeln(cmd);
     const result = std.process.executeShell(cmd);
     f.write(result.output);

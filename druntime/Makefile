@@ -443,7 +443,7 @@ WASM_DMD    ?= $(DMD)
 WASM_ROOT   := $(ROOT_OF_THEM_ALL)/wasm/release/wasm32
 WASM_LIB    := $(WASM_ROOT)/libdruntime-wasm.a
 WASM_RT_DIR := src/rt/wasm
-WASM_MODULES := start gc sync errors eh
+WASM_MODULES := start gc sync errors
 WASM_OBJS   := $(addprefix $(WASM_ROOT)/rt_,$(addsuffix .o,$(WASM_MODULES)))
 WASM_FLAGS  := -c -mwasm32 -os=wasm -betterC -conf= -Isrc -Iimport -w -de
 
@@ -493,7 +493,9 @@ WASM_DRT_SRCS := \
 	src/rt/sections_wasm.d \
 	src/rt/config.d \
 	src/rt/wasm/cover.d \
-	src/rt/wasm/extra.d
+	src/rt/wasm/extra.d \
+	src/rt/wasm/eh.d \
+	src/rt/ehalloc.d
 WASM_DRT_FLAGS := -c -mwasm32 -os=wasm -conf= -Isrc -Iimport -w -de
 WASM_DRT_OBJS := $(foreach s,$(WASM_DRT_SRCS),$(WASM_ROOT)/drt_$(notdir $(basename $(s))).o)
 

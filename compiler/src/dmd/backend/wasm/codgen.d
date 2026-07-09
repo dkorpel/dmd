@@ -196,6 +196,14 @@ struct WasmCG
     /// caller a spill-and-drop the way a discard-aware x86 retregs pass would.
     bool discardResult;
 
+    /// Scratch i32 local parking a caught exception payload while the landing
+    /// pad store rearranges the stack. Lazily allocated, shared per function.
+    uint caughtTmp = uint.max;
+
+    /// Per-try exnref locals holding the in-flight exception across a finally
+    /// body, keyed by the try's flag symbol (s2ir visitTryFinally EH_WASM).
+    uint[Symbol*] exnLocals;
+
 nothrow:
 
     /// Index of global used for __stack_pointer
@@ -390,6 +398,26 @@ nothrow:
         emitULEBpadded(0);
     }
 
+    /// Returns: the exnref local of the try/finally identified by its flag symbol
+    uint exnLocalFor(Symbol* s)
+    {
+        if (auto p = s in exnLocals)
+            return *p;
+        const uint idx = allocTemp(WASM_TYPE.EXNREF);
+        exnLocals[s] = idx;
+        return idx;
+    }
+
+    // Emit the 5-byte padded tag-index operand of a `throw` or a try_table
+    // catch clause, with a R_WASM.TAG_INDEX_LEB relocation binding it to the
+    // weak __d_exception tag symbol this module then defines.
+    void emitTagOperand()
+    {
+        wmod_noteTagUse();
+        codeRelocs ~= WasmFuncBody.CodeReloc(cast(uint) code.length, R_WASM.TAG_INDEX_LEB, 0, 0, null);
+        emitULEBpadded(0);
+    }
+
     void emitMemArg(uint align_, uint offset)
     {
         code.writeuLEB128(align_); // alignment (log2)
@@ -551,6 +579,20 @@ private void emitStore(ref WasmCG cg, tym_t ty, uint offset = 0)
     const m = memOpsFor(ty);
     cg.emit(m.storeOp);
     cg.emitMemArg(m.alignLog2, offset);
+}
+
+/// Store the caught exception payload (i32 on the value stack) into the
+/// try's jcatchvar shadow slot. Called by the block structurer right after
+/// a catch landing frame's OP_END.
+void emitCaughtStore(ref WasmCG cg, Symbol* jcatchvar)
+{
+    if (cg.caughtTmp == uint.max)
+        cg.caughtTmp = cg.allocTemp(WASM_I32);
+    cg.emitLocal(OP_LOCAL_SET, cg.caughtTmp);
+    const bool ok = emitSymAddr(cg, jcatchvar, 0);
+    assert(ok);
+    cg.emitLocal(OP_LOCAL_GET, cg.caughtTmp);
+    emitStore(cg, TYnptr);
 }
 
 private void emitReinterpret(ref WasmCG cg, WASM_TYPE from, WASM_TYPE to)
@@ -1832,6 +1874,7 @@ bool genElem(ref WasmCG cg, elem* e)
         case WASM_F64: fn = getRtlsym(f64Sym); break;
         case WASM_I32:
         case WASM_I64:
+        case WASM_TYPE.EXNREF:
             assert(0);
         }
         cg.emitCall(cg.funcIndex(fn), fn);
@@ -1856,6 +1899,20 @@ bool genElem(ref WasmCG cg, elem* e)
         cg.emit(OP_MEMORY_SIZE);
         cg.emitULEB(0); // memory index 0
         return true;
+
+    case OPthrow:
+        // core.wasm.throwException(ptr) / s2ir rethrow-unmatched → `throw __d_exception`
+        cg.genElem(e.E1, WASM_I32);
+        cg.emit(OP_THROW);
+        cg.emitTagOperand();
+        return false;
+
+    case OPrethrow:
+        // Re-raise the in-flight exception saved by the enclosing finally's
+        // catch_all_ref landing pad (Vsym = the finally's flag symbol).
+        cg.emitLocal(OP_LOCAL_GET, cg.exnLocalFor(e.Vsym));
+        cg.emit(OP_THROW_REF);
+        return false;
 
     case OPparam:
         // OPparam is only valid inside an OPcall's E2 subtree. Walk E2 then E1
@@ -2292,6 +2349,8 @@ bool genElem(ref WasmCG cg, elem* e)
         {
         case WASM_F32: return unaryOp(OP_F32_ABS);
         case WASM_F64: return unaryOp(OP_F64_ABS);
+        case WASM_TYPE.EXNREF:
+            assert(0);
         case WASM_I32:
         case WASM_I64:
             // No native integer abs. Compute `(x ^ (x >> N-1)) - (x >> N-1)`,
@@ -2329,6 +2388,7 @@ bool genElem(ref WasmCG cg, elem* e)
         case WASM_F64: return unaryOp(OP_F64_SQRT);
         case WASM_I32:
         case WASM_I64:
+        case WASM_TYPE.EXNREF:
             assert(0);
         }
 
@@ -2358,6 +2418,8 @@ bool genElem(ref WasmCG cg, elem* e)
             const wty = e.E1.Ety.wasmType;
             final switch (wty)
             {
+            case WASM_TYPE.EXNREF:
+                assert(0);
             case WASM_F32:
                 cg.emit(OP_F32_NEG);
                 break;
@@ -2415,6 +2477,7 @@ bool genElem(ref WasmCG cg, elem* e)
             return true;
         case WASM_F32:
         case WASM_F64:
+        case WASM_TYPE.EXNREF:
             assert(0); // operator not defined for float types
         }
 
@@ -2874,6 +2937,7 @@ bool genElem(ref WasmCG cg, elem* e)
                 return unaryOp(OP_I32_CTZ);
             case WASM_F32:
             case WASM_F64:
+            case WASM_TYPE.EXNREF:
                 assert(0);
         }
 
@@ -2895,6 +2959,7 @@ bool genElem(ref WasmCG cg, elem* e)
                 return true;
             case WASM_F32:
             case WASM_F64:
+            case WASM_TYPE.EXNREF:
                 assert(0);
         }
 
@@ -2959,6 +3024,7 @@ bool genElem(ref WasmCG cg, elem* e)
                 break;
             case WASM_F32:
             case WASM_F64:
+            case WASM_TYPE.EXNREF:
                 assert(0);
             }
             return true;
@@ -3160,6 +3226,7 @@ private ubyte pickByKind(tym_t ty, ubyte f32, ubyte f64, ubyte i64, ubyte i32)
     case WASM_F64: return f64;
     case WASM_I64: return i64;
     case WASM_I32: return i32;
+    case WASM_TYPE.EXNREF: assert(0);
     }
 }
 
@@ -3172,6 +3239,7 @@ private ubyte pickByKindSigned(tym_t ty, ubyte f32, ubyte f64, ubyte i64, ubyte 
     case WASM_F64: return f64;
     case WASM_I64: return isUns ? i64 : s64;
     case WASM_I32: return isUns ? i32 : s32;
+    case WASM_TYPE.EXNREF: assert(0);
     }
 }
 

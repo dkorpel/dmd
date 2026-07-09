@@ -125,7 +125,9 @@ enum RTLSYM
     RNDTOLF,
     RNDTOL,
 
-    CXA_ATEXIT
+    CXA_ATEXIT,
+
+    EHWASMMATCH
 }
 
 private __gshared Symbol*[RTLSYM.max + 1] rtlsym;
@@ -264,6 +266,7 @@ Symbol* getRtlsym(RTLSYM i) @trusted
         case RTLSYM.RNDTOL:                 symbolz(ps,FL.func,FREGSAVED,"llrint",  0, t); break; // C library function llrint()
 
         case RTLSYM.CXA_ATEXIT:             symbolz(ps,FL.func,FREGSAVED,"__cxa_atexit", 0, t); break;
+        case RTLSYM.EHWASMMATCH:            symbolz(ps,FL.func,FREGSAVED,"_d_eh_wasm_match", 0, t); break;
         default:
             assert(0);
     }
@@ -415,6 +418,9 @@ private type* wasmRtlsymType(RTLSYM i) @trusted
 
         case RTLSYM.CXA_ATEXIT:
             return fn([voidPtr(), voidPtr(), voidPtr()], tint);
+
+        case RTLSYM.EHWASMMATCH:
+            return fn([voidPtr(), voidPtr()], tstypes[TYbool]);
 
         case RTLSYM.MONITOR_HANDLER:
         case RTLSYM.MONITOR_PROLOG:

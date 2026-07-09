@@ -15,6 +15,16 @@ module core.wasm;
 
 version (WebAssembly):
 
+/*************************************
+ * The `throw` instruction: throw a `__d_exception` exception carrying `ptr`
+ * as its payload, unwinding to the nearest enclosing `try_table` that
+ * catches it.
+ *
+ * Params:
+ *      ptr = payload pointer (a Throwable in linear memory)
+ */
+noreturn throwException(void* ptr) @trusted @nogc;
+
 nothrow:
 @safe:
 @nogc:

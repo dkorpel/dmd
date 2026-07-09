@@ -400,6 +400,7 @@ immutable Msgtable[] msgtable =
     { "wasm" },
     { "memoryGrow" },
     { "memorySize" },
+    { "throwException" },
     { "_popcnt"},
     { "inp"},
     { "inpl"},

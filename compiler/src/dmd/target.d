@@ -144,7 +144,9 @@ void addDefaultVersionIdentifiers(const ref Param params, const ref Target tgt)
     }
     else if (tgt.isWasm)
     {
-        // Exceptions and ModuleInfo not supported (yet) on wasm
+        // ModuleInfo not supported (yet) on wasm
+        if (params.useExceptions)
+            VersionCondition.addPredefinedGlobalIdent("D_Exceptions");
         if (params.useTypeInfo)
             VersionCondition.addPredefinedGlobalIdent("D_TypeInfo");
     }

@@ -530,6 +530,12 @@ struct WasmModule
     FuncReloc[] funcRelocations;
     DataReloc[] dataRelocations;
 
+    // Exception tag: type index of the (i32)->() signature when any code in
+    // this module throws or catches, or uint.max when unused. The tag itself
+    // is emitted as a weak `__d_exception` symbol every EH-using object
+    // defines; wasm-ld merges them by name like comdat functions.
+    uint tagTypeIdx = uint.max;
+
     // Scratch OutBuffer for section payloads
     OutBuffer scratch;
 
@@ -954,6 +960,22 @@ private bool emitCodeSection(ref OutBuffer out_, ref WasmModule wmod)
     return true;
 }
 
+/// Tag section (id 13): one entry, the module's `__d_exception` throw tag.
+/// Each tag = attribute byte 0x00 (exception) + type index of its signature.
+/// Returns: true if section was actually written
+private bool emitTagSection(ref OutBuffer out_, ref WasmModule wmod)
+{
+    if (wmod.tagTypeIdx == uint.max)
+        return false;
+    OutBuffer* s = &wmod.scratch;
+    s.reset();
+    s.writeuLEB128(1);
+    s.writeByte(0x00);
+    s.writeuLEB128(wmod.tagTypeIdx);
+    writeSection(out_, WASM_SECTION.tag, s);
+    return true;
+}
+
 /// Returns: true if section was actually written
 private bool emitDataSection(ref OutBuffer out_, ref WasmModule wmod)
 {
@@ -1006,6 +1028,9 @@ private bool emitLinkingSection(ref OutBuffer out_, ref WasmModule wmod)
     symCount++;
     // One GLOBAL symbol for __stack_pointer when imported.
     symCount++;
+    // One TAG symbol for the exception tag when this module uses EH.
+    if (wmod.tagTypeIdx != uint.max)
+        symCount++;
 
     symtab.writeuLEB128(symCount);
 
@@ -1126,6 +1151,16 @@ private bool emitLinkingSection(ref OutBuffer out_, ref WasmModule wmod)
     symtab.writeByte(WASM_SYMTAB.GLOBAL);
     symtab.writeuLEB128(WASM_SYM.UNDEFINED);
     symtab.writeuLEB128(0); // global index 0
+
+    // Defined exception tag: weak so every EH-using object may define it and
+    // wasm-ld keeps one, binding all __d_exception references to it.
+    if (wmod.tagTypeIdx != uint.max)
+    {
+        symtab.writeByte(WASM_SYMTAB.TAG);
+        symtab.writeuLEB128(WASM_SYM.BINDING_WEAK);
+        symtab.writeuLEB128(0); // tag index 0
+        appendName(symtab, "__d_exception");
+    }
 
     // SEGMENT_INFO subsection: one entry per data segment. Names give wasm-ld
     // grouping/dead-strip granularity; alignment is the segment's own log2 align.
@@ -1281,6 +1316,7 @@ private bool emitRelocCodeSection(ref OutBuffer out_, ref WasmModule wmod, uint 
     // GLOBAL_INDEX_LEB relocation targets.
     const uint tableSymIdx = dataSymBase + cast(uint) datasyms.length;
     const uint globalSymIdx = tableSymIdx + 1;
+    const uint tagSymIdx = globalSymIdx + 1;
     uint dataSymIdx(const(Symbol)* sym)
     {
         return dataSymIndex(wmod, dataSymBase, sym);
@@ -1316,6 +1352,7 @@ private bool emitRelocCodeSection(ref OutBuffer out_, ref WasmModule wmod, uint 
             if (r.type == R_WASM.TYPE_INDEX_LEB ||
                 r.type == R_WASM.GLOBAL_INDEX_LEB ||
                 r.type == R_WASM.TABLE_NUMBER_LEB ||
+                r.type == R_WASM.TAG_INDEX_LEB ||
                 (fi < funcToSymIdx.length && funcToSymIdx[fi] != uint.max))
                 totalRelocs++;
         }
@@ -1355,6 +1392,10 @@ private bool emitRelocCodeSection(ref OutBuffer out_, ref WasmModule wmod, uint 
             else if (r.type == R_WASM.TABLE_NUMBER_LEB)
             {
                 idx = tableSymIdx;
+            }
+            else if (r.type == R_WASM.TAG_INDEX_LEB)
+            {
+                idx = tagSymIdx;
             }
             else
             {
@@ -1672,6 +1713,7 @@ void WasmObj_term2(const(char)[] objfilename, ref WasmModule wmod, ref OutBuffer
     sectionIdx += emitTypeSection(out_, wmod);
     sectionIdx += emitImportSection(out_, wmod);
     sectionIdx += emitFunctionSection(out_, wmod);
+    sectionIdx += emitTagSection(out_, wmod);
     sectionIdx += emitExportSection(out_, wmod);
 
     // No pre-populated element segment: wasm-ld builds the indirect-call table
@@ -1703,8 +1745,8 @@ void WasmObj_term2(const(char)[] objfilename, ref WasmModule wmod, ref OutBuffer
 // shared memory as-is, unlike clang/LLVM where -matomics changes codegen.
 private void emitTargetFeaturesSection(ref OutBuffer out_)
 {
-    static immutable string[5] features =
-        ["atomics", "bulk-memory", "mutable-globals", "nontrapping-fptoint", "sign-ext"];
+    static immutable string[7] features =
+        ["atomics", "bulk-memory", "exception-handling", "mutable-globals", "nontrapping-fptoint", "reference-types", "sign-ext"];
     OutBuffer payload;
     payload.writeuLEB128(features.length);
     foreach (f; features)
@@ -2161,6 +2203,16 @@ void WasmObj_fltused()
 uint wmod_numImports()
 {
     return wmod ? wmod.numImports : 0;
+}
+
+// Mark this module as using the exception tag (a throw or try_table was
+// emitted) and intern the tag's (i32)->() signature so the tag section and
+// its symbol are written at term time.
+void wmod_noteTagUse()
+{
+    assert(wmod);
+    if (wmod.tagTypeIdx == uint.max)
+        wmod.tagTypeIdx = wmod.internType(WasmFuncType([WASM_TYPE.I32], []));
 }
 
 // Intern a WASM function type given explicit param and result byte arrays.

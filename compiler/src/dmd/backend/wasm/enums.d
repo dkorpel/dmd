@@ -16,7 +16,10 @@ enum : ubyte
     OP_LOOP = 0x03,
     OP_IF = 0x04,
     OP_ELSE = 0x05,
-    // 0x06 .. 0x0A = Exception handling
+    // Exception handling (exnref proposal)
+    OP_THROW = 0x08,
+    OP_THROW_REF = 0x0A,
+    OP_TRY_TABLE = 0x1F,
     OP_END = 0x0B,
     OP_BR = 0x0C,
     OP_BR_IF = 0x0D,
@@ -192,6 +195,16 @@ enum WASM_TYPE : ubyte
     I64 = 0x7E,
     F32 = 0x7D,
     F64 = 0x7C,
+    EXNREF = 0x69,
+}
+
+/// Catch clause kind bytes inside a `try_table` instruction
+enum WASM_CATCH : ubyte
+{
+    CATCH = 0x00,         // catch tag label (pushes tag params)
+    CATCH_REF = 0x01,     // catch tag label (pushes tag params + exnref)
+    CATCH_ALL = 0x02,     // catch_all label
+    CATCH_ALL_REF = 0x03, // catch_all label (pushes exnref)
 }
 
 enum WASM_I32 = WASM_TYPE.I32;
@@ -217,6 +230,7 @@ enum WASM_SECTION : ubyte
     element = 9,
     code = 10,
     data = 11,
+    tag = 13,
 }
 
 /// Reference type bytes (used in element type fields, e.g. table imports)
@@ -261,6 +275,7 @@ enum R_WASM : ubyte
     MEMORY_ADDR_I32 = 5,
     TYPE_INDEX_LEB = 6,
     GLOBAL_INDEX_LEB = 7,
+    TAG_INDEX_LEB = 10,
     TABLE_NUMBER_LEB = 20,
 }
 

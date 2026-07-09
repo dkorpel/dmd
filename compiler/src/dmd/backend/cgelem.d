@@ -2746,7 +2746,8 @@ private elem* eldiv(elem* e, Goal goal)
             int sz = tysize(tym);
 
             // See if we can replace with OPremquo
-            if (sz == REGSIZE
+            // (not wasm: no combined div+rem instruction or register pair)
+            if (sz == REGSIZE && config.objfmt != OBJ_WASM
                 // Currently don't allow this because OPmsw doesn't work for the case
                 //|| (I64 && sz == 4)
                 )
@@ -6730,4 +6731,6 @@ private immutable elfp_t[OPMAX] elxxx =
     OPprefetch: &elzot,
     OPmemgrow: &elzot,
     OPmemsize: &elzot,
+    OPthrow: &elzot,
+    OPrethrow: &elzot,
 ];

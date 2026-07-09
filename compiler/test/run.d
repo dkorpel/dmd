@@ -694,7 +694,7 @@ string[string] getEnvironment()
         // kills a hung/pathologically-slow test after 10s (exit 124 => failure)
         // so the suite makes progress instead of stalling indefinitely.
         env.setDefault("EXEC_BINARY_WRAPPER",
-            "timeout -k 1 10 wasmtime run -W max-memory-size=2147483648 --dir=/ --env PWD=" ~ std.file.getcwd());
+            "timeout -k 1 10 wasmtime run -W exceptions=y -W max-memory-size=2147483648 --dir=/ --env PWD=" ~ std.file.getcwd());
         // Provide druntime import path (used when -conf= is passed, which strips dmd.conf).
         auto druntimePath = environment.get("DRUNTIME_PATH", testPath(`../../druntime`));
         env["DFLAGS"] = "-I%s/import".format(druntimePath);

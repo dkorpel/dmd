@@ -92,6 +92,10 @@ private char[][] wasiArgs() @nogc nothrow
     return arr[0 .. n];
 }
 
+// rt.wasm.eh: runs main under a top-level Throwable handler (this module is
+// -betterC and cannot catch).
+private extern(C) int _d_eh_wasm_runMain(MainFunc mainFunc, char[][] args);
+
 int _d_run_main(int argc, char** argv, MainFunc mainFunc)
 {
     gc_init();
@@ -99,7 +103,7 @@ int _d_run_main(int argc, char** argv, MainFunc mainFunc)
     rt_moduleCtor();
     rt_moduleTlsCtor();
     rt_moduleUnitTests();
-    int result = mainFunc(wasiArgs());
+    int result = _d_eh_wasm_runMain(mainFunc, wasiArgs());
     rt_moduleTlsDtor();
     rt_moduleDtor();
     rt_coverWrite();

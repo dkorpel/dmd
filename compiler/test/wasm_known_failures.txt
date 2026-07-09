@@ -107,59 +107,51 @@ runnable/testcomplexinit.c
 # mismatch via lax calling conventions; WASM's strict validation rejects it.
 runnable/exe1.c
 
-# --- Require exception handling (try/catch, throw, synchronized) ---
-# NOTE: WASM EH is OUT OF SCOPE until further notice (decided 2026-07-08). It is
-# a backend lift (try_table/throw opcodes + landing-pad structuring + a druntime
-# personality/unwind shim), not a bug fix. These entries stay filed as-is.
-# The WASM backend has no working exception-handling runtime: `throw` and the
-# assert/bounds/null failure hooks abort instead of throwing a catchable
-# Error/Exception. These tests fundamentally rely on catching, so they cannot
-# pass until EH is implemented for the WASM target. (Contract inheritance —
-# testcontracts, inclusive_incontracts, test_dip1006* — is also try/catch
-# based: a failing derived in-contract must be caught to try the base one.)
-runnable/bug12928.d
-runnable/closure.d
+# --- Require collateral exception chaining ---
+# A throw while a finally/scope(exit) runs on the exceptional path must chain
+# the new exception onto the in-flight one (Throwable.chainTogether) and let
+# the ORIGINAL keep propagating (eh.d bug1513, test4 test54). The wasm EH
+# lowering rethrows the collateral exception instead, so the catch sees the
+# wrong object. Design sketch: wrap the finally span [lpad..ret-1] in a
+# catch_all_ref "collision" region; on catch with flag==0, a runtime helper
+# chains inFlight[top-1] <- inFlight[top], then throw_ref the parked original.
 runnable/eh.d
-runnable/eh2.d
-runnable/fix22372.d
-runnable/foreach5.d
-runnable/loopunroll.d
-runnable/noreturn2.d
-runnable/opover2.d
-runnable/inclusive_incontracts.d
-runnable/issue16995.d
-runnable/noreturn1.d
-runnable/nullderefcheck.d
-runnable/nullderefcheck_safeonly.d
-runnable/pragmainline.d
+runnable/test4.d
+
+# --- Require expression-temporary destruction during unwind ---
+# Struct temporaries and by-value arguments constructed inside an expression
+# must be destructed when a later subexpression throws. Natively this runs
+# via OPdctor/OPddtor DWARF landing pads; the wasm backend has no elem-level
+# try_table regions, so these cleanups only run on the normal path (same
+# known gap as DMD_Win64 — see testassert.d's version(DMD_Win64) carve-out).
 runnable/sdtor.d
-runnable/test12874.d
 runnable/test14903.d
+runnable/testassert.d
+
+# --- Require stack traces in Throwable.toString ---
+# These parse the caught exception's stack trace for _Dmain frame lines;
+# _d_traceContext returns null on wasm (no unwinder / no trace capture).
 runnable/test17559.d
 runnable/test19086.d
-runnable/test19317.d
-runnable/test22205.d
-runnable/test22427.d
-runnable/test4.d
-runnable/test41.d
-runnable/test17906.d
-runnable/testscope.d
-runnable/testassert.d
-runnable/testassert_debug.d
-runnable/testbounds.d
-runnable/testbounds_on.d
-runnable/testbounds_safeonly.d
-runnable/testcontracts.d
-runnable/test_dip1006.d
-runnable/test_dip1006b.d
-runnable/test_dip1006c.d
-runnable/testdstress.d
-runnable/testinvariant.d
-runnable/testline.d
-runnable/testswitch.d
-runnable/testtypeid.d
-runnable/xpostblit.d
-runnable/testaa.d
+
+# --- noreturn codegen bugs (pre-existing, unrelated to EH) ---
+# noreturn1: declares `extern (C) noreturn exit();` which collides with
+# wasi-libc's `exit(i32)`; wasm-ld rejects the signature mismatch that native
+# linkers tolerate. noreturn2: passing a `noreturn` variable by ref emits a
+# `local.get` for a local that was never allocated (zero-size type).
+runnable/noreturn1.d
+runnable/noreturn2.d
+
+# --- Require runtime unittest infrastructure ---
+# Imports core.runtime and sets Runtime.extendedModuleUnitTester; the wasm
+# runtime has no core.runtime implementation (undefined import at link).
+runnable/issue16995.d
+
+# --- -O miscompiles opDollar slice bounds (pre-existing, unrelated to EH) ---
+# Under -O, `slice[$-3 .. $-1]` with a struct opSlice/opDollar loses the
+# first bound's opDollar value (yields -3 instead of 8-3). Reproduces with
+# -betterC, so it is not an EH interaction. Repro: tmp/w_slice6.d.
+runnable/opover2.d
 
 # --- Depend on the conservative GC's allocation geometry ---
 # -profile=gc reports allocation sizes as deltas of allocatedInCurrentThread,
@@ -227,11 +219,6 @@ runnable/constfold.d
 compilable/testos.d
 compilable/json2.d
 compilable/makedeps_exe.d
-
-# --- Require catchable exceptions (WASM EH is EH_NONE) ---
-# testgc2.d catches OutOfMemoryError; on WASM a throw lowers to a trap
-# (OPhalt), so the catch never runs and the process aborts.
-runnable/testgc2.d
 
 # --- Require thread support (WASM is single-threaded) ---
 runnable/testthread2.d

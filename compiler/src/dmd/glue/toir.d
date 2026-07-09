@@ -606,6 +606,7 @@ int intrinsic_op(FuncDeclaration fd)
             {
                      if (id3 == Id.memoryGrow) op = OPmemgrow;
                 else if (id3 == Id.memorySize) op = OPmemsize;
+                else if (id3 == Id.throwException) op = OPthrow;
             }
         }
     }

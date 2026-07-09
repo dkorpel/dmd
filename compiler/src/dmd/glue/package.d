@@ -933,7 +933,7 @@ void FuncDeclaration_toObjFile(FuncDeclaration fd, bool multiobj)
     }
     if (config.ehmethod == EHmethod.EH_NONE || f.Fflags3 & Feh_none)
         insertFinallyBlockGotos(f.Fstartblock);
-    else if (config.ehmethod == EHmethod.EH_DWARF)
+    else if (config.ehmethod == EHmethod.EH_DWARF || config.ehmethod == EHmethod.EH_WASM)
         insertFinallyBlockCalls(f.Fstartblock);
 
     // If static constructor

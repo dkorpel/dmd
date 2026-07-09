@@ -55,8 +55,10 @@ extern (C) void rt_finalize2(void* p, bool det = true, bool resetMemory = true) 
             p[0 .. w.length] = cast(void[]) w[];
         }
     }
-    catch (Throwable)
+    catch (Exception e)
     {
+        import core.exception : onFinalizeError;
+        onFinalizeError(*pc, e);
     }
     finally
     {

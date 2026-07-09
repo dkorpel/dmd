@@ -210,6 +210,7 @@ enum EHmethod
     EH_WIN64,                   // Win64 SEH (not supported yet)
     EH_DM,                      // Digital Mars method
     EH_DWARF,                   // Dwarf method
+    EH_WASM,                    // WebAssembly exnref exception handling (try_table/throw)
 }
 
 // CPU target

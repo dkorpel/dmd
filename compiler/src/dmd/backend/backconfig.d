@@ -331,7 +331,7 @@ void out_config_init(
     {
         cfg.target_cpu = TARGET_WASM;
         cfg.objfmt = OBJ_WASM;
-        cfg.ehmethod = EHmethod.EH_NONE;  // WASM MVP doesn't support exceptions
+        cfg.ehmethod = useExceptions ? EHmethod.EH_WASM : EHmethod.EH_NONE;
         cfg.fpxmmregs = false;
         cfg.inline8087 = false;
     }
