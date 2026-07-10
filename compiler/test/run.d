@@ -222,6 +222,16 @@ Options:
         Object tallyMutex = new Object;
         foreach (target; parallel(targets, 1))
         {
+            // dshell-style `.sh` tests drive the native toolchain (linking,
+            // running executables, host utilities) and cannot run on the wasm
+            // target, so skip them wholesale instead of listing each one.
+            if (wasmTarget && target.filename.endsWith(".sh"))
+            {
+                log("skipping shell test on wasm: %s", target.filename);
+                synchronized (tallyMutex)
+                    tallies.require(target.normalizedTestName.findSplit("/")[0]).bump(Outcome.ignored);
+                continue;
+            }
             log("run: %-(%s %)", target.args);
             int status = spawnProcess(target.args, env, Config.none, scriptDir).wait;
             const string name = target.filename

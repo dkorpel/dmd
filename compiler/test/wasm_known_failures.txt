@@ -3,36 +3,12 @@
 # Format: one normalized test path per line (e.g. `runnable/foo.d`).
 # Lines starting with `#` and blank lines are ignored.
 #
+# `.sh` (dshell) tests are skipped automatically by the runner, so they do
+# not need to be listed here.
+#
 # Invoke the WASM regression with:
 #
 #     ./run.d wasm
-
-compilable/issue24830.sh
-compilable/test6461.sh
-compilable/issue19243.sh
-compilable/issue15574.sh
-compilable/test14894.sh
-runnable/test10567.sh
-runnable/test23148.sh
-runnable/test39.sh
-runnable/test10386.sh
-runnable/test19675.sh
-runnable/test22863.sh
-runnable/gdb15729.sh
-runnable/importc-test1.sh
-runnable/test35.sh
-runnable/test18076.sh
-runnable/test18412.sh
-runnable/test18456.sh
-runnable/test21723.sh
-runnable/test9287.sh
-runnable/test24590.sh
-runnable/test13666.sh
-runnable/test13742.sh
-runnable/link846.sh
-runnable/link14198a.sh
-runnable/link14834.sh
-runnable/link20802.sh
 
 # --- Require Phobos (std.* not ported to the WASM target) ---
 # These fail at compile with "unable to read module" for std.math / std.file /
