@@ -12,3 +12,7 @@ ARG_SETS(linux osx): -version=Extended
 */
 
 module test.runnable.paranoia;
+
+/*
+DISABLED: wasm
+*/

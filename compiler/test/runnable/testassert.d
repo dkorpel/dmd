@@ -378,3 +378,7 @@ void main()
     testTupleFormat();
     testStaticOperators();
 }
+
+/*
+DISABLED: wasm
+*/

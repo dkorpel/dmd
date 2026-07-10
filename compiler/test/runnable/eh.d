@@ -1040,3 +1040,7 @@ int main()
     printf("finish\n");
     return 0;
 }
+
+/*
+DISABLED: wasm
+*/

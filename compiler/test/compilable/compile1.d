@@ -998,3 +998,7 @@ static assert(!__traits(compiles,
 {
     static class C11624 : I11624 { }
 }));
+
+/*
+DISABLED: wasm
+*/

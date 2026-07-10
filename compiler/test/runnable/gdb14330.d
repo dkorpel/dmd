@@ -19,3 +19,7 @@ void main()
     string str = "something";
     // BP
 }
+
+/*
+DISABLED: wasm
+*/

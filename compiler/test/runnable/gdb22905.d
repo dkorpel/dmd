@@ -18,3 +18,7 @@ void main()
 {
     funcB();
 }
+
+/*
+DISABLED: wasm
+*/

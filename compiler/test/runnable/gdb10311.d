@@ -18,3 +18,7 @@ void main()
     call({++x;});
     // BP
 }
+
+/*
+DISABLED: wasm
+*/

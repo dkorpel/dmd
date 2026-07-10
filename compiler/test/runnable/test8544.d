@@ -15,3 +15,7 @@ void main(string[] args)
     assert(dArgs[1] == to!string(cArgs.argv[1]));
     assert(args[1] == to!string(cArgs.argv[1]));
 }
+
+/*
+DISABLED: wasm
+*/

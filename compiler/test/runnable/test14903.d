@@ -84,3 +84,7 @@ void main() {
     evaluationOrderTest();
     dtorsTest();
 }
+
+/*
+DISABLED: wasm
+*/

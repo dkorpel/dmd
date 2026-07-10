@@ -16,3 +16,7 @@ void main()
     auto chars = "Anything".dup;
     // BP
 }
+
+/*
+DISABLED: wasm
+*/

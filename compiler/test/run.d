@@ -132,10 +132,10 @@ Options:
         environment["ARGS"] = "";
     }
 
-    // WASM regression target: compile+run fail_compilation/compilable/runnable
-    // tests as WebAssembly, no permutations (fast), tolerating a known-failure list.
+    // WASM regression target: compile+run compilable/runnable tests as
+    // WebAssembly, no permutations (fast). Tests that can't run on wasm carry
+    // a `DISABLED: wasm` directive; `.sh` tests are skipped by the runner.
     bool wasmTarget = false;
-    bool[string] wasmKnownFailures;
     if (args == ["wasm"])
     {
         wasmTarget = true;
@@ -145,7 +145,6 @@ Options:
         // Each test runs under wasmtime with up to 2 GiB of linear memory, so
         // cap parallelism to avoid exhausting host RAM on many-core machines.
         jobs = min(jobs, 4);
-        wasmKnownFailures = loadWasmKnownFailures();
         // The WASM druntime archive is linked into every test but is not a test
         // source, so timestamp-based caching wouldn't otherwise re-run tests
         // after the archive is rebuilt. Track it as an extra dependency.
@@ -217,7 +216,6 @@ Options:
     if (targets.length > 0)
     {
         shared string[] failedTargets;
-        shared string[] unexpectedPasses; // wasm: tests on known-failure list that now pass
         Tally[string] tallies; // keyed by category (e.g. "runnable"); guarded by `tallyMutex`
         Object tallyMutex = new Object;
         foreach (target; parallel(targets, 1))
@@ -237,24 +235,12 @@ Options:
             const string name = target.filename
                         ? target.normalizedTestName
                         : "`unit` tests: " ~ (cast(string)unitTestRunnerCommand) ~ " " ~ join(target.args, " ");
-            const bool known = wasmTarget && target.filename && (name in wasmKnownFailures) !is null;
             Outcome outcome;
-            if (status != 0 && known)
-            {
-                log("expected failure (wasm known): %s", name);
-                outcome = Outcome.ignored;
-            }
-            else if (status != 0)
+            if (status != 0)
             {
                 writeln(">>> TARGET FAILED: ", name);
                 synchronized failedTargets ~= name;
                 outcome = Outcome.failed;
-            }
-            else if (known)
-            {
-                writeln(">>> UNEXPECTED PASS (remove from wasm known-failures): ", name);
-                synchronized unexpectedPasses ~= name;
-                outcome = Outcome.passed;
             }
             synchronized (tallyMutex)
                 tallies.require(name.findSplit("/")[0]).bump(outcome);
@@ -278,13 +264,6 @@ Options:
             failedTargets.each!(l => writeln("- ",  l));
             return 1;
         }
-        if (unexpectedPasses.length > 0)
-        {
-            writeln("Tests passing that are listed in ", wasmKnownFailuresPath, ":");
-            unexpectedPasses.each!(l => writeln("- ", l));
-            writeln("Remove the above entries from the known-failures list.");
-            return 2;
-        }
     }
 
     return 0;
@@ -304,30 +283,6 @@ struct Tally
             case Outcome.ignored: ignored++; break;
         }
     }
-}
-
-enum wasmKnownFailuresPath = "wasm_known_failures.txt";
-
-/// Load the list of tests expected to fail under the WASM target.
-/// Format: one normalized test path per line (e.g. `runnable/foo.d`).
-/// Lines starting with `#` and blank lines are ignored.
-bool[string] loadWasmKnownFailures()
-{
-    bool[string] set;
-    const path = testPath(wasmKnownFailuresPath);
-    if (!path.exists)
-    {
-        writefln("Note: %s not found - no known WASM failures loaded.", path);
-        return set;
-    }
-    foreach (line; File(path).byLineCopy)
-    {
-        auto s = line.strip;
-        if (s.empty || s.startsWith("#"))
-            continue;
-        set[s] = true;
-    }
-    return set;
 }
 
 /// Verify that the compiler has been built.

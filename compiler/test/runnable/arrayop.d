@@ -954,3 +954,7 @@ extern (C) T[] _arraySliceSliceAddSliceAssignd(T[] a, T[] c, T[] b)
     return a;
 }
 }
+
+/*
+DISABLED: wasm
+*/

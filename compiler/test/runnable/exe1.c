@@ -2074,3 +2074,7 @@ int main()
         printf("SUCCESS\n");
         return 0;
 }
+
+/*
+DISABLED: wasm
+*/

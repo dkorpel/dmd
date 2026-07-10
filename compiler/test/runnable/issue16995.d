@@ -40,3 +40,7 @@ void main()
         }
     }
 }
+
+/*
+DISABLED: wasm
+*/
