@@ -18,8 +18,6 @@ import dmd.target : target;
 
 /****************************************************
  * Break down a D type into basic types for WebAssembly ABI.
- * WebAssembly has 4 basic value types: i32, i64, f32, f64
- * All parameters and returns are passed in locals (numbered sequentially).
  *
  * Params:
  *      t = type to break down
@@ -34,64 +32,17 @@ TypeTuple toArgTypes_wasm(Type t)
 
     Type tb = t.toBasetype();
 
-    // void has no size and is not passed — return null
-    if (tb.ty == Tvoid)
+    // void and zero-sized types are not passed
+    if (tb.ty == Tvoid || t.size() == 0)
         return null;
 
-    const sz = cast(size_t) t.size();
-    if (sz == 0)
-        return null;
-
-    switch (tb.ty)
-    {
-        // integer primitives
-    case Tint8:
-    case Tuns8:
-    case Tint16:
-    case Tuns16:
-    case Tint32:
-    case Tuns32:
-    case Tint64:
-    case Tuns64:
-    case Tint128:
-    case Tuns128:
-    case Tbool:
-    case Tchar:
-    case Twchar:
-    case Tdchar:
-        // floating point
-    case Tfloat32:
-    case Tfloat64:
-    case Tfloat80:
-    case Timaginary32:
-    case Timaginary64:
-    case Timaginary80:
-    case Tcomplex32:
-    case Tcomplex64:
-    case Tcomplex80:
-        // pointer-like (class references and associative arrays are
-        // pointer-sized values, not aggregates)
-    case Tpointer:
-    case Tclass:
-    case Taarray:
-    case Tnull:
-    case Tfunction:
+    // Scalars are single values
+    if (tb.isTypeBasic() || tb.isTypePointer() ||
+        tb.ty == Tclass || tb.ty == Taarray || tb.ty == Tnull || tb.ty == Tfunction)
         return new TypeTuple(t);
 
-    default:
-        break;
-    }
-
-    // Slices and delegates are two-word aggregates.  They are *passed* as two
-    // i32 params (handled directly in the backend's buildFuncType), but for the
-    // return ABI we route them through a hidden sret pointer just like structs,
-    // so the value never has to be packed into a single i64.  Returning empty
-    // here makes Target.isReturnOnStack() report return-on-stack for them.
-    if (tb.ty == Tarray || tb.ty == Tdelegate)
-        return TypeTuple.empty;
-
-    // Other aggregates (structs, static arrays, etc.): always pass by reference.
-    // Returning TypeTuple(t) for aggregates would recurse into visitStruct
-    // during backend type conversion; empty signals indirect passing.
+    // Aggregates (slices, delegates, structs, static arrays) are passed by
+    // reference. Returning empty makes Target.isReturnOnStack() route the
+    // return through a hidden sret pointer instead of packing it into a value
     return TypeTuple.empty;
 }
