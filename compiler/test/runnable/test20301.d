@@ -1,6 +1,3 @@
-// Very slow with the O(n^2) wasm backend, we'll skip it until that is fixed
-// DISABLED: wasm
-
 // https://github.com/dlang/dmd/issues/20301
 void main()
 {

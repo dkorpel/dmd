@@ -1,5 +1,4 @@
 /* REQUIRED_ARGS: -O -inline -release
-DISABLED: wasm
  */
 
 // https://issues.dlang.org/show_bug.cgi?id=23857

@@ -1,4 +1,3 @@
-// DISABLED: wasm
 // PERMUTE_ARGS:
 
 // COMDAT folding increases runtime by > 80x

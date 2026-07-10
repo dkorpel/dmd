@@ -67,4 +67,3 @@ deprecated void main()
     otherPar(S.init);
     otherVar(S.init);
 }
-// DISABLED: wasm
