@@ -1652,7 +1652,7 @@ void WasmObj_term2(const(char)[] objfilename, ref WasmModule wmod, ref OutBuffer
     //   This ensures import indices are stable before any bytecode is emitted.
     // Phase 2: generate bytecode for all functions.
     {
-        import dmd.backend.wasm.codgen : wasm_codgen;
+        import dmd.backend.wasm.codgen : wasm_codgen2;
 
         // Phase 1: collect all external function references across all functions.
         foreach (ref WasmFuncBody fb; wasmFuncBodies)
@@ -1684,7 +1684,7 @@ void WasmObj_term2(const(char)[] objfilename, ref WasmModule wmod, ref OutBuffer
         wmod.internPendingTypes();
 
         // Phase 2: generate code now that import indices are stable.
-        // Restore each function's globsym before calling wasm_codgen.
+        // Restore each function's globsym before calling wasm_codgen2.
         import dmd.backend.symbol : globsym;
 
         foreach (ref WasmFuncBody fb; wasmFuncBodies)
@@ -1695,7 +1695,7 @@ void WasmObj_term2(const(char)[] objfilename, ref WasmModule wmod, ref OutBuffer
             globsym.setLength(cast(uint) fb.savedGlobsym.length);
             foreach (size_t i, s; fb.savedGlobsym)
                 globsym[i] = s;
-            wasm_codgen(fb.sym);
+            wasm_codgen2(cast(Symbol*) fb.sym, fb);
         }
         globsym.setLength(0);
     }
