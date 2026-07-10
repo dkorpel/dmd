@@ -53,7 +53,8 @@ private enum : int
     WASM_UDATA = 4
 }
 
-private void pushSegData(int idx) nothrow
+nothrow:
+private void pushSegData(int idx)
 {
     import dmd.backend.barray : Rarray;
 
@@ -66,194 +67,6 @@ private void pushSegData(int idx) nothrow
     }
 }
 
-nothrow:
-
-private const(char)[] utf8SanitizeName(const(char)[] name)
-{
-    static bool validUtf8(const(char)[] s)
-    {
-        import dmd.root.utf : utf_decodeChar;
-
-        size_t i = 0;
-        while (i < s.length)
-        {
-            dchar c;
-            if (utf_decodeChar(s, i, c) !is null)
-                return false;
-        }
-        return true;
-    }
-    if (validUtf8(name))
-        return name;
-    char[] r;
-    foreach (char ch; name)
-    {
-        if (ch < 0x80)
-            r ~= ch;
-        else
-        {
-            enum hex = "0123456789ABCDEF";
-            r ~= '$';
-            r ~= hex[(ch >> 4) & 15];
-            r ~= hex[ch & 15];
-        }
-    }
-    return r;
-}
-
-private void appendName(ref OutBuffer buf, const(char)[] name)
-{
-    name = utf8SanitizeName(name);
-    buf.writeuLEB128(cast(uint) name.length);
-    buf.write(name.ptr[0 .. name.length]);
-}
-
-private const(char)[] funcName(ref const WasmFunc f)
-{
-    if (f.sym)
-        return f.sym.identifier;
-    return f.importName;
-}
-
-private void syncCanonicalFuncNames(ref WasmModule wmod)
-{
-    if (wmod.symIndex.canonLen == wmod.funcs.length)
-        return;
-    auto canon = &wmod.symIndex.canonByName;
-    *canon = null;
-    uint[string] firstImport;
-    foreach (size_t j, ref const WasmFunc g; wmod.funcs)
-    {
-        const(char)[] name = funcName(g);
-        if (!name.length)
-            continue;
-        if (!g.isImport && g.sym && g.sym.Sclass == SC.static_)
-            continue;
-        string key = cast(string) name;
-        if (g.isImport)
-        {
-            if (key !in firstImport)
-                firstImport[key] = cast(uint) j;
-        }
-        else if (key !in *canon)
-        {
-            (*canon)[key] = cast(uint) j;
-        }
-    }
-    foreach (key, idx; firstImport)
-        if (key !in *canon)
-            (*canon)[key] = idx;
-    wmod.symIndex.canonLen = wmod.funcs.length;
-}
-
-private void syncFuncIdxMaps(ref WasmModule wmod)
-{
-    if (wmod.symIndex.funcLen == wmod.funcs.length)
-        return;
-    auto bySym = &wmod.symIndex.funcBySym;
-    auto byName = &wmod.symIndex.funcByName;
-    *bySym = null;
-    *byName = null;
-    foreach (size_t k, ref const WasmFunc f; wmod.funcs)
-    {
-        if (f.sym)
-        {
-            Symbol* sym = cast(Symbol*) f.sym;
-            if (sym !in *bySym)
-                (*bySym)[sym] = cast(uint) k;
-        }
-        const(char)[] name = funcName(f);
-        if (name.length)
-        {
-            string key = cast(string) name;
-            if (key !in *byName)
-                (*byName)[key] = cast(uint) k;
-        }
-    }
-    wmod.symIndex.funcLen = wmod.funcs.length;
-}
-
-/// Returns: current wmod.funcs index of a function symbol, or uint.max if not registered.
-private uint funcIdxBySym(ref WasmModule wmod, const(Symbol)* sym)
-{
-    if (!sym)
-        return uint.max;
-    syncFuncIdxMaps(wmod);
-    if (auto p = cast(Symbol*) sym in wmod.symIndex.funcBySym)
-        return *p;
-    return uint.max;
-}
-
-private uint funcIdxBySymOrName(ref WasmModule wmod, const(Symbol)* sym)
-{
-    if (!sym)
-        return uint.max;
-    syncFuncIdxMaps(wmod);
-    if (auto p = cast(Symbol*) sym in wmod.symIndex.funcBySym)
-        return *p;
-    if (sym.Sident.ptr)
-        if (auto p = cast(string) sym.identifier in wmod.symIndex.funcByName)
-            return *p;
-    return uint.max;
-}
-
-private uint canonicalFuncForName(ref WasmModule wmod, size_t i)
-{
-    const(char)[] name = funcName(wmod.funcs[i]);
-    if (!name.length)
-        return cast(uint) i;
-    if (wmod.funcs[i].sym && wmod.funcs[i].sym.Sclass == SC.static_)
-        return cast(uint) i;
-    syncCanonicalFuncNames(wmod);
-    if (auto p = cast(string) name in wmod.symIndex.canonByName)
-        return *p;
-    return cast(uint) i;
-}
-
-private bool isShadowedFunc(ref WasmModule wmod, size_t i)
-{
-    return canonicalFuncForName(wmod, i) != i;
-}
-
-private uint[] buildFuncToSymIdx(ref WasmModule wmod)
-{
-    uint[] funcToSymIdx;
-    funcToSymIdx.length = wmod.funcs.length;
-    enum uint SHADOWED = uint.max - 1;
-    uint si = 0;
-    foreach (size_t i, ref const WasmFunc f; wmod.funcs)
-    {
-        const(char)[] name = funcName(f);
-        if (!name.length)
-        {
-            funcToSymIdx[i] = uint.max;
-            continue;
-        }
-        if (isShadowedFunc(wmod, i))
-        {
-            funcToSymIdx[i] = SHADOWED;
-            continue;
-        }
-        funcToSymIdx[i] = si++;
-    }
-    foreach (size_t i; 0 .. wmod.funcs.length)
-    {
-        if (funcToSymIdx[i] != SHADOWED)
-            continue;
-        funcToSymIdx[i] = funcToSymIdx[canonicalFuncForName(wmod, i)];
-    }
-    return funcToSymIdx;
-}
-
-private void writeCustomSection(ref OutBuffer out_, const(char)[] name, OutBuffer* payload)
-{
-    OutBuffer header;
-    appendName(header, name);
-    out_.writeByte(0); // custom section id
-    out_.writeuLEB128(cast(uint)(header.length() + payload.length()));
-    out_.write(header.peekSlice());
-    out_.write(payload.peekSlice());
-}
 
 /// WASM function type
 struct WasmFuncType
@@ -276,29 +89,11 @@ struct WasmFunc
     const(char)[] exportName; /// for @wasmExportName: export section name (overrides funcName)
 }
 
-/// Local variable in a WASM function
-struct WasmLocal
-{
-    Symbol* sym; /// null for anonymous temporaries
-    WASM_TYPE ty; /// WASM value type
-
-    this(WASM_TYPE type) nothrow
-    {
-        this.ty = type;
-    }
-
-    this(Symbol* sym) nothrow
-    {
-        this.sym = sym;
-        this.ty = tybasic(sym.ty).wasmType;
-    }
-}
-
 struct WasmFuncBody
 {
     Symbol* sym;
     string name;
-    WasmLocal[] locals;
+    Symbol*[] locals; /// params first; temporaries hold a shared type-marker symbol
     uint numParams;
     OutBuffer* code;
     Symbol*[] savedGlobsym;
@@ -325,40 +120,6 @@ struct WasmFuncBody
 }
 
 __gshared WasmFuncBody[] wasmFuncBodies;
-
-private void syncFuncBodyIndex()
-{
-    auto ix = &wmod.symIndex;
-    for (; ix.bodyIndexed < wasmFuncBodies.length; ix.bodyIndexed++)
-    {
-        Symbol* sym = cast(Symbol*) wasmFuncBodies[ix.bodyIndexed].sym;
-        if (!sym)
-            continue;
-        ix.bodyBySym[sym] = cast(uint) ix.bodyIndexed;
-        // Static functions don't participate in name matching, they can differ:
-        // ---
-        // // a.c: static int foo(void){return 1;} int getA(void){return foo();}
-        // // b.c: static int foo(void){return 2;} int getB(void){return foo();}
-        // ---
-        if (sym.Sclass != SC.static_)
-        {
-            string name = cast(string) sym.identifier;
-            if (name !in ix.bodyByName)
-                ix.bodyByName[name] = cast(uint) ix.bodyIndexed;
-        }
-    }
-}
-
-private void syncImportIndex()
-{
-    auto ix = &wmod.symIndex;
-    for (; ix.importIndexed < wmod.numImports; ix.importIndexed++)
-    {
-        Symbol* s = cast(Symbol*) wmod.funcs[ix.importIndexed].sym;
-        if (s && s !in ix.importBySym)
-            ix.importBySym[s] = cast(uint) ix.importIndexed;
-    }
-}
 
 /// Index of the import function whose symbol is exactly `sfunc`, or uint.max if
 /// `sfunc` is not registered as an import. O(1) replacement for the linear scan
@@ -657,6 +418,17 @@ public WasmFuncType buildFuncType(type* t, Symbol* sfunc, uint hiddenLeadingPtrs
     return ft;
 }
 
+private void writeCustomSection(ref OutBuffer out_, const(char)[] name, OutBuffer* payload)
+{
+    OutBuffer header;
+    appendName(header, name);
+    out_.writeByte(0); // custom section id
+    out_.writeuLEB128(cast(uint)(header.length() + payload.length()));
+    out_.write(header.peekSlice());
+    out_.write(payload.peekSlice());
+}
+
+
 private void writeSection(ref OutBuffer out_, WASM_SECTION id, OutBuffer* payload)
 {
     out_.writeByte(cast(ubyte) id);
@@ -802,10 +574,10 @@ private bool emitCodeSection(ref OutBuffer out_, ref WasmModule wmod)
         {
             numLocalGroups = cast(uint)(fb.locals.length - fb.numParams);
             locBuf.writeuLEB128(numLocalGroups);
-            foreach (ref const WasmLocal l; fb.locals[fb.numParams .. $])
+            foreach (Symbol* l; fb.locals[fb.numParams .. $])
             {
                 locBuf.writeuLEB128(1);
-                locBuf.writeByte(l.ty);
+                locBuf.writeByte(localWasmType(l));
             }
         }
         else
@@ -1955,7 +1727,7 @@ void WasmObj_thunk(Symbol* sthunk, Symbol* sfunc, uint p, tym_t thisty, int d, i
     fb.sym = null;
     fb.numParams = cast(uint) ft.params.length;
     foreach (ubyte v; ft.params)
-        fb.locals ~= WasmLocal(cast(WASM_TYPE) v);
+        fb.locals ~= newTempLocal(cast(WASM_TYPE) v);
 
     foreach (uint pi; 0 .. cast(uint) ft.params.length)
     {
@@ -2021,4 +1793,217 @@ Symbol* WasmObj_getGOTsym()
 
 void WasmObj_refGOTsym()
 {
+}
+
+private:
+
+void syncFuncBodyIndex()
+{
+    auto ix = &wmod.symIndex;
+    for (; ix.bodyIndexed < wasmFuncBodies.length; ix.bodyIndexed++)
+    {
+        Symbol* sym = cast(Symbol*) wasmFuncBodies[ix.bodyIndexed].sym;
+        if (!sym)
+            continue;
+        ix.bodyBySym[sym] = cast(uint) ix.bodyIndexed;
+        // Static functions don't participate in name matching, they can differ:
+        // ---
+        // // a.c: static int foo(void){return 1;} int getA(void){return foo();}
+        // // b.c: static int foo(void){return 2;} int getB(void){return foo();}
+        // ---
+        if (sym.Sclass != SC.static_)
+        {
+            string name = cast(string) sym.identifier;
+            if (name !in ix.bodyByName)
+                ix.bodyByName[name] = cast(uint) ix.bodyIndexed;
+        }
+    }
+}
+
+void syncImportIndex()
+{
+    auto ix = &wmod.symIndex;
+    for (; ix.importIndexed < wmod.numImports; ix.importIndexed++)
+    {
+        Symbol* s = cast(Symbol*) wmod.funcs[ix.importIndexed].sym;
+        if (s && s !in ix.importBySym)
+            ix.importBySym[s] = cast(uint) ix.importIndexed;
+    }
+}
+
+const(char)[] utf8SanitizeName(const(char)[] name)
+{
+    static bool validUtf8(const(char)[] s)
+    {
+        import dmd.root.utf : utf_decodeChar;
+
+        size_t i = 0;
+        while (i < s.length)
+        {
+            dchar c;
+            if (utf_decodeChar(s, i, c) !is null)
+                return false;
+        }
+        return true;
+    }
+    if (validUtf8(name))
+        return name;
+    char[] r;
+    foreach (char ch; name)
+    {
+        if (ch < 0x80)
+            r ~= ch;
+        else
+        {
+            enum hex = "0123456789ABCDEF";
+            r ~= '$';
+            r ~= hex[(ch >> 4) & 15];
+            r ~= hex[ch & 15];
+        }
+    }
+    return r;
+}
+
+void appendName(ref OutBuffer buf, const(char)[] name)
+{
+    name = utf8SanitizeName(name);
+    buf.writeuLEB128(cast(uint) name.length);
+    buf.write(name.ptr[0 .. name.length]);
+}
+
+const(char)[] funcName(ref const WasmFunc f)
+{
+    if (f.sym)
+        return f.sym.identifier;
+    return f.importName;
+}
+
+void syncCanonicalFuncNames(ref WasmModule wmod)
+{
+    if (wmod.symIndex.canonLen == wmod.funcs.length)
+        return;
+    auto canon = &wmod.symIndex.canonByName;
+    *canon = null;
+    uint[string] firstImport;
+    foreach (size_t j, ref const WasmFunc g; wmod.funcs)
+    {
+        const(char)[] name = funcName(g);
+        if (!name.length)
+            continue;
+        if (!g.isImport && g.sym && g.sym.Sclass == SC.static_)
+            continue;
+        string key = cast(string) name;
+        if (g.isImport)
+        {
+            if (key !in firstImport)
+                firstImport[key] = cast(uint) j;
+        }
+        else if (key !in *canon)
+        {
+            (*canon)[key] = cast(uint) j;
+        }
+    }
+    foreach (key, idx; firstImport)
+        if (key !in *canon)
+            (*canon)[key] = idx;
+    wmod.symIndex.canonLen = wmod.funcs.length;
+}
+
+void syncFuncIdxMaps(ref WasmModule wmod)
+{
+    if (wmod.symIndex.funcLen == wmod.funcs.length)
+        return;
+    auto bySym = &wmod.symIndex.funcBySym;
+    auto byName = &wmod.symIndex.funcByName;
+    *bySym = null;
+    *byName = null;
+    foreach (size_t k, ref const WasmFunc f; wmod.funcs)
+    {
+        if (f.sym)
+        {
+            Symbol* sym = cast(Symbol*) f.sym;
+            if (sym !in *bySym)
+                (*bySym)[sym] = cast(uint) k;
+        }
+        const(char)[] name = funcName(f);
+        if (name.length)
+        {
+            string key = cast(string) name;
+            if (key !in *byName)
+                (*byName)[key] = cast(uint) k;
+        }
+    }
+    wmod.symIndex.funcLen = wmod.funcs.length;
+}
+
+/// Returns: current wmod.funcs index of a function symbol, or uint.max if not registered.
+uint funcIdxBySym(ref WasmModule wmod, const(Symbol)* sym)
+{
+    if (!sym)
+        return uint.max;
+    syncFuncIdxMaps(wmod);
+    if (auto p = cast(Symbol*) sym in wmod.symIndex.funcBySym)
+        return *p;
+    return uint.max;
+}
+
+uint funcIdxBySymOrName(ref WasmModule wmod, const(Symbol)* sym)
+{
+    if (!sym)
+        return uint.max;
+    syncFuncIdxMaps(wmod);
+    if (auto p = cast(Symbol*) sym in wmod.symIndex.funcBySym)
+        return *p;
+    if (sym.Sident.ptr)
+        if (auto p = cast(string) sym.identifier in wmod.symIndex.funcByName)
+            return *p;
+    return uint.max;
+}
+
+private uint canonicalFuncForName(ref WasmModule wmod, size_t i)
+{
+    const(char)[] name = funcName(wmod.funcs[i]);
+    if (!name.length)
+        return cast(uint) i;
+    if (wmod.funcs[i].sym && wmod.funcs[i].sym.Sclass == SC.static_)
+        return cast(uint) i;
+    syncCanonicalFuncNames(wmod);
+    if (auto p = cast(string) name in wmod.symIndex.canonByName)
+        return *p;
+    return cast(uint) i;
+}
+
+private bool isShadowedFunc(ref WasmModule wmod, size_t i)
+{
+    return canonicalFuncForName(wmod, i) != i;
+}
+
+private uint[] buildFuncToSymIdx(ref WasmModule wmod)
+{
+    uint[] funcToSymIdx;
+    funcToSymIdx.length = wmod.funcs.length;
+    enum uint SHADOWED = uint.max - 1;
+    uint si = 0;
+    foreach (size_t i, ref const WasmFunc f; wmod.funcs)
+    {
+        const(char)[] name = funcName(f);
+        if (!name.length)
+        {
+            funcToSymIdx[i] = uint.max;
+            continue;
+        }
+        if (isShadowedFunc(wmod, i))
+        {
+            funcToSymIdx[i] = SHADOWED;
+            continue;
+        }
+        funcToSymIdx[i] = si++;
+    }
+    foreach (size_t i; 0 .. wmod.funcs.length)
+    {
+        if (funcToSymIdx[i] != SHADOWED)
+            continue;
+        funcToSymIdx[i] = funcToSymIdx[canonicalFuncForName(wmod, i)];
+    }
+    return funcToSymIdx;
 }

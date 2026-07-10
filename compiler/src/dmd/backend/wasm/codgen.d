@@ -50,7 +50,7 @@ import dmd.backend.el;
 import dmd.backend.oper;
 import dmd.backend.ty;
 import dmd.backend.type;
-import dmd.backend.symbol : globsym;
+import dmd.backend.symbol : globsym, symbol_generate;
 import dmd.backend.rtlsym : getRtlsym, RTLSYM;
 import dmd.backend.wasm.enums;
 import dmd.backend.wasm.util : writeuLEB128_5;
@@ -139,6 +139,35 @@ WASM_TYPE wasmType(tym_t ty)
     }
 }
 
+/// Generate a fresh artificial symbol for an anonymous temporary local of the
+/// given WASM value type. The per-function `locals` table holds `Symbol*`; the
+/// value type is recovered from the symbol's D type via `wasmType`. EXNREF has no
+/// `tym_t`, so its symbol is flagged `SFLwasmexnref` and given a placeholder type.
+///
+/// Returns: the generated symbol
+Symbol* newTempLocal(WASM_TYPE ty) nothrow
+{
+    tym_t tym;
+    final switch (ty)
+    {
+        case WASM_TYPE.I32:    tym = TYint;    break;
+        case WASM_TYPE.I64:    tym = TYllong;  break;
+        case WASM_TYPE.F32:    tym = TYfloat;  break;
+        case WASM_TYPE.F64:    tym = TYdouble; break;
+        case WASM_TYPE.EXNREF: tym = TYvoid;   break;
+    }
+    auto s = symbol_generate(SC.auto_, type_fake(tym));
+    if (ty == WASM_TYPE.EXNREF)
+        s.Sflags |= SFLwasmexnref;
+    return s;
+}
+
+/// Returns: the WASM value type declared for local `l` in the code section
+WASM_TYPE localWasmType(Symbol* l) nothrow
+{
+    return (l.Sflags & SFLwasmexnref) ? WASM_TYPE.EXNREF : wasmType(l.ty);
+}
+
 /// Duplicated: also in dvarstats.d
 bool isParameter(Symbol* s)
 {
@@ -180,7 +209,7 @@ Sleb sleb(long v) => Sleb(v);
 struct WasmCG
 {
     OutBuffer code; /// bytecode being emitted
-    WasmLocal[] locals; /// local variable table (params first)
+    Symbol*[] locals; /// local variable table (params first); temporaries hold a shared type-marker symbol
     uint numParams; /// number of parameters (= first numParams locals)
     WasmFuncBody.CodeReloc[] codeRelocs; /// relocations for direct function calls
     WasmFuncBody.DataAddrReloc[] dataAddrRelocs; /// R_WASM.MEMORY_ADDR_LEB relocations
@@ -252,7 +281,7 @@ nothrow:
     uint allocTemp(WASM_TYPE ty)
     {
         const uint result = cast(uint) locals.length;
-        locals ~= WasmLocal(ty);
+        locals ~= newTempLocal(ty);
         return result;
     }
 
@@ -261,12 +290,12 @@ nothrow:
     /// Returns: its index
     uint localFor(Symbol* s)
     {
-        foreach (size_t i, ref const WasmLocal l; locals)
-            if (l.sym == s)
+        foreach (size_t i, Symbol* l; locals)
+            if (l == s)
                 return cast(uint) i;
 
         const uint result = cast(uint) locals.length;
-        locals ~= WasmLocal(s);
+        locals ~= s;
         return result;
     }
 
@@ -555,7 +584,7 @@ private int canonicalI32Const(int v, tym_t ty)
     }
 }
 
-/// Emit a saturating float→int truncation (0xFC-prefixed trunc_sat family).
+/// Emit a saturating float to int truncation (0xFC-prefixed trunc_sat family).
 /// The plain trunc opcodes trap on NaN/out-of-range input, where native
 /// targets produce an unspecified value without trapping.
 /// ---
@@ -1143,7 +1172,13 @@ private void genVarArgs(ref WasmCG cg, elem*[] varArgs, ref uint spLocal, ref ui
         return;
     }
 
-    enum VaKind { scalar, slicePair, aggregate }
+    enum VaKind
+    {
+        scalar,
+        slicePair,
+        aggregate
+    }
+
     struct VaSlot
     {
         elem* e;
@@ -2127,17 +2162,13 @@ bool genElem(ref WasmCG cg, elem* e)
     case OPs16_32: return unaryOp(OP_I32_EXTEND16_S);
     case OPu32_64: return unaryOp(OP_I64_EXTEND_I32_U);
     case OPs32_64: return unaryOp(OP_I64_EXTEND_I32_S);
-
     case OP64_32: return unaryOp(OP_I32_WRAP_I64);
-
     case OPd_f: return unaryOp(OP_F32_DEMOTE_F64);
     case OPf_d: return unaryOp(OP_F64_PROMOTE_F32);
-
     case OPd_s32: return truncSat(WASM_F64, WASM_I32, false);
     case OPd_u32: return truncSat(WASM_F64, WASM_I32, true);
     case OPd_s64: return truncSat(WASM_F64, WASM_I64, false);
     case OPd_u64: return truncSat(WASM_F64, WASM_I64, true);
-
     case OPs32_d: return unaryOp(OP_F64_CONVERT_I32_S);
     case OPu32_d: return unaryOp(OP_F64_CONVERT_I32_U);
     case OPs64_d: return unaryOp(OP_F64_CONVERT_I64_S);
@@ -2901,19 +2932,19 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
         const uint i0 = cast(uint) cg.locals.length;
         if (isSliceOrDelegate(s.Stype))
         {
-            cg.locals ~= WasmLocal(WASM_I32);
-            cg.locals ~= WasmLocal(WASM_I32);
+            cg.locals ~= newTempLocal(WASM_PTR);
+            cg.locals ~= newTempLocal(WASM_PTR);
             paramSpills ~= ParamSpill(i0, s, 0, TYuint);
             paramSpills ~= ParamSpill(i0 + 1, s, 4, TYuint);
         }
         else if (pty == TYstruct && isNonPodStruct(s.Stype))
         {
-            cg.locals ~= WasmLocal(WASM_I32);
+            cg.locals ~= newTempLocal(WASM_PTR);
             paramSpills ~= ParamSpill(i0, s, 0, TYuint);
         }
         else if (pty == TYstruct || pty == TYarray)
         {
-            cg.locals ~= WasmLocal(WASM_I32);
+            cg.locals ~= newTempLocal(WASM_PTR);
             if (elidePodParam)
             {
                 cg.byRefParamLocal[s] = i0;
@@ -2926,7 +2957,7 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
         }
         else
         {
-            cg.locals ~= WasmLocal(wasmType(pty));
+            cg.locals ~= newTempLocal(wasmType(pty));
             paramSpills ~= ParamSpill(i0, s, 0, pty);
         }
     }
@@ -2934,7 +2965,7 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
     while (cg.locals.length < ft.params.length)
     {
         ubyte v = ft.params[cg.locals.length];
-        cg.locals ~= WasmLocal(cast(WASM_TYPE) v);
+        cg.locals ~= newTempLocal(cast(WASM_TYPE) v);
     }
     cg.numParams = cast(uint) ft.params.length;
 

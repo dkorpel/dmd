@@ -178,6 +178,10 @@ enum WASM_TYPE : ubyte
     I64 = 0x7E,
     F32 = 0x7D,
     F64 = 0x7C,
+    // Reference to an in-flight exception. Pushed by a `try_table`'s `catch_all_ref`
+    // clause when unwinding into a `finally` (blocks.d openTryFrames), stashed in a
+    // local (codgen.d exnLocalFor) across the finally body, then rethrown with
+    // `throw_ref` (codgen.d OP_THROW_REF).
     EXNREF = 0x69,
 }
 
