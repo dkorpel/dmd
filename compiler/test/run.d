@@ -88,7 +88,7 @@ int main(string[] args)
 int tryMain(string[] args)
 {
     bool runUnitTests, dumpEnvironment;
-    int jobs = 4; // 2 * totalCPUs;
+    int jobs = 2 * totalCPUs;
     auto res = getopt(args,
         std.getopt.config.passThrough,
         "j|jobs", "Specifies the number of jobs (commands) to run simultaneously (default: %d)".format(jobs), &jobs,
@@ -142,6 +142,9 @@ Options:
         environment["OS"] = "wasm";
         environment["ARGS"] = "";
         args = ["compilable", "runnable"];
+        // Each test runs under wasmtime with up to 2 GiB of linear memory, so
+        // cap parallelism to avoid exhausting host RAM on many-core machines.
+        jobs = min(jobs, 4);
         wasmKnownFailures = loadWasmKnownFailures();
         // The WASM druntime archive is linked into every test but is not a test
         // source, so timestamp-based caching wouldn't otherwise re-run tests
@@ -217,18 +220,6 @@ Options:
         shared string[] unexpectedPasses; // wasm: tests on known-failure list that now pass
         Tally[string] tallies; // keyed by category (e.g. "runnable"); guarded by `tallyMutex`
         Object tallyMutex = new Object;
-        void bump(string name, string field)
-        {
-            const cat = name.findSplit("/")[0];
-            synchronized (tallyMutex)
-            {
-                auto p = cat in tallies;
-                if (!p) { tallies[cat] = Tally.init; p = cat in tallies; }
-                if (field == "passed") p.passed++;
-                else if (field == "failed") p.failed++;
-                else p.ignored++;
-            }
-        }
         foreach (target; parallel(targets, 1))
         {
             log("run: %-(%s %)", target.args);
@@ -237,28 +228,26 @@ Options:
                         ? target.normalizedTestName
                         : "`unit` tests: " ~ (cast(string)unitTestRunnerCommand) ~ " " ~ join(target.args, " ");
             const bool known = wasmTarget && target.filename && (name in wasmKnownFailures) !is null;
-            if (status != 0)
+            Outcome outcome;
+            if (status != 0 && known)
             {
-                if (known)
-                {
-                    log("expected failure (wasm known): %s", name);
-                    bump(name, "ignored");
-                    continue;
-                }
+                log("expected failure (wasm known): %s", name);
+                outcome = Outcome.ignored;
+            }
+            else if (status != 0)
+            {
                 writeln(">>> TARGET FAILED: ", name);
                 synchronized failedTargets ~= name;
-                bump(name, "failed");
+                outcome = Outcome.failed;
             }
             else if (known)
             {
                 writeln(">>> UNEXPECTED PASS (remove from wasm known-failures): ", name);
                 synchronized unexpectedPasses ~= name;
-                bump(name, "passed");
+                outcome = Outcome.passed;
             }
-            else
-            {
-                bump(name, "passed");
-            }
+            synchronized (tallyMutex)
+                tallies.require(name.findSplit("/")[0]).bump(outcome);
         }
         size_t totPassed, totFailed, totIgnored;
         writeln("Results by category:");
@@ -291,7 +280,21 @@ Options:
     return 0;
 }
 
-struct Tally { size_t passed, failed, ignored; }
+enum Outcome { passed, failed, ignored } // note: `passed` is the default (0)
+
+struct Tally
+{
+    size_t passed, failed, ignored;
+    void bump(Outcome o)
+    {
+        final switch (o)
+        {
+            case Outcome.passed:  passed++;  break;
+            case Outcome.failed:  failed++;  break;
+            case Outcome.ignored: ignored++; break;
+        }
+    }
+}
 
 enum wasmKnownFailuresPath = "wasm_known_failures.txt";
 
@@ -409,18 +412,16 @@ void ensureToolsExists(const string[string] env, const TestTool[] tools ...)
                 "-c",
                 sourceFile
             ] ~ getPicFlags(env);
+            overrideEnv = env.dup;
             // When targeting WASM, env["DFLAGS"] only has druntime (no Phobos).
             // dshell_prebuilt imports std.meta so it needs Phobos; build it
             // with native import paths regardless of the cross-compile target.
             if (os == "wasm")
             {
-                overrideEnv = env.dup;
                 auto druntimePath = environment.get("DRUNTIME_PATH", testPath(`../../druntime`));
                 auto phobosPath    = environment.get("PHOBOS_PATH",   testPath(`../../../phobos`));
                 overrideEnv["DFLAGS"] = "-I%s/import -I%s".format(druntimePath, phobosPath);
             }
-            else
-                overrideEnv = env.dup;
         }
         else
         {

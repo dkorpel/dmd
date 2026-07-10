@@ -54,20 +54,23 @@ string build()
     return environment.get("BUILD", "release");
 }
 
+/// The DMD binary is always built for the host OS, even when tests target a
+/// cross-compile OS such as `wasm`.
+string dmdOs()
+{
+    return os == "wasm" ? hostOs : os;
+}
+
 string buildOutputPath()
 {
-    // The DMD binary is always built for the host OS, not the cross-compile target.
-    const hostOsForBinary = os == "wasm" ? hostOs : os;
-    return generatedDir.buildPath(hostOsForBinary, build, dmdModel);
+    return generatedDir.buildPath(dmdOs, build, dmdModel);
 }
 
 // auto-tester might run the test suite with a different $(MODEL) than DMD
 // has been compiled with. Hence we manually check which binary exists.
 string dmdModel()
 {
-    // DMD binary is always built for the host OS, not a cross-compile target.
-    const hostOsForBinary = os == "wasm" ? hostOs : os;
-    const prefix = generatedDir.buildPath(hostOsForBinary, build);
+    const prefix = generatedDir.buildPath(dmdOs, build);
     return environment.get("DMD_MODEL",
         prefix.buildPath("64", dmdFilename).exists ? "64" : "32");
 }
