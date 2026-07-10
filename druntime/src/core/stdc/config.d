@@ -213,20 +213,6 @@ else version (WASI)
         alias cpp_ulonglong = ulong;
     }
 }
-else version (WebAssembly)
-{
-    enum __c_long  : int;
-    enum __c_ulong : uint;
-
-    alias c_long = int;
-    alias c_ulong = uint;
-
-    alias cpp_long = __c_long;
-    alias cpp_ulong = __c_ulong;
-
-    alias cpp_longlong = long;
-    alias cpp_ulonglong = ulong;
-}
 
 version (GNU)
     alias c_long_double = real;

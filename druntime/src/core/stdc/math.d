@@ -4920,7 +4920,7 @@ else
         ///
         alias fmal = __fmaieee128;
     }
-    else version (WebAssembly)
+    else version (CRuntime_WASI)
     {
         // On the WebAssembly target `real` is 64-bit (== double), and the
         // wasi-libc `*l` long-double symbols use a 128-bit ABI that does not

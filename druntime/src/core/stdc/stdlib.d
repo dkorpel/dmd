@@ -145,7 +145,7 @@ version (CRuntime_Microsoft)
         }
     }
 }
-else version (WebAssembly)
+else version (CRuntime_WASI)
 {
     // D `real` is double on wasm32, but wasi-libc's strtold returns a
     // 128-bit long double through a hidden pointer — the signatures clash

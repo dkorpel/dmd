@@ -236,6 +236,7 @@ void addPredefinedGlobalIdentifiers(const ref Target tgt)
             {
                 predef("WebAssembly");
                 predef("WASI");
+                predef("WASIp1");
                 break;
             }
             default: assert(0);

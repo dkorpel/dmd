@@ -662,7 +662,7 @@ dmd -cov -unittest myprog.d
         Option("mwasm32",
             "generate WebAssembly 32 bit code",
             `Compile a WebAssembly 32 bit module. Use together with $(SWLINK -os=wasm).
-            Defines the $(D WebAssembly), $(D WASM32), and $(D CRuntime_WASI) version identifiers.`,
+            Defines the $(D WebAssembly), $(D WASM32), $(D WASI), $(D WASIp1), and $(D CRuntime_WASI) version identifiers.`,
         ),
         Option("main",
             "add default main() if not present already (e.g. for unittesting)",

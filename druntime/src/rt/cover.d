@@ -23,7 +23,7 @@ version (Windows)
     import core.sys.windows.basetsd;
     import core.sys.windows.winbase;
 }
-else version (WebAssembly)
+else version (WASI)
 {
     import core.stdc.stdio : fopen;
 }
@@ -84,11 +84,11 @@ private
 
         bool initialize()
         {
-            // WebAssembly has no parseoptions/env-var config; the destination
+            // WASI has no parseoptions/env-var config; the destination
             // path is set via the compiler-emitted dmd_coverDestPath call, and
             // sources are resolved relative to the host's working directory,
             // which the WASI host passes through as $PWD.
-            version (WebAssembly)
+            version (WASI)
             {
                 import core.stdc.stdlib : getenv;
                 import core.stdc.string : strlen;
@@ -481,7 +481,7 @@ string chomp( string str, string delim = null )
 // open/create file for read/write, pointer at beginning
 FILE* openOrCreateFile(string name)
 {
-    version (WebAssembly)
+    version (WASI)
         return fopen((name ~ '\0').ptr, "w+b");
     else
     {
