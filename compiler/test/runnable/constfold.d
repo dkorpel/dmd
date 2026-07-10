@@ -210,10 +210,14 @@ void test2()
     // leads to an undefined result.
     version (DigitalMars)
     {
-        float f = float.infinity;
-        int i = cast(int) f;
-        assert(i == cast(int)float.max);
-        assert(i == 0x80000000);
+        // wasm uses saturating float->int truncation (0x7FFFFFFF)
+        version (WebAssembly) {} else
+        {
+            float f = float.infinity;
+            int i = cast(int) f;
+            assert(i == cast(int)float.max);
+            assert(i == 0x80000000);
+        }
     }
 }
 

@@ -121,6 +121,10 @@ runnable/test4.d
 runnable/sdtor.d
 runnable/test14903.d
 runnable/testassert.d
+# noreturn2 reaches this same gap: getAndPrintS().acceptNoreturn(.., abort(), ..)
+# must destruct the returned temporary when abort() throws mid-argument-list
+# (fails the WithDtor.destroyed == 1 assert at line 258).
+runnable/noreturn2.d
 
 # --- Require stack traces in Throwable.toString ---
 # These parse the caught exception's stack trace for _Dmain frame lines;
@@ -128,13 +132,12 @@ runnable/testassert.d
 runnable/test17559.d
 runnable/test19086.d
 
-# --- noreturn codegen bugs (pre-existing, unrelated to EH) ---
-# noreturn1: declares `extern (C) noreturn exit();` which collides with
+# --- noreturn / wasi-libc signature clash ---
+# noreturn1 declares `extern (C) noreturn exit();` which collides with
 # wasi-libc's `exit(i32)`; wasm-ld rejects the signature mismatch that native
-# linkers tolerate. noreturn2: passing a `noreturn` variable by ref emits a
-# `local.get` for a local that was never allocated (zero-size type).
+# linkers tolerate. (noreturn2 is listed above under expression-temporary
+# destruction, which is what it actually hits.)
 runnable/noreturn1.d
-runnable/noreturn2.d
 
 # wasm runtime has no Runtime.extendedModuleUnitTester
 runnable/issue16995.d
@@ -182,11 +185,6 @@ runnable/testargtypes.d
 runnable/testprofile.d
 runnable/test_cdstrpar.d
 
-# --- Architecture-dependent undefined behavior ---
-# constfold.d test2 asserts cast(int)float.infinity == 0x80000000 (the x86
-# cvttss2si result); wasm uses saturating truncation, which yields 0x7FFFFFFF.
-runnable/constfold.d
-
 # --- Test harness / expected output encode host specifics ---
 # testos.d's PERMUTE_ARGS include -os=host, producing an ELF object that the
 # wasm harness then rejects with wasm-validate ("bad magic value").
@@ -199,12 +197,6 @@ compilable/makedeps_exe.d
 
 # Require thread support (WASM is single-threaded)
 runnable/testthread2.d
-
-# Encode ELF-style section separation
-# testconstsection.d asserts that string-literal data, TLS, data and BSS live in
-# disjoint address ranges, while WASM lays every symbol out as its own data segment
-# in one linear memory
-runnable/testconstsection.d
 
 # pragma(crt_constructor)/crt_destructor not wired for WASM
 runnable/test17868.d
@@ -227,17 +219,14 @@ compilable/test23679.d
 # wasi-libc's l-suffixed math functions take f128 ((i32, i64, i64) -> void).
 runnable/exe3.c
 
-# formats a real with %.20Lg (test20).
-runnable/template4.d
-
-# formats a real with %Lg (test17).
-runnable/test11.d
-
-# test22.d formats `real` with %Lg
+# --- Mixed-type D-style variadics ---
+# test22.d's test51 calls a `myfunc(int, ...)` D-style variadic with mixed
+# string/int/double arguments and reads them back via _arguments/va_arg; the
+# wasm ABI packs those differently, so the values come back misaligned (the
+# switch at line 978 hits its default). It also formats a `real` with %Lf, but
+# the variadic mismatch is the blocker. Int-only D-style variadics work fine
+# (see test42, which was un-listed once its %Lg prints were made portable).
 runnable/test22.d
-
-# Formats a real with %Lg (wasi-libc long double is f128, so the vararg layout can never match)
-runnable/test42.d
 
 # calls main() through a mismatched `extern(C) int function()`
 # pointer; wasm call_indirect strictly validates the signature and traps.

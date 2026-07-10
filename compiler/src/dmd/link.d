@@ -440,8 +440,11 @@ private int runWasmLINK(bool verbose, ref Param params, ErrorSink eSink)
     // host paths a user's dmd.conf may have appended via linkswitches.
     if (hasDruntime)
         argv.push("-l:libdruntime-wasm.a");
-    else if (params.betterC)
-        argv.push("-l:crt1_betterc.wasm"); // WASI _start shim for betterC `main`
+    else
+        // WASI _start shim for a user-supplied `main`: both -betterC and a
+        // custom-runtime (`-defaultlib=`) program provide their own `main`
+        // but no `_start`, so link the standalone shim to bridge WASI's entry.
+        argv.push("-l:crt1_betterc.wasm");
     // libc.a is linked in both modes: betterC programs commonly call printf /
     // puts / memcmp, and an archive only contributes the members referenced.
     argv.push("-l:libc.a"); // WASI C runtime (printf, memcpy, etc.)
