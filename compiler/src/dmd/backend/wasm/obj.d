@@ -86,6 +86,31 @@ struct WasmFunc
     const(char)[] exportName; /// for @wasmExportName: export section name (overrides funcName)
 }
 
+/// A relocation inside a function's code body. `sym` is the target symbol (null
+/// for type/global/table/tag relocs, whose target is derived from `type`).
+/// `symIdx` caches an interned index: the type index for TYPE_INDEX_LEB relocs,
+/// or a function index for func-reference relocs. `addend` applies to
+/// MEMORY_ADDR_LEB (data-address) relocs.
+struct WasmReloc
+{
+    uint offset;
+    ubyte type;
+    uint symIdx;
+    uint addend;
+    Symbol* sym;
+}
+
+/// A relocation lowered to its final serialized form: `sym` is the resolved
+/// symbol-table index (not a Symbol*). Used when writing both the reloc.DATA
+/// and reloc.CODE custom sections.
+private struct EmitReloc
+{
+    uint offset;
+    ubyte type;
+    uint sym;
+    uint addend;
+}
+
 struct WasmFuncBody
 {
     Symbol* sym;
@@ -94,24 +119,7 @@ struct WasmFuncBody
     OutBuffer* code;
     Symbol*[] savedGlobsym;
 
-    struct CodeReloc
-    {
-        uint offset;
-        ubyte type;
-        uint symIdx;
-        uint addend;
-        Symbol* sym;
-    }
-
-    struct DataAddrReloc
-    {
-        uint offset;
-        Symbol* sym;
-        uint addend;
-    }
-
-    CodeReloc[] codeRelocs;
-    DataAddrReloc[] dataAddrRelocs;
+    WasmReloc[] relocs;
     uint codePayloadStart;
 }
 
@@ -227,23 +235,18 @@ struct WasmModule
     uint dataHeap = 4; // next free byte offset in linear memory; starts at 4 to reserve address 0 as null
 
     /// Deferred relocations in data segments. Written as 0 at emit time;
-    /// patched in WasmObj_term once all symbol addresses are known.
-    struct FuncReloc
-    {
-        uint segIdx;
-        uint dataByteOffset;
-        Symbol* sym;
-    }
-
+    /// patched in WasmObj_term once all symbol addresses are known. `type`
+    /// discriminates TABLE_INDEX_I32 (function-pointer, no addend) from
+    /// MEMORY_ADDR_I32 (data-address, with addend).
     struct DataReloc
     {
         uint segIdx;
         uint dataByteOffset;
+        ubyte type;
         Symbol* sym;
         uint addend;
     }
 
-    FuncReloc[] funcRelocations;
     DataReloc[] dataRelocations;
 
     uint tagTypeIdx = uint.max;
@@ -548,7 +551,7 @@ private bool emitCodeSection(ref OutBuffer out_, ref WasmModule wmod)
         if (fb && fb.code.length())
         {
             ubyte[] codeBytes = fb.code.peekSlice();
-            foreach (ref const WasmFuncBody.CodeReloc r; fb.codeRelocs)
+            foreach (ref const WasmReloc r; fb.relocs)
             {
                 if (r.type != R_WASM.FUNCTION_INDEX_LEB || !r.sym)
                     continue;
@@ -773,8 +776,7 @@ private bool emitLinkingSection(ref OutBuffer out_, ref WasmModule wmod)
 /// Returns: true if section was actually written
 private bool emitRelocDataSection(ref OutBuffer out_, ref WasmModule wmod, uint dataSectionIdx)
 {
-    if ((!wmod.funcRelocations.length && !wmod.dataRelocations.length) ||
-        !wmod.dataSegs.length)
+    if (!wmod.dataRelocations.length || !wmod.dataSegs.length)
         return false;
 
     uint[] funcToSymIdx = buildFuncToSymIdx(wmod);
@@ -797,32 +799,32 @@ private bool emitRelocDataSection(ref OutBuffer out_, ref WasmModule wmod, uint 
         cursor += header + sz;
     }
 
-    struct Rel { uint offset; ubyte type; uint sym; uint addend; }
-    Rel[] rels;
-
-    foreach (ref WasmModule.FuncReloc rel; wmod.funcRelocations)
-    {
-        if (rel.segIdx >= wmod.dataSegs.length)
-            continue;
-        const uint funcIdx = funcIdxBySymOrName(wmod, rel.sym);
-        if (funcIdx == uint.max || funcIdx >= funcToSymIdx.length)
-            continue;
-        uint sym = funcToSymIdx[funcIdx];
-        if (sym == uint.max)
-            continue;
-        rels ~= Rel(segDataStart[rel.segIdx] + rel.dataByteOffset,
-            R_WASM.TABLE_INDEX_I32, sym, 0);
-    }
+    EmitReloc[] rels;
 
     foreach (ref WasmModule.DataReloc rel; wmod.dataRelocations)
     {
-        if (rel.segIdx >= wmod.dataSegs.length || !rel.sym)
+        if (rel.segIdx >= wmod.dataSegs.length)
             continue;
-        uint sym = dataSymIdx(rel.sym);
-        if (sym == uint.max)
-            continue;
-        rels ~= Rel(segDataStart[rel.segIdx] + rel.dataByteOffset,
-            R_WASM.MEMORY_ADDR_I32, sym, rel.addend);
+        const uint offset = segDataStart[rel.segIdx] + rel.dataByteOffset;
+        if (rel.type == R_WASM.TABLE_INDEX_I32)
+        {
+            const uint funcIdx = funcIdxBySymOrName(wmod, rel.sym);
+            if (funcIdx == uint.max || funcIdx >= funcToSymIdx.length)
+                continue;
+            uint sym = funcToSymIdx[funcIdx];
+            if (sym == uint.max)
+                continue;
+            rels ~= EmitReloc(offset, R_WASM.TABLE_INDEX_I32, sym, 0);
+        }
+        else
+        {
+            if (!rel.sym)
+                continue;
+            uint sym = dataSymIdx(rel.sym);
+            if (sym == uint.max)
+                continue;
+            rels ~= EmitReloc(offset, R_WASM.MEMORY_ADDR_I32, sym, rel.addend);
+        }
     }
 
     if (!rels.length)
@@ -833,7 +835,7 @@ private bool emitRelocDataSection(ref OutBuffer out_, ref WasmModule wmod, uint 
     OutBuffer payload;
     payload.writeuLEB128(dataSectionIdx);
     payload.writeuLEB128(cast(uint) rels.length);
-    foreach (ref Rel r; rels)
+    foreach (ref EmitReloc r; rels)
     {
         payload.writeByte(r.type);
         payload.writeuLEB128(r.offset);
@@ -859,7 +861,7 @@ private bool emitRelocCodeSection(ref OutBuffer out_, ref WasmModule wmod, uint 
         return dataSymIndex(wmod, dataSymBase, sym);
     }
 
-    uint currentFuncIdx(ref const WasmFuncBody.CodeReloc r)
+    uint currentFuncIdx(ref const WasmReloc r)
     {
         if (r.sym)
         {
@@ -873,8 +875,14 @@ private bool emitRelocCodeSection(ref OutBuffer out_, ref WasmModule wmod, uint 
     uint totalRelocs = 0;
     foreach (ref const WasmFuncBody fb; wasmFuncBodies)
     {
-        foreach (ref const WasmFuncBody.CodeReloc r; fb.codeRelocs)
+        foreach (ref const WasmReloc r; fb.relocs)
         {
+            if (r.type == R_WASM.MEMORY_ADDR_LEB)
+            {
+                if (r.sym && dataSymIdx(r.sym) != uint.max)
+                    totalRelocs++;
+                continue;
+            }
             uint fi = currentFuncIdx(r);
             if (r.type == R_WASM.TYPE_INDEX_LEB ||
                 r.type == R_WASM.GLOBAL_INDEX_LEB ||
@@ -883,30 +891,29 @@ private bool emitRelocCodeSection(ref OutBuffer out_, ref WasmModule wmod, uint 
                 (fi < funcToSymIdx.length && funcToSymIdx[fi] != uint.max))
                 totalRelocs++;
         }
-        foreach (ref const WasmFuncBody.DataAddrReloc r; fb.dataAddrRelocs)
-            if (r.sym && dataSymIdx(r.sym) != uint.max)
-                totalRelocs++;
     }
     if (!totalRelocs)
         return false;
 
-    struct AnyReloc
-    {
-        uint offset;
-        ubyte type;
-        uint sym;
-        uint addend;
-    }
-
-    AnyReloc[] allRelocs;
+    EmitReloc[] allRelocs;
     allRelocs.reserve(totalRelocs);
 
     foreach (ref const WasmFuncBody fb; wasmFuncBodies)
     {
-        foreach (ref const WasmFuncBody.CodeReloc r; fb.codeRelocs)
+        foreach (ref const WasmReloc r; fb.relocs)
         {
             uint idx;
-            if (r.type == R_WASM.TYPE_INDEX_LEB)
+            uint addend = 0;
+            if (r.type == R_WASM.MEMORY_ADDR_LEB)
+            {
+                if (!r.sym)
+                    continue;
+                idx = dataSymIdx(r.sym);
+                if (idx == uint.max)
+                    continue;
+                addend = r.addend;
+            }
+            else if (r.type == R_WASM.TYPE_INDEX_LEB)
             {
                 idx = r.symIdx;
             }
@@ -931,17 +938,7 @@ private bool emitRelocCodeSection(ref OutBuffer out_, ref WasmModule wmod, uint 
                 if (idx == uint.max)
                     continue;
             }
-            allRelocs ~= AnyReloc(fb.codePayloadStart + r.offset, r.type, idx, 0);
-        }
-        foreach (ref const WasmFuncBody.DataAddrReloc r; fb.dataAddrRelocs)
-        {
-            if (!r.sym)
-                continue;
-            uint sym = dataSymIdx(r.sym);
-            if (sym == uint.max)
-                continue;
-            allRelocs ~= AnyReloc(fb.codePayloadStart + r.offset,
-                R_WASM.MEMORY_ADDR_LEB, sym, r.addend);
+            allRelocs ~= EmitReloc(fb.codePayloadStart + r.offset, r.type, idx, addend);
         }
     }
 
@@ -951,7 +948,7 @@ private bool emitRelocCodeSection(ref OutBuffer out_, ref WasmModule wmod, uint 
     payload.writeuLEB128(codeSectionIdx);
     payload.writeuLEB128(cast(uint) allRelocs.length);
 
-    foreach (ref const AnyReloc r; allRelocs)
+    foreach (ref const EmitReloc r; allRelocs)
     {
         payload.writeByte(r.type);
         payload.writeuLEB128(r.offset);
@@ -1049,10 +1046,12 @@ private Symbol*[] collectRelocDataSyms(ref WasmModule wmod)
         datasyms ~= s;
     }
     foreach (ref const WasmFuncBody fb; wasmFuncBodies)
-        foreach (ref const WasmFuncBody.DataAddrReloc r; fb.dataAddrRelocs)
-            add(cast(Symbol*) r.sym);
+        foreach (ref const WasmReloc r; fb.relocs)
+            if (r.type == R_WASM.MEMORY_ADDR_LEB)
+                add(cast(Symbol*) r.sym);
     foreach (ref const WasmModule.DataReloc r; wmod.dataRelocations)
-        add(cast(Symbol*) r.sym);
+        if (r.type == R_WASM.MEMORY_ADDR_I32)
+            add(cast(Symbol*) r.sym);
     return datasyms;
 }
 
@@ -1135,8 +1134,8 @@ void WasmObj_term2(const(char)[] objfilename, ref WasmModule wmod, ref OutBuffer
         //   // C's vtable slot for the inherited Object.toString
         {
             import dmd.backend.wasm.codgen : funcIndex;
-            foreach (ref rel; wmod.funcRelocations)
-                if (rel.sym)
+            foreach (ref rel; wmod.dataRelocations)
+                if (rel.type == R_WASM.TABLE_INDEX_I32 && rel.sym)
                     funcIndex(rel.sym);
         }
         wmod.internPendingTypes();
@@ -1267,7 +1266,7 @@ void WasmObj_moduleinfo(Symbol* scc)
     const uint segIdx = cast(uint) wmod.activeSegIdx;
     uint zero = 0;
     wmod.dataSegs[segIdx].data.write(&zero, 4);
-    wmod.dataRelocations ~= WasmModule.DataReloc(segIdx, 0, scc, 0);
+    wmod.dataRelocations ~= WasmModule.DataReloc(segIdx, 0, R_WASM.MEMORY_ADDR_I32, scc, 0);
 
     wmod.activeSegIdx = -1;
 }
@@ -1488,7 +1487,7 @@ void WasmObj_reftodatseg(int seg, targ_size_t offset, targ_size_t val, uint targ
         const uint dataOff = cast(uint) wmod.activeSeg.data.length();
         uint zero = 0;
         wmod.activeSeg.data.write(&zero, 4);
-        wmod.dataRelocations ~= WasmModule.DataReloc(segIdx, dataOff, ds.sym, addr - ds.offset);
+        wmod.dataRelocations ~= WasmModule.DataReloc(segIdx, dataOff, R_WASM.MEMORY_ADDR_I32, ds.sym, addr - ds.offset);
         return;
     }
     wmod.activeSeg.data.write(&addr, 4);
@@ -1509,7 +1508,7 @@ int WasmObj_reftoident(int seg, targ_size_t offset, Symbol* s, targ_size_t val, 
         uint dataOff = cast(uint) active.data.length;
         uint zero = 0;
         active.data.write(&zero, 4);
-        wmod.funcRelocations ~= WasmModule.FuncReloc(segIdx, dataOff, s);
+        wmod.dataRelocations ~= WasmModule.DataReloc(segIdx, dataOff, R_WASM.TABLE_INDEX_I32, s, 0);
         return 4;
     }
     if (s)
@@ -1517,7 +1516,7 @@ int WasmObj_reftoident(int seg, targ_size_t offset, Symbol* s, targ_size_t val, 
         uint dataOff = cast(uint) active.data.length;
         uint zero = 0;
         active.data.write(&zero, 4);
-        wmod.dataRelocations ~= WasmModule.DataReloc(segIdx, dataOff, s, cast(uint) val);
+        wmod.dataRelocations ~= WasmModule.DataReloc(segIdx, dataOff, R_WASM.MEMORY_ADDR_I32, s, cast(uint) val);
         return 4;
     }
     uint addr = cast(uint) val;
@@ -1595,11 +1594,12 @@ void wmod_recordDataAddrReloc(uint codeOffset, Symbol* sym, uint addend)
 {
     if (!wasmFuncBodies.length)
         return;
-    WasmFuncBody.DataAddrReloc r;
+    WasmReloc r;
     r.offset = codeOffset;
+    r.type = R_WASM.MEMORY_ADDR_LEB;
     r.sym = sym;
     r.addend = addend;
-    wasmFuncBodies[$ - 1].dataAddrRelocs ~= r;
+    wasmFuncBodies[$ - 1].relocs ~= r;
 }
 
 uint allocRoData_wasm(const(void)* p, uint len, uint align_)
@@ -1734,7 +1734,7 @@ void WasmObj_thunk(Symbol* sthunk, Symbol* sfunc, uint p, tym_t thisty, int d, i
     }
 
     fb.code.writeByte(OP_CALL);
-    fb.codeRelocs ~= WasmFuncBody.CodeReloc(cast(uint) fb.code.length,
+    fb.relocs ~= WasmReloc(cast(uint) fb.code.length,
         R_WASM.FUNCTION_INDEX_LEB, 0, 0, sfunc);
     (*fb.code).writeuLEB128_5(0u);
 

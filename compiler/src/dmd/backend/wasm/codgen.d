@@ -211,8 +211,7 @@ struct WasmCG
     OutBuffer code; /// bytecode being emitted
     Symbol*[] locals; /// local variable table (params first); temporaries hold a shared type-marker symbol
     uint numParams; /// number of parameters (= first numParams locals)
-    WasmFuncBody.CodeReloc[] codeRelocs; /// relocations for direct function calls
-    WasmFuncBody.DataAddrReloc[] dataAddrRelocs; /// R_WASM.MEMORY_ADDR_LEB relocations
+    WasmReloc[] relocs; /// relocations recorded in this function's code body
 
     bool hasShadowFrame;
 
@@ -404,7 +403,7 @@ nothrow:
         const bool canRelocate = symCanRelocate(sym);
         if (canRelocate)
         {
-            dataAddrRelocs ~= WasmFuncBody.DataAddrReloc(cast(uint) code.length, sym, addend);
+            relocs ~= WasmReloc(cast(uint) code.length, R_WASM.MEMORY_ADDR_LEB, 0, addend, sym);
             emitULEBpadded(addr);
         }
         else
@@ -419,7 +418,7 @@ nothrow:
         const bool canRelocate = symCanRelocate(sym);
         if (canRelocate)
         {
-            dataAddrRelocs ~= WasmFuncBody.DataAddrReloc(cast(uint) code.length, sym, 0);
+            relocs ~= WasmReloc(cast(uint) code.length, R_WASM.MEMORY_ADDR_LEB, 0, 0, sym);
             emitULEBpadded(cast(uint) sym.Soffset);
         }
         else
@@ -431,27 +430,27 @@ nothrow:
     void emitCall(uint fidx, Symbol* sym = null)
     {
         emit(OP_CALL);
-        codeRelocs ~= WasmFuncBody.CodeReloc(cast(uint) code.length, R_WASM.FUNCTION_INDEX_LEB, fidx, 0, sym);
+        relocs ~= WasmReloc(cast(uint) code.length, R_WASM.FUNCTION_INDEX_LEB, fidx, 0, sym);
         emitULEBpadded(fidx);
     }
 
     void emitTableIndex(uint fidx, Symbol* sym)
     {
         emit(OP_I32_CONST);
-        codeRelocs ~= WasmFuncBody.CodeReloc(cast(uint) code.length, R_WASM.TABLE_INDEX_SLEB, fidx, 0, sym);
+        relocs ~= WasmReloc(cast(uint) code.length, R_WASM.TABLE_INDEX_SLEB, fidx, 0, sym);
         emitULEBpadded(fidx);
     }
 
     void emitCallIndirectType(uint typeIdx)
     {
-        codeRelocs ~= WasmFuncBody.CodeReloc(cast(uint) code.length,
+        relocs ~= WasmReloc(cast(uint) code.length,
             R_WASM.TYPE_INDEX_LEB, typeIdx);
         emitULEBpadded(typeIdx);
     }
 
     void emitCallIndirectTable()
     {
-        codeRelocs ~= WasmFuncBody.CodeReloc(cast(uint) code.length, R_WASM.TABLE_NUMBER_LEB, 0, 0, null);
+        relocs ~= WasmReloc(cast(uint) code.length, R_WASM.TABLE_NUMBER_LEB, 0, 0, null);
         emitULEBpadded(0);
     }
 
@@ -468,7 +467,7 @@ nothrow:
     void emitTagOperand()
     {
         wmod_noteTagUse();
-        codeRelocs ~= WasmFuncBody.CodeReloc(cast(uint) code.length, R_WASM.TAG_INDEX_LEB, 0, 0, null);
+        relocs ~= WasmReloc(cast(uint) code.length, R_WASM.TAG_INDEX_LEB, 0, 0, null);
         emitULEBpadded(0);
     }
 
@@ -485,7 +484,7 @@ nothrow:
     /// elsewhere, so the operand must be relocatable rather than a fixed 0.
     void emitStackPtrGlobal()
     {
-        codeRelocs ~= WasmFuncBody.CodeReloc(cast(uint) code.length, R_WASM.GLOBAL_INDEX_LEB, 0, 0, null);
+        relocs ~= WasmReloc(cast(uint) code.length, R_WASM.GLOBAL_INDEX_LEB, 0, 0, null);
         emitULEBpadded(stackPtrGlobal());
     }
 
@@ -795,8 +794,16 @@ private elem* splitConstOffset(elem* addr, out uint memOff)
         return addr;
     elem* c;
     elem* base;
-    if (addr.E2 && addr.E2.Eoper == OPconst)      { c = addr.E2; base = addr.E1; }
-    else if (addr.E1 && addr.E1.Eoper == OPconst) { c = addr.E1; base = addr.E2; }
+    if (addr.E2 && addr.E2.Eoper == OPconst)
+    {
+        c = addr.E2;
+        base = addr.E1;
+    }
+    else if (addr.E1 && addr.E1.Eoper == OPconst)
+    {
+        c = addr.E1;
+        base = addr.E2;
+    }
     else
         return addr;
     const wt = c.wasmType;
@@ -3021,8 +3028,7 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
 
     fb.locals = cg.locals;
     fb.numParams = cg.numParams;
-    fb.codeRelocs = cg.codeRelocs;
-    fb.dataAddrRelocs = cg.dataAddrRelocs;
+    fb.relocs = cg.relocs;
     fb.code.reset();
     fb.code.write(cg.code.peekSlice());
 }
