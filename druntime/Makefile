@@ -488,6 +488,8 @@ WASM_DRT_SRCS := \
 	src/rt/profilegc.d \
 	src/rt/tracegc.d \
 	src/core/bitop.d \
+	src/core/int128.d \
+	src/core/cpuid.d \
 	src/core/internal/abort.d \
 	src/rt/minfo.d \
 	src/rt/sections_wasm.d \

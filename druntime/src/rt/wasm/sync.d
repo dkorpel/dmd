@@ -43,6 +43,12 @@ void _d_monitordelete_nogc(Object h) @nogc {}
 // Shared-mutex helpers (used by synchronized classes)
 void _d_setSameMutex(shared Object ownee, shared Object owner) @trusted {}
 
+// Dispose-event registration (used by std.signals). No dtor hook fires on
+// this single-threaded no-op monitor, so registration is elided.
+alias DEvent = void delegate(Object);
+void rt_attachDisposeEvent(Object h, DEvent e) {}
+void rt_detachDisposeEvent(Object h, DEvent e) {}
+
 // Thread init / term (stubs so dmain2 can be compiled in if needed)
 void thread_init() @nogc {}
 void thread_term() @nogc {}
