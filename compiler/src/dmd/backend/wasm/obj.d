@@ -446,6 +446,31 @@ struct WasmDataSeg
     uint alignLog2 = 2;   // log2(alignment) for SEGMENT_INFO
 }
 
+/// Append a new data segment of `size` bytes at the next `align_`-aligned
+/// linear-memory offset and make it the active segment.
+/// Returns: the segment's assigned linear-memory offset
+private uint pushDataSeg(uint size, uint align_, Symbol* sym, const(char)[] name)
+{
+    const uint base = (wmod.dataHeap + (align_ - 1)) & ~(align_ - 1);
+    WasmDataSeg ds;
+    ds.data = new OutBuffer();
+    ds.offset = base;
+    ds.sym = sym;
+    ds.name = name;
+    uint a = 1;
+    uint log2 = 0;
+    while (a < align_)
+    {
+        a <<= 1;
+        log2++;
+    }
+    ds.alignLog2 = log2;
+    wmod.dataSegs ~= ds;
+    wmod.activeSegIdx = cast(int)(wmod.dataSegs.length - 1);
+    wmod.dataHeap = base + size;
+    return base;
+}
+
 // ---------------------------------------------------------------------------
 // Module state
 // ---------------------------------------------------------------------------
@@ -764,6 +789,8 @@ private void writeSection(ref OutBuffer out_, WASM_SECTION id, OutBuffer* payloa
 
 private bool emitTypeSection(ref OutBuffer out_, ref WasmModule wmod)
 {
+    if (wmod.funcTypes.length == 0)
+        return false;
     OutBuffer* s = &wmod.scratch;
     s.reset();
     s.writeuLEB128(cast(uint) wmod.funcTypes.length);
@@ -777,9 +804,6 @@ private bool emitTypeSection(ref OutBuffer out_, ref WasmModule wmod)
         foreach (ubyte v; ft.results)
             s.writeByte(v);
     }
-    if (wmod.funcTypes.length == 0)
-        return false;
-
     writeSection(out_, WASM_SECTION.type_, s);
     return true;
 }
@@ -883,23 +907,15 @@ private bool emitCodeSection(ref OutBuffer out_, ref WasmModule wmod)
     // to compute absolute relocation offsets for reloc.CODE.
     uint payloadOffset = ulebSize(defined);
 
-    // Resolve a symbol to its current index in wmod.funcs (imports first, then
-    // defined functions). Used to patch provisional FUNCTION_INDEX_LEB operands
-    // whose code bytes were emitted before the final index space was known
-    // (notably adjustor thunks, generated before imports are inserted at the
-    // front, which shifts every defined-function index).
-    uint curFuncIdxBySym(const(Symbol)* sym)
-    {
-        return funcIdxBySym(wmod, sym);
-    }
-
     foreach (size_t fi, ref const WasmFunc f; wmod.funcs[wmod.numImports .. $])
     {
         WasmFuncBody* fb = fi < wasmFuncBodies.length ? &wasmFuncBodies[fi] : null;
 
         // Patch provisional function-index operands to their final values now
         // that wmod.funcs is stable. Idempotent for calls emitted at term time
-        // (already correct); fixes calls emitted earlier (thunks).
+        // (already correct); fixes calls emitted earlier (thunks, generated
+        // before imports are inserted at the front, which shifts every
+        // defined-function index).
         if (fb && fb.code.length())
         {
             ubyte[] codeBytes = fb.code.peekSlice();
@@ -907,7 +923,7 @@ private bool emitCodeSection(ref OutBuffer out_, ref WasmModule wmod)
             {
                 if (r.type != R_WASM.FUNCTION_INDEX_LEB || !r.sym)
                     continue;
-                uint idx = curFuncIdxBySym(r.sym);
+                uint idx = funcIdxBySym(wmod, r.sym);
                 if (idx == uint.max || r.offset + 5 > codeBytes.length)
                     continue;
                 uint v = idx;
@@ -1005,34 +1021,14 @@ private bool emitLinkingSection(ref OutBuffer out_, ref WasmModule wmod)
     OutBuffer body_;
     body_.writeuLEB128(2); // linking metadata version 2
 
-    // WASM_LINKING_SYMBOL_TABLE subsection
+    // WASM_LINKING_SYMBOL_TABLE subsection: entries accumulate in symtab and
+    // symCount tallies along; the count is prepended when the subsection is
+    // written into body_ below.
     OutBuffer symtab;
-    // Count usable symbols (skip anonymous synthesized functions and
-    // imports that are shadowed by a same-named defined function).
     uint symCount = 0;
-    foreach (size_t i, ref const WasmFunc f; wmod.funcs)
-    {
-        const(char)[] name = funcName(f);
-        if (!name.length)
-            continue;
-        if (isShadowedFunc(wmod, i))
-            continue;
-        symCount++;
-    }
     // Data symbols: one DATA entry per data segment that has a sym, plus
     // UNDEFINED entries for code-referenced syms without a segment (externs).
     Symbol*[] datasymsForLinking = buildDataSymtabOrder(wmod);
-    symCount += cast(uint) datasymsForLinking.length;
-
-    // One TABLE symbol for the imported function table.
-    symCount++;
-    // One GLOBAL symbol for __stack_pointer when imported.
-    symCount++;
-    // One TAG symbol for the exception tag when this module uses EH.
-    if (wmod.tagTypeIdx != uint.max)
-        symCount++;
-
-    symtab.writeuLEB128(symCount);
 
     foreach (size_t i, ref const WasmFunc f; wmod.funcs)
     {
@@ -1042,6 +1038,7 @@ private bool emitLinkingSection(ref OutBuffer out_, ref WasmModule wmod)
         if (isShadowedFunc(wmod, i))
             continue; // canonical twin owns the symbol-table entry
 
+        symCount++;
         symtab.writeByte(WASM_SYMTAB.FUNCTION);
 
         // For UNDEFINED (import) symbols the name comes from the import
@@ -1085,6 +1082,7 @@ private bool emitLinkingSection(ref OutBuffer out_, ref WasmModule wmod)
     // Emit WASM_SYMTAB.DATA entries in buildDataSymtabOrder order.
     foreach (Symbol* sym; datasymsForLinking)
     {
+        symCount++;
         uint segIdx = uint.max;
         foreach (size_t i, ref const WasmDataSeg ds; wmod.dataSegs)
         {
@@ -1142,12 +1140,14 @@ private bool emitLinkingSection(ref OutBuffer out_, ref WasmModule wmod)
 
     // Imported __indirect_function_table: table index 0, undefined.
     // Name comes from the import section (no EXPLICIT_NAME).
+    symCount++;
     symtab.writeByte(WASM_SYMTAB.TABLE);
     symtab.writeuLEB128(WASM_SYM.UNDEFINED);
     symtab.writeuLEB128(0); // table index 0
 
     // Imported __stack_pointer global: global index 0, undefined.
     // Name is taken from the import section (no EXPLICIT_NAME).
+    symCount++;
     symtab.writeByte(WASM_SYMTAB.GLOBAL);
     symtab.writeuLEB128(WASM_SYM.UNDEFINED);
     symtab.writeuLEB128(0); // global index 0
@@ -1156,6 +1156,7 @@ private bool emitLinkingSection(ref OutBuffer out_, ref WasmModule wmod)
     // wasm-ld keeps one, binding all __d_exception references to it.
     if (wmod.tagTypeIdx != uint.max)
     {
+        symCount++;
         symtab.writeByte(WASM_SYMTAB.TAG);
         symtab.writeuLEB128(WASM_SYM.BINDING_WEAK);
         symtab.writeuLEB128(0); // tag index 0
@@ -1190,7 +1191,8 @@ private bool emitLinkingSection(ref OutBuffer out_, ref WasmModule wmod)
     }
 
     body_.writeByte(WASM_LINKING.SYMBOL_TABLE);
-    body_.writeuLEB128(cast(uint) symtab.length());
+    body_.writeuLEB128(cast(uint)(ulebSize(symCount) + symtab.length()));
+    body_.writeuLEB128(symCount);
     body_.write(symtab.peekSlice());
 
     writeCustomSection(out_, "linking", &body_);
@@ -1252,15 +1254,7 @@ private bool emitRelocDataSection(ref OutBuffer out_, ref WasmModule wmod, uint 
         // Match imports too (externally-defined functions referenced from
         // vtables), and match by name: the reloc's Symbol may be a distinct
         // declaration of an already-registered function.
-        const(char)[] relName = rel.sym ? rel.sym.identifier : null;
-        uint funcIdx = uint.max;
-        foreach (size_t fi; 0 .. wmod.funcs.length)
-            if (wmod.funcs[fi].sym == rel.sym ||
-                (relName.length && funcName(wmod.funcs[fi]) == relName))
-            {
-                funcIdx = cast(uint) fi;
-                break;
-            }
+        const uint funcIdx = funcIdxBySymOrName(wmod, rel.sym);
         if (funcIdx == uint.max || funcIdx >= funcToSymIdx.length)
             continue;
         uint sym = funcToSymIdx[funcIdx];
@@ -1573,11 +1567,10 @@ Obj WasmObj_init(OutBuffer* objbuf, const(char)* filename, const(char)* csegname
     wasmFuncBodies = null;
 
     // Initialize the SegData array with placeholder entries for the standard
-    // segment indices (CODE=1, DATA=2, CDATA=3, UDATA=4) so the backend's
-    // segment-offset bookkeeping doesn't crash.
+    // segment indices (0 reserved, CODE=1, DATA=2, CDATA=3, UDATA=4) so the
+    // backend's segment-offset bookkeeping doesn't crash.
     SegData.reset();
-    SegData.push(); // index 0 reserved
-    pushSegData(WASM_UDATA); // push indices 1-4
+    pushSegData(WASM_UDATA);
 
     return new Obj();
 }
@@ -1596,9 +1589,7 @@ void WasmObj_term(const(char)[] objfilename)
     wmod = null;
 }
 
-import dmd.backend.el;
 import dmd.backend.oper;
-
 
 // Walk the IR tree and pre-register any external function calls as imports.
 // Must run before code generation so that import indices are stable across
@@ -1625,14 +1616,6 @@ void preRegisterExternals(elem* e)
     if (OTleaf(op))
         return;
 
-    if (op == OPcall || op == OPucall)
-    {
-        if (e.E1)
-            preRegisterExternals(e.E1);
-        if (e.E2)
-            preRegisterExternals(e.E2);
-        return;
-    }
     if (OTunary(op))
     {
         preRegisterExternals(e.E1);
@@ -1837,18 +1820,8 @@ void WasmObj_moduleinfo(Symbol* scc)
     if (!scc)
         return;
 
-    enum align_ = 4;
-    const uint base = (wmod.dataHeap + (align_ - 1)) & ~(align_ - 1);
-
-    WasmDataSeg ds;
-    ds.data = new OutBuffer();
-    ds.offset = base;
-    ds.sym = null;          // anonymous: the slot is reached via __start_minfo
-    ds.name = "minfo";
-    ds.alignLog2 = 2;
-    wmod.dataSegs ~= ds;
-    wmod.activeSegIdx = cast(int)(wmod.dataSegs.length - 1);
-    wmod.dataHeap = base + 4;
+    // Anonymous segment (null sym): the slot is reached via __start_minfo.
+    pushDataSeg(4, 4, null, "minfo");
 
     // 4-byte pointer slot, patched by wasm-ld to scc's final address.
     const uint segIdx = cast(uint) wmod.activeSegIdx;
@@ -1968,33 +1941,14 @@ int WasmObj_data_start(Symbol* sdata, targ_size_t datasize, int seg)
     }
     if (sdata && sdata.Salignment > cast(int) align_)
         align_ = cast(uint) sdata.Salignment;
-    uint mask = align_ - 1;
-    uint base = (wmod.dataHeap + mask) & ~mask;
-
 
     // One WASM data segment per data symbol (LDC-style)
-    WasmDataSeg ds;
-    ds.data = new OutBuffer();
-    ds.offset = base;
-    ds.sym = sdata;
-    if (sdata)
-        ds.name = sdata.identifier;
-    uint a = 1;
-    int log2 = 0;
-    while (a < align_)
-    {
-        a <<= 1; log2++;
-    }
-    ds.alignLog2 = cast(uint) log2;
-
-    wmod.dataSegs ~= ds;
-    wmod.activeSegIdx = cast(int)(wmod.dataSegs.length - 1);
+    const uint base = pushDataSeg(cast(uint) datasize, align_, sdata,
+        sdata ? sdata.identifier : null);
 
     // Assign this symbol's linear memory address.
     if (sdata)
         sdata.Soffset = base;
-
-    wmod.dataHeap = base + cast(uint) datasize;
     return 1;
 }
 
@@ -2021,32 +1975,17 @@ int WasmObj_external(Symbol* s)
     // If the same symbol is already registered (import or defined), return its index.
     const(char)[] id = s.identifier;
 
+    // Deduplicate: match an existing entry by Symbol identity (e.g. a thunk,
+    // registered by WasmObj_thunk and later referenced through the same Symbol
+    // by a vtable relocation) or by name — multiple D modules may declare the
+    // same extern(C) symbol, and a same-named defined function (e.g. a user's
+    // `extern(C) int memcmp(...)`) must be used instead of importing.
     foreach (size_t i, ref const WasmFunc f; wmod.funcs)
     {
-        // Deduplicate imports: multiple D modules may declare the same extern(C) symbol.
-        if (f.isImport && f.importName == id)
+        if (f.sym is s || funcName(f) == id)
         {
             s.Sseg = cast(int) i;
             return s.Sseg;
-        }
-        // The symbol may already be defined here (e.g. a thunk, registered by
-        // WasmObj_thunk and later referenced through the same Symbol by a
-        // vtable relocation): return the definition, never make an import.
-        if (!f.isImport && f.sym is s)
-        {
-            s.Sseg = cast(int) i;
-            return s.Sseg;
-        }
-        // If a non-import function with the same name is already defined (e.g. user provides
-        // `extern(C) int memcmp(...)`), use that instead of importing.
-        if (!f.isImport && f.sym && f.sym.Sident.ptr != s.Sident.ptr)
-        {
-            const(char)[] fname = f.sym.identifier;
-            if (fname == id)
-            {
-                s.Sseg = cast(int) i;
-                return s.Sseg;
-            }
         }
     }
     // Register as an import. Module name comes from pragma(wasm_import_module), else "env".
@@ -2081,10 +2020,7 @@ int WasmObj_common_block(Symbol* s, int flag, targ_size_t size, targ_size_t coun
 
 void WasmObj_lidata(int seg, targ_size_t offset, targ_size_t count)
 {
-    if (!wmod.activeSeg)
-        return;
-    foreach (_; 0 .. count)
-        wmod.activeSeg.data.writeByte(0);
+    WasmObj_write_zeros(null, count);
 }
 
 void WasmObj_write_zeros(seg_data* pseg, targ_size_t count)
@@ -2109,8 +2045,7 @@ void WasmObj_write_bytes(seg_data* pseg, const(void[]) a)
 
 void WasmObj_byte(int seg, targ_size_t offset, uint _byte)
 {
-    if (wmod.activeSeg)
-        wmod.activeSeg.data.writeByte(cast(ubyte) _byte);
+    WasmObj_write_byte(null, _byte);
 }
 
 size_t WasmObj_bytes(int seg, targ_size_t offset, const(void)[] data)
@@ -2296,34 +2231,18 @@ uint allocRoData_wasm(const(void)* p, uint len, uint align_)
 // write the bytes into a fresh segment, and return the linear memory address.
 private uint allocRoData(const(void)* p, uint len, uint align_)
 {
-    uint mask = align_ - 1;
-    uint base = (wmod.dataHeap + mask) & ~mask;
-
-    WasmDataSeg ds;
-    ds.data = new OutBuffer();
-    ds.offset = base;
     // Synthesised name (".rodata.<n>") matches the LLVM convention so wasm-ld
     // groups these alongside other rodata.
-    {
-        import core.stdc.stdio : snprintf;
-        char[32] buf;
-        const n = snprintf(buf.ptr, buf.length, ".rodata.%u",
-            cast(uint) wmod.dataSegs.length);
-        ds.name = buf[0 .. n].idup;
-    }
-    uint a = 1;
-    int log2 = 0;
-    while (a < align_) { a <<= 1; log2++; }
-    ds.alignLog2 = cast(uint) log2;
+    import core.stdc.stdio : snprintf;
+    char[32] buf;
+    const n = snprintf(buf.ptr, buf.length, ".rodata.%u",
+        cast(uint) wmod.dataSegs.length);
+    const uint base = pushDataSeg(len, align_, null, buf[0 .. n].idup);
     if (p)
-        ds.data.write(p, len);
+        wmod.activeSeg.data.write(p, len);
     else
         foreach (_; 0 .. len)
-            ds.data.writeByte(0);
-
-    wmod.dataSegs ~= ds;
-    wmod.activeSegIdx = cast(int)(wmod.dataSegs.length - 1);
-    wmod.dataHeap = base + len;
+            wmod.activeSeg.data.writeByte(0);
     return base;
 }
 
