@@ -82,17 +82,13 @@ struct WasmFunc
     WasmFuncType pendingType; /// signature of a defined function awaiting interning (after phase 1)
     Symbol* sym;
     bool exported;
-    bool isImport;
-    bool comdat; /// duplicate copies across objects merge instead of colliding
     const(char)[] importModule; /// for imports: module name
-    const(char)[] importName; /// for imports: field name
     const(char)[] exportName; /// for @wasmExportName: export section name (overrides funcName)
 }
 
 struct WasmFuncBody
 {
     Symbol* sym;
-    string name;
     Symbol*[] locals; /// params first; temporaries hold a shared type-marker symbol
     uint numParams;
     OutBuffer* code;
@@ -474,7 +470,7 @@ private bool emitImportSection(ref OutBuffer out_, ref WasmModule wmod)
     s.writeuLEB128(count);
     foreach (ref const WasmFunc f; wmod.funcs[0 .. wmod.numImports])
     {
-        appendImportHead(*s, f.importModule, f.importName, WASM_EXPORT.FUNC);
+        appendImportHead(*s, f.importModule, funcName(f), WASM_EXPORT.FUNC);
         s.writeuLEB128(f.typeIdx);
     }
     appendImportHead(*s, "env", "__linear_memory", WASM_EXPORT.MEM);
@@ -663,8 +659,9 @@ private bool emitLinkingSection(ref OutBuffer out_, ref WasmModule wmod)
         symCount++;
         symtab.writeByte(WASM_SYMTAB.FUNCTION);
 
+        const isImport = i < wmod.numImports;
         uint flags;
-        if (f.isImport)
+        if (isImport)
         {
             flags = WASM_SYM.UNDEFINED;
         }
@@ -673,15 +670,15 @@ private bool emitLinkingSection(ref OutBuffer out_, ref WasmModule wmod)
             flags = 0;
             if (f.exportName.length)
                 flags |= WASM_SYM.EXPORTED;
-            if (f.comdat)
+            if (f.sym.Sclass == SC.comdat)
                 flags |= WASM_SYM.BINDING_WEAK;
-            else if (f.sym && f.sym.Sclass == SC.static_)
+            else if (f.sym.Sclass == SC.static_)
                 flags |= WASM_SYM.BINDING_LOCAL;
         }
 
         symtab.writeuLEB128(flags);
         symtab.writeuLEB128(cast(uint) i);
-        if (!f.isImport)
+        if (!isImport)
             appendName(symtab, name);
     }
 
@@ -1294,7 +1291,6 @@ int WasmObj_comdat(Symbol* s)
     f.pendingType = ft;
     f.sym = s;
     f.exported = (s.Sclass == SC.global);
-    f.comdat = true;
     applyWasmExportName(f, s);
 
     s.Sseg = cast(int) wmod.funcs.length;
@@ -1416,8 +1412,6 @@ int WasmObj_external(Symbol* s)
         f.importModule = *p;
     else
         f.importModule = "env";
-    f.importName = id;
-    f.isImport = true;
     wmod.funcs = wmod.funcs[0 .. wmod.numImports] ~ [f] ~ wmod.funcs[wmod.numImports .. $];
     s.Sseg = cast(int) wmod.numImports;
     wmod.numImports++;
@@ -1588,7 +1582,7 @@ uint wmod_findFuncForType(uint typeIdx)
         if (!name.length)
             continue;
 
-        if (f.isImport)
+        if (i < wmod.numImports)
             return cast(uint) i;
 
         if (localFallback == uint.max)
@@ -1676,7 +1670,6 @@ void WasmObj_func_start(Symbol* sfunc)
     f.pendingType = ft;
     f.sym = sfunc;
     f.exported = (sfunc.Sclass == SC.global);
-    f.comdat = (sfunc.Sclass == SC.comdat);
     applyWasmExportName(f, sfunc);
     wmod.funcs ~= f;
     sfunc.Sseg = cast(int)(wmod.funcs.length - 1);
@@ -1716,7 +1709,6 @@ void WasmObj_thunk(Symbol* sthunk, Symbol* sfunc, uint p, tym_t thisty, int d, i
     f.typeIdx = uint.max;
     f.pendingType = ft;
     f.sym = sthunk;
-    f.comdat = (sthunk.Sclass == SC.comdat);
     sthunk.Sseg = cast(int) wmod.funcs.length;
     wmod.funcs ~= f;
 
@@ -1873,9 +1865,7 @@ void appendName(ref OutBuffer buf, const(char)[] name)
 
 const(char)[] funcName(ref const WasmFunc f)
 {
-    if (f.sym)
-        return f.sym.identifier;
-    return f.importName;
+    return f.sym ? f.sym.identifier : null;
 }
 
 void syncCanonicalFuncNames(ref WasmModule wmod)
@@ -1890,10 +1880,11 @@ void syncCanonicalFuncNames(ref WasmModule wmod)
         const(char)[] name = funcName(g);
         if (!name.length)
             continue;
-        if (!g.isImport && g.sym && g.sym.Sclass == SC.static_)
+        const isImport = j < wmod.numImports;
+        if (!isImport && g.sym && g.sym.Sclass == SC.static_)
             continue;
         string key = cast(string) name;
-        if (g.isImport)
+        if (isImport)
         {
             if (key !in firstImport)
                 firstImport[key] = cast(uint) j;
