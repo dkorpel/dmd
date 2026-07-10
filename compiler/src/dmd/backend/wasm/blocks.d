@@ -10,6 +10,9 @@ import dmd.backend.symbol : globsym;
 import dmd.backend.wasm.enums;
 import dmd.backend.wasm.codgen;
 
+import core.stdc.stdio : printf;
+import core.stdc.stdlib : getenv;
+
 nothrow:
 
 // Per-block metadata computed during analysis
@@ -52,8 +55,7 @@ private bool emitBlockReturn(ref WasmCG cg, block* b, bool hasReturn)
                 const tym_t bty = tybasic(b.Belem.Ety);
                 WASM_TYPE retTy = cg.retByHiddenPtr ? WASM_I32 : wasmType(bty);
                 uint retTmp = cg.allocTemp(retTy);
-                cg.emit(OP_LOCAL_SET);
-                cg.emitULEB(retTmp);
+                cg.emitLocal(OP_LOCAL_SET, retTmp);
                 emitShadowEpilogue(cg);
                 cg.emitLocal(OP_LOCAL_GET, retTmp);
             }
@@ -93,6 +95,22 @@ private bool emitBlockReturn(ref WasmCG cg, block* b, bool hasReturn)
         return true;
     }
     return false;
+}
+
+// Push `condLocal == cv` as an i32
+private void emitCaseEq(ref WasmCG cg, WASM_TYPE condType, uint condLocal, long cv)
+{
+    cg.emitLocal(OP_LOCAL_GET, condLocal);
+    if (condType == WASM_I64)
+    {
+        cg.emitConst(OP_I64_CONST, cv);
+        cg.emit(OP_I64_EQ);
+    }
+    else
+    {
+        cg.emitConst(OP_I32_CONST, cast(int) cv);
+        cg.emit(OP_I32_EQ);
+    }
 }
 
 // Reorder `blocks` so the try_table frame model can structure them: each
@@ -182,16 +200,12 @@ nothrow:
                         foreach (s; m.Bsucc)
                             visitSucc(s);
                 block* h = node.Bsucc[1];
-                if (h && h.bc == BC.jcatch)
+                if (h && (h.bc == BC.jcatch || h.bc == BC._finally))
                 {
                     foreach (s; h.Bsucc)
                         visitSucc(s);
-                }
-                else if (h && h.bc == BC._finally)
-                {
-                    foreach (s; h.Bsucc)
-                        visitSucc(s);
-                    if (h.Bsucc.length && h.Bsucc[0].bc == BC._lpad)
+                    if (h.bc == BC._finally && h.Bsucc.length
+                        && h.Bsucc[0].bc == BC._lpad)
                         foreach (s; h.Bsucc[0].Bsucc)
                             visitSucc(s);
                 }
@@ -222,16 +236,12 @@ nothrow:
             return;
         layoutLevel(b, b.Bsucc[0]);
         block* h = b.Bsucc[1];
-        if (h && !placed[h.Bdfoidx] && h.bc == BC.jcatch)
+        if (h && !placed[h.Bdfoidx]
+            && (h.bc == BC.jcatch || h.bc == BC._finally))
         {
             placed[h.Bdfoidx] = true;
             result ~= h;
-        }
-        else if (h && !placed[h.Bdfoidx] && h.bc == BC._finally)
-        {
-            placed[h.Bdfoidx] = true;
-            result ~= h;
-            block* lp = h.Bsucc.length ? h.Bsucc[0] : null;
+            block* lp = h.bc == BC._finally && h.Bsucc.length ? h.Bsucc[0] : null;
             if (lp && lp.bc == BC._lpad && !placed[lp.Bdfoidx])
             {
                 placed[lp.Bdfoidx] = true;
@@ -244,15 +254,9 @@ nothrow:
 /// Structured control flow synthesis (block CFG => WASM)
 void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
 {
-    static block*[] collectBlocks(block* start)
-    {
-        block*[] v;
-        for (block* b = start; b; b = b.Bnext)
-            v ~= b;
-        return v;
-    }
-
-    block*[] blocks = collectBlocks(startblock);
+    block*[] blocks;
+    for (block* b = startblock; b; b = b.Bnext)
+        blocks ~= b;
     const int N = cast(int) blocks.length;
     if (N == 0)
         return;
@@ -280,9 +284,8 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
             || b.bc == BC.jmptab || b.bc == BC.switch_
             || b.bc == BC._finally || b.bc == BC._lpad || b.bc == BC.jcatch)
         {
-            foreach (int si; 0 .. cast(int) b.Bsucc.length)
+            foreach (s; b.Bsucc)
             {
-                block* s = b.Bsucc[si];
                 if (s && s.Bdfoidx <= cast(int) i) // back edge
                 {
                     info[s.Bdfoidx].isLoopHeader = true;
@@ -411,38 +414,24 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
     foreach (int i; 0 .. N)
     {
         block* b = blocks[i];
-        if (b.bc == BC.goto_ || b.bc == BC.iftrue || b.bc == BC.ifthen)
-        {
-            foreach (int si; 0 .. cast(int) b.Bsucc.length)
-            {
-                const int t = blockIdx(b.Bsucc[si]);
-                if (t != int.max && t > i + 1)
-                    needFrame(i, t);
-            }
-        }
-        else if (b.bc == BC.jmptab || b.bc == BC.switch_)
+        const bool table = b.bc == BC.jmptab || b.bc == BC.switch_;
+        if (table || b.bc == BC.goto_ || b.bc == BC.iftrue || b.bc == BC.ifthen)
         {
             // br_table can't fall through, so even target i+1 needs a frame
-            foreach (int si; 0 .. cast(int) b.Bsucc.length)
+            foreach (s; b.Bsucc)
             {
-                const int t = blockIdx(b.Bsucc[si]);
-                if (t != int.max && t > i)
+                const int t = blockIdx(s);
+                if (t != int.max && t > (table ? i : i + 1))
                     needFrame(i, t);
             }
         }
-        else if (b.bc == BC._finally)
+        else if (b.bc == BC._finally || b.bc == BC._lpad || b.bc == BC.jcatch)
         {
-            // Normal entry branches to the finally body (Bsucc[1]), skipping
-            // the exceptional BC._lpad block that follows this one.
-            const int t = blockIdx(succ(b, 1));
-            if (t != int.max && t > i + 1)
-                needFrame(i, t);
-        }
-        else if (b.bc == BC._lpad || b.bc == BC.jcatch)
-        {
-            // Landing pads continue at Bsucc[0]; after blockopt (-O) that
-            // block is not necessarily laid out right after the pad.
-            const int t = blockIdx(succ(b, 0));
+            // A BC._finally's normal entry branches to the finally body
+            // (Bsucc[1]), skipping the exceptional BC._lpad block that
+            // follows it; landing pads continue at Bsucc[0]. After blockopt
+            // (-O) that block is not necessarily laid out right after.
+            const int t = blockIdx(succ(b, b.bc == BC._finally ? 1 : 0));
             if (t != int.max && t > i + 1)
                 needFrame(i, t);
         }
@@ -453,20 +442,16 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
             needFrame(h, info[h].loopEnd + 1);
 
     // WASM_BLOCKS=1: dump the block graph for debugging structuring bugs
+    if (getenv("WASM_BLOCKS"))
     {
-        import core.stdc.stdlib : getenv;
-        import core.stdc.stdio : printf;
-        if (getenv("WASM_BLOCKS"))
+        printf("=== block graph (%d blocks) ===\n", N);
+        foreach (size_t i, b; blocks)
         {
-            printf("=== block graph (%d blocks) ===\n", N);
-            foreach (size_t i, b; blocks)
-            {
-                printf("  b%d bc=%d try=%d succ=[", cast(int) i, cast(int) b.bc,
-                    b.Btry ? blockIdx(b.Btry) : -1);
-                foreach (int si; 0 .. cast(int) b.Bsucc.length)
-                    printf("%s%d", si ? ",".ptr : "".ptr, blockIdx(b.Bsucc[si]));
-                printf("]\n");
-            }
+            printf("  b%d bc=%d try=%d succ=[", cast(int) i, cast(int) b.bc,
+                b.Btry ? blockIdx(b.Btry) : -1);
+            foreach (int si; 0 .. cast(int) b.Bsucc.length)
+                printf("%s%d", si ? ",".ptr : "".ptr, blockIdx(b.Bsucc[si]));
+            printf("]\n");
         }
     }
 
@@ -554,9 +539,9 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
                 || b.bc == BC.ifthen || b.bc == BC.jmptab || b.bc == BC.switch_;
             if (!branches)
                 continue;
-            foreach (int si; 0 .. cast(int) b.Bsucc.length)
+            foreach (s; b.Bsucc)
             {
-                const int t = blockIdx(b.Bsucc[si]);
+                const int t = blockIdx(s);
                 if (t == i + 1 && b.bc != BC.jmptab && b.bc != BC.switch_)
                     continue;
                 if (!branchOK(i, t))
@@ -575,17 +560,13 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
     }
 
     // WASM_BLOCKS=1: dump the repaired frames
+    if (getenv("WASM_BLOCKS"))
     {
-        import core.stdc.stdlib : getenv;
-        import core.stdc.stdio : printf;
-        if (getenv("WASM_BLOCKS"))
-        {
-            foreach (ref const f; bframes)
-                printf("  frame [%d..%d] -> %d\n", f.begin, f.end, f.end + 1);
-            foreach (ref const t; tryRegs)
-                printf("  try [%d..%d] land %d %s\n", t.start, t.end,
-                    t.end + 1, t.isCatch ? "catch".ptr : "finally".ptr);
-        }
+        foreach (ref const f; bframes)
+            printf("  frame [%d..%d] -> %d\n", f.begin, f.end, f.end + 1);
+        foreach (ref const t; tryRegs)
+            printf("  try [%d..%d] land %d %s\n", t.start, t.end,
+                t.end + 1, t.isCatch ? "catch".ptr : "finally".ptr);
     }
 
     enum FrameKind
@@ -714,40 +695,33 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         }
     }
 
-    // Branch to the frame at `fi`. A missing frame (fi == stack.length
-    // sentinel) means the CFG couldn't be structured — a dropped branch
-    // would silently corrupt control flow, so fail loudly instead.
-    void branchTo(size_t fi, bool conditional)
-    {
-        assert(fi < stack.length, "wasm blocks: branch target has no frame");
-        cg.emit(conditional ? OP_BR_IF : OP_BR);
-        cg.emitULEB(brDepth(fi));
-        if (!conditional)
-            cg.reachable = false;
-    }
-
     int currentIdx;
+
+    // br depth to reach block `t`: its loop frame if backward, its block
+    // frame if forward. A missing frame (the lookups' stack.length sentinel)
+    // means the CFG couldn't be structured — a dropped branch would silently
+    // corrupt control flow, so fail loudly instead.
+    uint destDepth(int t)
+    {
+        const size_t fi = t <= currentIdx ? loopFrame(t) : exactFrame(t);
+        assert(fi < stack.length, "wasm blocks: branch target has no frame");
+        return brDepth(fi);
+    }
 
     // Branch to block `t`: continue its loop if backward, exit a block
     // frame if forward
     void branchToBlock(int t, bool conditional)
     {
-        branchTo(t <= currentIdx ? loopFrame(t) : exactFrame(t), conditional);
+        cg.emit(conditional ? OP_BR_IF : OP_BR);
+        cg.emitULEB(destDepth(t));
+        if (!conditional)
+            cg.reachable = false;
     }
 
     foreach (const bi; 0 .. N)
     {
         block* b = blocks[bi];
         currentIdx = bi;
-
-        // Push the condition value of b, or 0 if there is none
-        void emitCondValue()
-        {
-            if (b.Belem)
-                cg.genElem(b.Belem);
-            else
-                cg.emitConst(OP_I32_CONST, 0);
-        }
 
         // Close frames ending before this block. Per WASM validation, control
         // past an OP_END resumes at the reachability the enclosing frame had
@@ -813,14 +787,6 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
 
         if (b.bc == BC.jmptab || b.bc == BC.switch_)
         {
-            uint destDepth(int destIdx)
-            {
-                const size_t fi = destIdx <= cast(int) bi
-                    ? loopFrame(destIdx) : exactFrame(destIdx);
-                assert(fi < stack.length, "wasm blocks: branch target has no frame");
-                return brDepth(fi);
-            }
-
             const int defaultIdx = blockIdx(b.Bsucc[0]);
 
             cg.genElem(b.Belem);
@@ -828,8 +794,8 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
             if (b.Bswitch.length == 0)
             {
                 cg.emit(OP_DROP);
-                if (defaultIdx != cast(int) bi + 1)
-                    branchTo(exactFrame(defaultIdx), false);
+                if (defaultIdx != bi + 1)
+                    branchToBlock(defaultIdx, false);
                 continue;
             }
 
@@ -856,32 +822,15 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
             if (!useBrTable)
             {
                 // If-else chain: store condition in a local, compare each case
-                uint condLocal = cg.allocTemp(condType);
-                cg.emit(OP_LOCAL_SET);
-                cg.emitULEB(condLocal);
+                const uint condLocal = cg.allocTemp(condType);
+                cg.emitLocal(OP_LOCAL_SET, condLocal);
                 foreach (size_t ci, long cv; b.Bswitch)
                 {
-                    int caseIdx = blockIdx(b.Bsucc[cast(int)(ci + 1)]);
-                    cg.emitLocal(OP_LOCAL_GET, condLocal);
-                    if (condType == WASM_I64)
-                    {
-                        cg.emitConst(OP_I64_CONST, cv);
-                        cg.emit(OP_I64_EQ);
-                    }
-                    else if (condType == WASM_I32)
-                    {
-                        cg.emitConst(OP_I32_CONST, cast(int) cv);
-                        cg.emit(OP_I32_EQ);
-                    }
-                    cg.emit(OP_BR_IF);
-                    cg.emitULEB(destDepth(caseIdx));
+                    emitCaseEq(cg, condType, condLocal, cv);
+                    branchToBlock(blockIdx(b.Bsucc[cast(int)(ci + 1)]), true);
                 }
-                if (defaultIdx != cast(int) bi + 1)
-                {
-                    cg.emit(OP_BR);
-                    cg.emitULEB(destDepth(defaultIdx));
-                    cg.reachable = false;
-                }
+                if (defaultIdx != bi + 1)
+                    branchToBlock(defaultIdx, false);
                 continue;
             }
 
@@ -915,21 +864,26 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
             const int takenIdx = blockIdx(succ(b, 0));
             const int nottakenIdx = blockIdx(succ(b, 1));
 
-            emitCondValue();
+            // Push the condition value, or 0 if there is none
+            if (b.Belem)
+                cg.genElem(b.Belem);
+            else
+                cg.emitConst(OP_I32_CONST, 0);
+
             if (takenIdx == nottakenIdx)
             {
                 // Degenerate: both arms go to the same block
                 emitCondToI32(cg, b.Belem);
                 cg.emit(OP_DROP);
-                if (takenIdx != cast(int) bi + 1)
+                if (takenIdx != bi + 1)
                     branchToBlock(takenIdx, false);
             }
-            else if (takenIdx == cast(int) bi + 1)
+            else if (takenIdx == bi + 1)
             {
                 emitCondInvert(cg, b.Belem);
                 branchToBlock(nottakenIdx, true);
             }
-            else if (nottakenIdx == cast(int) bi + 1)
+            else if (nottakenIdx == bi + 1)
             {
                 emitCondToI32(cg, b.Belem);
                 branchToBlock(takenIdx, true);
@@ -945,38 +899,18 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
             }
             continue;
         }
-        else if (b.bc == BC.goto_)
+        else if (b.bc == BC.goto_ || b.bc == BC._finally
+            || b.bc == BC._lpad || b.bc == BC.jcatch)
         {
-            block* target = succ(b, 0);
+            // Continue at Bsucc[0], except a BC._finally's normal entry
+            // branches to the finally body (Bsucc[1]), skipping the
+            // exceptional BC._lpad block right after it. blockopt (-O) may
+            // have laid the target out elsewhere; == bi+1 falls through
+            // naturally.
             if (b.Belem)
                 cg.genElemDiscard(b.Belem);
-            if (!target)
-                continue;
-
-            const int targetIdx = blockIdx(target);
-            if (targetIdx != bi + 1) // == bi+1 falls through naturally
-                branchToBlock(targetIdx, false);
-            continue;
-        }
-        else if (b.bc == BC._finally)
-        {
-            // Normal entry: branch to the finally body (Bsucc[1]), skipping
-            // the exceptional BC._lpad block right after this one.
-            if (b.Belem)
-                cg.genElemDiscard(b.Belem);
-            const int t = blockIdx(succ(b, 1));
-            if (t != bi + 1)
-                branchToBlock(t, false);
-            continue;
-        }
-        else if (b.bc == BC._lpad || b.bc == BC.jcatch)
-        {
-            // Landing pad: continue at Bsucc[0], which blockopt (-O) may
-            // have laid out elsewhere.
-            if (b.Belem)
-                cg.genElemDiscard(b.Belem);
-            const int t = blockIdx(succ(b, 0));
-            if (t != bi + 1)
+            const int t = blockIdx(succ(b, b.bc == BC._finally ? 1 : 0));
+            if (t != int.max && t != bi + 1)
                 branchToBlock(t, false);
             continue;
         }
@@ -997,8 +931,6 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
 // but handles any CFG.
 private void genBlocksDispatch(ref WasmCG cg, block*[] blocks, bool hasReturn)
 {
-    import core.stdc.stdlib : getenv;
-    import core.stdc.stdio : printf;
     if (getenv("WASM_BLOCKS"))
         printf("  (dispatch fallback)\n");
 
@@ -1069,21 +1001,10 @@ private void genBlocksDispatch(ref WasmCG cg, block*[] blocks, bool hasReturn)
             // Compare chain against each case value
             const condType = b.Belem.wasmType;
             const uint condLocal = cg.allocTemp(condType);
-            cg.emit(OP_LOCAL_SET);
-            cg.emitULEB(condLocal);
+            cg.emitLocal(OP_LOCAL_SET, condLocal);
             foreach (size_t ci, long cv; b.Bswitch)
             {
-                cg.emitLocal(OP_LOCAL_GET, condLocal);
-                if (condType == WASM_I64)
-                {
-                    cg.emitConst(OP_I64_CONST, cv);
-                    cg.emit(OP_I64_EQ);
-                }
-                else
-                {
-                    cg.emitConst(OP_I32_CONST, cast(int) cv);
-                    cg.emit(OP_I32_EQ);
-                }
+                emitCaseEq(cg, condType, condLocal, cv);
                 cg.emit(OP_IF);
                 cg.emit(WASM_VOID_BLOCK);
                 gotoBlock(blockIdx(b.Bsucc[cast(int)(ci + 1)]), 1);
@@ -1091,20 +1012,15 @@ private void genBlocksDispatch(ref WasmCG cg, block*[] blocks, bool hasReturn)
             }
             gotoBlock(defaultIdx, 0);
         }
-        else if (b.bc == BC.goto_)
+        else if (b.bc == BC.goto_ || b.bc == BC._finally)
         {
+            // A BC._finally's normal entry continues at Bsucc[1] (no
+            // try_table in dispatch mode, so the exceptional path is lost:
+            // exceptions escape this function).
             if (b.Belem)
                 cg.genElemDiscard(b.Belem);
-            if (block* target = succ(b, 0))
+            if (block* target = succ(b, b.bc == BC._finally ? 1 : 0))
                 gotoBlock(blockIdx(target), 0);
-        }
-        else if (b.bc == BC._finally)
-        {
-            // Normal-path finally entry (no try_table in dispatch mode, so
-            // the exceptional path is lost: exceptions escape this function).
-            if (b.Belem)
-                cg.genElemDiscard(b.Belem);
-            gotoBlock(blockIdx(succ(b, 1)), 0);
         }
         else
         {
