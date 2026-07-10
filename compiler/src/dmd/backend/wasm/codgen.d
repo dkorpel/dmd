@@ -2,17 +2,6 @@
  * WebAssembly code generator.
  *
  * Translates DMD IR (elem trees + block CFG) to WebAssembly bytecode.
- * Called from dout.d when OBJ_WASM is the target object format.
- *
- * Design notes:
- * - WASM is a typed stack machine with structured control flow.
- * - Parameters and locals are indexed starting at 0.
- * - Results are left on the value stack.
- * - Structured control flow: block/loop/if...end (no arbitrary goto).
- *   Unstructured gotos in the IR are handled by wrapping blocks and
- *   using br_table for switches; truly irreducible CFG falls back to a
- *   block-index dispatch loop (Relooper / Stackifier not yet implemented —
- *   those blocks emit unreachable for now).
  */
 
 module dmd.backend.wasm.codgen;
@@ -42,7 +31,10 @@ WASM_TYPE wasmType(elem* e)
     return wasmType(tybasic(e.Ety));
 }
 
-/// Returns: WASM type for backend `ty`
+/// Integer type holding a pointer. Only 32-bit supported now, refactor this to a variable for wasm64
+enum WASM_PTR = WASM_I32;
+
+/// Returns: WASM integral type for backend `ty`
 WASM_TYPE wasmType(tym_t ty)
 {
     switch (tybasic(ty))
@@ -78,7 +70,7 @@ WASM_TYPE wasmType(tym_t ty)
     case TYfgPtr:
     case TYsharePtr:
     case TYimmutPtr:
-        return WASM_I32; // I64 for 64-bit
+        return WASM_PTR;
 
     case TYllong:
     case TYullong:
@@ -98,16 +90,12 @@ WASM_TYPE wasmType(tym_t ty)
         return WASM_F64;
 
     case TYnoreturn:
-        // Noreturn never produces a real value; return i32 as a benign
-        // placeholder. Callers that actually consume the value follow
-        // OP_UNREACHABLE so this is unused at runtime.
         return WASM_I32;
 
+    // These are not passed by value
     case TYstruct:
     case TYarray:
-        // e.g. the result of a `cond ? structA : structB` or a by-value struct argument
-        // TODO: Should be WASM_PTR or something
-        return WASM_I32;
+        return WASM_PTR;
 
     default:
         debug { import core.stdc.stdio : printf; printf("ty = %s, tybasic = %d\n", tym_str(ty), tybasic(ty)); }
@@ -161,7 +149,6 @@ struct WasmCG
     WasmFuncBody.CodeReloc[] codeRelocs; /// relocations for direct function calls
     WasmFuncBody.DataAddrReloc[] dataAddrRelocs; /// R_WASM.MEMORY_ADDR_LEB relocations
 
-    // Shadow stack frame
     bool hasShadowFrame;
 
     /// True when the frame's decremented __stack_pointer is written back to the
@@ -258,12 +245,6 @@ nothrow:
 
         if (inShadow(s))
         {
-            // Offset was already assigned — by an earlier registerShadow in this
-            // pass, or by the eager wasm_assignShadowOffsets() pre-pass run at
-            // func_term (so nested functions could bake the right frame offset).
-            // Don't re-assign; just make sure the frame size covers this slot, so
-            // the prologue reserves enough space even when every symbol was
-            // pre-assigned and this call would otherwise be a no-op.
             const uint end = cast(uint) s.Soffset + sz;
             if (end > shadowFrameSize)
                 shadowFrameSize = end;
@@ -345,19 +326,11 @@ nothrow:
         code.writeuLEB128_5(addr);
     }
 
-    // All named data symbols relocate (-> 5-byte padded i32.const + MEMORY_ADDR
-    // reloc). Zero-initialized (BSS) symbols included: WasmObj_data_start gives
-    // them a real zero-filled segment and symtab entry, so a raw unrelocated
-    // offset would be wrong once wasm-ld moves the data section.
     static bool symCanRelocate(const Symbol* sym)
     {
         return sym.Sident.ptr !is null;
     }
 
-    // Emit OP_I32_CONST with a data-segment address.
-    // Emits a 5-byte padded ULEB128 and records a R_WASM.MEMORY_ADDR_LEB
-    // relocation so wasm-ld patches the address after moving the data section
-    // to its final location.
     void emitDataAddr(Symbol* sym, uint addend)
     {
         emit(OP_I32_CONST);
@@ -375,10 +348,6 @@ nothrow:
         }
     }
 
-    // Variant of emitDataAddr that records the relocation with addend=0 and
-    // leaves the constant offset for the caller to fold into the memarg of a
-    // following load/store. Matches LDC's pattern of `i32.const sym;
-    // i32.load offset=N` rather than `i32.const sym+N; i32.add; i32.load`.
     void emitDataBase(Symbol* sym)
     {
         emit(OP_I32_CONST);
@@ -394,11 +363,6 @@ nothrow:
         }
     }
 
-    // Emit OP_CALL with a 5-byte padded ULEB128 function index and record a
-    // R_WASM.FUNCTION_INDEX_LEB relocation so wasm-ld can patch the index.
-    // Symbol* is recorded so that if wmod.funcs is reordered before term time
-    // (e.g. additional imports inserted), the relocation still resolves to the
-    // intended symbol rather than a stale funcIdx.
     void emitCall(uint fidx, Symbol* sym = null)
     {
         emit(OP_CALL);
@@ -406,10 +370,6 @@ nothrow:
         emitULEBpadded(fidx);
     }
 
-    // Emit OP_I32_CONST with a function-table index, recording a
-    // R_WASM.TABLE_INDEX_SLEB relocation so wasm-ld patches the value to the
-    // function's runtime table slot after linker-side table layout is decided.
-    // Used for taking the address of a function (function pointer).
     void emitTableIndex(uint fidx, Symbol* sym)
     {
         emit(OP_I32_CONST);
@@ -417,22 +377,13 @@ nothrow:
         emitULEBpadded(fidx);
     }
 
-    // Emit the type index operand of call_indirect.
-    // Emits R_WASM.TYPE_INDEX_LEB with the local typeIdx as its symIdx —
-    // wasm-ld remaps local type indices to the merged type table at link time
-    // (no function-symbol anchor needed; the reloc target is the type-section
-    // index directly).
     void emitCallIndirectType(uint typeIdx)
     {
         codeRelocs ~= WasmFuncBody.CodeReloc(cast(uint) code.length,
             R_WASM.TYPE_INDEX_LEB, typeIdx);
-        // 5-byte padded ULEB128 so wasm-ld has room to write the patched index.
         emitULEBpadded(typeIdx);
     }
 
-    // Emit the table-number operand of call_indirect (always the imported
-    // __indirect_function_table). Records a R_WASM.TABLE_NUMBER_LEB relocation
-    // so wasm-ld patches it to the table's final index rather than a fixed 0.
     void emitCallIndirectTable()
     {
         codeRelocs ~= WasmFuncBody.CodeReloc(cast(uint) code.length, R_WASM.TABLE_NUMBER_LEB, 0, 0, null);
@@ -449,9 +400,6 @@ nothrow:
         return idx;
     }
 
-    // Emit the 5-byte padded tag-index operand of a `throw` or a try_table
-    // catch clause, with a R_WASM.TAG_INDEX_LEB relocation binding it to the
-    // weak __d_exception tag symbol this module then defines.
     void emitTagOperand()
     {
         wmod_noteTagUse();
@@ -461,8 +409,8 @@ nothrow:
 
     void emitMemArg(uint align_, uint offset)
     {
-        code.writeuLEB128(align_); // alignment (log2)
-        code.writeuLEB128(offset); // byte offset
+        code.writeuLEB128(align_);
+        code.writeuLEB128(offset);
     }
 
     /// Emit a global-index operand referencing __stack_pointer as a 5-byte
@@ -524,9 +472,6 @@ nothrow:
     }
 }
 
-// Emit a typed load from the address already on the stack.
-// Per-type (load opcode, store opcode, natural-alignment log2).
-// Load variants of narrow ints carry their signedness; stores share one op.
 private struct MemOps
 {
     ubyte loadOp;
@@ -557,8 +502,6 @@ private MemOps memOpsFor(tym_t ty) @safe
     }
 }
 
-// Extend a sub-word integer constant to its type's canonical i32 form (signed →
-// sign-extended, unsigned → zero-extended), matching how memOpsFor loads it.
 private int canonicalI32Const(int v, tym_t ty)
 {
     switch (tybasic(ty))
@@ -592,14 +535,12 @@ private void emitTruncSat(ref WasmCG cg, WASM_TYPE from, WASM_TYPE to, bool uns)
 /// Emit `memory.copy 0 0`
 private void emitMemoryCopy(ref WasmCG cg)
 {
-    // sub-opcode 10, dst + src memidx
     cg.emit(OP_FC_PREFIX, uleb(10), uleb(0), uleb(0));
 }
 
 /// Emit `memory.fill 0`
 private void emitMemoryFill(ref WasmCG cg)
 {
-    // sub-opcode 11, memidx
     cg.emit(OP_FC_PREFIX, uleb(11), uleb(0));
 }
 
@@ -610,7 +551,6 @@ private void emitLoad(ref WasmCG cg, tym_t ty, uint offset = 0)
     cg.emitMemArg(m.alignLog2, offset);
 }
 
-// Emit a typed store (address then value already on stack).
 private void emitStore(ref WasmCG cg, tym_t ty, uint offset = 0)
 {
     const m = memOpsFor(ty);
@@ -632,15 +572,11 @@ void emitCaughtStore(ref WasmCG cg, Symbol* jcatchvar)
     emitStore(cg, TYnptr);
 }
 
-// Emit a type coercion when a value's actual WASM type differs from what e.Ety expects.
-// This handles cases where the optimizer elides explicit cast operators.
 private void emitCoerce(ref WasmCG cg, WASM_TYPE from, WASM_TYPE to)
 {
     if (from == to)
         return;
 
-    // F32 <-> I64 (bit-pun cases like *cast(long*)&y) need two ops; emit
-    // them inline before the single-op lookup below.
     if (from == WASM_F32 && to == WASM_I64)
     {
         cg.emit(OP_I32_REINTERPRET_F32, OP_I64_EXTEND_I32_U);
@@ -732,7 +668,6 @@ bool emitSymAddr(ref WasmCG cg, Symbol* s, uint off)
 {
     if (isDataSym(s.Sfl))
     {
-        // Fold `off` into the relocation addend rather than an i32.add.
         cg.emitDataAddr(s, off);
         return true;
     }
@@ -954,8 +889,6 @@ SavedLValue saveLValueAddr(ref WasmCG cg, elem* e)
         r.directOff = cast(uint) e.Voffset;
         return r;
     }
-    // OPind: spill only the base address, folding a constant field/element
-    // offset into memOff (replayed into each load/store memarg).
     if (e.Eoper == OPind)
         cg.genElem(splitConstOffset(e.E1, r.memOff));
     else
@@ -996,15 +929,6 @@ private bool elemNeedsFrameBase(elem* e)
     const op = e.Eoper;
     if (op == OPframeptr)
         return true;
-    // OPrelconst of a frame-resident local/parameter (`el_ptr(sthis)`) keeps the
-    // shadow frame base live: the parent hands its frame to a nested function
-    // that reads captured vars, so a captured POD-struct param needs its spilled
-    // slot and must not be elided to the incoming pointer.
-    // ---
-    // struct S { double v; }
-    // struct B { double got; this(T)(T p) { double f() { return p.v; } got = f(); } }
-    // // p is only read inside f(): without the frame slot the nested read sees 0
-    // ---
     if (op == OPrelconst && e.Vsym &&
         (e.Vsym.Sclass == SC.parameter || e.Vsym.Sclass == SC.regpar ||
          e.Vsym.Sclass == SC.fastpar   || e.Vsym.Sclass == SC.shadowreg ||
@@ -1113,8 +1037,6 @@ void emitShadowPrologue(ref WasmCG cg)
     cg.shadowBaseLocal = cg.allocTemp(WASM_I32);
     const uint fsz = (cg.shadowFrameSize + 15) & ~15u;
 
-    // shadow_base = __stack_pointer - frame_size; publish to __stack_pointer only
-    // when a callee might observe it (see WasmCG.framePublished).
     cg.emitFrameAlloc(fsz, cg.shadowBaseLocal, cg.framePublished);
 }
 
@@ -1123,7 +1045,6 @@ void emitShadowEpilogue(ref WasmCG cg)
 {
     const uint fsz = (cg.shadowFrameSize + 15) & ~15u;
 
-    // __stack_pointer = shadow_base + frame_size
     cg.emitFrameFree(cg.shadowBaseLocal, fsz);
 }
 
@@ -1177,27 +1098,20 @@ private void genVarArgs(ref WasmCG cg, elem*[] varArgs, ref uint spLocal, ref ui
 
     if (varArgs.length == 0)
     {
-        // No variadic args: pass null pointer per LDC2 convention.
         cg.emitConst(OP_I32_CONST, 0);
         return;
     }
 
-    // How a variadic argument is laid into the shadow frame. Each kind matches
-    // how core.stdc.stdarg.va_arg!T reads back the bytes on WebAssembly:
-    //   scalar    — one i32/i64/f32→f64 store (float promoted to double)
-    //   slicePair — a D slice/delegate (OPparam split): {length, ptr} as two
-    //               i32 stores; align 4 since size_t/ptr are 4-byte on wasm32
-    //   aggregate — a by-value struct (OPstrpar): memory.copy the bytes inline
     enum VaKind { scalar, slicePair, aggregate }
     struct VaSlot
     {
         elem* e;
         uint off;
         VaKind kind;
-        WASM_OP storeOp;   // scalar only
+        WASM_OP storeOp;
         uint alignLog2;
-        bool promoteF32;   // scalar only
-        uint byteSize;     // aggregate only
+        bool promoteF32;
+        uint byteSize;
     }
 
     VaSlot[] slots;
@@ -1209,23 +1123,18 @@ private void genVarArgs(ref WasmCG cg, elem*[] varArgs, ref uint spLocal, ref ui
         uint sz, al;
         bool promF32 = false;
 
-        // A non-void OPparam is a slice/delegate split into a (ptr, length)
-        // register pair by elparamx (E1 = ptr/msw, E2 = length/lsw). va_arg!T
-        // reads it as a D slice {length, ptr} — 8 bytes, 4-byte aligned.
         if (va.Eoper == OPparam)
         {
             kind = VaKind.slicePair;
             sz = 8;
             al = 2;
         }
-        // A by-value struct argument. va_arg!T reads sizeof(T) bytes inline, so
-        // copy the struct bytes into the frame at its natural alignment.
         else if (va.Eoper == OPstrpar)
         {
             kind = VaKind.aggregate;
             type* st = va.ET;
             sz = st ? cast(uint) type_size(st) : 0;
-            sz = (sz + 3) & ~3; // va_arg advances by size rounded up to size_t
+            sz = (sz + 3) & ~3;
             const uint aln = st ? type_alignsize(st) : 4;
             al = aln >= 8 ? 3 : 2;
         }
@@ -1242,7 +1151,6 @@ private void genVarArgs(ref WasmCG cg, elem*[] varArgs, ref uint spLocal, ref ui
             al = 3;
             break;
         case WASM_F32:
-            // C promotes float to double in varargs
             storeOp = OP_F64_STORE;
             sz = 8;
             al = 3;
@@ -1263,17 +1171,15 @@ private void genVarArgs(ref WasmCG cg, elem*[] varArgs, ref uint spLocal, ref ui
     }
     vaFrameSize = (offset + 15) & ~15;
 
-    // Allocate shadow stack frame for varargs.
     spLocal = cg.allocTemp(WASM_I32);
     cg.emitFrameAlloc(vaFrameSize, spLocal);
 
-    // Store each variadic arg into the frame.
     foreach (ref sl; slots)
     {
         final switch (sl.kind)
         {
         case VaKind.scalar:
-            cg.emit(OP_LOCAL_GET, uleb(spLocal), sl.e); // addr, value
+            cg.emit(OP_LOCAL_GET, uleb(spLocal), sl.e);
             if (sl.promoteF32)
                 cg.emit(OP_F64_PROMOTE_F32);
             cg.emit(sl.storeOp);
@@ -1281,8 +1187,6 @@ private void genVarArgs(ref WasmCG cg, elem*[] varArgs, ref uint spLocal, ref ui
             break;
 
         case VaKind.slicePair:
-            // D slice layout {length, ptr}: store E2 (length/lsw) at off+0 and
-            // E1 (ptr/msw) at off+4 as two i32s.
             cg.emit(OP_LOCAL_GET, uleb(spLocal), sl.e.E2, OP_I32_STORE);
             cg.emitMemArg(2, sl.off);
             cg.emit(OP_LOCAL_GET, uleb(spLocal), sl.e.E1, OP_I32_STORE);
@@ -1290,14 +1194,11 @@ private void genVarArgs(ref WasmCG cg, elem*[] varArgs, ref uint spLocal, ref ui
             break;
 
         case VaKind.aggregate:
-            // memory.copy(dst = sp+off, src = &struct, byteSize). genElem on the
-            // OPstrpar pushes the struct's source address.
             if (sl.byteSize)
             {
-                cg.emitLocal(OP_LOCAL_GET, spLocal); // dst base
+                cg.emitLocal(OP_LOCAL_GET, spLocal);
                 if (sl.off)
                     cg.emit(OP_I32_CONST, sleb(sl.off), OP_I32_ADD);
-                // src address, byte count
                 cg.emit(sl.e, OP_I32_CONST, sleb(sl.byteSize));
                 cg.emitMemoryCopy();
             }
@@ -1305,12 +1206,9 @@ private void genVarArgs(ref WasmCG cg, elem*[] varArgs, ref uint spLocal, ref ui
         }
     }
 
-    // Push varargs pointer as the last parameter.
     cg.emitLocal(OP_LOCAL_GET, spLocal);
 }
 
-// Drop OPcomma side-effect chains, emitting and dropping each LHS, until we
-// land on something that isn't an OPcomma. Returns the remaining value-expr.
 private elem* unwrapComma(ref WasmCG cg, elem* e)
 {
     while (e && e.Eoper == OPcomma)
@@ -1321,20 +1219,12 @@ private elem* unwrapComma(ref WasmCG cg, elem* e)
     return e;
 }
 
-// Emit one half of a slice/delegate `e` (the i32 at offset 0 or offset 4 of
-// its in-memory representation) without going through an i64-packed value.
-// `e` must already be OPcomma-unwrapped via unwrapComma.
-// Returns: true on success. Returns false when `e` isn't an addressable
-// slice/delegate that we can decompose.
 private bool emitSliceHalf(ref WasmCG cg, elem* e, bool ptrHalf)
 {
     if (!e)
         return false;
     const uint half = ptrHalf ? 4u : 0u;
     uint memOff;
-    // OPrelconst is &sym: the slice value lives in `sym` at Voffset, so load
-    // each half directly from the symbol. (Its Ety is the pointer type, not
-    // TYdarray, so this case precedes the darray/delegate Ety guard below.)
     if (e.Eoper == OPrelconst && e.Vsym &&
         emitSymBase(cg, e.Vsym, cast(uint) e.Voffset + half, memOff))
     {
@@ -1361,7 +1251,6 @@ private bool emitSliceHalf(ref WasmCG cg, elem* e, bool ptrHalf)
     return false;
 }
 
-// Returns: true if param_t denotes a D slice/delegate (split into two i32s).
 private bool paramIsSlice(const(param_t)* p)
 {
     if (!p || !p.Ptype)
@@ -1369,39 +1258,29 @@ private bool paramIsSlice(const(param_t)* p)
     return isSliceOrDelegate(cast(type*) p.Ptype);
 }
 
-// Emit `arg` as a slice/delegate split into (length, ptr) i32s.
 private void emitSliceArg(ref WasmCG cg, elem* arg)
 {
     elem* a = unwrapComma(cg, arg);
-    // OPconst null slice/delegate → emit (0, 0).
     if (a.Eoper == OPconst)
     {
         cg.emit(OP_I32_CONST, sleb(0), OP_I32_CONST, sleb(0));
         return;
     }
-    // OPpair(lo, hi): lo = length (LSW), hi = ptr (MSW). Emit both halves directly.
     if (a.Eoper == OPpair)
     {
         cg.emit(a.E1, a.E2);
         return;
     }
-    // OPrpair is the reversed pair: E1 = msb (ptr), E2 = lsb (length). Emit
-    // (length, ptr) by swapping the operand order.
     if (a.Eoper == OPrpair)
     {
         cg.emit(a.E2, a.E1);
         return;
     }
-    // A non-void OPparam is a slice/delegate already split into a register pair
-    // by elparamx (cgelem.d): E1 = msw (ptr/funcptr), E2 = lsw (length/context).
-    // Emit (lsw, msw) to match the (length, ptr) / (context, funcptr) order.
     if (a.Eoper == OPparam)
     {
         cg.emit(a.E2, a.E1);
         return;
     }
-    // OPind: evaluate the address expression ONCE (it may have side effects,
-    // e.g. a call returning a slice via hidden sret pointer)
     if (a.Eoper == OPind && a.E1 &&
         (tybasic(a.Ety) == TYdarray || tybasic(a.Ety) == TYdelegate))
     {
@@ -1414,11 +1293,6 @@ private void emitSliceArg(ref WasmCG cg, elem* arg)
         emitSliceHalf(cg, a, /*ptrHalf*/ true))
         return;
 
-    // `cond ? sliceA : sliceB`: cgelem has collapsed the slice to an i64-packed
-    // value (TYulong), so emitSliceHalf rejects the branches. A slice must
-    // never be carried as a packed i64 — emit each arm recursively into two
-    // temps inside a void `if` (arms may themselves be conditionals, calls,
-    // pairs, ...).
     if (a.Eoper == OPcond)
     {
         cg.genElem(a.E1);
@@ -1427,7 +1301,7 @@ private void emitSliceArg(ref WasmCG cg, elem* arg)
         const uint ptrTmp = cg.allocTemp(WASM_I32);
         void emitArm(elem* arm)
         {
-            emitSliceArg(cg, arm); // pushes (length, ptr)
+            emitSliceArg(cg, arm);
             cg.emit(OP_LOCAL_SET, uleb(ptrTmp), OP_LOCAL_SET, uleb(lenTmp));
         }
         cg.emit(OP_IF, WASM_VOID_BLOCK);
@@ -1442,9 +1316,6 @@ private void emitSliceArg(ref WasmCG cg, elem* arg)
     assert(0);
 }
 
-// Push the address of a by-value struct argument (OPstrpar operand): a
-// comma chain ending in an lvalue, or a conditional selecting between two
-// such values.
 private bool emitStructParAddr(ref WasmCG cg, elem* e)
 {
     e = unwrapComma(cg, e);
@@ -1462,16 +1333,8 @@ private bool emitStructParAddr(ref WasmCG cg, elem* e)
         cg.emit(OP_LOCAL_SET, uleb(addrTmp), OP_END, OP_LOCAL_GET, uleb(addrTmp));
         return true;
     }
-    // A struct rvalue argument arrives as `strpar(streq(_TMP, value))`: the copy
-    // builds the value into a temporary and yields the temp's address. Emitting
-    // the streq performs the copy and leaves that address on the stack.
-    // Example: `f(S.init)` for a by-value struct parameter (structlit_rvalue.d).
     if (e.Eoper == OPstreq)
         return cg.genElem(e);
-    // A small struct built via a single scalar store arrives as
-    // `strpar(=(_TMP, value))` (OPeq of a TYlong, etc.). The assignment leaves
-    // the stored value on the stack, not an address — drop it and re-address the
-    // destination lvalue. Example: a nested-function 8-byte context (nested.d).
     if (e.Eoper == OPeq && e.E1)
     {
         if (cg.genElem(e))
@@ -1481,8 +1344,6 @@ private bool emitStructParAddr(ref WasmCG cg, elem* e)
     return emitLValueAddr(cg, e);
 }
 
-// Replace the slice/delegate address on the stack with its two i32 halves:
-// (length/context, ptr/funcptr).
 private void loadSliceHalves(ref WasmCG cg)
 {
     const uint addrTmp = cg.allocTemp(WASM_I32);
@@ -1492,18 +1353,11 @@ private void loadSliceHalves(ref WasmCG cg)
     cg.emitMemArg(2, 4);
 }
 
-// True if `e` is an OPparam spine node (the void-typed binary list backbone)
-// rather than a non-void OPparam that `elparamx` (cgelem.d) produced to pass a
-// slice/delegate as a split register pair — those count as one ABI argument.
 private bool isParamSpine(const(elem)* e)
 {
     return e && e.Eoper == OPparam && tybasic(e.Ety) == TYvoid;
 }
 
-// Count the leaves of a call's argument tree. Each leaf is one positional ABI
-// argument (including any prepended hidden-ret pointer / ethis / nested static
-// link). A non-void OPparam is a single split slice/delegate argument, so it
-// counts as one leaf rather than recursing into its two halves.
 private size_t countParamLeaves(elem* e)
 {
     if (!e)
@@ -1513,28 +1367,18 @@ private size_t countParamLeaves(elem* e)
     return 1;
 }
 
-// Consume one leaf of the current call's OPparam tree as a single argument,
-// using the CallCtx at top of `cg.callCtxStack` to decide how to emit it.
-// `case OPparam` in genElem walks E2 then E1 and dispatches each leaf here.
-//
-// Walk order: for D linkage (TYjfunc), the OPparam tree is left-folded with
-// source-order args plus ethis/ehidden appended last, so E2-first/E1-second
-// yields the declared param order [this, line, file, args].
 private void consumeCallArg(ref WasmCG cg, elem* e)
 {
     if (!e)
         return;
     if (isParamSpine(e))
     {
-        cg.genElem(e); // → case OPparam → recurses through here
+        cg.genElem(e);
         return;
     }
     CallCtx* ctx = &cg.callCtxStack[$ - 1];
     if (ctx.skipCount > 0)
     {
-        // ABI-prepended leaf (hidden ret ptr, ethis, nested static-link).
-        // These come first in stack order but aren't in Tparamtypes — emit
-        // them as plain i32s without advancing nextParam.
         ctx.skipCount--;
         cg.genElem(e);
         return;
@@ -1551,22 +1395,16 @@ private void consumeCallArg(ref WasmCG cg, elem* e)
     }
     else if (ctx.isCVariadic)
     {
-        // Past declared params: stash for the post-recursion shadow-frame spill.
         ctx.varArgs ~= e;
         return;
     }
     cg.genElem(e);
 }
 
-// Expression code generation
 private bool genCall(ref WasmCG cg, elem* e)
 {
-    // E1 is the function. Direct call: E1 is OPvar of a function symbol.
     Symbol* calleeSym = e.E1.Vsym;
 
-    // Lower alloca(n) to a dynamic shadow-stack bump: the epilogue restores
-    // __stack_pointer from shadowBaseLocal (fixed at entry), so the memory is
-    // reclaimed at function exit exactly like native alloca.
     {
         import core.stdc.string : strcmp;
         if (calleeSym && e.E1.Eoper == OPvar && e.E2 && e.E2.Eoper != OPparam &&
@@ -1584,9 +1422,6 @@ private bool genCall(ref WasmCG cg, elem* e)
     }
 
     type* fty = calleeSym ? calleeSym.Stype : null;
-    // Indirect call: e2ir's callfunc stashes the pointed-to function type on
-    // e.E1.ET. Needed so slice/delegate args still split into (length, ptr)
-    // and the call_indirect type signature matches the callee's.
     if (!fty)
     {
         if (e.E1 && e.E1.ET && tyfunc(e.E1.ET.Tty))
@@ -1595,7 +1430,6 @@ private bool genCall(ref WasmCG cg, elem* e)
     if (!fty)
     {
         elem* fe = e.E1;
-        // Peel an outer OPind: e2ir often emits `*&f` for function calls.
         if (fe && fe.Eoper == OPind && fe.E1)
             fe = fe.E1;
         Symbol* fsym = (fe && (fe.Eoper == OPvar || fe.Eoper == OPrelconst)) ? fe.Vsym : null;
@@ -1603,37 +1437,17 @@ private bool genCall(ref WasmCG cg, elem* e)
         {
             type* st = fsym.Stype;
             if (st.Tnext && tyfunc(st.Tnext.Tty))
-                fty = st.Tnext;          // pointer-to-function variable
+                fty = st.Tnext;
             else if (tyfunc(st.Tty))
-                fty = st;                 // direct function symbol via OPrelconst
+                fty = st;
         }
     }
 
-    // An unprototyped RTL decl (bare TYnfunc, e.g. `_memset80`) carries no
-    // param info, so buildFuncType would register a wrong import signature
-    // and wasm-ld warns of the mismatch against druntime's definition.
-    // Derive the signature from the call site instead — but only when every
-    // arg is a plain scalar leaf, since those are the only shapes an RTL call
-    // pushes; anything fancier keeps the old fallback.
-    // C variadic requires Tparamtypes set (bare TYnfunc/TYjfunc with no
-    // params is an unprototyped RTL decl, not a real variadic). `void arr3(...)`
-    // (dstyle, no fixed params) has null Tparamtypes but still spills varargs.
     CallCtx ctx;
     ctx.remainingParams = (fty && fty.Tparamtypes) ? *fty.Tparamtypes : null;
     ctx.isCVariadic = fty !is null && variadic(fty) &&
         (fty.Tparamtypes !is null || dstyleVariadic(fty));
 
-    // Hidden-ret pointer (struct/array return) and ethis/nested static link
-    // are prepended to the WASM signature by buildFuncType, but they don't
-    // appear in Tparamtypes. The OPparam tree contains them as leaves walked
-    // before the declared args, so let consumeCallArg skip past them.
-    //
-    // We can't rely on the callee's func_t flags (Fmember/Fnested/F3hiddenPtr):
-    // they're only set when the function is *defined* in this compilation, not
-    // for external/imported declarations (e.g. object.Exception.__ctor). For
-    // non-variadic calls the number of prepended ABI leaves is simply the
-    // excess of actual OPparam leaves over declared parameters, which captures
-    // the hidden-ret pointer, ethis, and the nested static link uniformly.
     if (!ctx.isCVariadic)
     {
         const size_t leaves = countParamLeaves(e.E2);
@@ -1647,30 +1461,12 @@ private bool genCall(ref WasmCG cg, elem* e)
         if (calleeSym && calleeSym.Sfunc &&
             (calleeSym.Sfunc.Fflags3 & (Fmember | Fnested)))
             ctx.skipCount++;
-        // Indirect variadic call: the leaf count can't reveal a hidden
-        // context-pointer argument (varargs make it ambiguous), so e2ir's
-        // callfunc records it in numParams as 1 + count.
-        // ---
-        // void foo2(void delegate(int, ...) dg) { dg(20, 3.14); }
-        // ---
         else if (!calleeSym && e.numParams)
             ctx.skipCount += e.numParams - 1;
-        // extern(D) variadics push a leading `_arguments` (TypeInfo_Tuple
-        // pointer, single i32) before the declared params; emit it as a plain
-        // arg, not a spilled vararg value (buildFuncType reserves a slot).
         if (fty && dstyleVariadic(fty))
             ctx.skipCount++;
     }
 
-    // e2ir builds rtlsym calls returning a slice (e.g. _d_arraycopy) without
-    // an ehidden argument: the native ABI returns slices in a register pair.
-    // The WASM signature has a hidden sret pointer as first param, so when no
-    // hidden leaf was supplied, bump the stack pointer for a scratch buffer
-    // and pass its address; restore the stack pointer after the call.
-    // ---
-    // struct S { this(inout ref S) inout {} ~this() {} }
-    // struct T { S[3] ss; this(int) { ss[] = makeStaticArray(); } }
-    // ---
     const bool retByPtrCall = fty && fty.Tnext && returnByPtr(fty.Tnext);
     uint sretLocal = uint.max;
     uint sretSize;
@@ -1682,15 +1478,11 @@ private bool genCall(ref WasmCG cg, elem* e)
         cg.emitLocal(OP_LOCAL_GET, sretLocal);
     }
 
-    // Walk the OPparam tree via genElem natural recursion; consumeCallArg
-    // emits each leaf using `ctx`, queueing variadics into ctx.varArgs.
     cg.callCtxStack ~= ctx;
     consumeCallArg(cg, e.E2);
     elem*[] varArgs = cg.callCtxStack[$ - 1].varArgs;
     cg.callCtxStack.length--;
 
-    // For C variadics, spill the queued args to the shadow frame and push
-    // the frame pointer as the trailing i32 arg.
     uint spLocal;
     uint vaFrameSize;
     if (ctx.isCVariadic)
@@ -1702,72 +1494,30 @@ private bool genCall(ref WasmCG cg, elem* e)
     }
     else
     {
-        // Indirect call. Prefer the declared function type when available so
-        // slices/delegates split into (length, ptr) i32 pairs and aggregates
-        // pass by hidden pointer — matching what buildFuncType does for
-        // direct calls. Fall back to deriving from arg shapes when the
-        // function pointer carries no type info.
         uint typeIdx;
         assert(fty);
 
-        // e2ir lowers a delegate/member-pointer call to push hidden leading
-        // pointers (delegate context, multi-context array, hidden return
-        // pointer) ahead of the declared args, but the function type fished
-        // out of the pointer/delegate variable only lists the declared
-        // params. ctx.skipCount counts those hidden arg leaves; buildFuncType
-        // already re-adds the hidden return pointer via returnByPtr, so pass
-        // the remainder so the call_indirect signature matches what is
-        // actually pushed.
-        // skipCount also covers the hidden-ret pointer and the dstyle
-        // `_arguments` leaf, both of which buildFuncType re-adds from the
-        // type itself — only the remainder is hidden *leading* pointers.
         const bool retPtr = fty.Tnext && returnByPtr(fty.Tnext);
         const uint nonLeading = (retPtr ? 1 : 0) + (dstyleVariadic(fty) ? 1 : 0);
         const uint hiddenLeading = ctx.skipCount > nonLeading
             ? ctx.skipCount - nonLeading : 0;
         typeIdx = cg.internType(buildFuncType(fty, null, hiddenLeading));
 
-        // Function pointer source: strip an outer OPind (fptr table index
-        // lives at the address) and evaluate the inner expression to push
-        // the table index on the value stack.
         elem* fn = (e.E1.Eoper == OPind && e.E1.E1) ? e.E1.E1 : e.E1;
         cg.emit(fn, OP_CALL_INDIRECT);
         cg.emitCallIndirectType(typeIdx);
         cg.emitCallIndirectTable();
     }
 
-    // Free the synthesized sret buffer. The returned pointer (still on the
-    // value stack) stays readable until the next stack-pointer decrement,
-    // which is always after the immediate consumer's loads.
     if (sretLocal != uint.max)
         cg.emitFrameFree(sretLocal, sretSize);
 
-    // Restore __stack_pointer after a variadic call that spilled args.
     if (ctx.isCVariadic && varArgs.length)
         cg.emitFrameFree(spLocal, vaFrameSize);
 
-    // Noreturn functions leave the stack empty. Emit unreachable so the type
-    // checker accepts any stack expectations after the call. The call node can be
-    // typed TYnoreturn even when the callee's own signature is `void` (e.g. the
-    // assert lowering builds `_d_unittestp` as OPcall(TYnoreturn)); the optimizer
-    // then folds `assert(false)` to `OPne(call, 0)`, whose relop needs the value
-    // to come from a polymorphic stack. Example: `unittest{ assert(false); }`.
     if ((calleeSym && (calleeSym.Sflags & SFLexit)) || tybasic(e.Ety) == TYnoreturn)
         cg.emit(OP_UNREACHABLE);
 
-    // DO NOT check e.E1.Vsym, if the type is incorrect fix that instead of overriding it
-
-    // Report what the callee's signature actually left on the stack — e.Ety
-    // can disagree: a `ref void` return is typed as a pointer by the frontend
-    // but produces no WASM result. For direct calls prefer the *defining*
-    // symbol's type: a C block-scope redeclaration may differ from it.
-    // ---
-    // struct S { this(ref inout typeof(this)) {} ref opAssign(typeof(this)) {} }
-    // void emplace(S chunk, S args) { chunk = args; } // drop after resultless call
-    //
-    // void cdnot() { int testbool(int,int); testbool(-1,0); } // decl says int,
-    // void testbool(int val, int expect) {}                   // definition void
-    // ---
     if (calleeSym)
     {
         if (Symbol* def = definedFuncByName(calleeSym))
@@ -1797,10 +1547,6 @@ bool genElemDiscard(ref WasmCG cg, elem* e)
 {
     if (!e)
         return false;
-    // A discarded expression with no side effect is dead — evaluating it only
-    // to drop the result is pure overhead. Skipping it here removes stray
-    // `local.get; <load>; drop` sequences (e.g. the trailing struct-address
-    // value of a `Point p;` default-init comma `(*p=0, *(p+4)=0, p)`).
     if (!el_sideeffect(e))
         return false;
     cg.discardResult = true;
@@ -1817,8 +1563,6 @@ bool genElem(ref WasmCG cg, elem* e)
         return false;
 
     const op = e.Eoper;
-    // Consume the discard flag here so it applies only to this top-level node;
-    // recursive genElem calls below start fresh with it cleared.
     const discard = cg.discardResult;
     cg.discardResult = false;
 
@@ -1835,8 +1579,6 @@ bool genElem(ref WasmCG cg, elem* e)
         return true;
     }
 
-    // Evaluate E1 and call the libm routine for its operand type (WASM has no
-    // native instruction). Used by the trig/rounding opers below.
     bool libmCall(RTLSYM f32Sym, RTLSYM f64Sym)
     {
         cg.genElem(e.E1);
@@ -1861,41 +1603,29 @@ bool genElem(ref WasmCG cg, elem* e)
         return cg.genCall(e);
 
     case OPmemgrow:
-        // core.wasm.memoryGrow(pages) → memory.grow (returns previous page count)
-        cg.emit(e.E1, OP_MEMORY_GROW, uleb(0)); // memory index 0
+        cg.emit(e.E1, OP_MEMORY_GROW, uleb(0));
         return true;
 
     case OPmemsize:
-        // core.wasm.memorySize() → memory.size (current page count)
-        cg.emit(OP_MEMORY_SIZE, uleb(0)); // memory index 0
+        cg.emit(OP_MEMORY_SIZE, uleb(0));
         return true;
 
     case OPthrow:
-        // core.wasm.throwException(ptr) / s2ir rethrow-unmatched → `throw __d_exception`
         cg.genElem(e.E1, WASM_I32);
         cg.emit(OP_THROW);
         cg.emitTagOperand();
         return false;
 
     case OPrethrow:
-        // Re-raise the in-flight exception saved by the enclosing finally's
-        // catch_all_ref landing pad (Vsym = the finally's flag symbol).
         cg.emit(OP_LOCAL_GET, uleb(cg.exnLocalFor(e.Vsym)), OP_THROW_REF);
         return false;
 
     case OPparam:
-        // OPparam is only valid inside an OPcall's E2 subtree. Walk E2 then E1
-        // (call-order: see consumeCallArg comment) and dispatch each leaf via
-        // the active CallCtx on top of cg.callCtxStack.
         consumeCallArg(cg, e.E2);
         consumeCallArg(cg, e.E1);
         return false;
 
     case OPconst:
-        // A TYvoid OPconst is the dead "result" of a folded short-circuit
-        // expression in statement context (cgelem.d:eloror rewrites
-        // `true || noreturnCall` into `OPcomma(1, OPconst(TYvoid, 1))`).
-        // The OPcomma already knows not to drop a non-push, so emit nothing.
         if (tybasic(e.Ety) == TYvoid)
             return false;
         switch (e.wasmType)
@@ -1907,20 +1637,10 @@ bool genElem(ref WasmCG cg, elem* e)
             cg.emitF32Const(e.Vfloat);
             break;
         case WASM_F64:
-            // A `real`/`ireal` constant (TYreal) keeps its value in the 80-bit
-            // Vreal field, not Vdouble. On WASM `real` is 64-bit, so narrow it
-            // numerically — reading Vdouble would grab the low 8 bytes of the
-            // x87 representation (the mantissa) and corrupt the value.
             const tbF64 = tybasic(e.Ety);
             cg.emitF64Const((tbF64 == TYreal || tbF64 == TYireal) ? cast(double) e.Vreal : e.Vdouble);
             break;
         case WASM_I32:
-            // Sub-word integers live in an i32 canonically extended to match how
-            // a value of that type loads from memory (signed types sign-extended,
-            // unsigned types zero-extended — see memOpsFor). A constant operand
-            // must use the same representation, otherwise e.g. a `ushort` compare
-            // against `i32.load16_u` (zero-extended) mismatches a sign-extended
-            // literal. Example: `cast(ushort)s == 0xCCCC` (test15.d test39).
             cg.emitConst(OP_I32_CONST, canonicalI32Const(cast(int) e.Vlong, e.Ety));
             break;
         default:
@@ -1932,10 +1652,6 @@ bool genElem(ref WasmCG cg, elem* e)
         if (emitSymLoad(cg, e.Vsym, cast(uint) e.Voffset, e.Ety))
             return true;
 
-        // Reading through a dereferenced function pointer, e.g.
-        // `*cast(int*)&func`. Functions have no linear-memory address on
-        // wasm; load from the table index so the (meaningless) read at
-        // least compiles and runs, matching native code reading code bytes.
         if (e.Vsym.Sfl == FL.func)
         {
             cg.emitTableIndex(cg.funcIndex(e.Vsym), e.Vsym);
@@ -1951,7 +1667,6 @@ bool genElem(ref WasmCG cg, elem* e)
     case OPrelconst:
         if (Symbol* rs = e.Vsym)
         {
-            // Function address, table-index relocation
             if (rs.Sfl == FL.func)
             {
                 cg.emitTableIndex(cg.funcIndex(rs), rs);
@@ -1964,8 +1679,6 @@ bool genElem(ref WasmCG cg, elem* e)
         assert(0);
 
     case OPaddr:
-        // Address-of an lvalue. Falls through to genElem(E1) only if E1 isn't
-        // a recognised lvalue (e.g. address-of an rvalue computation).
         if (emitLValueAddr(cg, e.E1))
             return true;
         elem_print(e.E1);
@@ -1974,19 +1687,13 @@ bool genElem(ref WasmCG cg, elem* e)
     case OPind:
         {
             uint off;
-            cg.genElem(splitConstOffset(e.E1, off)); // base address on stack
-            cg.emitLoad(e.Ety, off);                 // constant offset in memarg
+            cg.genElem(splitConstOffset(e.E1, off));
+            cg.emitLoad(e.Ety, off);
             return true;
         }
 
     case OPeq:
         {
-            // Slice/delegate assignment where the RHS resolves to a
-            // fresh (length, ptr) pair — e.g. `arr = arr[0 .. n]`,
-            // `arr = somefunc()` returning a `T[]`, or a delegate
-            // literal `&obj.method`. Decompose into two i32 stores
-            // rather than treating the 8-byte aggregate as one value.
-            // Peek through trailing OPcomma side effects on the RHS.
             const tym_t lty = tybasic(e.E1.Ety);
 
             elem* rhsTail = e.E2;
@@ -1997,19 +1704,10 @@ bool genElem(ref WasmCG cg, elem* e)
                 rhsTail && (rhsTail.Eoper == OPpair || rhsTail.Eoper == OPrpair) &&
                 emitLValueAddr(cg, e.E1))
             {
-                // Evaluate any leading OPcomma side effects (everything
-                // before the tail pair). genElemDiscard lets discarded
-                // subtrees skip materializing a result — a `||`/`&&` bounds
-                // guard lowers to short-circuit control flow and a discarded
-                // `x = y` skips pushing its stored value — rather than emitting
-                // a value form here followed by a drop.
                 for (elem* c = e.E2; c !is rhsTail; c = c.E2)
                     cg.genElemDiscard(c.E1);
-                // Capture base addr in a temp so we can use it twice.
                 uint addrTmp = cg.allocTemp(WASM_I32);
                 cg.emitLocal(OP_LOCAL_SET, addrTmp);
-                // OPpair: E1=lo (length), E2=hi (ptr).
-                // OPrpair: E1=hi (ptr), E2=lo (length).
                 elem* lo = (rhsTail.Eoper == OPpair) ? rhsTail.E1 : rhsTail.E2;
                 elem* hi = (rhsTail.Eoper == OPpair) ? rhsTail.E2 : rhsTail.E1;
                 cg.emit(OP_LOCAL_GET, uleb(addrTmp), lo, OP_I32_STORE);
@@ -2018,18 +1716,7 @@ bool genElem(ref WasmCG cg, elem* e)
                 cg.emitMemArg(2, 4);
                 return false;
             }
-            // Store rhs through lvalue E1, leaving the rhs value on stack
-            // (unless this assignment is used as a statement, e.Ety == void).
             const bool needValue = typeHasValue(e.Ety) && !discard;
-            // When neither side has a side effect, push the destination address
-            // first and leave the rhs on the stack for the store (which consumes
-            // [addr][value]) — no value temp, matching ldc -O0. A side-effecting
-            // side needs the RHS evaluated *before* the destination address: the
-            // address may read a temp the RHS defines (e.g. a bitfield store
-            // `*t = (*t & ~mask) | v` whose RHS subtree contains `t = &field`),
-            // or the address may itself write something the RHS reads. Pushing
-            // the address first would reorder those; matches the x86 backend
-            // (cdeq: value, then address, then store).
             uint memOff;
             if (!el_sideeffect(e.E1) && !el_sideeffect(e.E2))
             {
@@ -2082,20 +1769,12 @@ bool genElem(ref WasmCG cg, elem* e)
     case OPshrass:
     case OPashrass:
         {
-            // Desugar: lhs op= rhs  =>  lhs = lhs op rhs.
-            // Lvalue address is needed twice (load + store) — capture it.
             if (e.E1.Eoper != OPvar && e.E1.Eoper != OPind)
             {
                 cg.genElem(e.E2);
                 return true;
             }
             auto lv = saveLValueAddr(cg, e.E1);
-            // A side-effecting RHS must be evaluated before the LHS value is
-            // read — a call in the RHS may modify the lvalue and the updated
-            // value must be the one combined (e.g. `val += add8ret3(val)` in
-            // evalorder.d) — so spill it to a temp. A pure RHS (constant, plain
-            // variable read) has no observable ordering versus the load, so it
-            // is materialized inline afterwards with no temp.
             const bool rhsPure = !el_sideeffect(e.E2);
             uint rTmp;
             if (!rhsPure)
@@ -2104,9 +1783,6 @@ bool genElem(ref WasmCG cg, elem* e)
                 rTmp = cg.allocTemp(wasmType(e));
                 cg.emitLocal(OP_LOCAL_SET, rTmp);
             }
-            // Push the store address first so the read-modify-write value stays
-            // on the stack for the store (which consumes [addr][value]) — no
-            // value temp, matching ldc -O0.
             const bool needValue = typeHasValue(e.Ety) && !discard;
             const uint storeOff = replayAddr(cg, lv);
             const uint loadOff = replayAddr(cg, lv);
@@ -2119,8 +1795,6 @@ bool genElem(ref WasmCG cg, elem* e)
                 cg.emitLocal(OP_LOCAL_GET, rTmp);
             cg.emitBinop(opeqtoop(op), e.Ety);
             cg.maskSmallInt(e.E1.Ety);
-            // Statement form (e.Ety == void) leaves nothing on the stack; the
-            // expression form tees the new value aside to return it afterwards.
             uint vTmp;
             if (needValue)
             {
@@ -2147,7 +1821,7 @@ bool genElem(ref WasmCG cg, elem* e)
     case OPshl:
     case OPshr:
     case OPashr:
-    case OProl: // OProl/OPror are from `core.bitop.rol`/`ror` or recognized patterns
+    case OProl:
     case OPror:
         {
             const rty = wasmType(e.Ety);
@@ -2168,30 +1842,16 @@ bool genElem(ref WasmCG cg, elem* e)
         }
 
     case OPframeptr:
-        // Push the function's frame pointer (base of shadow frame).
-        // Generated by glue for nested-function context pointers and for
-        // `va_start` / `alloca` expansions that need the frame base.
         cg.emitLocal(OP_LOCAL_GET, cg.shadowBaseLocal);
         return true;
 
     case OPva_start:
-        // The caller spilled the variadic args into a contiguous block and
-        // passed a pointer to it as the trailing implicit WASM parameter
-        // (see genVarArgs / buildFuncType). va_start stores that pointer into
-        // the va_list; va_arg (core.stdc.stdarg, WebAssembly branch) walks it.
-        //
-        // OPva_start has two address operands: the va_list and the last named
-        // parameter (unused on this ABI). Their order is NOT fixed — the
-        // compiler-generated `_argptr` setup (glue/package.d) builds it as
-        // (&va_list &lastParam), while a user `va_start(ap, n)` arrives via
-        // constructVa_start with the arguments reversed (&lastParam &va_list).
-        // The va_list is the operand that addresses a non-parameter symbol.
         {
             elem* eva = e.E1;
             if (e.E1.Eoper == OPrelconst && e.E1.Vsym && isParameter(e.E1.Vsym))
                 eva = e.E2;
-            cg.genElem(eva);                              // push &va_list
-            cg.emitLocal(OP_LOCAL_GET, cg.numParams - 1); // varargs-block ptr
+            cg.genElem(eva);
+            cg.emitLocal(OP_LOCAL_GET, cg.numParams - 1);
             cg.emit(OP_I32_STORE);
             cg.emitMemArg(2, 0);
         }
@@ -2199,16 +1859,9 @@ bool genElem(ref WasmCG cg, elem* e)
 
     case OPpostinc:
     case OPpostdec:
-        // D `x++` / `x--`. Result is the original value; the side effect
-        // is `x = x +/- E2` (E2 is the step, usually 1).
         {
-            // result = old value of E1; then E1 = old +/- E2
             assert(e.E1.Eoper == OPvar || e.E1.Eoper == OPind);
             auto lv = saveLValueAddr(cg, e.E1);
-            // Push the store address first so the new value stays on the stack
-            // for the store (which consumes [addr][value]) — no new-value temp.
-            // The original value (the expression result) is teed aside only when
-            // needed; a bare `x++;` statement keeps nothing.
             const uint storeOff = replayAddr(cg, lv);
             const uint loadOff = replayAddr(cg, lv);
             cg.emitLoad(e.E1.Ety, loadOff);
@@ -2220,14 +1873,11 @@ bool genElem(ref WasmCG cg, elem* e)
                 cg.emitLocal(OP_LOCAL_TEE, oldTmp);
             }
 
-            // Compute new value = old +/- E2 and store it.
             cg.genElem(e.E2, wasmType(e.E1.Ety));
             cg.emitBinop(op == OPpostinc ? OPadd : OPmin, e.E1.Ety);
             cg.maskSmallInt(e.E1.Ety);
             cg.emitStore(e.E1.Ety, storeOff);
 
-            // Result: old value — skipped when the result is discarded
-            // (a bare `x++;` statement), leaving just the load/store side effect.
             if (!discard)
             {
                 cg.emitLocal(OP_LOCAL_GET, oldTmp);
@@ -2275,7 +1925,6 @@ bool genElem(ref WasmCG cg, elem* e)
         case WASM_F64:
             return unaryOp(OP_F64_NEG);
 
-        // integer negation = 0 - x
         case WASM_I64:
             cg.emit(OP_I64_CONST, sleb(0), e.E1, OP_I64_SUB);
             return true;
@@ -2288,8 +1937,6 @@ bool genElem(ref WasmCG cg, elem* e)
         }
 
     case OPabs:
-        // D `import core.math; abs(x);` and `std.math.abs`. Generated as
-        // an intrinsic when the frontend recognises the call.
         final switch (e.wasmType)
         {
         case WASM_F32: return unaryOp(OP_F32_ABS);
@@ -2298,27 +1945,24 @@ bool genElem(ref WasmCG cg, elem* e)
             assert(0);
         case WASM_I32:
         case WASM_I64:
-            // No native integer abs. Compute `(x ^ (x >> N-1)) - (x >> N-1)`,
-            // i.e. flip-on-negative-then-subtract-mask. Saves a branch.
             {
                 const bool is64 = (e.wasmType == WASM_I64);
                 uint t = cg.allocTemp(is64 ? WASM_I64 : WASM_I32);
-                cg.emit(e.E1, OP_LOCAL_TEE, uleb(t)); // stash x
-                // Arithmetic shift right to get sign mask.
+                cg.emit(e.E1, OP_LOCAL_TEE, uleb(t));
                 if (is64)
                     cg.emit(OP_I64_CONST, sleb(63), OP_I64_SHR_S);
                 else
                     cg.emit(OP_I32_CONST, sleb(31), OP_I32_SHR_S);
                 uint m = cg.allocTemp(is64 ? WASM_I64 : WASM_I32);
-                cg.emit(OP_LOCAL_TEE, uleb(m), OP_LOCAL_GET, uleb(t)); // stash mask
-                cg.emit(is64 ? OP_I64_XOR : OP_I32_XOR); // x ^ mask
+                cg.emit(OP_LOCAL_TEE, uleb(m), OP_LOCAL_GET, uleb(t));
+                cg.emit(is64 ? OP_I64_XOR : OP_I32_XOR);
                 cg.emitLocal(OP_LOCAL_GET, m);
-                cg.emit(is64 ? OP_I64_SUB : OP_I32_SUB); // - mask
+                cg.emit(is64 ? OP_I64_SUB : OP_I32_SUB);
                 return true;
             }
         }
 
-    case OPsqrt: // D `import core.math; sqrt(x);`
+    case OPsqrt:
         final switch (e.wasmType)
         {
         case WASM_F32: return unaryOp(OP_F32_SQRT);
@@ -2329,21 +1973,17 @@ bool genElem(ref WasmCG cg, elem* e)
             assert(0);
         }
 
-    case OPsin: // `core.math.sin(x)`
+    case OPsin:
         return libmCall(RTLSYM.SINF, RTLSYM.SIN);
-    case OPcos: // `core.math.cos(x)`
+    case OPcos:
         return libmCall(RTLSYM.COSF, RTLSYM.COS);
-    case OPrint: // `core.math.rint(x)` -- round to nearest
+    case OPrint:
         return libmCall(RTLSYM.RINTF, RTLSYM.RINT);
-    case OPrndtol: // `core.math.rndtol(x)` -- round float to long
+    case OPrndtol:
         return libmCall(RTLSYM.RNDTOLF, RTLSYM.RNDTOL);
 
-    case OPscale: // `core.math.ldexp(n, exp)` == n * 2^^exp -- x87 fscale on x86
+    case OPscale:
         {
-            // wasm has no fscale opcode, so call C ldexp(double n, int exp)
-            // (ldexpf for float). fscale semantics: E1 is the significand n,
-            // E2 the exponent. Coerce the significand to the libcall float type
-            // and the exponent to i32 (it may arrive widened to a real).
             const resTy = e.wasmType;
             Symbol* fn;
             final switch (resTy)
@@ -2355,9 +1995,6 @@ bool genElem(ref WasmCG cg, elem* e)
             case WASM_TYPE.EXNREF:
                 assert(0);
             }
-            // The e2ir OPscale rewrite is skipped for wasm, so the operands are
-            // the raw call args in ABI order: the significand is the floating
-            // operand, the exponent the integral one. Identify them by type.
             elem* sig = tyfloating(e.E1.Ety) ? e.E1 : e.E2;
             elem* expo = tyfloating(e.E1.Ety) ? e.E2 : e.E1;
             cg.genElem(sig);
@@ -2371,9 +2008,6 @@ bool genElem(ref WasmCG cg, elem* e)
         }
 
     case OPnegass:
-        // `x = -x;` lowered as a single op (an in-place negation).
-        // Push the store address first, then the negated value (integer
-        // negation is `0 - x`, so the 0 goes on the stack before the load).
         {
             assert(e.E1.Eoper == OPvar || e.E1.Eoper == OPind);
             auto lv = saveLValueAddr(cg, e.E1);
@@ -2407,7 +2041,6 @@ bool genElem(ref WasmCG cg, elem* e)
         return true;
 
     case OPcom:
-        // ~x = x ^ 0xFFFFFFFF
         final switch (e.wasmType)
         {
         case WASM_I64:
@@ -2420,44 +2053,34 @@ bool genElem(ref WasmCG cg, elem* e)
         case WASM_F32:
         case WASM_F64:
         case WASM_TYPE.EXNREF:
-            assert(0); // operator not defined for float types
+            assert(0);
         }
 
-    // Unsigned widenings up to i32 are no-ops: small ints already live as
-    // i32 with zero-extension (D `ushort x; uint y = x;`).
     case OPu8_16:
     case OPu16_32:
         cg.genElem(e.E1);
         return true;
 
-    // Signed/unsigned integer widening (D `int i = s; long l = i;` and unsigned variants).
     case OPs8_16: return unaryOp(OP_I32_EXTEND8_S);
     case OPs16_32: return unaryOp(OP_I32_EXTEND16_S);
     case OPu32_64: return unaryOp(OP_I64_EXTEND_I32_U);
     case OPs32_64: return unaryOp(OP_I64_EXTEND_I32_S);
 
-    // Integer narrowing (D `long l; int i = cast(int) l;`).
     case OP64_32: return unaryOp(OP_I32_WRAP_I64);
 
-    // Float<->double (D `float f = cast(float) d;` and reverse).
     case OPd_f: return unaryOp(OP_F32_DEMOTE_F64);
     case OPf_d: return unaryOp(OP_F64_PROMOTE_F32);
 
-    // Float to integer (D `int i = cast(int) d;` etc.).
     case OPd_s32: return truncSat(WASM_F64, WASM_I32, false);
     case OPd_u32: return truncSat(WASM_F64, WASM_I32, true);
     case OPd_s64: return truncSat(WASM_F64, WASM_I64, false);
     case OPd_u64: return truncSat(WASM_F64, WASM_I64, true);
 
-    // Integer to float (D `double d = cast(double) i;` etc.).
     case OPs32_d: return unaryOp(OP_F64_CONVERT_I32_S);
     case OPu32_d: return unaryOp(OP_F64_CONVERT_I32_U);
     case OPs64_d: return unaryOp(OP_F64_CONVERT_I64_S);
     case OPu64_d: return unaryOp(OP_F64_CONVERT_I64_U);
 
-    // 16-bit converters. WASM has no direct 16-bit instructions; small ints
-    // live in i32 slots, so sign/zero-extend the input first, then convert
-    // (D `double d = cast(double)cast(short)x;`, `short s = cast(short)d;`).
     case OPs16_d:
         cg.emit(e.E1, OP_I32_EXTEND16_S, OP_F64_CONVERT_I32_S);
         return true;
@@ -2475,39 +2098,23 @@ bool genElem(ref WasmCG cg, elem* e)
         cg.emit(OP_I32_CONST, sleb(0xFFFF), OP_I32_AND);
         return true;
 
-    // Long double conversions. WASM has no 80-bit real, so `real` == `double`
-    // in this backend (see wasmType: TYreal -> WASM_F64). All `_ld` / `ld_`
-    // conversions degenerate to identity or to the corresponding `_d` form.
-    // D `double d = cast(double)r;`, `real r = cast(real)d;`.
     case OPd_ld:
     case OPld_d:
         cg.genElem(e.E1);
         return true;
     case OPld_u64:
-        // D `ulong u = cast(ulong)r;` with real==double on WASM.
         return truncSat(WASM_F64, WASM_I64, true);
 
     case OPmsw:
         {
-            // Slice/delegate: high 32 bits live at offset +4 of the
-            // slice's address. Load them directly — slices/delegates
-            // are never packed into a single i64.
             elem* src = unwrapComma(cg, e.E1);
             if (emitSliceHalf(cg, src, /*ptrHalf*/ true))
                 return true;
-            // Fallback: 64-bit value (non-slice). Extract via shift.
             cg.emit(src, OP_I64_CONST, sleb(32), OP_I64_SHR_U, OP_I32_WRAP_I64);
             return true;
         }
 
     case OPstrpar:
-        // `void f(S s)` callsite: `f(myS)` becomes `OPstrpar(myS)`.
-        // The contained E1 is the struct value (typically an lvalue: OPvar
-        // for a variable, OPind for a pointer dereference, or a comma chain
-        // that ends in one of those).
-        // The struct value may be wrapped in an OPcomma chain that builds it
-        // into a temporary (field-by-field stores) and yields the temp as its
-        // final lvalue — emit the side effects, then address the lvalue.
         if (emitStructParAddr(cg, e.E1))
             return true;
 
@@ -2516,18 +2123,6 @@ bool genElem(ref WasmCG cg, elem* e)
 
     case OPpair:
     case OPrpair:
-        // Build a 64-bit value from two 32-bit halves. Emitted by glue/optimizer
-        // for slice/delegate construction (D `T[] s = arr[0 .. n];` and
-        // `auto dg = &obj.method;`) and for elsewhere-disabled struct-pair SROA.
-        //   OPpair:  E1 = low  (offset +0), E2 = high (offset +4)
-        //   OPrpair: E1 = high (offset +4), E2 = low  (offset +0)
-        // Resulting i64 packs as `(hi << 32) | (lo & 0xFFFFFFFF)`. When stored
-        // via i64.store the little-endian layout puts `lo` at addr+0 and `hi`
-        // at addr+4, matching the in-memory slice/delegate layout. The
-        // dedicated OPeq decomposition above already handles the common
-        // store path with two i32 stores — this case handles uses that
-        // consume the pair as a single 64-bit value (e.g. passed to OPmsw,
-        // OP64_32, or stored as a whole via i64).
         {
             elem* lo = (op == OPpair) ? e.E1 : e.E2;
             elem* hi = (op == OPpair) ? e.E2 : e.E1;
@@ -2545,16 +2140,11 @@ bool genElem(ref WasmCG cg, elem* e)
         return true;
 
     case OPcomma:
-        // A struct/array default-init (`Point p;`) lowers to a comma chain of
-        // per-field `*(base+k) = 0` stores; coalesce contiguous ones into the
-        // widest store, matching ldc -O0's single i64.store.
         if (discard && tryCoalesceZeroInit(cg, e))
             return false;
-        cg.genElemDiscard(e.E1); // left-hand result is always unused
+        cg.genElemDiscard(e.E1);
         if (discard)
         {
-            // Whole comma is discarded, so its value (E2) is too: let E2 skip
-            // materializing a result rather than push-then-drop it.
             cg.genElemDiscard(e.E2);
             return false;
         }
@@ -2562,29 +2152,15 @@ bool genElem(ref WasmCG cg, elem* e)
 
     case OPcond:
         {
-            // e.E1 ? e.E2.E1 : e.E2.E2
             cg.genElem(e.E1);
-            emitCondToI32(cg, e.E1); // i64 cond → i32 truthiness
+            emitCondToI32(cg, e.E1);
             const bool voidCond = !typeHasValue(e.Ety);
             cg.emit(OP_IF);
             if (voidCond)
-                cg.emit(WASM_VOID_BLOCK); // void blocktype: discard any branch value
+                cg.emit(WASM_VOID_BLOCK);
             else
                 cg.emit(e.wasmType);
 
-            // An arm can push a different width than the cond's own type, or
-            // nothing at all: e2ir types an AA struct-assign cond as the
-            // 8-byte struct (i64) while its arms yield an opAssign ref (i32)
-            // or a plain store. Pad/coerce so the if-block type checks; a
-            // consumer of such a struct-as-i64 "value" never reads it.
-            // ---
-            // void main()
-            // {
-            //     struct Bar { int id; this(this) {} ~this() {} }
-            //     Bar[string] bars;
-            //     bars["test"] = Bar(42);
-            // }
-            // ---
             void fitArm(bool pushed, elem* arm)
             {
                 if (voidCond)
@@ -2615,26 +2191,13 @@ bool genElem(ref WasmCG cg, elem* e)
             const bool isOr = op == OPoror;
             if (discard)
             {
-                // Result unused (e.g. the guard arm of a bounds check): render
-                // as short-circuit control flow with no value on the stack,
-                // rather than the value form below followed by a drop.
-                //   a || b  =>  block; a; br_if 0; <b side effects>; end
-                //   a && b  =>  block; a; eqz; br_if 0; <b side effects>; end
                 cg.emit(OP_BLOCK, WASM_VOID_BLOCK, e.E1);
-                emitCondToI32(cg, e.E1, !isOr); // short-circuit → branch out, skip b
+                emitCondToI32(cg, e.E1, !isOr);
                 cg.emit(OP_BR_IF, uleb(0));
                 cg.genElemDiscard(e.E2);
                 cg.emit(OP_END);
                 return false;
             }
-            // a || b  =>  if (a) 1 else (b != 0)
-            // a && b  =>  if (a) (b != 0) else 0
-            // Decide synth-vs-coerce from whether E2 actually pushed a value, not
-            // from typeHasValue(E2.Ety): a nested OPoror/OPandand always leaves an
-            // i32 yet can be typed void, which would otherwise double-count (push
-            // the value *and* synthesise a 0). Example: `a || b || dtor()` in a
-            // struct destructor (test17246.d). A void RHS leaves nothing on the
-            // stack; synthesise a result so the if-block type checks.
             void rhsToI32()
             {
                 if (cg.genElem(e.E2))
@@ -2664,7 +2227,7 @@ bool genElem(ref WasmCG cg, elem* e)
         return true;
 
     case OPb_8:
-        cg.genElem(e.E1); // bool is already 0/1 as i32
+        cg.genElem(e.E1);
         return true;
 
     case OPhalt:
@@ -2675,26 +2238,19 @@ bool genElem(ref WasmCG cg, elem* e)
         return false;
 
     case OPinfo:
-        // Optimizer annotation, no code
-        return cg.genElem(e.E2); // only the right child has the value
+        return cg.genElem(e.E2);
 
     case OPddtor:
-        // D scope destructor marker (`scope(exit) { ... }` and inferred
-        // dtor cleanups). Emitted by glue around the dtor body; treat as
-        // a passthrough — the body is in E1.
         if (e.E1)
             return cg.genElem(e.E1);
         return false;
 
     case OPsizeof:
-        // Sizeof (compile-time constant, should be folded)
         cg.emitConst(OP_I32_CONST, cast(int) e.Vlong);
         return true;
 
     case OPstreq:
         {
-            // Struct assignment: copy type_size(e.ET) bytes from E2 to E1.
-            // Result: the destination address (i32) for chained assignment.
 
             uint sz = e.ET ? cast(uint) type_size(e.ET) : 0;
             if (sz == 0)
@@ -2702,23 +2258,21 @@ bool genElem(ref WasmCG cg, elem* e)
 
             uint dstTmp = cg.allocTemp(WASM_I32);
             genElemAddr(cg, e.E1);
-            cg.emitLocal(OP_LOCAL_TEE, dstTmp); // stack: dst
-            genElemAddr(cg, e.E2); // stack: dst, src
-            cg.emitConst(OP_I32_CONST, sz); // stack: dst, src, n
+            cg.emitLocal(OP_LOCAL_TEE, dstTmp);
+            genElemAddr(cg, e.E2);
+            cg.emitConst(OP_I32_CONST, sz);
             emitMemoryCopy(cg);
-            cg.emitLocal(OP_LOCAL_GET, dstTmp); // result: dst
+            cg.emitLocal(OP_LOCAL_GET, dstTmp);
             return true;
         }
 
     case OPmemcpy:
         {
-            // IR: OPmemcpy(dst, OPparam(src, count)). Result is dst.
-            // (See cgelem.d elmemcpy: E2.E1 is the source, E2.E2 the byte count.)
             assert(e.E2.Eoper == OPparam);
             uint dstTmp = cg.allocTemp(WASM_I32);
-            cg.emit(e.E1, OP_LOCAL_TEE, uleb(dstTmp)); // stack: dst
-            cg.genElem(e.E2.E1, WASM_I32); // src
-            cg.genElem(e.E2.E2, WASM_I32); // count
+            cg.emit(e.E1, OP_LOCAL_TEE, uleb(dstTmp));
+            cg.genElem(e.E2.E1, WASM_I32);
+            cg.genElem(e.E2.E2, WASM_I32);
             emitMemoryCopy(cg);
             cg.emitLocal(OP_LOCAL_GET, dstTmp);
             return true;
@@ -2726,9 +2280,6 @@ bool genElem(ref WasmCG cg, elem* e)
 
     case OPmemset:
         {
-            // IR: OPmemset(dst, OPparam(nelems, val)). Result is dst.
-            // struct BB { ulong bits; }
-            // BB[8] arr; arr[] = BB(0); // val is 8 bytes wide, nelems is 8
             assert(e.E2.Eoper == OPparam);
             elem* enelems = e.E2.E1;
             elem* evalue = e.E2.E2;
@@ -2747,8 +2298,8 @@ bool genElem(ref WasmCG cg, elem* e)
             if (width <= 1)
             {
                 cg.emitLocal(OP_LOCAL_GET, dstTmp);
-                cg.genElem(evalue, WASM_I32); // val
-                cg.genElem(enelems, WASM_I32); // count
+                cg.genElem(evalue, WASM_I32);
+                cg.genElem(enelems, WASM_I32);
                 emitMemoryFill(cg);
             }
             else if (evalue.Eoper == OPconst && !tyfloating(evalue.Ety) &&
@@ -2783,8 +2334,6 @@ bool genElem(ref WasmCG cg, elem* e)
             return true;
         }
 
-    // bit scan forward = count trailing zeros; result is always i32,
-    // so switch on the operand width (e.E1), not the node's result type.
     case OPbsf:
         final switch (e.E1.wasmType)
         {
@@ -2816,8 +2365,6 @@ bool genElem(ref WasmCG cg, elem* e)
 
     case OPpopcnt:
         {
-            // popcnt at the operand's width; the result may be narrower
-            // (core.bitop.popcnt(ulong) returns int).
             const opnd = e.E1.wasmType;
             cg.emit(e.E1, opnd == WASM_I64 ? OP_I64_POPCNT : OP_I32_POPCNT);
             if (opnd == WASM_I64 && e.wasmType == WASM_I32)
@@ -2829,7 +2376,6 @@ bool genElem(ref WasmCG cg, elem* e)
 
     case OPbswap:
         {
-            // No native WASM bswap; implement with shifts.
             const ty = e.wasmType;
             cg.genElem(e.E1);
             if (ty == WASM_I64)
@@ -2839,19 +2385,13 @@ bool genElem(ref WasmCG cg, elem* e)
             return true;
         }
 
-    case OPbtc: // D `import core.bitop; btc/btr/bts(p, bitnum);`
-    case OPbtr: // no native wasm instruction, synthesize from load/store + bit ops.
+    case OPbtc:
+    case OPbtr:
     case OPbts:
-        // e2ir builds these right-to-left, so E1 = bitnum, E2 = pointer to
-        // a size_t[] (size_t is 32-bit on wasm32).
         emitBitTestOp(cg, op, e.E1, e.E2);
         return true;
 
     case OPbtst:
-        // cgelem's `((a >> b) & 1) => (a btst b)` peephole (also reachable
-        // via `(*p >> shift) & 1` on a 64-bit value): E1 = word, E2 = bit
-        // index. No native wasm instruction; synthesize the shift+mask at
-        // E1's width.
         {
             const rty = e.E1.wasmType;
             cg.genElem(e.E1, rty);
@@ -2874,18 +2414,18 @@ bool genElem(ref WasmCG cg, elem* e)
             return true;
         }
 
-    case OPu64_128: // no cent/ucent
+    case OPu64_128:
     case OPs64_128:
     case OP128_64:
-    case OPc_r: // no complex numbers
+    case OPc_r:
     case OPc_i:
-    case OPvp_fp: //  DOS era near/far
+    case OPvp_fp:
     case OPcvp_fp:
     case OPnp_fp:
     case OPnp_f16p:
     case OPf16p_np:
-    case OPvecfill: // No SIMD yet
-    case OPoffset: // segmented-address offset extraction, not applicable.
+    case OPvecfill:
+    case OPoffset:
         import core.stdc.stdio : printf;
         printf("wasm codegen non-goal Eoper: %s\n", oper_str(e.Eoper));
         elem_print(e);
@@ -2898,25 +2438,18 @@ bool genElem(ref WasmCG cg, elem* e)
     }
 }
 
-// Emit byte-swap for an i32 value on top of the wasm stack.
-// Result: 0xAABBCCDD → 0xDDCCBBAA
 private void emitBswap32(ref WasmCG cg)
 {
     uint t = cg.allocTemp(WASM_I32);
-    cg.emitLocal(OP_LOCAL_TEE, t); // save v
-    cg.emit(OP_I32_CONST, sleb(24), OP_I32_SHR_U); // v >> 24
-    // (v >> 8) & 0xFF00
+    cg.emitLocal(OP_LOCAL_TEE, t);
+    cg.emit(OP_I32_CONST, sleb(24), OP_I32_SHR_U);
     cg.emit(OP_LOCAL_GET, uleb(t), OP_I32_CONST, sleb(8), OP_I32_SHR_U,
         OP_I32_CONST, sleb(0x0000_FF00), OP_I32_AND, OP_I32_OR);
-    // (v << 8) & 0xFF0000
     cg.emit(OP_LOCAL_GET, uleb(t), OP_I32_CONST, sleb(8), OP_I32_SHL,
         OP_I32_CONST, sleb(0x00FF_0000), OP_I32_AND, OP_I32_OR);
-    // v << 24
     cg.emit(OP_LOCAL_GET, uleb(t), OP_I32_CONST, sleb(24), OP_I32_SHL, OP_I32_OR);
 }
 
-// Emit byte-swap for an i64 value on top of the wasm stack.
-// Strategy: split into lo/hi i32 halves, bswap each, then swap halves.
 private void emitBswap64(ref WasmCG cg)
 {
     uint t = cg.allocTemp(WASM_I64);
@@ -2924,31 +2457,24 @@ private void emitBswap64(ref WasmCG cg)
     uint hi = cg.allocTemp(WASM_I32);
     cg.emitLocal(OP_LOCAL_TEE, t);
 
-    // lo = bswap32((uint)(v))
     cg.emit(OP_I32_WRAP_I64);
     emitBswap32(cg);
     cg.emitLocal(OP_LOCAL_SET, lo);
 
-    // hi = bswap32((uint)(v >> 32))
     cg.emit(OP_LOCAL_GET, uleb(t), OP_I64_CONST, sleb(32), OP_I64_SHR_U, OP_I32_WRAP_I64);
     emitBswap32(cg);
     cg.emitLocal(OP_LOCAL_SET, hi);
 
-    // result = ((i64)lo << 32) | (i64)hi
     cg.emit(OP_LOCAL_GET, uleb(lo), OP_I64_EXTEND_I32_U, OP_I64_CONST, sleb(32), OP_I64_SHL,
         OP_LOCAL_GET, uleb(hi), OP_I64_EXTEND_I32_U, OP_I64_OR);
 }
 
-// Emit `core.bitop.{btc,btr,bts}(p, bitnum)`: test bit `bitnum` of the
-// size_t array at `p` (size_t is 32-bit on wasm32), leaving the old bit
-// value (0 or 1, i32) on the stack, then complement/reset/set that bit.
 private void emitBitTestOp(ref WasmCG cg, uint op, elem* bitnumE, elem* ptrE)
 {
     cg.genElem(bitnumE);
     const uint bitTmp = cg.allocTemp(WASM_I32);
     cg.emitLocal(OP_LOCAL_SET, bitTmp);
 
-    // addr = p + (bitnum >> 5) * 4
     cg.genElem(ptrE);
     cg.emit(OP_LOCAL_GET, uleb(bitTmp), OP_I32_CONST, sleb(5), OP_I32_SHR_U,
         OP_I32_CONST, sleb(2), OP_I32_SHL, OP_I32_ADD);
@@ -2958,18 +2484,15 @@ private void emitBitTestOp(ref WasmCG cg, uint op, elem* bitnumE, elem* ptrE)
     const uint wordTmp = cg.allocTemp(WASM_I32);
     cg.emitLocal(OP_LOCAL_SET, wordTmp);
 
-    // mask = 1 << (bitnum & 31)
     cg.emit(OP_I32_CONST, sleb(1), OP_LOCAL_GET, uleb(bitTmp),
         OP_I32_CONST, sleb(31), OP_I32_AND, OP_I32_SHL);
     const uint maskTmp = cg.allocTemp(WASM_I32);
     cg.emitLocal(OP_LOCAL_TEE, maskTmp);
 
-    // result = (word & mask) != 0
     cg.emit(OP_LOCAL_GET, uleb(wordTmp), OP_I32_AND, OP_I32_CONST, sleb(0), OP_I32_NE);
     const uint resultTmp = cg.allocTemp(WASM_I32);
     cg.emitLocal(OP_LOCAL_SET, resultTmp);
 
-    // *addr = word <op> mask
     cg.emit(OP_LOCAL_GET, uleb(addrTmp), OP_LOCAL_GET, uleb(wordTmp), OP_LOCAL_GET, uleb(maskTmp));
     switch (op)
     {
@@ -2977,7 +2500,7 @@ private void emitBitTestOp(ref WasmCG cg, uint op, elem* bitnumE, elem* ptrE)
         cg.emit(OP_I32_OR);
         break;
     case OPbtr:
-        cg.emit(OP_I32_CONST, sleb(-1), OP_I32_XOR, OP_I32_AND); // & ~mask
+        cg.emit(OP_I32_CONST, sleb(-1), OP_I32_XOR, OP_I32_AND);
         break;
     case OPbtc:
         cg.emit(OP_I32_XOR);
@@ -2991,10 +2514,6 @@ private void emitBitTestOp(ref WasmCG cg, uint op, elem* bitnumE, elem* ptrE)
     cg.emitLocal(OP_LOCAL_GET, resultTmp);
 }
 
-// Get the address of an lvalue expression
-// OPind → its pointer;
-// OPvar in shadow/data → its memory address;
-// else genElem (expected to push an address itself)
 private void genElemAddr(ref WasmCG cg, elem* e)
 {
     if (!e)
@@ -3006,8 +2525,6 @@ private void genElemAddr(ref WasmCG cg, elem* e)
         cg.genElem(e);
 }
 
-// Pick the WASM opcode variant matching the IR operand's numeric kind.
-// Order: f32, f64, i64, i32. Pass OP_UNREACHABLE for kinds that don't apply.
 private ubyte pickByKind(tym_t ty, ubyte f32, ubyte f64, ubyte i64, ubyte i32)
 {
     final switch (tybasic(ty).wasmType)
@@ -3020,7 +2537,6 @@ private ubyte pickByKind(tym_t ty, ubyte f32, ubyte f64, ubyte i64, ubyte i32)
     }
 }
 
-// Binary operation opcode selection by IR operator
 private void emitBinop(ref WasmCG cg, int op, tym_t ty)
 {
     if (op == OPmod && tyfloating(ty))
@@ -3062,14 +2578,8 @@ private void emitBinop(ref WasmCG cg, int op, tym_t ty)
     cg.emit(binOp(op, ty));
 }
 
-// Emit a relational/comparison opcode
 private void emitRelop(ref WasmCG cg, int op, tym_t ty)
 {
-    // Reduce the unordered/negated forms (true when a float operand is NaN)
-    // to a base compare plus optional eqz. WASM float compares are all
-    // ordered (false on NaN), so e.g. !> is eqz(gt). D source like
-    // `if (!(aspect > 0))` on a double reaches these opers via the opnot
-    // table in oper.d; test: runnable/wasm_float_cmp.d.
     bool negate = false;
 
     {
@@ -3097,14 +2607,13 @@ private void emitRelop(ref WasmCG cg, int op, tym_t ty)
         }
     }
 
-    // <> and <>= need the operands twice (ordered = x==x && y==y)
     if (op == OPlg || op == OPleg)
     {
         const WASM_TYPE wt = wasmType(ty);
         if (wt == WASM_I32 || wt == WASM_I64)
         {
             if (op == OPlg)
-                op = OPne; // integers are always ordered
+                op = OPne;
             else
             {
                 cg.emit(OP_DROP, OP_DROP, OP_I32_CONST, sleb(negate ? 0 : 1));
@@ -3184,15 +2693,10 @@ Symbol* definedFuncByName(Symbol* sfunc)
 
 uint funcIndex(Symbol* sfunc)
 {
-    // Imports come first in wmod.funcs; defined functions come after.
-    // Check imports (registered via WasmObj_external).
     uint importIdx = importFuncIndex(sfunc);
     if (importIdx != uint.max)
         return importIdx;
 
-    // Defined functions follow imports. Match by name too: a C block-scope
-    // declaration is a distinct Symbol from the definition, and must not
-    // become a self-import of the module's own function.
     uint bodyIdx;
     if (lookupDefinedFuncBody(sfunc, bodyIdx))
         return wmod_numImports() + bodyIdx;
@@ -3205,14 +2709,10 @@ uint funcIndex(Symbol* sfunc)
     return 0;
 }
 
-// Ensure a condition value on the WASM stack is an i32 suitable for br_if.
 void emitCondToI32(ref WasmCG cg, elem* condElem, bool invert = false)
 {
     assert(condElem);
 
-    // A void/noreturn-typed operand that nonetheless left a value on the stack is
-    // a short-circuit result (OPoror/OPandand always push a 0/1 i32) — already a
-    // boolean, so only apply the optional inversion.
     const tb = tybasic(condElem.Ety);
     if (tb == TYvoid || tb == TYnoreturn)
     {
@@ -3224,14 +2724,13 @@ void emitCondToI32(ref WasmCG cg, elem* condElem, bool invert = false)
     switch (condElem.wasmType)
     {
     case WASM_I64:
-        cg.emit(OP_I64_EQZ); // i64 → i32: 1 if zero, 0 if nonzero
+        cg.emit(OP_I64_EQZ);
 
         if (!invert)
-            cg.emit(OP_I32_EQZ); // invert again, `cast(bool) i = !!i`
+            cg.emit(OP_I32_EQZ);
         return;
 
     case WASM_F32:
-        // f32 truthiness: nonzero (NaN is truthy under WASM's NE semantics).
         cg.emitF32Const(0.0f);
         cg.emit(invert ? OP_F32_EQ : OP_F32_NE);
         return;
@@ -3250,7 +2749,6 @@ void emitCondToI32(ref WasmCG cg, elem* condElem, bool invert = false)
     }
 }
 
-// Emit the inversion of a condition for "branch if FALSE" patterns (cond; eqz; br_if).
 void emitCondInvert(ref WasmCG cg, elem* condElem)
 {
     return emitCondToI32(cg, condElem, true);
@@ -3283,9 +2781,6 @@ void wasm_assignShadowOffsets(Symbol* sfunc)
     }
 }
 
-// True if `t` is a struct type that is not Plain Old Data (has a destructor,
-// postblit, copy constructor, or a non-POD member). Such structs are passed by
-// invisible reference in the native extern(D) ABI.
 private bool isNonPodStruct(type* t)
 {
     if (!t || tybasic(t.Tty) != TYstruct)
@@ -3294,32 +2789,22 @@ private bool isNonPodStruct(type* t)
     return tag && tag.Sstruct && (tag.Sstruct.Sflags & STRnotpod) != 0;
 }
 
-// Describes how one WASM-level param slot maps into a shadow-frame slot.
 private struct ParamSpill
 {
-    uint wasmLocalIdx; // index of incoming WASM param
-    Symbol* sym;       // symbol whose shadow slot this fills
-    uint byteOffset;   // offset within the symbol's shadow slot
-    tym_t ty;          // backend type of the param (used to pick store op + alignment)
-    uint copyBytes;    // if non-zero: param is a by-pointer aggregate; memory.copy
-                       // this many bytes from the incoming pointer into the slot
+    uint wasmLocalIdx;
+    Symbol* sym;
+    uint byteOffset;
+    tym_t ty;
+    uint copyBytes;
 }
 
 void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
 {
     WasmCG cg;
 
-    // All params and locals live in the shadow stack frame; WASM locals
-    // hold only the incoming param values (to be spilled into the frame)
-    // and anonymous temporaries allocated via allocTemp.
     ParamSpill[] paramSpills;
 
     block* startblock = sfunc.Sfunc.Fstartblock;
-    // A read-only by-value POD struct parameter can be addressed through the
-    // caller-supplied pointer instead of a copied shadow-frame slot, but only
-    // when the function has no nested-function context (no OPframeptr): a
-    // captured parameter is read at a frame offset with no explicit reference
-    // in these block trees, so paramReadOnlyPod would not observe the use.
     const bool canElidePodParams = !funcNeedsFrameBase(startblock);
 
     foreach (s; globsym[])
@@ -3332,16 +2817,12 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
             && paramReadOnlyPod(s, startblock);
         if (!elidePodParam)
             cg.registerShadow(s);
-        // No-value params (noreturn/void) are dropped from the WASM signature by
-        // buildFuncType, so allocate no local slot for them either — otherwise
-        // every following local index is off by one (e.g. hashOf!(noreturn)).
         if (!isSliceOrDelegate(s.Stype) && pty != TYstruct && pty != TYarray
             && !typeHasValue(pty))
             continue;
         const uint i0 = cast(uint) cg.locals.length;
         if (isSliceOrDelegate(s.Stype))
         {
-            // Slice/delegate: 2 i32 WASM params (len/context, ptr/funcptr).
             cg.locals ~= WasmLocal(WASM_I32);
             cg.locals ~= WasmLocal(WASM_I32);
             paramSpills ~= ParamSpill(i0, s, 0, TYuint);
@@ -3349,32 +2830,18 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
         }
         else if (pty == TYstruct && isNonPodStruct(s.Stype))
         {
-            // Non-POD struct (dtor/postblit/copy-ctor): the native extern(D)
-            // ABI passes it by invisible reference (ISX64REF in e2ir), so the
-            // frontend hands us an i32 pointer to the caller's object and emits
-            // an explicit OPind deref for every field access. A destructive
-            // move ctor writing through the parameter therefore mutates the
-            // caller's object, and value passes get a caller-built temporary.
-            // Spill the incoming pointer as a plain i32 scalar.
             cg.locals ~= WasmLocal(WASM_I32);
             paramSpills ~= ParamSpill(i0, s, 0, TYuint);
         }
         else if (pty == TYstruct || pty == TYarray)
         {
-            // POD aggregate param: passed by pointer (i32). The incoming pointer
-            // addresses the caller's copy.
             cg.locals ~= WasmLocal(WASM_I32);
             if (elidePodParam)
             {
-                // Read-only POD struct: address its fields directly through the
-                // caller-supplied pointer — no copy into a shadow-frame slot.
                 cg.byRefParamLocal[s] = i0;
             }
             else
             {
-                // Spill by copying the bytes into this param's own shadow slot
-                // so in-body field accesses (which address the slot directly)
-                // see the value, not the pointer.
                 const uint sz = cast(uint) type_size(s.Stype);
                 paramSpills ~= ParamSpill(i0, s, 0, TYuint, sz);
             }
@@ -3385,17 +2852,6 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
             paramSpills ~= ParamSpill(i0, s, 0, pty);
         }
     }
-    // The WASM signature may differ from the D source's parameter list
-    // (e.g. `main` is normalised to (i32, i32) -> i32 regardless of the
-    // user's source).  Pad cg.locals with placeholder params when the
-    // signature has more, so locals 0..numParams-1 aren't clobbered by
-    // allocTemp() calls.  When the source declares more (e.g. a 3-arg C
-    // `main` whose env pointer doesn't exist on WASI), the excess entries
-    // become zero-initialised wasm locals instead.  numParams must follow
-    // the signature — the locals section starts right after it.  Use the
-    // signature cached at func_start: recomputing buildFuncType here would
-    // double-count the `this` pointer, which the glue layer injects into
-    // Tparamtypes after func_start (see wmod_funcTypeForSym).
     WasmFuncType ft = wmod_funcTypeForSym(sfunc);
     while (cg.locals.length < ft.params.length)
     {
@@ -3404,7 +2860,6 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
     }
     cg.numParams = cast(uint) ft.params.length;
 
-    // Register every non-param local in the shadow frame.
     foreach (s; globsym[])
     {
         if (s.isParameter)
@@ -3415,41 +2870,22 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
 
     type* retType = sfunc.Stype.Tnext;
     assert(retType);
-    // Judge by the WASM signature, not the D return type: `void main` is
-    // forced to the runtime's `(i32, i32) -> i32` ABI, so its bare BC.ret
-    // blocks still need the `unreachable` guard to satisfy the validator.
     const bool hasReturn = ft.results.length != 0;
-    // Slices/delegates return via hidden sret pointer too (returnByPtr keys off
-    // the type's Tnext to tell a real slice from a plain ulong/long).
     cg.retByHiddenPtr = returnByPtr(retType);
 
-    // The shadow frame is only needed when its base is actually read: by
-    // frame-resident symbols (shadowFrameSize > 0) or params spilled into it,
-    // by an explicit OPframeptr (nested-function context, va_start, alloca), or
-    // by an alloca call whose bumped __stack_pointer the epilogue must restore.
-    // Struct/slice returns via hidden pointer keep the frame too. A leaf
-    // function with none of these (e.g. `int getCounter() => counter;`) omits
-    // the prologue/epilogue entirely, matching LDC's -O0 output. The epilogue
-    // sites all gate on hasShadowFrame, so clearing it here suppresses them.
     cg.hasShadowFrame = cg.shadowFrameSize != 0
         || paramSpills.length != 0
         || cg.retByHiddenPtr
         || funcNeedsFrameBase(startblock);
-    // Publish the frame to __stack_pointer only when a callee might observe it;
-    // a call-free framed function keeps its base in a local and skips the
-    // epilogue restore (matching LDC's -O0 output).
     cg.framePublished = cg.hasShadowFrame && funcMakesCall(startblock);
     if (cg.hasShadowFrame)
         emitShadowPrologue(cg);
 
-    // Spill incoming WASM params into their shadow-frame slots.
     foreach (ref sp; paramSpills)
     {
         const uint off = cast(uint) sp.sym.Soffset + sp.byteOffset;
         if (sp.copyBytes)
         {
-            // By-pointer aggregate: memory.copy(dst = shadowBase+off,
-            // src = incoming pointer, n = struct size).
             cg.emitLocal(OP_LOCAL_GET, cg.shadowBaseLocal);
             if (off)
                 cg.emit(OP_I32_CONST, sleb(cast(int) off), OP_I32_ADD);
@@ -3466,9 +2902,6 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
     if (startblock)
         genBlocksProper(cg, startblock, hasReturn);
 
-    // For:
-    // int spin() { for (;;) {} }
-    // Need to insert unreachable because wasm validator expects i32 on stack
     if (cg.reachable)
     {
         if (cg.framePublished)

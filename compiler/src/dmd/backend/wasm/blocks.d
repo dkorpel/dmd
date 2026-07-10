@@ -15,7 +15,6 @@ import core.stdc.stdlib : getenv;
 
 nothrow:
 
-// Per-block metadata computed during analysis
 private struct BlkInfo
 {
     bool isLoopHeader; // targeted by a back edge
@@ -27,7 +26,6 @@ private int blockIdx(block* b)
     return b ? b.Bdfoidx : int.max;
 }
 
-// Successor index in Bsucc list
 private block* succ(block* b, int n)
 {
     if (n < b.Bsucc.length)
@@ -35,8 +33,6 @@ private block* succ(block* b, int n)
     return null;
 }
 
-// Emit a returning/terminating block (retexp/ret/exit).
-// Returns false if b is not one of those.
 private bool emitBlockReturn(ref WasmCG cg, block* b, bool hasReturn)
 {
     if (b.bc == BC.retexp)
@@ -48,10 +44,6 @@ private bool emitBlockReturn(ref WasmCG cg, block* b, bool hasReturn)
         {
             if (hasRetVal)
             {
-                // Save the return value across the epilogue. Use the
-                // function-level retByHiddenPtr flag because TYdarray/
-                // TYdelegate alias TYullong/TYllong on wasm32, so Ety
-                // can't tell a slice return from a plain long.
                 const tym_t bty = tybasic(b.Belem.Ety);
                 WASM_TYPE retTy = cg.retByHiddenPtr ? WASM_I32 : wasmType(bty);
                 uint retTmp = cg.allocTemp(retTy);
@@ -74,9 +66,6 @@ private bool emitBlockReturn(ref WasmCG cg, block* b, bool hasReturn)
             cg.genElemDiscard(b.Belem);
         if (cg.framePublished)
             emitShadowEpilogue(cg);
-        // A value-returning function may still end in BC.ret (e.g. a call
-        // to a noreturn function like __switch_error); `unreachable` gives
-        // the validator a polymorphic stack.
         if (hasReturn)
             cg.emit(OP_UNREACHABLE);
         cg.emit(OP_RETURN);
@@ -85,9 +74,6 @@ private bool emitBlockReturn(ref WasmCG cg, block* b, bool hasReturn)
     }
     else if (b.bc == BC.exit || b.bc == BC._ret)
     {
-        // BC._ret survives only in EH_WASM functions: after
-        // insertFinallyBlockCalls it is reached exclusively through the
-        // rethrow/flag-dispatch chain, so falling off its end is impossible.
         if (b.Belem)
             cg.genElemDiscard(b.Belem);
         cg.emit(OP_UNREACHABLE);
@@ -97,7 +83,6 @@ private bool emitBlockReturn(ref WasmCG cg, block* b, bool hasReturn)
     return false;
 }
 
-// Push `condLocal == cv` as an i32
 private void emitCaseEq(ref WasmCG cg, WASM_TYPE condType, uint condLocal, long cv)
 {
     cg.emitLocal(OP_LOCAL_GET, condLocal);
@@ -107,16 +92,6 @@ private void emitCaseEq(ref WasmCG cg, WASM_TYPE condType, uint condLocal, long 
         cg.emit(OP_I32_CONST, sleb(cast(int) cv), OP_I32_EQ);
 }
 
-// Reorder `blocks` so the try_table frame model can structure them: each
-// BC._try header is directly followed by the blocks it guards (those whose
-// Btry chain reaches it) and then by its landing-pad group (BC.jcatch, or
-// BC._finally + BC._lpad). Within each nesting level, blocks are emitted in
-// reverse post order from the level's entry, so acyclic forward flow (catch
-// dispatch, handlers, join points) never becomes an index-space back edge
-// that the loop detection would mistake for a loop — blockopt (-O) and the
-// inliner produce layouts where that would otherwise happen. Blocks the pass
-// cannot attribute are appended at the end, where the validation below
-// downgrades the function to dispatch emission.
 private block*[] layoutTryRegions(block*[] blocks)
 {
     foreach (size_t i, b; blocks)
@@ -147,9 +122,6 @@ nothrow:
         return b.bc == BC.jcatch || b.bc == BC._finally || b.bc == BC._lpad;
     }
 
-    // Map `b` to its representative at `owner`'s nesting level: itself if
-    // directly owned, the ancestor BC._try header whose region contains it
-    // if nested deeper, or null if outside `owner` entirely.
     static block* levelNode(block* b, block* owner)
     {
         block* prev = b;
@@ -162,9 +134,6 @@ nothrow:
         }
     }
 
-    // Emit the blocks of `owner`'s nesting level reachable from `entry` in
-    // reverse post order. Nested try regions collapse into their header
-    // node; landing pads ride along with their header in placeOne.
     void layoutLevel(block* owner, block* entry)
     {
         block*[] post;
@@ -187,8 +156,6 @@ nothrow:
 
             if (node.bc == BC._try && node.Bsucc.length > 1)
             {
-                // Collapsed region node: its level successors are the
-                // region's exits plus the landing pad's continuations.
                 foreach (m; blocks)
                     if (m !is node && levelNode(m, node) !is null)
                         foreach (s; m.Bsucc)
@@ -255,10 +222,6 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
     if (N == 0)
         return;
 
-    // Blockopt (-O) merges and reorders blocks, so a try body is not
-    // necessarily laid out contiguously between its BC._try header and its
-    // landing pad. The try_table frame model requires exactly that layout;
-    // rebuild it from Btry ownership, which blockopt preserves.
     foreach (b; blocks)
         if (b.bc == BC._try)
         {
@@ -266,11 +229,9 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
             break;
         }
 
-    // Assign sequential indices
     foreach (size_t i, b; blocks)
         b.Bdfoidx = cast(int) i;
 
-    // A back edge B => A (A.idx <= B.idx) makes A a loop header.
     BlkInfo[] info = new BlkInfo[N];
     foreach (size_t i, b; blocks)
     {
@@ -280,7 +241,7 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         {
             foreach (s; b.Bsucc)
             {
-                if (s && s.Bdfoidx <= cast(int) i) // back edge
+                if (s && s.Bdfoidx <= cast(int) i)
                 {
                     info[s.Bdfoidx].isLoopHeader = true;
                     if (info[s.Bdfoidx].loopEnd < cast(int) i)
@@ -290,9 +251,6 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         }
     }
 
-    // A wasm loop frame may extend past its last back edge, so overlapping
-    // loop regions (irreducible goto flow) can be made to nest by extending
-    // the earlier loop's end over the later one.
     {
         bool changed = true;
         while (changed)
@@ -313,15 +271,11 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         }
     }
 
-    // EH_WASM try regions: each BC._try opens a try_table frame over
-    // [start, end] whose catch clause lands on the block at end+1 (the
-    // BC.jcatch pad of a try/catch, or the BC._lpad of a try/finally).
-    // Fixed regions like loops — block frames must nest around them.
     struct TryReg
     {
-        int start; // BC._try block index
-        int end; // last block inside the try_table (= land - 1)
-        bool isCatch; // catch (i32 payload) vs catch_all_ref (exnref)
+        int start;
+        int end;
+        bool isCatch;
         block* tryBlock;
     }
 
@@ -353,7 +307,6 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         tryRegs ~= TryReg(i, land - 1, isCatch, b);
     }
 
-    // Try regions must be laminar with each other and with loops.
     if (!tryBroken)
     {
         static bool overlapPartially(int a1, int a2, int b1, int b2)
@@ -380,11 +333,6 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         }
     }
 
-    // Every forward branch target gets one block frame: OP_BLOCK before block
-    // `begin`, OP_END after block `end` (= target-1), so a br to it lands on
-    // the target. Collecting them all up front lets frames open in reverse
-    // target order, which per-branch lazy opening can't do when several
-    // targets are pending at once (e.g. an if-chain).
     struct BFrame
     {
         int begin;
@@ -411,7 +359,6 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         const bool table = b.bc == BC.jmptab || b.bc == BC.switch_;
         if (table || b.bc == BC.goto_ || b.bc == BC.iftrue || b.bc == BC.ifthen)
         {
-            // br_table can't fall through, so even target i+1 needs a frame
             foreach (s; b.Bsucc)
             {
                 const int t = blockIdx(s);
@@ -421,21 +368,15 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         }
         else if (b.bc == BC._finally || b.bc == BC._lpad || b.bc == BC.jcatch)
         {
-            // A BC._finally's normal entry branches to the finally body
-            // (Bsucc[1]), skipping the exceptional BC._lpad block that
-            // follows it; landing pads continue at Bsucc[0]. After blockopt
-            // (-O) that block is not necessarily laid out right after.
             const int t = blockIdx(succ(b, b.bc == BC._finally ? 1 : 0));
             if (t != int.max && t > i + 1)
                 needFrame(i, t);
         }
     }
-    // Every loop gets an exit wrapper so branches past its end have a frame
     foreach (int h; 0 .. N)
         if (info[h].isLoopHeader)
             needFrame(h, info[h].loopEnd + 1);
 
-    // WASM_BLOCKS=1: dump the block graph for debugging structuring bugs
     if (getenv("WASM_BLOCKS"))
     {
         printf("=== block graph (%d blocks) ===\n", N);
@@ -449,9 +390,6 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         }
     }
 
-    // Frames must nest (LIFO), so widen begins until the set is laminar.
-    // Loops and try regions are fixed [start, end] frames the block frames
-    // must respect.
     bool converged;
     {
         int iterations = 0;
@@ -466,17 +404,11 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
                 {
                     if (f.begin > h && f.begin <= le && f.end > le)
                     {
-                        f.begin = h; // exits the region: enclose it
+                        f.begin = h;
                         changed = true;
                     }
                     else if (f.begin < h && f.end >= h && f.end < le)
                     {
-                        // Branch into the region from outside (multi-entry
-                        // loop, goto into a try body): unstructurable. Keep
-                        // the frame for in-region sources; the validation
-                        // below sees the outside sources are uncovered and
-                        // picks the dispatch-loop fallback for the whole
-                        // function.
                         f.begin = h;
                         changed = true;
                     }
@@ -490,7 +422,7 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
                 foreach (ref const g; bframes)
                     if (g.begin < f.begin && f.begin <= g.end && g.end < f.end)
                     {
-                        f.begin = g.begin; // crosses g: enclose it
+                        f.begin = g.begin;
                         changed = true;
                     }
             }
@@ -498,9 +430,6 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         converged = !changed;
     }
 
-    // Validate that every branch has a frame or loop to br to. Irreducible
-    // control flow (goto into a loop body, `goto case` to an earlier case,
-    // optimizer-produced layouts) fails this and uses the dispatch fallback.
     bool structurable = converged && !tryBroken;
     if (structurable)
     {
@@ -508,12 +437,12 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         {
             if (t == int.max)
                 return true;
-            if (t <= i) // back edge: must continue a loop from inside it
+            if (t <= i)
                 return info[t].isLoopHeader && info[t].loopEnd >= i;
             foreach (ref const f; bframes)
                 if (f.end == t - 1)
                     return f.begin <= i;
-            return true; // fallthrough needs no frame
+            return true;
         }
 
         outer: foreach (int i; 0 .. N)
@@ -553,7 +482,6 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         return;
     }
 
-    // WASM_BLOCKS=1: dump the repaired frames
     if (getenv("WASM_BLOCKS"))
     {
         foreach (ref const f; bframes)
@@ -567,30 +495,26 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
     {
         block,
         loop,
-        tryTable, // the try_table instruction's own frame
-        catchLand, // typed block the catch clause lands on (result i32/exnref)
+        tryTable,
+        catchLand,
     }
 
-    // Nesting stack of open frames; frames must close in LIFO order.
     struct Frame
     {
         FrameKind kind;
-        int closeAfter; // OP_END is emitted after this block index
-        int loopStart = -1; // for loops: the header block index
-        bool parentReachable; // reachability at the point this frame was opened
-        int tryIdx = -1; // for tryTable/catchLand: index into tryRegs
+        int closeAfter;
+        int loopStart = -1;
+        bool parentReachable;
+        int tryIdx = -1;
     }
 
     Frame[] stack;
 
-    // br depth to reach a given stack frame (0 = innermost)
     uint brDepth(size_t frameIdx)
     {
         return cast(uint)(stack.length - 1 - frameIdx);
     }
 
-    // Find the stack frame for the loop whose header is at idx.
-    // These lookups return stack.length as a not-found sentinel.
     size_t loopFrame(int headerIdx)
     {
         foreach_reverse (size_t fi, ref const Frame f; stack)
@@ -599,8 +523,6 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         return stack.length;
     }
 
-    // Block frame closing exactly where targetIdx begins, so a br to it
-    // lands on targetIdx. The pre-pass opened one per forward branch target.
     size_t exactFrame(int targetIdx)
     {
         foreach_reverse (size_t fi, ref const Frame f; stack)
@@ -615,9 +537,6 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         cg.emit(OP_BLOCK, WASM_VOID_BLOCK);
     }
 
-    // Open the two frames of a try region: the typed landing block the catch
-    // clause targets, then the try_table itself (innermost, so the clause's
-    // label immediate is always 0 — labels resolve outside the try_table).
     void openTryFrames(int ti)
     {
         const int end = tryRegs[ti].end;
@@ -636,10 +555,6 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         cg.emitULEB(0);
     }
 
-    // Close the innermost open frame. A catchLand frame's END is the landing
-    // pad: the caught value is on the stack there, so park it (jcatchvar for
-    // a catch's i32 payload, a per-try exnref local for a finally), and the
-    // pad is reachable via the exceptional edge regardless of fall-through.
     void closeTop()
     {
         const Frame f = stack[$ - 1];
@@ -647,10 +562,6 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         stack = stack[0 .. $ - 1];
         if (f.kind == FrameKind.tryTable)
         {
-            // The try body always branches out, so normal completion of the
-            // try_table is impossible; the validator still types the
-            // fall-through path to the catchLand END, which expects the
-            // caught value. Make that path polymorphic.
             cg.emit(OP_UNREACHABLE);
             cg.reachable = false;
             return;
@@ -668,8 +579,6 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
             cg.reachable = f.parentReachable;
     }
 
-    // Open the pre-computed frames beginning at `pos` whose end lies in
-    // (loEnd, hiEnd], outermost (largest end) first
     void openFramesAt(int pos, int loEnd, int hiEnd)
     {
         while (true)
@@ -687,10 +596,6 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
 
     int currentIdx;
 
-    // br depth to reach block `t`: its loop frame if backward, its block
-    // frame if forward. A missing frame (the lookups' stack.length sentinel)
-    // means the CFG couldn't be structured — a dropped branch would silently
-    // corrupt control flow, so fail loudly instead.
     uint destDepth(int t)
     {
         const size_t fi = t <= currentIdx ? loopFrame(t) : exactFrame(t);
@@ -698,8 +603,6 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         return brDepth(fi);
     }
 
-    // Branch to block `t`: continue its loop if backward, exit a block
-    // frame if forward
     void branchToBlock(int t, bool conditional)
     {
         cg.emit(conditional ? OP_BR_IF : OP_BR, uleb(destDepth(t)));
@@ -712,9 +615,6 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         block* b = blocks[bi];
         currentIdx = bi;
 
-        // Close frames ending before this block. Per WASM validation, control
-        // past an OP_END resumes at the reachability the enclosing frame had
-        // when it was opened — regardless of whether the body fell through.
         while (stack.length > 0 && stack[$ - 1].closeAfter < bi)
             closeTop();
 
@@ -724,9 +624,6 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
             cg.emit(OP_LOOP, WASM_VOID_BLOCK);
         }
 
-        // Open frames beginning here. At a loop header, frames ending at or
-        // after the loop end enclose the loop, the rest open inside it; a
-        // try region nests inside or outside the loop by relative extent.
         int tryIdx = -1;
         foreach (size_t ti, ref const TryReg t; tryRegs)
             if (t.start == bi)
@@ -800,8 +697,6 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
             enum maxJumpTableSize = 1024;
 
             const condType = b.Belem.wasmType;
-            // Span computed as unsigned: case values may straddle the full
-            // long range. br_table needs an i32 index and a dense table.
             const ulong span = cast(ulong) vmax - cast(ulong) vmin;
             const bool useBrTable = condType == WASM_I32
                 && span < maxJumpTableSize
@@ -809,7 +704,6 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
 
             if (!useBrTable)
             {
-                // If-else chain: store condition in a local, compare each case
                 const uint condLocal = cg.allocTemp(condType);
                 cg.emitLocal(OP_LOCAL_SET, condLocal);
                 foreach (size_t ci, long cv; b.Bswitch)
@@ -822,7 +716,6 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
                 continue;
             }
 
-            // Dense i32 range: br_table with a 0-based index
             if (vmin != 0)
                 cg.emit(OP_I32_CONST, sleb(cast(int)-vmin), OP_I32_ADD);
 
@@ -839,8 +732,8 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
                     }
                 cg.emitULEB(destDepth(destIdx));
             }
-            cg.emitULEB(destDepth(defaultIdx)); // default label
-            cg.reachable = false; // br_table is unconditional
+            cg.emitULEB(destDepth(defaultIdx));
+            cg.reachable = false;
             continue;
         }
         else if (b.bc == BC.ifthen || b.bc == BC.iftrue)
@@ -848,7 +741,6 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
             const int takenIdx = blockIdx(succ(b, 0));
             const int nottakenIdx = blockIdx(succ(b, 1));
 
-            // Push the condition value, or 0 if there is none
             if (b.Belem)
                 cg.genElem(b.Belem);
             else
@@ -856,7 +748,6 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
 
             if (takenIdx == nottakenIdx)
             {
-                // Degenerate: both arms go to the same block
                 emitCondToI32(cg, b.Belem);
                 cg.emit(OP_DROP);
                 if (takenIdx != bi + 1)
@@ -874,9 +765,6 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
             }
             else
             {
-                // Neither target is the next block (e.g. `if (c) break;
-                // continue;` in a switch case, or a loop back edge whose
-                // exit skips blocks)
                 emitCondToI32(cg, b.Belem);
                 branchToBlock(takenIdx, true);
                 branchToBlock(nottakenIdx, false);
@@ -886,11 +774,6 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         else if (b.bc == BC.goto_ || b.bc == BC._finally
             || b.bc == BC._lpad || b.bc == BC.jcatch)
         {
-            // Continue at Bsucc[0], except a BC._finally's normal entry
-            // branches to the finally body (Bsucc[1]), skipping the
-            // exceptional BC._lpad block right after it. blockopt (-O) may
-            // have laid the target out elsewhere; == bi+1 falls through
-            // naturally.
             if (b.Belem)
                 cg.genElemDiscard(b.Belem);
             const int t = blockIdx(succ(b, b.bc == BC._finally ? 1 : 0));
@@ -899,8 +782,6 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
             continue;
         }
 
-        // Default: emit expression, discard result.
-        // (BC._try opens its frames above.)
         if (b.Belem)
             cg.genElemDiscard(b.Belem);
     }
@@ -909,10 +790,6 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         closeTop();
 }
 
-// Fallback for irreducible control flow the structurer can't nest: a selector
-// local drives a br_table inside a loop, with one wrapper block per basic
-// block. Every branch becomes "set selector, br to the loop". Slower code,
-// but handles any CFG.
 private void genBlocksDispatch(ref WasmCG cg, block*[] blocks, bool hasReturn)
 {
     if (getenv("WASM_BLOCKS"))
@@ -925,18 +802,16 @@ private void genBlocksDispatch(ref WasmCG cg, block*[] blocks, bool hasReturn)
     cg.emit(OP_LOOP, WASM_VOID_BLOCK);
     foreach (int i; 0 .. N)
         cg.emit(OP_BLOCK, WASM_VOID_BLOCK);
-    // The innermost wrapper is block 0's: br depth i lands on block i's body
     cg.emit(OP_LOCAL_GET, uleb(sel), OP_BR_TABLE, uleb(cast(uint) N));
     foreach (int i; 0 .. N)
         cg.emitULEB(cast(uint) i);
-    cg.emitULEB(0); // default; sel is always a valid block index
+    cg.emitULEB(0);
 
     foreach (int i; 0 .. N)
     {
-        cg.emit(OP_END); // close wrapper i; block i's body follows
+        cg.emit(OP_END);
         block* b = blocks[i];
 
-        // Inside body i the open frames are wrappers i+1 .. N-1, then the loop
         const uint loopDepth = cast(uint)(N - 1 - i);
 
         void gotoBlock(int t, uint extraDepth)
@@ -950,7 +825,6 @@ private void genBlocksDispatch(ref WasmCG cg, block*[] blocks, bool hasReturn)
 
         if (b.bc == BC.iftrue || b.bc == BC.ifthen)
         {
-            // sel = cond ? taken : nottaken
             cg.emit(OP_I32_CONST, sleb(blockIdx(succ(b, 0))),
                 OP_I32_CONST, sleb(blockIdx(succ(b, 1))));
             if (b.Belem)
@@ -970,7 +844,6 @@ private void genBlocksDispatch(ref WasmCG cg, block*[] blocks, bool hasReturn)
                 gotoBlock(defaultIdx, 0);
                 continue;
             }
-            // Compare chain against each case value
             const condType = b.Belem.wasmType;
             const uint condLocal = cg.allocTemp(condType);
             cg.emitLocal(OP_LOCAL_SET, condLocal);
@@ -985,9 +858,6 @@ private void genBlocksDispatch(ref WasmCG cg, block*[] blocks, bool hasReturn)
         }
         else if (b.bc == BC.goto_ || b.bc == BC._finally)
         {
-            // A BC._finally's normal entry continues at Bsucc[1] (no
-            // try_table in dispatch mode, so the exceptional path is lost:
-            // exceptions escape this function).
             if (b.Belem)
                 cg.genElemDiscard(b.Belem);
             if (block* target = succ(b, b.bc == BC._finally ? 1 : 0))
@@ -1002,8 +872,7 @@ private void genBlocksDispatch(ref WasmCG cg, block*[] blocks, bool hasReturn)
         }
     }
 
-    cg.emit(OP_END); // close the dispatch loop
-    // Control never falls out of the loop, but the validator doesn't know
+    cg.emit(OP_END);
     cg.emit(OP_UNREACHABLE);
     cg.reachable = false;
 }
