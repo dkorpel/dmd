@@ -69,7 +69,6 @@ private uint digits(uint number) @nogc
     return n;
 }
 
-// `path` copied into a NUL-terminated heap buffer for fopen.
 private char* toCstr(const(char)[] path) @nogc
 {
     auto p = cast(char*) malloc(path.length + 1);
@@ -80,7 +79,6 @@ private char* toCstr(const(char)[] path) @nogc
     return p;
 }
 
-// Read a whole file; returns null on failure.
 private char[] readWholeFile(const(char)[] name) @nogc
 {
     char* cname = toCstr(name);
@@ -104,7 +102,6 @@ private char[] readWholeFile(const(char)[] name) @nogc
     return buf[0 .. got];
 }
 
-// Split into lines like rt.cover: strip a trailing \r per line.
 private char[][] splitLines(char[] buf)
 {
     char[][] lines;
@@ -130,7 +127,6 @@ private char[][] splitLines(char[] buf)
     return lines;
 }
 
-// Expand tabs to multiples of 8 columns, matching rt.cover's expandTabs.
 private char[] expandTabs(char[] line)
 {
     enum tabWidth = 8;
@@ -196,12 +192,8 @@ private const(char)[] lstName(const(char)[] filename)
     return r;
 }
 
-// Write one .lst per registered module (called after main returns).
 void rt_coverWrite()
 {
-    // WASI has no working directory: relative paths resolve against "/".
-    // The harness passes the host working directory in PWD; use it to
-    // absolutize relative source paths unless dmd_coverSourcePath was called.
     if (!srcpath.length)
     {
         import core.stdc.stdlib : getenv;

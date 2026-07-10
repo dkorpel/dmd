@@ -26,15 +26,6 @@ import dmd.root.string : toCStringThen;
 import dmd.root.stringtable : StringTable;
 import dmd.target : Target;
 
-// ──────────────────────────────────────────────────────────────────────────────
-// ar archive header format shared by ELF and WASM libraries.
-//
-// All three of ELF, Mach-O/BSD, and WASM use the same GNU/SVR4 ar format:
-//   !<arch>\n
-//   [member header (60 bytes)] [member data] ...
-//
-// See: https://en.wikipedia.org/wiki/Ar_(Unix)
-// ──────────────────────────────────────────────────────────────────────────────
 
 enum AR_OBJECT_NAME_SIZE = 16;
 enum AR_FILE_TIME_SIZE   = 12;
@@ -87,7 +78,6 @@ void arFillHeader(ref ArHeader h, const(char)* name, int name_offset,
         len = snprintf(buf.ptr, buf.sizeof,
             "%-16s%-12lld%-6u%-6u%-8o%-10u`",
             name, cast(long)file_time, user_id, group_id, file_mode, file_size);
-        // snprintf pads name to 16 with spaces; replace the null at name.length with '/'
         import core.stdc.string : strlen;
         buf[strlen(name)] = '/';
     }
@@ -146,7 +136,6 @@ void arAddSymbol(ref StringTable!(ArObjSymbol*) tab, ref Array!(ArObjSymbol*) ob
     auto s = tab.insert(name.ptr, name.length, null);
     if (!s)
     {
-        // already in table
         if (!pickAny)
         {
             s = tab.lookup(name.ptr, name.length);
@@ -182,7 +171,6 @@ package(dmd.lib)
 void writeArLibToBuffer(ref OutBuffer libbuf,
     ref Array!(ArObjModule*) objmodules, ref Array!(ArObjSymbol*) objsymbols) nothrow
 {
-    // Long file names (>= 16 chars) go into a "//" string table.
     uint noffset = 0;
     foreach (om; objmodules)
     {
@@ -196,8 +184,6 @@ void writeArLibToBuffer(ref OutBuffer libbuf,
             om.name_offset = -1;
     }
 
-    // The "/" symbol-table member holds a 4-byte count, one 4-byte member
-    // offset per symbol, then the NUL-terminated symbol names.
     uint moffset = 8 + ArHeader.sizeof + 4;
     foreach (os; objsymbols)
         moffset += cast(uint)(4 + os.name.length + 1);
@@ -213,7 +199,6 @@ void writeArLibToBuffer(ref OutBuffer libbuf,
     }
     libbuf.reserve(moffset);
 
-    // Magic + "/" symbol-table member (empty name → arFillHeader emits "/").
     libbuf.write("!<arch>\n");
     ArHeader h;
     arFillHeader(h, "", -1, 0, 0, 0, 0, cast(uint)(hoffset - (8 + ArHeader.sizeof)));
@@ -232,7 +217,6 @@ void writeArLibToBuffer(ref OutBuffer libbuf,
         libbuf.writeByte(0);
     }
 
-    // "//" long-filename string table.
     if (noffset)
     {
         if (libbuf.length & 1)
@@ -257,7 +241,6 @@ void writeArLibToBuffer(ref OutBuffer libbuf,
         }
     }
 
-    // Object members.
     foreach (om; objmodules)
     {
         if (libbuf.length & 1)
@@ -270,9 +253,6 @@ void writeArLibToBuffer(ref OutBuffer libbuf,
     }
     assert(libbuf.length == moffset);
 
-    // Members are 2-byte aligned; pad a final odd-sized member too. GNU ar
-    // tolerates a missing trailing pad, but llvm-ar/wasm-ld reject an archive
-    // that ends on an odd offset.
     if (libbuf.length & 1)
         libbuf.writeByte('\n');
 }

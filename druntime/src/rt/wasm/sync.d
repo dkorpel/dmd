@@ -10,18 +10,12 @@ module rt.wasm.sync;
 nothrow:
 extern (C):
 
-// Monitor static init / term (called from dmain2 on other platforms)
 void _d_monitor_staticctor() @nogc {}
 void _d_monitor_staticdtor() @nogc {}
 
-// Critical-section init / term
 void _d_critical_init() @nogc {}
 void _d_critical_term() @nogc {}
 
-// synchronized(obj) enter / exit. Locking is elided, but user code can
-// observe `obj.__monitor` inside a synchronized block, so lazily install a
-// dummy allocation (never freed; the monitor slot is the pointer after the
-// vptr).
 private extern (C) void* gc_calloc(size_t sz, uint ba = 0, const scope TypeInfo ti = null) @nogc nothrow;
 
 void _d_monitorenter(Object h)
@@ -32,24 +26,18 @@ void _d_monitorenter(Object h)
 }
 void _d_monitorexit(Object h) {}
 
-// synchronized-statement critical sections
 void _d_criticalenter2(void** pcs) @nogc {}
 void _d_criticalexit(void* cs) @nogc {}
 
-// Monitor destruction
 void _d_monitordelete(Object h, bool det) {}
 void _d_monitordelete_nogc(Object h) @nogc {}
 
-// Shared-mutex helpers (used by synchronized classes)
 void _d_setSameMutex(shared Object ownee, shared Object owner) @trusted {}
 
-// Dispose-event registration (used by std.signals). No dtor hook fires on
-// this single-threaded no-op monitor, so registration is elided.
 alias DEvent = void delegate(Object);
 void rt_attachDisposeEvent(Object h, DEvent e) {}
 void rt_detachDisposeEvent(Object h, DEvent e) {}
 
-// Thread init / term (stubs so dmain2 can be compiled in if needed)
 void thread_init() @nogc {}
 void thread_term() @nogc {}
 void thread_joinAll() {}

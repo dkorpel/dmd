@@ -1,17 +1,6 @@
 /**
  * WASM runtime entry point and `_d_run_main` implementation.
  *
- * `_start` is a thin WASI shim that calls `main()` and `proc_exit`s its
- * result — it does NOT initialize druntime.  Druntime init lives in
- * `_d_run_main`, which the compiler-generated `main` wrapper (from
- * `core.internal.entrypoint`, for D `main` only) calls.  An `extern(C)`
- * user `main` bypasses druntime init the same way it does on Linux.
- *
- * The front end mangles an `extern(C)` main into the wasi-libc crt entry names
- * `__main_void` / `__main_argc_argv` (by arity); `_start` calls `__main_void`,
- * which wasi-libc's weak wrapper bridges to `__main_argc_argv` after fetching
- * WASI argc/argv when the app declared parameters.
- *
  * Copyright: Copyright (C) 1999-2026 by The D Language Foundation, All Rights Reserved
  * License:   $(LINK2 https://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
  */
@@ -20,26 +9,14 @@ module rt.wasm.start;
 nothrow:
 extern (C):
 
-// Provided by rt/wasm/gc.d
 void gc_init();
 void gc_term();
 
-// wasm-ld synthesizes __wasm_call_ctors from object .init_array / .ctors and
-// .Linking custom-section init functions.  wasi-libc relies on it to set up
-// stdio buffers (FILE* for stdout/stderr) before any printf can succeed.
 private extern(C) void __wasm_call_ctors() @nogc nothrow;
 private extern(C) void __wasm_call_dtors() @nogc nothrow;
 
-// wasi-libc's crt entry.  Either the app's `int main(void)` (mangled
-// `__main_void`), or the weak libc.a wrapper that fetches WASI argc/argv and
-// forwards to the app's `__main_argc_argv` (compiler-generated D-main wrapper
-// or an `extern(C) int main(int, char**)`).
 private extern(C) int __main_void() nothrow;
 
-// ── WASI _start entry point ───────────────────────────────────────────────────
-// wasmtime (WASI command ABI) calls _start, not main.  proc_exit called from
-// _start correctly propagates the exit code to the shell; called from main it
-// does not (wasmtime exits 0 regardless of the argument).
 export void _start() nothrow
 {
     __wasm_call_ctors();
@@ -49,9 +26,6 @@ export void _start() nothrow
     while (true) {}
 }
 
-// Module ctor/dtor execution reuses the canonical rt.minfo.ModuleGroup, bridged
-// to the wasm-ld "minfo" segment brackets by rt.sections_wasm.  initSections
-// populates the single SectionGroup from those brackets before the ctors run.
 import rt.sections : initSections;
 extern(C) void rt_moduleCtor();
 extern(C) void rt_moduleTlsCtor();
@@ -60,15 +34,10 @@ extern(C) void rt_moduleTlsDtor();
 extern(C) void rt_moduleDtor();
 extern(C) void rt_coverWrite();
 
-// Called by the compiler-generated `main` wrapper (for D main).
 private alias MainFunc = extern(C) int function(char[][] args);
 
 private extern(C) void* calloc(size_t, size_t) @nogc nothrow;
 
-// Fetch program arguments from WASI (heap-staged: the buffers must not live
-// in static data, where cross-object layout is fragile). Runtime arguments
-// (--DRT-*) are consumed here like native druntime does, so user code never
-// sees them.
 private char[][] wasiArgs() @nogc nothrow
 {
     size_t nargs, buflen;
@@ -92,8 +61,6 @@ private char[][] wasiArgs() @nogc nothrow
     return arr[0 .. n];
 }
 
-// rt.wasm.eh: runs main under a top-level Throwable handler (this module is
-// -betterC and cannot catch).
 private extern(C) int _d_eh_wasm_runMain(MainFunc mainFunc, char[][] args);
 
 int _d_run_main(int argc, char** argv, MainFunc mainFunc)
@@ -115,8 +82,6 @@ void _d_initMonoTime() @nogc {}
 
 import core.attribute : wasmImportModule;
 
-// WASI proc_exit: (i32) -> () — terminates the process, never returns.
-// Single declaration avoids duplicate-import linker errors.
 @wasmImportModule("wasi_snapshot_preview1")
 private extern(C) void proc_exit(int code) @nogc nothrow;
 
@@ -130,9 +95,7 @@ private extern(C) int fflush(void* stream) @nogc nothrow;
 
 noreturn _wasm_trap(int code) @nogc nothrow
 {
-    // proc_exit skips wasi-libc's atexit flushing; flush explicitly so
-    // buffered stdout (printf) isn't lost on the abort path.
     fflush(null);
     proc_exit(code);
-    while (true) {} // noreturn: proc_exit never returns
+    while (true) {}
 }

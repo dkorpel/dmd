@@ -1,10 +1,6 @@
 /**
  * Extract exported symbols from a WebAssembly relocatable object module.
  *
- * Reads the "linking" custom section (WebAssembly tool-conventions v2) and
- * reports all globally-visible, defined, non-hidden function, data, and table
- * symbols to the caller via a delegate.  These are the symbol names that
- * wasm-ld uses when doing lazy archive linking.
  *
  * Reference: https://github.com/WebAssembly/tool-conventions/blob/main/Linking.md
  *
@@ -44,7 +40,6 @@ void scanWasmObjModule(void delegate(const(char)[] name, int pickAny) nothrow pA
             filename.fTuple.expand, module_name, reason);
     }
 
-    // Validate WASM magic + version.
     if (base.length < 8)
         return corrupt(__LINE__);
     if (base[0] != 0 || base[1] != 0x61 || base[2] != 0x73 || base[3] != 0x6d)
@@ -52,9 +47,8 @@ void scanWasmObjModule(void delegate(const(char)[] name, int pickAny) nothrow pA
     if (base[4] != 1 || base[5] != 0 || base[6] != 0 || base[7] != 0)
         return corrupt(__LINE__);
 
-    size_t pos = 8; // skip magic + version
+    size_t pos = 8;
 
-    // Helper: read a ULEB128 unsigned integer.
     uint readULEB(ref size_t p) nothrow
     {
         uint result = 0;
@@ -62,9 +56,6 @@ void scanWasmObjModule(void delegate(const(char)[] name, int pickAny) nothrow pA
         while (p < base.length)
         {
             ubyte b = base[p++];
-            // Bound the shift to the width of `result`; shifting a uint by >= 32
-            // is undefined. Over-long encodings still consume their bytes so the
-            // cursor stays in sync, but bits past bit 31 are dropped.
             if (shift < 32)
                 result |= cast(uint)(b & 0x7F) << shift;
             if (!(b & 0x80))
@@ -74,7 +65,6 @@ void scanWasmObjModule(void delegate(const(char)[] name, int pickAny) nothrow pA
         return result;
     }
 
-    // Helper: read a length-prefixed string (WASM "name" encoding).
     const(char)[] readName(ref size_t p) nothrow
     {
         uint len = readULEB(p);
@@ -85,7 +75,6 @@ void scanWasmObjModule(void delegate(const(char)[] name, int pickAny) nothrow pA
         return s;
     }
 
-    // Scan sections looking for the "linking" custom section.
     while (pos + 2 <= base.length)
     {
         uint sectionId = readULEB(pos);
@@ -100,7 +89,6 @@ void scanWasmObjModule(void delegate(const(char)[] name, int pickAny) nothrow pA
             continue;
         }
 
-        // Read the custom section name.
         size_t nameStart = pos;
         const(char)[] sectionName = readName(pos);
         if (sectionName != "linking")
@@ -109,7 +97,6 @@ void scanWasmObjModule(void delegate(const(char)[] name, int pickAny) nothrow pA
             continue;
         }
 
-        // Found the "linking" section — parse it.
         uint linkingVersion = readULEB(pos);
         if (linkingVersion != 2)
         {
@@ -117,7 +104,6 @@ void scanWasmObjModule(void delegate(const(char)[] name, int pickAny) nothrow pA
             continue;
         }
 
-        // Iterate subsections until WASM_SYMBOL_TABLE is found.
         while (pos < sectionEnd)
         {
             uint subtype = readULEB(pos);
@@ -132,29 +118,26 @@ void scanWasmObjModule(void delegate(const(char)[] name, int pickAny) nothrow pA
                 continue;
             }
 
-            // Parse the symbol table.
             uint count = readULEB(pos);
             foreach (_; 0 .. count)
             {
                 if (pos >= subEnd)
                     return corrupt(__LINE__);
 
-                uint kind  = readULEB(pos);
+                uint kind = readULEB(pos);
                 uint flags = readULEB(pos);
 
-                bool isLocal     = (flags & WASM_SYM.BINDING_LOCAL) != 0;
+                bool isLocal = (flags & WASM_SYM.BINDING_LOCAL) != 0;
                 bool isUndefined = (flags & WASM_SYM.UNDEFINED) != 0;
-                bool isHidden    = (flags & WASM_SYM.VISIBILITY_HIDDEN) != 0;
-                bool hasName     = (flags & WASM_SYM.EXPLICIT_NAME) != 0;
+                bool isHidden = (flags & WASM_SYM.VISIBILITY_HIDDEN) != 0;
+                bool hasName = (flags & WASM_SYM.EXPLICIT_NAME) != 0;
 
                 const(char)[] symName;
 
                 if (kind == WASM_SYMTAB.FUNCTION || kind == WASM_SYMTAB.GLOBAL ||
                     kind == WASM_SYMTAB.TAG || kind == WASM_SYMTAB.TABLE)
                 {
-                    readULEB(pos); // index — always present, consume but don't use
-                    // Name is present for defined symbols, or when the symbol
-                    // carries an explicit name (e.g. a named import).
+                    readULEB(pos);
                     if (hasName || !isUndefined)
                         symName = readName(pos);
                 }
@@ -173,12 +156,11 @@ void scanWasmObjModule(void delegate(const(char)[] name, int pickAny) nothrow pA
                     readULEB(pos); // section index
                 }
 
-                // Add to symbol table if global, defined, and visible.
                 if (!isLocal && !isUndefined && !isHidden && symName.length)
                     pAddSymbol(symName, 1);
             }
-            break; // only one WASM_SYMBOL_TABLE subsection
+            break;
         }
-        break; // only one "linking" section
+        break;
     }
 }

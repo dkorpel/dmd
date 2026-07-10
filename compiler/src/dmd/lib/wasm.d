@@ -3,8 +3,6 @@
  *
  * The ar format is shared with the ELF library (same header structure and
  * symbol-table layout); see dmd.lib.ArHeader and arFillHeader() in package.d.
- * wasm-ld reads WASM object members from the archive and uses the symbol table
- * for lazy linking, exactly as LDC and llvm-ar produce it.
  *
  * Copyright:   Copyright (C) 1999-2026 by The D Language Foundation, All Rights Reserved
  * License:     $(LINK2 https://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
@@ -29,7 +27,6 @@ import dmd.root.stringtable;
 import dmd.common.outbuffer;
 import dmd.utils : readFile;
 
-// Entry point (only public symbol in this module).
 package(dmd.lib) extern (C++) Library LibWasm_factory()
 {
     return new LibWasm();
@@ -70,14 +67,12 @@ final class LibWasm : Library
             buffer = cast(ubyte[])b.extractSlice();
         }
 
-        // Already an ar archive → extract WASM members from it.
         if (buffer.length >= 8 && memcmp(buffer.ptr, "!<arch>\n".ptr, 8) == 0)
         {
             extractArchive(buffer, module_name);
             return;
         }
 
-        // Validate WASM magic (\0asm).
         if (buffer.length < 4 || buffer[0] != 0 || buffer[1] != 0x61 ||
             buffer[2] != 0x73 || buffer[3] != 0x6d)
         {
@@ -110,11 +105,10 @@ final class LibWasm : Library
 
 private:
 
-    // Extract WASM object members from an existing ar archive.
     void extractArchive(const(ubyte)[] buf, const(char)[] archiveName)
     {
-        uint offset = 8; // skip "!<arch>\n"
-        const(char)[] nametab; // extended filename table (//)
+        uint offset = 8;
+        const(char)[] nametab;
 
         while (offset + ArHeader.sizeof <= buf.length)
         {
@@ -130,12 +124,10 @@ private:
 
             if (memberName.length >= 2 && memberName[0] == '/' && memberName[1] == '/')
             {
-                // Extended filename table.
                 nametab = cast(const(char)[])(buf.ptr + offset)[0 .. size];
             }
             else if (memberName[0] != '/')
             {
-                // Short-name regular member.
                 const(char)[] name = memberName;
                 size_t end = name.length;
                 while (end > 0 && (name[end-1] == ' ' || name[end-1] == '/'))
@@ -145,7 +137,6 @@ private:
             }
             else if (memberName[0] == '/' && memberName[1] != '/' && memberName[1] != ' ')
             {
-                // Long-name reference into // table.
                 uint noff = cast(uint)strtoul(cast(char*)memberName.ptr + 1, null, 10);
                 if (noff < nametab.length)
                 {
@@ -157,7 +148,6 @@ private:
                         addObject(rest[0 .. end], cast(const(ubyte)[])(buf.ptr + offset)[0 .. size]);
                 }
             }
-            // else: "/" symbol table or other special member — skip.
 
             offset += size;
             if (offset & 1)

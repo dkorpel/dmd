@@ -9,14 +9,12 @@ alias WASM_OP = ubyte;
 /// WASM instruction opcodes
 enum : ubyte
 {
-    // Control
     OP_UNREACHABLE = 0x00,
     OP_NOP = 0x01,
     OP_BLOCK = 0x02,
     OP_LOOP = 0x03,
     OP_IF = 0x04,
     OP_ELSE = 0x05,
-    // Exception handling (exnref proposal)
     OP_THROW = 0x08,
     OP_THROW_REF = 0x0A,
     OP_TRY_TABLE = 0x1F,
@@ -25,21 +23,17 @@ enum : ubyte
     OP_BR_IF = 0x0D,
     OP_BR_TABLE = 0x0E,
     OP_RETURN = 0x0F,
-    // Call
     OP_CALL = 0x10,
     OP_CALL_INDIRECT = 0x11,
     OP_RETURN_CALL = 0x12,
     OP_RETURN_CALL_INDIRECT = 0x13,
     OP_DROP = 0x1A,
     OP_SELECT = 0x1B,
-    // Locals
     OP_LOCAL_GET = 0x20,
     OP_LOCAL_SET = 0x21,
     OP_LOCAL_TEE = 0x22,
-    // Globals
     OP_GLOBAL_GET = 0x23,
     OP_GLOBAL_SET = 0x24,
-    // Memory
     OP_I32_LOAD = 0x28,
     OP_I64_LOAD = 0x29,
     OP_F32_LOAD = 0x2A,
@@ -56,12 +50,10 @@ enum : ubyte
     OP_I32_STORE16 = 0x3B,
     OP_MEMORY_SIZE = 0x3F,
     OP_MEMORY_GROW = 0x40,
-    // Constants
     OP_I32_CONST = 0x41,
     OP_I64_CONST = 0x42,
     OP_F32_CONST = 0x43,
     OP_F64_CONST = 0x44,
-    // i32 comparisons
     OP_I32_EQZ = 0x45,
     OP_I32_EQ = 0x46,
     OP_I32_NE = 0x47,
@@ -73,7 +65,6 @@ enum : ubyte
     OP_I32_LE_U = 0x4D,
     OP_I32_GE_S = 0x4E,
     OP_I32_GE_U = 0x4F,
-    // i64 comparisons
     OP_I64_EQZ = 0x50,
     OP_I64_EQ = 0x51,
     OP_I64_NE = 0x52,
@@ -85,7 +76,6 @@ enum : ubyte
     OP_I64_LE_U = 0x58,
     OP_I64_GE_S = 0x59,
     OP_I64_GE_U = 0x5A,
-    // f32/f64 comparisons
     OP_F32_EQ = 0x5B,
     OP_F32_NE = 0x5C,
     OP_F32_LT = 0x5D,
@@ -98,7 +88,6 @@ enum : ubyte
     OP_F64_GT = 0x64,
     OP_F64_LE = 0x65,
     OP_F64_GE = 0x66,
-    // i32 arithmetic
     OP_I32_CLZ = 0x67,
     OP_I32_CTZ = 0x68,
     OP_I32_POPCNT = 0x69,
@@ -117,7 +106,6 @@ enum : ubyte
     OP_I32_SHR_U = 0x76,
     OP_I32_ROTL = 0x77,
     OP_I32_ROTR = 0x78,
-    // i64 arithmetic
     OP_I64_CLZ = 0x79,
     OP_I64_CTZ = 0x7A,
     OP_I64_POPCNT = 0x7B,
@@ -136,7 +124,6 @@ enum : ubyte
     OP_I64_SHR_U = 0x88,
     OP_I64_ROTL = 0x89,
     OP_I64_ROTR = 0x8A,
-    // f32 arithmetic
     OP_F32_ABS = 0x8B,
     OP_F32_NEG = 0x8C,
     OP_F32_SQRT = 0x91,
@@ -144,7 +131,6 @@ enum : ubyte
     OP_F32_SUB = 0x93,
     OP_F32_MUL = 0x94,
     OP_F32_DIV = 0x95,
-    // f64 arithmetic
     OP_F64_ABS = 0x99,
     OP_F64_NEG = 0x9A,
     OP_F64_SQRT = 0x9F,
@@ -152,7 +138,6 @@ enum : ubyte
     OP_F64_SUB = 0xA1,
     OP_F64_MUL = 0xA2,
     OP_F64_DIV = 0xA3,
-    // Conversions
     OP_I32_WRAP_I64 = 0xA7,
     OP_I32_TRUNC_F32_S = 0xA8,
     OP_I32_TRUNC_F32_U = 0xA9,
@@ -178,9 +163,7 @@ enum : ubyte
     OP_I64_REINTERPRET_F64 = 0xBD,
     OP_F32_REINTERPRET_I32 = 0xBE,
     OP_F64_REINTERPRET_I64 = 0xBF,
-    // Bulk-memory prefix (sub-opcode follows as ULEB128)
     OP_FC_PREFIX = 0xFC,
-    // Sign extension (MVP extension)
     OP_I32_EXTEND8_S = 0xC0,
     OP_I32_EXTEND16_S = 0xC1,
     OP_I64_EXTEND8_S = 0xC2,
@@ -201,10 +184,10 @@ enum WASM_TYPE : ubyte
 /// Catch clause kind bytes inside a `try_table` instruction
 enum WASM_CATCH : ubyte
 {
-    CATCH = 0x00,         // catch tag label (pushes tag params)
-    CATCH_REF = 0x01,     // catch tag label (pushes tag params + exnref)
-    CATCH_ALL = 0x02,     // catch_all label
-    CATCH_ALL_REF = 0x03, // catch_all label (pushes exnref)
+    CATCH = 0x00,
+    CATCH_REF = 0x01,
+    CATCH_ALL = 0x02,
+    CATCH_ALL_REF = 0x03,
 }
 
 enum WASM_I32 = WASM_TYPE.I32;
@@ -212,7 +195,6 @@ enum WASM_I64 = WASM_TYPE.I64;
 enum WASM_F32 = WASM_TYPE.F32;
 enum WASM_F64 = WASM_TYPE.F64;
 
-//// Block type for void blocks
 enum ubyte WASM_VOID_BLOCK = 0x40;
 
 /// Section IDs
@@ -267,7 +249,7 @@ enum WASM_EXPORT : ubyte
 /// WASM relocation types (WebAssembly tool conventions / linking metadata)
 enum R_WASM : ubyte
 {
-    FUNCTION_INDEX_LEB = 0, // function index in call (5-byte padded ULEB)
+    FUNCTION_INDEX_LEB = 0,
     TABLE_INDEX_SLEB = 1,
     TABLE_INDEX_I32 = 2,
     MEMORY_ADDR_LEB = 3,
@@ -315,7 +297,7 @@ enum WASM_SYM : uint
     VISIBILITY_HIDDEN = 0x04,
     UNDEFINED = 0x10,
     EXPORTED = 0x20,      // force wasm-ld to export the symbol without --export-dynamic
-    EXPLICIT_NAME = 0x40, // symbol-table entry carries its own name field
+    EXPLICIT_NAME = 0x40,
     NO_STRIP = 0x80,      // retain even without a reference (no --gc-sections stripping)
     TLS = 0x100,
 }

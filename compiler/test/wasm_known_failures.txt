@@ -6,10 +6,6 @@
 # Invoke the WASM regression with:
 #
 #     ./run.d wasm
-#
-# Add entries here when a test currently fails under WASM. Remove entries
-# once they pass; the test runner reports unexpected passes so this file
-# can be shrunk as the WASM backend improves.
 
 compilable/issue24830.sh
 compilable/test6461.sh
@@ -80,9 +76,7 @@ runnable/dbitfieldsms.d
 runnable/dbitfieldsposix32.d
 runnable/dbitfieldsposix64.d
 
-# --- Require complex types (cfloat/cdouble/creal) ---
-# Hit `assert(0)` in backend/wasm/codgen.d wasmType for the deprecated complex
-# types, which the WASM backend does not support.
+# Require complex types (cfloat/cdouble/creal)
 compilable/fix20425.c
 compilable/sw_transition_complex.d
 compilable/test18251.d
@@ -142,36 +136,20 @@ runnable/test19086.d
 runnable/noreturn1.d
 runnable/noreturn2.d
 
-# --- Require runtime unittest infrastructure ---
-# Imports core.runtime and sets Runtime.extendedModuleUnitTester; the wasm
-# runtime has no core.runtime implementation (undefined import at link).
+# wasm runtime has no Runtime.extendedModuleUnitTester
 runnable/issue16995.d
 
 # --- -O miscompiles opDollar slice bounds (pre-existing, unrelated to EH) ---
 # Under -O, `slice[$-3 .. $-1]` with a struct opSlice/opDollar loses the
 # first bound's opDollar value (yields -3 instead of 8-3). Reproduces with
-# -betterC, so it is not an EH interaction. Repro: tmp/w_slice6.d.
+# -betterC, so it is not an EH interaction.
 runnable/opover2.d
 
-# --- Depend on the conservative GC's allocation geometry ---
-# -profile=gc reports allocation sizes as deltas of allocatedInCurrentThread,
-# and the expected output hardcodes the native GC's bin size (96 bytes for
-# `new ubyte[64]`). The WASM bump allocator honestly reports the requested
-# size (64), so the byte counts can only match once the real collecting GC
-# is ported to WASM.
+# Depend on the conservative GC's allocation geometry
 runnable/profilegc_stdout.d
 
-# --- Latent codegen bugs exposed by module-ctor/dtor support ---
-# Wiring module ctors/dtors emits a ModuleInfo + "minfo" pointer per module and
-# moves the GC heap from a fixed static buffer to wasi-libc calloc (memory.grow).
-# Both shift linear-memory addresses, which surfaces pre-existing address-/
-# layout-sensitive codegen bugs in these tests (each fails an assert on a wrong
-# computed value, not on the ctor machinery itself). They pass only under the
-# old layout; the underlying codegen bugs need separate fixes.
 
-# --- gdb debugger tests (cannot run under WASM) ---
-# The harness drives gdb against a native executable; the emitted .wasm gives
-# "exec format error", so these can never run on the WASM target.
+# gdb debugger tests (cannot run under WASM)
 runnable/gdb1.d
 runnable/gdb4149.d
 runnable/gdb4181.d
@@ -207,7 +185,6 @@ runnable/test_cdstrpar.d
 # --- Architecture-dependent undefined behavior ---
 # constfold.d test2 asserts cast(int)float.infinity == 0x80000000 (the x86
 # cvttss2si result); wasm uses saturating truncation, which yields 0x7FFFFFFF.
-# The test itself documents this as architecture-dependent UB.
 runnable/constfold.d
 
 # --- Test harness / expected output encode host specifics ---
@@ -220,29 +197,22 @@ compilable/testos.d
 compilable/json2.d
 compilable/makedeps_exe.d
 
-# --- Require thread support (WASM is single-threaded) ---
+# Require thread support (WASM is single-threaded)
 runnable/testthread2.d
 
-# --- Encode ELF-style section separation ---
+# Encode ELF-style section separation
 # testconstsection.d asserts that string-literal data, TLS, data and BSS live in
-# disjoint address ranges (comparing bounding intervals of a few pointers). ELF
-# gives each its own section; WASM lays every symbol out as its own data segment
-# in one linear memory, so wasm-ld can interleave a string's char array between
-# two BSS variables and the bounding intervals then overlap.
+# disjoint address ranges, while WASM lays every symbol out as its own data segment
+# in one linear memory
 runnable/testconstsection.d
 
-# --- pragma(crt_constructor)/crt_destructor not wired for WASM ---
-# The WASM backend does not emit crt_constructor functions into the linking
-# section's WASM_INIT_FUNCS (so they never run via __wasm_call_ctors), and WASM
-# has no standard fini mechanism for crt_destructor. test17868/b expect the
-# ctor/dtor functions to print, but only main's output appears.
+# pragma(crt_constructor)/crt_destructor not wired for WASM
 runnable/test17868.d
 runnable/test17868b.d
 
 # --- Assembler symbol renaming + host open() ---
 # test23343.c renames `open` to the macho-underscored `_open` via asm("_open")
-# and calls open("/dev/null"). WASI exposes no `_open` import and the macho
-# underscore convention does not apply, so the symbol is an undefined import.
+# and calls open("/dev/null")
 runnable/test23343.c
 
 # --- Data too large for wasm object format ---
@@ -253,29 +223,29 @@ runnable/test23343.c
 compilable/test23679.d
 
 # --- Host C library behavior the WASM target cannot match ---
-# test22.d formats `real` with %Lg: wasi-libc is built without long-double
-# printf support and aborts at runtime with "Support for formatting long
-# double values is currently disabled".
-# test6423.d calls main() through a mismatched `extern(C) int function()`
-# pointer; wasm call_indirect strictly validates the signature and traps.
-# test42.d also formats a real with %Lg (and D real is f64 on wasm32 while
-# wasi-libc long double is f128, so the vararg layout can never match).
 # exe3.c calls fabsl/expl/...: ImportC types long double as D real (f64), but
 # wasi-libc's l-suffixed math functions take f128 ((i32, i64, i64) -> void).
-# test11.d formats a real with %Lg (test17).
-# template4.d formats a real with %.20Lg (test20).
 runnable/exe3.c
+
+# formats a real with %.20Lg (test20).
 runnable/template4.d
+
+# formats a real with %Lg (test17).
 runnable/test11.d
+
+# test22.d formats `real` with %Lg
 runnable/test22.d
+
+# Formats a real with %Lg (wasi-libc long double is f128, so the vararg layout can never match)
 runnable/test42.d
+
+# calls main() through a mismatched `extern(C) int function()`
+# pointer; wasm call_indirect strictly validates the signature and traps.
 runnable/test6423.d
 
 # --- Require threads / fibers (WASM is single-threaded) ---
-# core.thread (Thread, Fiber) has no WASM implementation; these tests spawn
-# threads or fibers as their core scenario. test17072 only calls Thread.sleep,
-# but core.thread.wasi_impl is not compiled into the minimal wasm druntime, so
-# even the static method is an undefined import at link time.
 runnable/test15779.d
 runnable/testthread.d
+
+# Calls Thread.sleep
 runnable/test17072.d
