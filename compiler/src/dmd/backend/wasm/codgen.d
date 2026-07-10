@@ -1008,6 +1008,21 @@ private bool elemNeedsFrameBase(elem* e)
     const op = e.Eoper;
     if (op == OPframeptr)
         return true;
+    // OPrelconst of a frame-resident local/parameter (`el_ptr(sthis)`) keeps the
+    // shadow frame base live: the parent hands its frame to a nested function
+    // that reads captured vars, so a captured POD-struct param needs its spilled
+    // slot and must not be elided to the incoming pointer.
+    // ---
+    // struct S { double v; }
+    // struct B { double got; this(T)(T p) { double f() { return p.v; } got = f(); } }
+    // // p is only read inside f(): without the frame slot the nested read sees 0
+    // ---
+    if (op == OPrelconst && e.Vsym &&
+        (e.Vsym.Sclass == SC.parameter || e.Vsym.Sclass == SC.regpar ||
+         e.Vsym.Sclass == SC.fastpar   || e.Vsym.Sclass == SC.shadowreg ||
+         e.Vsym.Sclass == SC.auto_     || e.Vsym.Sclass == SC.register ||
+         e.Vsym.Sclass == SC.stack))
+        return true;
     if (OTleaf(op))
         return false;
     if (op == OPcall && e.E1 && e.E1.Eoper == OPvar && e.E1.Vsym)
