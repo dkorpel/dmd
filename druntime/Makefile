@@ -490,6 +490,7 @@ WASM_DRT_SRCS := \
 	src/core/bitop.d \
 	src/core/int128.d \
 	src/core/cpuid.d \
+	src/core/internal/spinlock.d \
 	src/core/internal/abort.d \
 	src/rt/minfo.d \
 	src/rt/sections_wasm.d \
