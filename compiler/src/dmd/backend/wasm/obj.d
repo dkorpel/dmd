@@ -5,6 +5,25 @@
  * type, function, export, memory, code and data sections plus the linking and
  * relocation custom sections wasm-ld consumes.
  *
+ * It also drives codgen.d's two-phase compilation. Per function, `func_term`
+ * records the IR (a WasmFuncBody) and snapshots `globsym`; code generation is
+ * deferred. `term` then, once the whole module is visible: (1) pre-registers
+ * every externally-called function and every function pointer held in data as
+ * an import, so import indices are frozen before any bytecode is emitted (WASM
+ * indices are fixed-width LEBs); (2) interns the defined functions' types after
+ * the imports, giving stable ld-compatible type indices; (3) runs `wasm_codgen2`
+ * on each function; (4) writes the sections in canonical order.
+ *
+ * Linking model: this backend patches nothing itself. Function calls, function
+ * pointers and data-to-data pointers are emitted as zero/placeholder operands
+ * carrying a relocation entry (R_WASM.*) recorded against a Symbol*; wasm-ld
+ * resolves the final memory addresses and table/function/type indices. Memory,
+ * table and `__stack_pointer` are imported from the linker, not defined here.
+ *
+ * Data lives in two segments matching the backend's Segments enum: WASM_DATA
+ * (initialized) and WASM_UDATA (BSS — still emitted as a real zero-filled
+ * segment so `&bssSym` relocates like any other address).
+ *
  * Spec: https://webassembly.github.io/spec/core/binary/index.html
  *
  * Copyright:   Copyright (C) 1999-2026 by The D Language Foundation, All Rights Reserved
@@ -1339,6 +1358,12 @@ void WasmObj_term2(const(char)[] objfilename, ref WasmModule wmod, ref OutBuffer
             for (; b; b = b.Bnext)
                 preRegisterExternals(b.Belem);
         }
+        // Data segments (vtables) hold function pointers to functions defined
+        // in other objects; register those as imports too, so reloc.DATA has a
+        // function symbol wasm-ld can assign a table slot to:
+        //   class C { int x; }
+        //   void main() { Object o = new C; assert(o.toString() != ""); }
+        //   // C's vtable slot for the inherited Object.toString
         {
             import dmd.backend.wasm.codgen : funcIndex;
             foreach (ref rel; wmod.funcRelocations)

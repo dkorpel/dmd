@@ -1,3 +1,46 @@
+/**
+ * WebAssembly control-flow structuring.
+ *
+ * WebAssembly has no arbitrary `goto`: control flow is expressed with nested
+ * structured regions — `block`/`loop`/`if` bracketed by `end`, left by a `br N`
+ * that targets the N-th enclosing region. This module turns DMD's unstructured
+ * block CFG (arbitrary `Bsucc` edges) into that nested form and drives codgen.d
+ * to emit the region opcodes and branches.
+ *
+ * Algorithm:
+ *   1. Assign each block a reverse-post-order index. A successor edge B => A
+ *      with A.index <= B.index is a back edge, making A a loop header (its region
+ *      becomes a `loop`); overlapping loop regions from irreducible flow are
+ *      widened so they nest.
+ *   2. Every forward branch target gets a `block` frame: OP_BLOCK opens before
+ *      the span reaching it and OP_END closes just before the target, so a `br`
+ *      to that frame lands on the target. All frames are collected up front and
+ *      widened until laminar (frames must nest LIFO), because several targets can
+ *      be pending at once (an if-chain) in an order lazy per-branch opening can't
+ *      produce.
+ *   3. Emit: at each block, close frames ending before it and open frames
+ *      beginning at it, then translate the terminator into fall-through, `br`,
+ *      `br_if`, or `br_table` (switch: dense range => indexed table, sparse =>
+ *      compare chain).
+ *
+ * Exceptions (EH_WASM) add `try_table` frames: `structureTryRegions` reorders
+ * blocks so each `BC._try` header is immediately followed by the blocks it
+ * guards and then its landing-pad group (blockopt (-O) and the inliner scatter
+ * them); the catch clause lands on the block just past the try body.
+ *
+ * Fallback: a CFG that can't be made laminar (goto into a loop body, `goto case`
+ * to an earlier case, some optimizer layouts) fails validation and is emitted
+ * with a dispatch loop — a selector local drives a `br_table` inside one big
+ * `loop`, one wrapper `block` per basic block, so every branch becomes "set
+ * selector, br to the loop". Correct for any CFG, but slower code.
+ *
+ * Set WASM_BLOCKS=1 in the environment to dump the block graph and the repaired
+ * frames when debugging structuring bugs.
+ *
+ * Copyright:   Copyright (C) 1999-2026 by The D Language Foundation, All Rights Reserved
+ * License:     $(LINK2 https://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
+ * Source:      $(LINK2 https://github.com/dlang/dmd/blob/master/compiler/src/dmd/backend/wasm/blocks.d, _blocks.d)
+ */
 module dmd.backend.wasm.blocks;
 
 import dmd.backend.cc;

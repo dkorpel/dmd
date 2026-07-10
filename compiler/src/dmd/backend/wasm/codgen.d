@@ -1,7 +1,43 @@
 /**
  * WebAssembly code generator.
  *
- * Translates DMD IR (elem trees + block CFG) to WebAssembly bytecode.
+ * Translates DMD's backend IR (elem expression trees hung off a block CFG) into
+ * WebAssembly bytecode. Companion to blocks.d (control-flow structuring) and
+ * obj.d (the module/section writer that drives and links the result).
+ *
+ * Two-phase compilation:
+ *   Phase 1 runs per function during e2ir, from `WasmObj_func_term`: it
+ *   snapshots the function's local symbol table (`globsym`) and eagerly assigns
+ *   shadow-frame offsets (`wasm_assignShadowOffsets`). Offsets must be fixed
+ *   here because a nested function's IR bakes in the enclosing frame offset of
+ *   each captured variable before that enclosing function is code-generated.
+ *   Phase 2 (`wasm_codgen2`) is deferred to `WasmObj_term`, once every function,
+ *   import and type in the module is known, so function/type/table indices are
+ *   stable — WASM encodes them as fixed-width LEBs that cannot grow after the fact.
+ *
+ * Value model — WASM is a stack machine:
+ *   `genElem` walks an elem tree, leaves its result on the operand stack, and
+ *   returns whether it pushed a value. Scalar locals/params live in WASM locals.
+ *   Anything whose address is taken (structs, static arrays, captured variables,
+ *   spilled C-variadic args, hidden sret buffers) lives in a *shadow stack* frame
+ *   in linear memory: the prologue subtracts the frame size from the imported
+ *   `__stack_pointer` global into a base local, the epilogue restores it. D
+ *   slices and delegates are lowered to two i32s (ptr+length / funcptr+context),
+ *   matching LDC's -O0 ABI.
+ *
+ * Function / type / table index system:
+ *   Codegen never bakes a final index; every index is emitted as a padded LEB
+ *   plus a relocation recorded against a Symbol*, so wasm-ld can renumber at
+ *   link time. Direct calls emit R_WASM.FUNCTION_INDEX_LEB; `call_indirect`
+ *   emits a type-section index (R_WASM.TYPE_INDEX_LEB) and the imported
+ *   `__indirect_function_table` number (R_WASM.TABLE_NUMBER_LEB); taking a
+ *   function's address emits a table slot (R_WASM.TABLE_INDEX_SLEB); data
+ *   addresses, the stack-pointer global and EH tags are relocatable too
+ *   (MEMORY_ADDR_LEB / GLOBAL_INDEX_LEB / TAG_INDEX_LEB).
+ *
+ * `WasmCG` is the per-function generator state: operand-stack reachability,
+ * temporary locals, shadow-frame layout, pending relocations, and the
+ * call-context stack consumed while walking OPparam argument trees.
  */
 
 module dmd.backend.wasm.codgen;
@@ -929,6 +965,11 @@ private bool elemNeedsFrameBase(elem* e)
     const op = e.Eoper;
     if (op == OPframeptr)
         return true;
+    // A captured POD-struct param needs its spilled frame slot, so `&param`
+    // must not collapse to the incoming pointer:
+    //   struct S { double v; }
+    //   struct B { double got; this(T)(T p) { double f() { return p.v; } got = f(); } }
+    //   // p is read only inside f(): without the frame slot the nested read sees 0
     if (op == OPrelconst && e.Vsym &&
         (e.Vsym.Sclass == SC.parameter || e.Vsym.Sclass == SC.regpar ||
          e.Vsym.Sclass == SC.fastpar   || e.Vsym.Sclass == SC.shadowreg ||
@@ -1333,6 +1374,9 @@ private bool emitStructParAddr(ref WasmCG cg, elem* e)
         cg.emit(OP_LOCAL_SET, uleb(addrTmp), OP_END, OP_LOCAL_GET, uleb(addrTmp));
         return true;
     }
+    // A struct rvalue arrives as `strpar(streq(_TMP, value))`: emitting the
+    // streq performs the copy and leaves the temp's address on the stack.
+    // Example: `f(S.init)` for a by-value struct parameter (structlit_rvalue.d).
     if (e.Eoper == OPstreq)
         return cg.genElem(e);
     if (e.Eoper == OPeq && e.E1)
@@ -1467,6 +1511,12 @@ private bool genCall(ref WasmCG cg, elem* e)
             ctx.skipCount++;
     }
 
+    // An rtlsym slice return (e.g. _d_arraycopy) has no ehidden arg — the native
+    // ABI returns slices in a register pair — but the WASM signature has a hidden
+    // sret pointer first; when no hidden leaf was supplied, bump the stack pointer
+    // for a scratch buffer and pass its address, restoring afterwards:
+    //   struct S { this(inout ref S) inout {} ~this() {} }
+    //   struct T { S[3] ss; this(int) { ss[] = makeStaticArray(); } }
     const bool retByPtrCall = fty && fty.Tnext && returnByPtr(fty.Tnext);
     uint sretLocal = uint.max;
     uint sretSize;
@@ -1515,9 +1565,17 @@ private bool genCall(ref WasmCG cg, elem* e)
     if (ctx.isCVariadic && varArgs.length)
         cg.emitFrameFree(spLocal, vaFrameSize);
 
+    // Noreturn call: leave a polymorphic stack. The optimizer folds
+    // `assert(false)` to OPne(call, 0), whose relop needs the call's value even
+    // though the callee's signature is void: `unittest { assert(false); }`.
     if ((calleeSym && (calleeSym.Sflags & SFLexit)) || tybasic(e.Ety) == TYnoreturn)
         cg.emit(OP_UNREACHABLE);
 
+    // Report what the callee's signature actually left on the stack — e.Ety can
+    // disagree (a `ref void` return is a pointer to the frontend but no WASM
+    // result), and a defining symbol may differ from a redeclaration:
+    //   struct S { this(ref inout typeof(this)) {} ref opAssign(typeof(this)) {} }
+    //   void emplace(S chunk, S args) { chunk = args; } // drop after resultless call
     if (calleeSym)
     {
         if (Symbol* def = definedFuncByName(calleeSym))
@@ -1641,6 +1699,10 @@ bool genElem(ref WasmCG cg, elem* e)
             cg.emitF64Const((tbF64 == TYreal || tbF64 == TYireal) ? cast(double) e.Vreal : e.Vdouble);
             break;
         case WASM_I32:
+            // A sub-word constant must use its type's canonical i32 extension
+            // (see memOpsFor), else e.g. `cast(ushort)s == 0xCCCC` mismatches a
+            // zero-extended i32.load16_u against a sign-extended literal
+            // (test15.d test39).
             cg.emitConst(OP_I32_CONST, canonicalI32Const(cast(int) e.Vlong, e.Ety));
             break;
         default:
@@ -2161,6 +2223,14 @@ bool genElem(ref WasmCG cg, elem* e)
             else
                 cg.emit(e.wasmType);
 
+            // An arm may push a different width than the cond's type (e2ir types
+            // an AA struct-assign cond as the 8-byte struct but its arms yield an
+            // opAssign ref); pad/coerce so the if-block type checks:
+            //   void main() {
+            //       struct Bar { int id; this(this) {} ~this() {} }
+            //       Bar[string] bars;
+            //       bars["test"] = Bar(42);
+            //   }
             void fitArm(bool pushed, elem* arm)
             {
                 if (voidCond)
@@ -2198,6 +2268,11 @@ bool genElem(ref WasmCG cg, elem* e)
                 cg.emit(OP_END);
                 return false;
             }
+            // Decide synth-vs-coerce from whether E2 actually pushed, not from
+            // typeHasValue(E2.Ety): a nested OPoror/OPandand always leaves an i32
+            // yet can be typed void, which would double-count. `a || b || dtor()`
+            // in a struct destructor (test17246.d): a void RHS leaves nothing, so
+            // synthesise a result for the if-block type check.
             void rhsToI32()
             {
                 if (cg.genElem(e.E2))
@@ -2280,6 +2355,9 @@ bool genElem(ref WasmCG cg, elem* e)
 
     case OPmemset:
         {
+            // IR: OPmemset(dst, OPparam(nelems, val)). Result is dst.
+            //   struct BB { ulong bits; }
+            //   BB[8] arr; arr[] = BB(0); // val is 8 bytes wide, nelems is 8
             assert(e.E2.Eoper == OPparam);
             elem* enelems = e.E2.E1;
             elem* evalue = e.E2.E2;
