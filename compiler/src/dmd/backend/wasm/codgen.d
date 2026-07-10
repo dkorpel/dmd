@@ -142,6 +142,16 @@ struct CallCtx
     elem*[] varArgs;            /// args collected for the variadic shadow-frame spill
 }
 
+/// An integer tagged for unsigned LEB128 encoding by the variadic `WasmCG.emit`
+struct Uleb { uint v; }
+/// An integer tagged for signed LEB128 encoding by the variadic `WasmCG.emit`
+struct Sleb { long v; }
+
+/// Returns: `v` tagged for unsigned LEB128 encoding in `WasmCG.emit`
+Uleb uleb(uint v) => Uleb(v);
+/// Returns: `v` tagged for signed LEB128 encoding in `WasmCG.emit`
+Sleb sleb(long v) => Sleb(v);
+
 /// Per-function code-generation state
 struct WasmCG
 {
@@ -271,6 +281,24 @@ nothrow:
     void emit(ubyte b)
     {
         code.writeByte(b);
+    }
+
+    /// Emit a mixed sequence in one call: `ubyte` arguments are opcodes
+    /// written verbatim, `elem*` arguments are code-generated via `genElem`,
+    /// and integers wrapped in `uleb`/`sleb` are LEB128-encoded immediates.
+    void emit(Args...)(Args args) if (Args.length > 1)
+    {
+        foreach (a; args)
+        {
+            static if (is(typeof(a) : elem*))
+                genElem(this, a);
+            else static if (is(typeof(a) == Uleb))
+                emitULEB(a.v);
+            else static if (is(typeof(a) == Sleb))
+                emitSLEB(a.v);
+            else
+                emit(a);
+        }
     }
 
     void emitULEB(uint v)
@@ -558,25 +586,21 @@ private int canonicalI32Const(int v, tym_t ty)
 private void emitTruncSat(ref WasmCG cg, WASM_TYPE from, WASM_TYPE to, bool uns)
 {
     const subop = (to == WASM_I64 ? 4 : 0) | (from == WASM_F64 ? 2 : 0) | (uns ? 1 : 0);
-    cg.emit(OP_FC_PREFIX);
-    cg.emitULEB(subop);
+    cg.emit(OP_FC_PREFIX, uleb(subop));
 }
 
 /// Emit `memory.copy 0 0`
 private void emitMemoryCopy(ref WasmCG cg)
 {
-    cg.emit(OP_FC_PREFIX);
-    cg.emitULEB(10); // memory.copy sub-opcode
-    cg.emit(0x00); // dst memidx
-    cg.emit(0x00); // src memidx
+    // sub-opcode 10, dst + src memidx
+    cg.emit(OP_FC_PREFIX, uleb(10), uleb(0), uleb(0));
 }
 
 /// Emit `memory.fill 0`
 private void emitMemoryFill(ref WasmCG cg)
 {
-    cg.emit(OP_FC_PREFIX);
-    cg.emitULEB(11); // memory.fill sub-opcode
-    cg.emit(0x00); // memidx
+    // sub-opcode 11, memidx
+    cg.emit(OP_FC_PREFIX, uleb(11), uleb(0));
 }
 
 private void emitLoad(ref WasmCG cg, tym_t ty, uint offset = 0)
@@ -619,14 +643,12 @@ private void emitCoerce(ref WasmCG cg, WASM_TYPE from, WASM_TYPE to)
     // them inline before the single-op lookup below.
     if (from == WASM_F32 && to == WASM_I64)
     {
-        cg.emit(OP_I32_REINTERPRET_F32);
-        cg.emit(OP_I64_EXTEND_I32_U);
+        cg.emit(OP_I32_REINTERPRET_F32, OP_I64_EXTEND_I32_U);
         return;
     }
     if (from == WASM_I64 && to == WASM_F32)
     {
-        cg.emit(OP_I32_WRAP_I64);
-        cg.emit(OP_F32_REINTERPRET_I32);
+        cg.emit(OP_I32_WRAP_I64, OP_F32_REINTERPRET_I32);
         return;
     }
     if ((from == WASM_F32 || from == WASM_F64) && (to == WASM_I32 || to == WASM_I64))
@@ -718,10 +740,7 @@ bool emitSymAddr(ref WasmCG cg, Symbol* s, uint off)
     if (!emitSymBase(cg, s, off, memOff))
         return false;
     if (memOff != 0)
-    {
-        cg.emitConst(OP_I32_CONST, cast(int) memOff);
-        cg.emit(OP_I32_ADD);
-    }
+        cg.emit(OP_I32_CONST, sleb(cast(int) memOff), OP_I32_ADD);
     return true;
 }
 
@@ -859,17 +878,13 @@ private bool tryCoalesceZeroInit(ref WasmCG cg, elem* comma)
     {
         if (i + 1 < n && offs[i + 1] == offs[i] + 4)
         {
-            cg.genElem(base);
-            cg.emitConst(OP_I64_CONST, 0);
-            cg.emit(OP_I64_STORE);
+            cg.emit(base, OP_I64_CONST, sleb(0), OP_I64_STORE);
             cg.emitMemArg(2, offs[i]);
             i += 2;
         }
         else
         {
-            cg.genElem(base);
-            cg.emitConst(OP_I32_CONST, 0);
-            cg.emit(OP_I32_STORE);
+            cg.emit(base, OP_I32_CONST, sleb(0), OP_I32_STORE);
             cg.emitMemArg(2, offs[i]);
             i += 1;
         }
@@ -1146,12 +1161,10 @@ private void zeroExtendSmallInt(ref WasmCG cg, tym_t ty)
     switch (tysize(ty))
     {
     case 1:
-        cg.emitConst(OP_I32_CONST, 0xFF);
-        cg.emit(OP_I32_AND);
+        cg.emit(OP_I32_CONST, sleb(0xFF), OP_I32_AND);
         break;
     case 2:
-        cg.emitConst(OP_I32_CONST, 0xFFFF);
-        cg.emit(OP_I32_AND);
+        cg.emit(OP_I32_CONST, sleb(0xFFFF), OP_I32_AND);
         break;
     default:
         break;
@@ -1260,8 +1273,7 @@ private void genVarArgs(ref WasmCG cg, elem*[] varArgs, ref uint spLocal, ref ui
         final switch (sl.kind)
         {
         case VaKind.scalar:
-            cg.emitLocal(OP_LOCAL_GET, spLocal); // addr
-            cg.genElem(sl.e); // value
+            cg.emit(OP_LOCAL_GET, uleb(spLocal), sl.e); // addr, value
             if (sl.promoteF32)
                 cg.emit(OP_F64_PROMOTE_F32);
             cg.emit(sl.storeOp);
@@ -1271,13 +1283,9 @@ private void genVarArgs(ref WasmCG cg, elem*[] varArgs, ref uint spLocal, ref ui
         case VaKind.slicePair:
             // D slice layout {length, ptr}: store E2 (length/lsw) at off+0 and
             // E1 (ptr/msw) at off+4 as two i32s.
-            cg.emitLocal(OP_LOCAL_GET, spLocal);
-            cg.genElem(sl.e.E2);
-            cg.emit(OP_I32_STORE);
+            cg.emit(OP_LOCAL_GET, uleb(spLocal), sl.e.E2, OP_I32_STORE);
             cg.emitMemArg(2, sl.off);
-            cg.emitLocal(OP_LOCAL_GET, spLocal);
-            cg.genElem(sl.e.E1);
-            cg.emit(OP_I32_STORE);
+            cg.emit(OP_LOCAL_GET, uleb(spLocal), sl.e.E1, OP_I32_STORE);
             cg.emitMemArg(2, sl.off + 4);
             break;
 
@@ -1288,12 +1296,9 @@ private void genVarArgs(ref WasmCG cg, elem*[] varArgs, ref uint spLocal, ref ui
             {
                 cg.emitLocal(OP_LOCAL_GET, spLocal); // dst base
                 if (sl.off)
-                {
-                    cg.emitConst(OP_I32_CONST, cast(int) sl.off);
-                    cg.emit(OP_I32_ADD);
-                }
-                cg.genElem(sl.e);                    // src address
-                cg.emitConst(OP_I32_CONST, cast(int) sl.byteSize);
+                    cg.emit(OP_I32_CONST, sleb(sl.off), OP_I32_ADD);
+                // src address, byte count
+                cg.emit(sl.e, OP_I32_CONST, sleb(sl.byteSize));
                 cg.emitMemoryCopy();
             }
             break;
@@ -1349,8 +1354,7 @@ private bool emitSliceHalf(ref WasmCG cg, elem* e, bool ptrHalf)
     }
     if (e.Eoper == OPind && e.E1)
     {
-        cg.genElem(e.E1);
-        cg.emit(OP_I32_LOAD);
+        cg.emit(e.E1, OP_I32_LOAD);
         cg.emitMemArg(2, half);
         return true;
     }
@@ -1372,23 +1376,20 @@ private void emitSliceArg(ref WasmCG cg, elem* arg)
     // OPconst null slice/delegate → emit (0, 0).
     if (a.Eoper == OPconst)
     {
-        cg.emitConst(OP_I32_CONST, 0);
-        cg.emitConst(OP_I32_CONST, 0);
+        cg.emit(OP_I32_CONST, sleb(0), OP_I32_CONST, sleb(0));
         return;
     }
     // OPpair(lo, hi): lo = length (LSW), hi = ptr (MSW). Emit both halves directly.
     if (a.Eoper == OPpair)
     {
-        cg.genElem(a.E1);
-        cg.genElem(a.E2);
+        cg.emit(a.E1, a.E2);
         return;
     }
     // OPrpair is the reversed pair: E1 = msb (ptr), E2 = lsb (length). Emit
     // (length, ptr) by swapping the operand order.
     if (a.Eoper == OPrpair)
     {
-        cg.genElem(a.E2);
-        cg.genElem(a.E1);
+        cg.emit(a.E2, a.E1);
         return;
     }
     // A non-void OPparam is a slice/delegate already split into a register pair
@@ -1396,8 +1397,7 @@ private void emitSliceArg(ref WasmCG cg, elem* arg)
     // Emit (lsw, msw) to match the (length, ptr) / (context, funcptr) order.
     if (a.Eoper == OPparam)
     {
-        cg.genElem(a.E2);
-        cg.genElem(a.E1);
+        cg.emit(a.E2, a.E1);
         return;
     }
     // OPind: evaluate the address expression ONCE (it may have side effects,
@@ -1428,17 +1428,13 @@ private void emitSliceArg(ref WasmCG cg, elem* arg)
         void emitArm(elem* arm)
         {
             emitSliceArg(cg, arm); // pushes (length, ptr)
-            cg.emitLocal(OP_LOCAL_SET, ptrTmp);
-            cg.emitLocal(OP_LOCAL_SET, lenTmp);
+            cg.emit(OP_LOCAL_SET, uleb(ptrTmp), OP_LOCAL_SET, uleb(lenTmp));
         }
-        cg.emit(OP_IF);
-        cg.emit(WASM_VOID_BLOCK);
+        cg.emit(OP_IF, WASM_VOID_BLOCK);
         emitArm(a.E2.E1);
         cg.emit(OP_ELSE);
         emitArm(a.E2.E2);
-        cg.emit(OP_END);
-        cg.emitLocal(OP_LOCAL_GET, lenTmp);
-        cg.emitLocal(OP_LOCAL_GET, ptrTmp);
+        cg.emit(OP_END, OP_LOCAL_GET, uleb(lenTmp), OP_LOCAL_GET, uleb(ptrTmp));
         return;
     }
 
@@ -1457,17 +1453,13 @@ private bool emitStructParAddr(ref WasmCG cg, elem* e)
         cg.genElem(e.E1);
         emitCondToI32(cg, e.E1);
         const uint addrTmp = cg.allocTemp(WASM_I32);
-        cg.emit(OP_IF);
-        cg.emit(WASM_VOID_BLOCK);
+        cg.emit(OP_IF, WASM_VOID_BLOCK);
         if (!emitStructParAddr(cg, e.E2.E1))
             return false;
-        cg.emitLocal(OP_LOCAL_SET, addrTmp);
-        cg.emit(OP_ELSE);
+        cg.emit(OP_LOCAL_SET, uleb(addrTmp), OP_ELSE);
         if (!emitStructParAddr(cg, e.E2.E2))
             return false;
-        cg.emitLocal(OP_LOCAL_SET, addrTmp);
-        cg.emit(OP_END);
-        cg.emitLocal(OP_LOCAL_GET, addrTmp);
+        cg.emit(OP_LOCAL_SET, uleb(addrTmp), OP_END, OP_LOCAL_GET, uleb(addrTmp));
         return true;
     }
     // A struct rvalue argument arrives as `strpar(streq(_TMP, value))`: the copy
@@ -1494,11 +1486,9 @@ private bool emitStructParAddr(ref WasmCG cg, elem* e)
 private void loadSliceHalves(ref WasmCG cg)
 {
     const uint addrTmp = cg.allocTemp(WASM_I32);
-    cg.emitLocal(OP_LOCAL_TEE, addrTmp);
-    cg.emit(OP_I32_LOAD);
+    cg.emit(OP_LOCAL_TEE, uleb(addrTmp), OP_I32_LOAD);
     cg.emitMemArg(2, 0);
-    cg.emitLocal(OP_LOCAL_GET, addrTmp);
-    cg.emit(OP_I32_LOAD);
+    cg.emit(OP_LOCAL_GET, uleb(addrTmp), OP_I32_LOAD);
     cg.emitMemArg(2, 4);
 }
 
@@ -1584,9 +1574,7 @@ private bool genCall(ref WasmCG cg, elem* e)
         {
             cg.emitSPGet();
             cg.genElem(e.E2, WASM_I32);
-            cg.emit(OP_I32_SUB);
-            cg.emitConst(OP_I32_CONST, ~15);
-            cg.emit(OP_I32_AND);
+            cg.emit(OP_I32_SUB, OP_I32_CONST, sleb(~15), OP_I32_AND);
             const uint tmp = cg.allocTemp(WASM_I32);
             cg.emitLocal(OP_LOCAL_TEE, tmp);
             cg.emitSPSet();
@@ -1743,8 +1731,7 @@ private bool genCall(ref WasmCG cg, elem* e)
         // lives at the address) and evaluate the inner expression to push
         // the table index on the value stack.
         elem* fn = (e.E1.Eoper == OPind && e.E1.E1) ? e.E1.E1 : e.E1;
-        cg.genElem(fn);
-        cg.emit(OP_CALL_INDIRECT);
+        cg.emit(fn, OP_CALL_INDIRECT);
         cg.emitCallIndirectType(typeIdx);
         cg.emitCallIndirectTable();
     }
@@ -1837,8 +1824,7 @@ bool genElem(ref WasmCG cg, elem* e)
 
     bool unaryOp(WASM_OP op)
     {
-        cg.genElem(e.E1);
-        cg.emit(op);
+        cg.emit(e.E1, op);
         return true;
     }
 
@@ -1876,15 +1862,12 @@ bool genElem(ref WasmCG cg, elem* e)
 
     case OPmemgrow:
         // core.wasm.memoryGrow(pages) → memory.grow (returns previous page count)
-        cg.genElem(e.E1);
-        cg.emit(OP_MEMORY_GROW);
-        cg.emitULEB(0); // memory index 0
+        cg.emit(e.E1, OP_MEMORY_GROW, uleb(0)); // memory index 0
         return true;
 
     case OPmemsize:
         // core.wasm.memorySize() → memory.size (current page count)
-        cg.emit(OP_MEMORY_SIZE);
-        cg.emitULEB(0); // memory index 0
+        cg.emit(OP_MEMORY_SIZE, uleb(0)); // memory index 0
         return true;
 
     case OPthrow:
@@ -1897,8 +1880,7 @@ bool genElem(ref WasmCG cg, elem* e)
     case OPrethrow:
         // Re-raise the in-flight exception saved by the enclosing finally's
         // catch_all_ref landing pad (Vsym = the finally's flag symbol).
-        cg.emitLocal(OP_LOCAL_GET, cg.exnLocalFor(e.Vsym));
-        cg.emit(OP_THROW_REF);
+        cg.emit(OP_LOCAL_GET, uleb(cg.exnLocalFor(e.Vsym)), OP_THROW_REF);
         return false;
 
     case OPparam:
@@ -2030,13 +2012,9 @@ bool genElem(ref WasmCG cg, elem* e)
                 // OPrpair: E1=hi (ptr), E2=lo (length).
                 elem* lo = (rhsTail.Eoper == OPpair) ? rhsTail.E1 : rhsTail.E2;
                 elem* hi = (rhsTail.Eoper == OPpair) ? rhsTail.E2 : rhsTail.E1;
-                cg.emitLocal(OP_LOCAL_GET, addrTmp);
-                cg.genElem(lo);
-                cg.emit(OP_I32_STORE);
+                cg.emit(OP_LOCAL_GET, uleb(addrTmp), lo, OP_I32_STORE);
                 cg.emitMemArg(2, 0);
-                cg.emitLocal(OP_LOCAL_GET, addrTmp);
-                cg.genElem(hi);
-                cg.emit(OP_I32_STORE);
+                cg.emit(OP_LOCAL_GET, uleb(addrTmp), hi, OP_I32_STORE);
                 cg.emitMemArg(2, 4);
                 return false;
             }
@@ -2076,8 +2054,7 @@ bool genElem(ref WasmCG cg, elem* e)
                 return false;
             }
             uint valTmp = cg.allocTemp(wasmType(e.E1.Ety));
-            cg.genElem(e.E2);
-            cg.emitLocal(OP_LOCAL_SET, valTmp);
+            cg.emit(e.E2, OP_LOCAL_SET, uleb(valTmp));
             if (cg.emitLValueBase(e.E1, memOff))
             {
                 cg.emitLocal(OP_LOCAL_GET, valTmp);
@@ -2300,14 +2277,10 @@ bool genElem(ref WasmCG cg, elem* e)
 
         // integer negation = 0 - x
         case WASM_I64:
-            cg.emitConst(OP_I64_CONST, 0);
-            cg.genElem(e.E1);
-            cg.emit(OP_I64_SUB);
+            cg.emit(OP_I64_CONST, sleb(0), e.E1, OP_I64_SUB);
             return true;
         case WASM_I32:
-            cg.emitConst(OP_I32_CONST, 0);
-            cg.genElem(e.E1);
-            cg.emit(OP_I32_SUB);
+            cg.emit(OP_I32_CONST, sleb(0), e.E1, OP_I32_SUB);
             cg.maskSmallInt(e.Ety);
             return true;
         default:
@@ -2330,22 +2303,14 @@ bool genElem(ref WasmCG cg, elem* e)
             {
                 const bool is64 = (e.wasmType == WASM_I64);
                 uint t = cg.allocTemp(is64 ? WASM_I64 : WASM_I32);
-                cg.genElem(e.E1);
-                cg.emitLocal(OP_LOCAL_TEE, t); // stash x
+                cg.emit(e.E1, OP_LOCAL_TEE, uleb(t)); // stash x
                 // Arithmetic shift right to get sign mask.
                 if (is64)
-                {
-                    cg.emitConst(OP_I64_CONST, 63);
-                    cg.emit(OP_I64_SHR_S);
-                }
+                    cg.emit(OP_I64_CONST, sleb(63), OP_I64_SHR_S);
                 else
-                {
-                    cg.emitConst(OP_I32_CONST, 31);
-                    cg.emit(OP_I32_SHR_S);
-                }
+                    cg.emit(OP_I32_CONST, sleb(31), OP_I32_SHR_S);
                 uint m = cg.allocTemp(is64 ? WASM_I64 : WASM_I32);
-                cg.emitLocal(OP_LOCAL_TEE, m); // stash mask
-                cg.emitLocal(OP_LOCAL_GET, t);
+                cg.emit(OP_LOCAL_TEE, uleb(m), OP_LOCAL_GET, uleb(t)); // stash mask
                 cg.emit(is64 ? OP_I64_XOR : OP_I32_XOR); // x ^ mask
                 cg.emitLocal(OP_LOCAL_GET, m);
                 cg.emit(is64 ? OP_I64_SUB : OP_I32_SUB); // - mask
@@ -2446,14 +2411,10 @@ bool genElem(ref WasmCG cg, elem* e)
         final switch (e.wasmType)
         {
         case WASM_I64:
-            cg.genElem(e.E1);
-            cg.emitConst(OP_I64_CONST, -1);
-            cg.emit(OP_I64_XOR);
+            cg.emit(e.E1, OP_I64_CONST, sleb(-1), OP_I64_XOR);
             return true;
         case WASM_I32:
-            cg.genElem(e.E1);
-            cg.emitConst(OP_I32_CONST, -1);
-            cg.emit(OP_I32_XOR);
+            cg.emit(e.E1, OP_I32_CONST, sleb(-1), OP_I32_XOR);
             cg.maskSmallInt(e.Ety);
             return true;
         case WASM_F32:
@@ -2498,15 +2459,10 @@ bool genElem(ref WasmCG cg, elem* e)
     // live in i32 slots, so sign/zero-extend the input first, then convert
     // (D `double d = cast(double)cast(short)x;`, `short s = cast(short)d;`).
     case OPs16_d:
-        cg.genElem(e.E1);
-        cg.emit(OP_I32_EXTEND16_S);
-        cg.emit(OP_F64_CONVERT_I32_S);
+        cg.emit(e.E1, OP_I32_EXTEND16_S, OP_F64_CONVERT_I32_S);
         return true;
     case OPu16_d:
-        cg.genElem(e.E1);
-        cg.emitConst(OP_I32_CONST, 0xFFFF);
-        cg.emit(OP_I32_AND);
-        cg.emit(OP_F64_CONVERT_I32_U);
+        cg.emit(e.E1, OP_I32_CONST, sleb(0xFFFF), OP_I32_AND, OP_F64_CONVERT_I32_U);
         return true;
     case OPd_s16:
         cg.genElem(e.E1);
@@ -2516,8 +2472,7 @@ bool genElem(ref WasmCG cg, elem* e)
     case OPd_u16:
         cg.genElem(e.E1);
         cg.emitTruncSat(WASM_F64, WASM_I32, false);
-        cg.emitConst(OP_I32_CONST, 0xFFFF);
-        cg.emit(OP_I32_AND);
+        cg.emit(OP_I32_CONST, sleb(0xFFFF), OP_I32_AND);
         return true;
 
     // Long double conversions. WASM has no 80-bit real, so `real` == `double`
@@ -2541,10 +2496,7 @@ bool genElem(ref WasmCG cg, elem* e)
             if (emitSliceHalf(cg, src, /*ptrHalf*/ true))
                 return true;
             // Fallback: 64-bit value (non-slice). Extract via shift.
-            cg.genElem(src);
-            cg.emitConst(OP_I64_CONST, 32);
-            cg.emit(OP_I64_SHR_U);
-            cg.emit(OP_I32_WRAP_I64);
+            cg.emit(src, OP_I64_CONST, sleb(32), OP_I64_SHR_U, OP_I32_WRAP_I64);
             return true;
         }
 
@@ -2579,26 +2531,17 @@ bool genElem(ref WasmCG cg, elem* e)
         {
             elem* lo = (op == OPpair) ? e.E1 : e.E2;
             elem* hi = (op == OPpair) ? e.E2 : e.E1;
-            cg.genElem(lo);
-            cg.emit(OP_I64_EXTEND_I32_U);
-            cg.genElem(hi);
-            cg.emit(OP_I64_EXTEND_I32_U);
-            cg.emitConst(OP_I64_CONST, 32);
-            cg.emit(OP_I64_SHL);
-            cg.emit(OP_I64_OR);
+            cg.emit(lo, OP_I64_EXTEND_I32_U, hi, OP_I64_EXTEND_I32_U,
+                OP_I64_CONST, sleb(32), OP_I64_SHL, OP_I64_OR);
             return true;
         }
 
     case OP16_8:
-        cg.genElem(e.E1);
-        cg.emitConst(OP_I32_CONST, 0xFF);
-        cg.emit(OP_I32_AND);
+        cg.emit(e.E1, OP_I32_CONST, sleb(0xFF), OP_I32_AND);
         return true;
 
     case OP32_16:
-        cg.genElem(e.E1);
-        cg.emitConst(OP_I32_CONST, 0xFFFF);
-        cg.emit(OP_I32_AND);
+        cg.emit(e.E1, OP_I32_CONST, sleb(0xFFFF), OP_I32_AND);
         return true;
 
     case OPcomma:
@@ -2677,12 +2620,9 @@ bool genElem(ref WasmCG cg, elem* e)
                 // rather than the value form below followed by a drop.
                 //   a || b  =>  block; a; br_if 0; <b side effects>; end
                 //   a && b  =>  block; a; eqz; br_if 0; <b side effects>; end
-                cg.emit(OP_BLOCK);
-                cg.emit(WASM_VOID_BLOCK);
-                cg.genElem(e.E1);
+                cg.emit(OP_BLOCK, WASM_VOID_BLOCK, e.E1);
                 emitCondToI32(cg, e.E1, !isOr); // short-circuit → branch out, skip b
-                cg.emit(OP_BR_IF);
-                cg.emitULEB(0);
+                cg.emit(OP_BR_IF, uleb(0));
                 cg.genElemDiscard(e.E2);
                 cg.emit(OP_END);
                 return false;
@@ -2704,8 +2644,7 @@ bool genElem(ref WasmCG cg, elem* e)
             }
             cg.genElem(e.E1);
             emitCondToI32(cg, e.E1);
-            cg.emit(OP_IF);
-            cg.emit(WASM_I32);
+            cg.emit(OP_IF, WASM_I32);
             if (isOr)
                 cg.emitConst(OP_I32_CONST, 1);
             else
@@ -2777,8 +2716,7 @@ bool genElem(ref WasmCG cg, elem* e)
             // (See cgelem.d elmemcpy: E2.E1 is the source, E2.E2 the byte count.)
             assert(e.E2.Eoper == OPparam);
             uint dstTmp = cg.allocTemp(WASM_I32);
-            cg.genElem(e.E1);
-            cg.emitLocal(OP_LOCAL_TEE, dstTmp); // stack: dst
+            cg.emit(e.E1, OP_LOCAL_TEE, uleb(dstTmp)); // stack: dst
             cg.genElem(e.E2.E1, WASM_I32); // src
             cg.genElem(e.E2.E2, WASM_I32); // count
             emitMemoryCopy(cg);
@@ -2797,8 +2735,7 @@ bool genElem(ref WasmCG cg, elem* e)
             const width = cast(uint) tysize(evalue.Ety);
 
             uint dstTmp = cg.allocTemp(WASM_I32);
-            cg.genElem(e.E1);
-            cg.emitLocal(OP_LOCAL_SET, dstTmp);
+            cg.emit(e.E1, OP_LOCAL_SET, uleb(dstTmp));
 
             ulong splat(ulong v)
             {
@@ -2817,11 +2754,9 @@ bool genElem(ref WasmCG cg, elem* e)
             else if (evalue.Eoper == OPconst && !tyfloating(evalue.Ety) &&
                 (evalue.Vullong & mask) == (splat(evalue.Vullong) & mask))
             {
-                cg.emitLocal(OP_LOCAL_GET, dstTmp);
-                cg.emitConst(OP_I32_CONST, evalue.Vullong & 0xFF);
+                cg.emit(OP_LOCAL_GET, uleb(dstTmp), OP_I32_CONST, sleb(evalue.Vullong & 0xFF));
                 cg.genElem(enelems, WASM_I32);
-                cg.emitConst(OP_I32_CONST, width);
-                cg.emit(OP_I32_MUL);
+                cg.emit(OP_I32_CONST, sleb(width), OP_I32_MUL);
                 emitMemoryFill(cg);
             }
             else
@@ -2830,35 +2765,19 @@ bool genElem(ref WasmCG cg, elem* e)
                 uint valTmp = cg.allocTemp(vt);
                 uint curTmp = cg.allocTemp(WASM_I32);
                 uint endTmp = cg.allocTemp(WASM_I32);
-                cg.genElem(evalue);
-                cg.emitLocal(OP_LOCAL_SET, valTmp);
-                cg.emitLocal(OP_LOCAL_GET, dstTmp);
-                cg.emitLocal(OP_LOCAL_TEE, curTmp);
+                cg.emit(evalue, OP_LOCAL_SET, uleb(valTmp));
+                cg.emit(OP_LOCAL_GET, uleb(dstTmp), OP_LOCAL_TEE, uleb(curTmp));
                 cg.genElem(enelems, WASM_I32);
-                cg.emitConst(OP_I32_CONST, width);
-                cg.emit(OP_I32_MUL);
-                cg.emit(OP_I32_ADD);
-                cg.emitLocal(OP_LOCAL_SET, endTmp);
-                cg.emit(OP_BLOCK);
-                cg.emit(WASM_VOID_BLOCK);
-                cg.emit(OP_LOOP);
-                cg.emit(WASM_VOID_BLOCK);
-                cg.emitLocal(OP_LOCAL_GET, curTmp);
-                cg.emitLocal(OP_LOCAL_GET, endTmp);
-                cg.emit(OP_I32_GE_U);
-                cg.emit(OP_BR_IF);
-                cg.emitULEB(1);
-                cg.emitLocal(OP_LOCAL_GET, curTmp);
-                cg.emitLocal(OP_LOCAL_GET, valTmp);
+                cg.emit(OP_I32_CONST, sleb(width), OP_I32_MUL, OP_I32_ADD,
+                    OP_LOCAL_SET, uleb(endTmp));
+                cg.emit(OP_BLOCK, WASM_VOID_BLOCK, OP_LOOP, WASM_VOID_BLOCK);
+                cg.emit(OP_LOCAL_GET, uleb(curTmp), OP_LOCAL_GET, uleb(endTmp),
+                    OP_I32_GE_U, OP_BR_IF, uleb(1));
+                cg.emit(OP_LOCAL_GET, uleb(curTmp), OP_LOCAL_GET, uleb(valTmp));
                 emitStore(cg, evalue.Ety);
-                cg.emitLocal(OP_LOCAL_GET, curTmp);
-                cg.emitConst(OP_I32_CONST, width);
-                cg.emit(OP_I32_ADD);
-                cg.emitLocal(OP_LOCAL_SET, curTmp);
-                cg.emit(OP_BR);
-                cg.emitULEB(0);
-                cg.emit(OP_END);
-                cg.emit(OP_END);
+                cg.emit(OP_LOCAL_GET, uleb(curTmp), OP_I32_CONST, sleb(width),
+                    OP_I32_ADD, OP_LOCAL_SET, uleb(curTmp));
+                cg.emit(OP_BR, uleb(0), OP_END, OP_END);
             }
             cg.emitLocal(OP_LOCAL_GET, dstTmp);
             return true;
@@ -2870,9 +2789,7 @@ bool genElem(ref WasmCG cg, elem* e)
         final switch (e.E1.wasmType)
         {
             case WASM_I64:
-                cg.genElem(e.E1);
-                cg.emit(OP_I64_CTZ);
-                cg.emit(OP_I32_WRAP_I64);
+                cg.emit(e.E1, OP_I64_CTZ, OP_I32_WRAP_I64);
                 return true;
             case WASM_I32:
                 return unaryOp(OP_I32_CTZ);
@@ -2886,17 +2803,10 @@ bool genElem(ref WasmCG cg, elem* e)
         final switch (e.E1.wasmType)
         {
             case WASM_I64:
-                cg.emitConst(OP_I64_CONST, 63);
-                cg.genElem(e.E1);
-                cg.emit(OP_I64_CLZ);
-                cg.emit(OP_I64_SUB);
-                cg.emit(OP_I32_WRAP_I64);
+                cg.emit(OP_I64_CONST, sleb(63), e.E1, OP_I64_CLZ, OP_I64_SUB, OP_I32_WRAP_I64);
                 return true;
             case WASM_I32:
-                cg.emitConst(OP_I32_CONST, 31);
-                cg.genElem(e.E1);
-                cg.emit(OP_I32_CLZ);
-                cg.emit(OP_I32_SUB);
+                cg.emit(OP_I32_CONST, sleb(31), e.E1, OP_I32_CLZ, OP_I32_SUB);
                 return true;
             case WASM_F32:
             case WASM_F64:
@@ -2909,8 +2819,7 @@ bool genElem(ref WasmCG cg, elem* e)
             // popcnt at the operand's width; the result may be narrower
             // (core.bitop.popcnt(ulong) returns int).
             const opnd = e.E1.wasmType;
-            cg.genElem(e.E1);
-            cg.emit(opnd == WASM_I64 ? OP_I64_POPCNT : OP_I32_POPCNT);
+            cg.emit(e.E1, opnd == WASM_I64 ? OP_I64_POPCNT : OP_I32_POPCNT);
             if (opnd == WASM_I64 && e.wasmType == WASM_I32)
                 cg.emit(OP_I32_WRAP_I64);
             else if (opnd == WASM_I32 && e.wasmType == WASM_I64)
@@ -2950,18 +2859,12 @@ bool genElem(ref WasmCG cg, elem* e)
             final switch (rty)
             {
             case WASM_I32:
-                cg.emitConst(OP_I32_CONST, 31);
-                cg.emit(OP_I32_AND);
-                cg.emit(OP_I32_SHR_U);
-                cg.emitConst(OP_I32_CONST, 1);
-                cg.emit(OP_I32_AND);
+                cg.emit(OP_I32_CONST, sleb(31), OP_I32_AND, OP_I32_SHR_U,
+                    OP_I32_CONST, sleb(1), OP_I32_AND);
                 break;
             case WASM_I64:
-                cg.emitConst(OP_I64_CONST, 63);
-                cg.emit(OP_I64_AND);
-                cg.emit(OP_I64_SHR_U);
-                cg.emitConst(OP_I64_CONST, 1);
-                cg.emit(OP_I64_AND);
+                cg.emit(OP_I64_CONST, sleb(63), OP_I64_AND, OP_I64_SHR_U,
+                    OP_I64_CONST, sleb(1), OP_I64_AND);
                 break;
             case WASM_F32:
             case WASM_F64:
@@ -3001,28 +2904,15 @@ private void emitBswap32(ref WasmCG cg)
 {
     uint t = cg.allocTemp(WASM_I32);
     cg.emitLocal(OP_LOCAL_TEE, t); // save v
-
-    cg.emitConst(OP_I32_CONST, 24);
-    cg.emit(OP_I32_SHR_U); // v >> 24
-
-    cg.emitLocal(OP_LOCAL_GET, t);
-    cg.emitConst(OP_I32_CONST, 8);
-    cg.emit(OP_I32_SHR_U);
-    cg.emitConst(OP_I32_CONST, 0x0000_FF00);
-    cg.emit(OP_I32_AND); // (v >> 8) & 0xFF00
-    cg.emit(OP_I32_OR);
-
-    cg.emitLocal(OP_LOCAL_GET, t);
-    cg.emitConst(OP_I32_CONST, 8);
-    cg.emit(OP_I32_SHL);
-    cg.emitConst(OP_I32_CONST, 0x00FF_0000);
-    cg.emit(OP_I32_AND); // (v << 8) & 0xFF0000
-    cg.emit(OP_I32_OR);
-
-    cg.emitLocal(OP_LOCAL_GET, t);
-    cg.emitConst(OP_I32_CONST, 24);
-    cg.emit(OP_I32_SHL); // v << 24
-    cg.emit(OP_I32_OR);
+    cg.emit(OP_I32_CONST, sleb(24), OP_I32_SHR_U); // v >> 24
+    // (v >> 8) & 0xFF00
+    cg.emit(OP_LOCAL_GET, uleb(t), OP_I32_CONST, sleb(8), OP_I32_SHR_U,
+        OP_I32_CONST, sleb(0x0000_FF00), OP_I32_AND, OP_I32_OR);
+    // (v << 8) & 0xFF0000
+    cg.emit(OP_LOCAL_GET, uleb(t), OP_I32_CONST, sleb(8), OP_I32_SHL,
+        OP_I32_CONST, sleb(0x00FF_0000), OP_I32_AND, OP_I32_OR);
+    // v << 24
+    cg.emit(OP_LOCAL_GET, uleb(t), OP_I32_CONST, sleb(24), OP_I32_SHL, OP_I32_OR);
 }
 
 // Emit byte-swap for an i64 value on top of the wasm stack.
@@ -3040,21 +2930,13 @@ private void emitBswap64(ref WasmCG cg)
     cg.emitLocal(OP_LOCAL_SET, lo);
 
     // hi = bswap32((uint)(v >> 32))
-    cg.emitLocal(OP_LOCAL_GET, t);
-    cg.emitConst(OP_I64_CONST, 32);
-    cg.emit(OP_I64_SHR_U);
-    cg.emit(OP_I32_WRAP_I64);
+    cg.emit(OP_LOCAL_GET, uleb(t), OP_I64_CONST, sleb(32), OP_I64_SHR_U, OP_I32_WRAP_I64);
     emitBswap32(cg);
     cg.emitLocal(OP_LOCAL_SET, hi);
 
     // result = ((i64)lo << 32) | (i64)hi
-    cg.emitLocal(OP_LOCAL_GET, lo);
-    cg.emit(OP_I64_EXTEND_I32_U);
-    cg.emitConst(OP_I64_CONST, 32);
-    cg.emit(OP_I64_SHL);
-    cg.emitLocal(OP_LOCAL_GET, hi);
-    cg.emit(OP_I64_EXTEND_I32_U);
-    cg.emit(OP_I64_OR);
+    cg.emit(OP_LOCAL_GET, uleb(lo), OP_I64_EXTEND_I32_U, OP_I64_CONST, sleb(32), OP_I64_SHL,
+        OP_LOCAL_GET, uleb(hi), OP_I64_EXTEND_I32_U, OP_I64_OR);
 }
 
 // Emit `core.bitop.{btc,btr,bts}(p, bitnum)`: test bit `bitnum` of the
@@ -3068,50 +2950,34 @@ private void emitBitTestOp(ref WasmCG cg, uint op, elem* bitnumE, elem* ptrE)
 
     // addr = p + (bitnum >> 5) * 4
     cg.genElem(ptrE);
-    cg.emitLocal(OP_LOCAL_GET, bitTmp);
-    cg.emitConst(OP_I32_CONST, 5);
-    cg.emit(OP_I32_SHR_U);
-    cg.emitConst(OP_I32_CONST, 2);
-    cg.emit(OP_I32_SHL);
-    cg.emit(OP_I32_ADD);
+    cg.emit(OP_LOCAL_GET, uleb(bitTmp), OP_I32_CONST, sleb(5), OP_I32_SHR_U,
+        OP_I32_CONST, sleb(2), OP_I32_SHL, OP_I32_ADD);
     const uint addrTmp = cg.allocTemp(WASM_I32);
-    cg.emitLocal(OP_LOCAL_TEE, addrTmp);
-
-    cg.emit(OP_I32_LOAD);
+    cg.emit(OP_LOCAL_TEE, uleb(addrTmp), OP_I32_LOAD);
     cg.emitMemArg(2, 0);
     const uint wordTmp = cg.allocTemp(WASM_I32);
     cg.emitLocal(OP_LOCAL_SET, wordTmp);
 
     // mask = 1 << (bitnum & 31)
-    cg.emitConst(OP_I32_CONST, 1);
-    cg.emitLocal(OP_LOCAL_GET, bitTmp);
-    cg.emitConst(OP_I32_CONST, 31);
-    cg.emit(OP_I32_AND);
-    cg.emit(OP_I32_SHL);
+    cg.emit(OP_I32_CONST, sleb(1), OP_LOCAL_GET, uleb(bitTmp),
+        OP_I32_CONST, sleb(31), OP_I32_AND, OP_I32_SHL);
     const uint maskTmp = cg.allocTemp(WASM_I32);
     cg.emitLocal(OP_LOCAL_TEE, maskTmp);
 
     // result = (word & mask) != 0
-    cg.emitLocal(OP_LOCAL_GET, wordTmp);
-    cg.emit(OP_I32_AND);
-    cg.emitConst(OP_I32_CONST, 0);
-    cg.emit(OP_I32_NE);
+    cg.emit(OP_LOCAL_GET, uleb(wordTmp), OP_I32_AND, OP_I32_CONST, sleb(0), OP_I32_NE);
     const uint resultTmp = cg.allocTemp(WASM_I32);
     cg.emitLocal(OP_LOCAL_SET, resultTmp);
 
     // *addr = word <op> mask
-    cg.emitLocal(OP_LOCAL_GET, addrTmp);
-    cg.emitLocal(OP_LOCAL_GET, wordTmp);
-    cg.emitLocal(OP_LOCAL_GET, maskTmp);
+    cg.emit(OP_LOCAL_GET, uleb(addrTmp), OP_LOCAL_GET, uleb(wordTmp), OP_LOCAL_GET, uleb(maskTmp));
     switch (op)
     {
     case OPbts:
         cg.emit(OP_I32_OR);
         break;
     case OPbtr:
-        cg.emitConst(OP_I32_CONST, -1);
-        cg.emit(OP_I32_XOR); // ~mask
-        cg.emit(OP_I32_AND);
+        cg.emit(OP_I32_CONST, sleb(-1), OP_I32_XOR, OP_I32_AND); // & ~mask
         break;
     case OPbtc:
         cg.emit(OP_I32_XOR);
@@ -3241,9 +3107,7 @@ private void emitRelop(ref WasmCG cg, int op, tym_t ty)
                 op = OPne; // integers are always ordered
             else
             {
-                cg.emit(OP_DROP);
-                cg.emit(OP_DROP);
-                cg.emitConst(OP_I32_CONST, negate ? 0 : 1);
+                cg.emit(OP_DROP, OP_DROP, OP_I32_CONST, sleb(negate ? 0 : 1));
                 return;
             }
         }
@@ -3251,23 +3115,14 @@ private void emitRelop(ref WasmCG cg, int op, tym_t ty)
         {
             const uint yTmp = cg.allocTemp(wt);
             const uint xTmp = cg.allocTemp(wt);
-            cg.emitLocal(OP_LOCAL_SET, yTmp);
-            cg.emitLocal(OP_LOCAL_SET, xTmp);
+            cg.emit(OP_LOCAL_SET, uleb(yTmp), OP_LOCAL_SET, uleb(xTmp));
             const ubyte feq = (wt == WASM_F32) ? OP_F32_EQ : OP_F64_EQ;
-            cg.emitLocal(OP_LOCAL_GET, xTmp);
-            cg.emitLocal(OP_LOCAL_GET, xTmp);
-            cg.emit(feq);
-            cg.emitLocal(OP_LOCAL_GET, yTmp);
-            cg.emitLocal(OP_LOCAL_GET, yTmp);
-            cg.emit(feq);
-            cg.emit(OP_I32_AND);
+            cg.emit(OP_LOCAL_GET, uleb(xTmp), OP_LOCAL_GET, uleb(xTmp), feq,
+                OP_LOCAL_GET, uleb(yTmp), OP_LOCAL_GET, uleb(yTmp), feq, OP_I32_AND);
             if (op == OPlg)
             {
                 const ubyte fne = (wt == WASM_F32) ? OP_F32_NE : OP_F64_NE;
-                cg.emitLocal(OP_LOCAL_GET, xTmp);
-                cg.emitLocal(OP_LOCAL_GET, yTmp);
-                cg.emit(fne);
-                cg.emit(OP_I32_AND);
+                cg.emit(OP_LOCAL_GET, uleb(xTmp), OP_LOCAL_GET, uleb(yTmp), fne, OP_I32_AND);
             }
             if (negate)
                 cg.emit(OP_I32_EQZ);
@@ -3387,8 +3242,7 @@ void emitCondToI32(ref WasmCG cg, elem* condElem, bool invert = false)
         return;
 
     case WASM_I32:
-        cg.emitConst(OP_I32_CONST, 0);
-        cg.emit(invert ? OP_I32_EQ : OP_I32_NE);
+        cg.emit(OP_I32_CONST, sleb(0), invert ? OP_I32_EQ : OP_I32_NE);
         return;
 
     default:
@@ -3598,17 +3452,12 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
             // src = incoming pointer, n = struct size).
             cg.emitLocal(OP_LOCAL_GET, cg.shadowBaseLocal);
             if (off)
-            {
-                cg.emitConst(OP_I32_CONST, off);
-                cg.emit(OP_I32_ADD);
-            }
-            cg.emitLocal(OP_LOCAL_GET, sp.wasmLocalIdx);
-            cg.emitConst(OP_I32_CONST, sp.copyBytes);
+                cg.emit(OP_I32_CONST, sleb(cast(int) off), OP_I32_ADD);
+            cg.emit(OP_LOCAL_GET, uleb(sp.wasmLocalIdx), OP_I32_CONST, sleb(sp.copyBytes));
             emitMemoryCopy(cg);
             continue;
         }
-        cg.emitLocal(OP_LOCAL_GET, cg.shadowBaseLocal);
-        cg.emitLocal(OP_LOCAL_GET, sp.wasmLocalIdx);
+        cg.emit(OP_LOCAL_GET, uleb(cg.shadowBaseLocal), OP_LOCAL_GET, uleb(sp.wasmLocalIdx));
         const m = memOpsFor(sp.ty);
         cg.emit(m.storeOp);
         cg.emitMemArg(m.alignLog2, off);
