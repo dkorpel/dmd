@@ -32,7 +32,6 @@ extern(C) void rt_moduleTlsCtor();
 extern(C) void rt_moduleUnitTests();
 extern(C) void rt_moduleTlsDtor();
 extern(C) void rt_moduleDtor();
-extern(C) void rt_coverWrite();
 
 private alias MainFunc = extern(C) int function(char[][] args);
 
@@ -73,7 +72,6 @@ int _d_run_main(int argc, char** argv, MainFunc mainFunc)
     int result = _d_eh_wasm_runMain(mainFunc, wasiArgs());
     rt_moduleTlsDtor();
     rt_moduleDtor();
-    rt_coverWrite();
     gc_term();
     return result;
 }

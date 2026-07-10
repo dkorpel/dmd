@@ -11,9 +11,6 @@
 
 module rt.cover;
 
-version (WASI) {}
-else:
-
 import core.internal.utf;
 import core.internal.util.math : max, min;
 import core.stdc.stdio : EOF, fclose, fgetc, FILE, fileno, fprintf, fread, fseek, ftell, printf, SEEK_END, SEEK_SET,
@@ -25,6 +22,10 @@ version (Windows)
     import core.stdc.stdio : _fdopen, _get_osfhandle, _O_BINARY, _O_CREAT, _O_RDWR, _S_IREAD, _S_IWRITE, _wopen;
     import core.sys.windows.basetsd;
     import core.sys.windows.winbase;
+}
+else version (WebAssembly)
+{
+    import core.stdc.stdio : fopen;
 }
 else version (Posix)
 {
@@ -83,8 +84,24 @@ private
 
         bool initialize()
         {
-            import core.internal.parseoptions : initConfigOptions;
-            return initConfigOptions(this, this.errorName);
+            // WebAssembly has no parseoptions/env-var config; the destination
+            // path is set via the compiler-emitted dmd_coverDestPath call, and
+            // sources are resolved relative to the host's working directory,
+            // which the WASI host passes through as $PWD.
+            version (WebAssembly)
+            {
+                import core.stdc.stdlib : getenv;
+                import core.stdc.string : strlen;
+                if (srcpath.length == 0)
+                    if (auto p = getenv("PWD"))
+                        srcpath = cast(string) p[0 .. strlen(p)];
+                return true;
+            }
+            else
+            {
+                import core.internal.parseoptions : initConfigOptions;
+                return initConfigOptions(this, this.errorName);
+            }
         }
 
         void help()
@@ -361,7 +378,7 @@ string appendFN( string path, string name )
 
     version (Windows)
         const char sep = '\\';
-    else version (Posix)
+    else
         const char sep = '/';
 
     auto dest = path;
@@ -407,7 +424,7 @@ string getExt( string name )
             if ( name[i] == ':' || name[i] == '\\' )
                 break;
         }
-        else version (Posix)
+        else
         {
             if ( name[i] == '/' )
                 break;
@@ -464,16 +481,21 @@ string chomp( string str, string delim = null )
 // open/create file for read/write, pointer at beginning
 FILE* openOrCreateFile(string name)
 {
-    version (Windows)
-        immutable fd = _wopen(toUTF16z(name), _O_RDWR | _O_CREAT | _O_BINARY, _S_IREAD | _S_IWRITE);
-    else version (Posix)
-        immutable fd = open((name ~ '\0').ptr, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP |
-                S_IROTH | S_IWOTH);
-    version (CRuntime_Microsoft)
-        alias fdopen = _fdopen;
-    else version (Posix)
-        import core.sys.posix.stdio : fdopen;
-    return fdopen(fd, "r+b");
+    version (WebAssembly)
+        return fopen((name ~ '\0').ptr, "w+b");
+    else
+    {
+        version (Windows)
+            immutable fd = _wopen(toUTF16z(name), _O_RDWR | _O_CREAT | _O_BINARY, _S_IREAD | _S_IWRITE);
+        else version (Posix)
+            immutable fd = open((name ~ '\0').ptr, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP |
+                    S_IROTH | S_IWOTH);
+        version (CRuntime_Microsoft)
+            alias fdopen = _fdopen;
+        else version (Posix)
+            import core.sys.posix.stdio : fdopen;
+        return fdopen(fd, "r+b");
+    }
 }
 
 version (Windows) HANDLE handle(int fd)
@@ -528,7 +550,7 @@ bool readFile(string name, ref char[] buf)
 {
     version (Windows)
         auto file = _wfopen(toUTF16z(name), "rb"w.ptr);
-    else version (Posix)
+    else
         auto file = fopen((name ~ '\0').ptr, "rb".ptr);
     if (file is null) return false;
     scope(exit) fclose(file);

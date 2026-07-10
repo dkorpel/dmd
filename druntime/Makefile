@@ -458,6 +458,7 @@ WASM_DRT_SRCS := \
 	src/object.d \
 	src/core/memory.d \
 	src/rt/invariant_.d \
+	src/rt/lifetime.d \
 	src/rt/memset.d \
 	src/rt/aApply.d \
 	src/rt/aApplyR.d \
@@ -495,7 +496,7 @@ WASM_DRT_SRCS := \
 	src/rt/minfo.d \
 	src/rt/sections_wasm.d \
 	src/rt/config.d \
-	src/rt/wasm/cover.d \
+	src/rt/cover.d \
 	src/rt/wasm/extra.d \
 	src/rt/wasm/eh.d \
 	src/rt/ehalloc.d

@@ -701,51 +701,6 @@ uint gc_clrAttr(void* p, uint a) @nogc
     return h.attr;
 }
 
-void* _d_allocmemory(size_t sz)
-{
-    return gc_malloc(sz, 0, null);
-}
-
-void _d_callfinalizer(void* p)
-{
-    rt_finalize(p);
-}
-
-void _d_callinterfacefinalizer(void* p)
-{
-}
-
-void _d_delclass(Object* p)
-{
-    if (p && *p)
-    {
-        rt_finalize(cast(void*)*p);
-        gc_free(cast(void*)*p);
-        *p = null;
-    }
-}
-
-void _d_delinterface(void** p)
-{
-    if (p && *p)
-    {
-        auto pi = **cast(Interface***)*p;
-        void* base = *p - pi.offset;
-        rt_finalize(base);
-        gc_free(base);
-        *p = null;
-    }
-}
-
-void _d_delmemory(void** p)
-{
-    if (p && *p)
-    {
-        gc_free(*p);
-        *p = null;
-    }
-}
-
 size_t newCapacity(size_t newlength, size_t elemsize) pure nothrow @nogc
 {
     return newlength * elemsize * 2;
