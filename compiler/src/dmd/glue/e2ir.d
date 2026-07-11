@@ -6062,7 +6062,7 @@ elem* callfunc(Loc loc,
     }
     else if (retmethod == RET.stack)
     {
-        if (irs.target.os == Target.OS.OSX && eresult)
+        if ((irs.target.os == Target.OS.OSX || irs.target.isWasm) && eresult)
         {
             /* ABI quirk: hidden pointer is not returned in registers
              */

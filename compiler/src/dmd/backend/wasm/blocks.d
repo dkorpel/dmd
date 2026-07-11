@@ -80,6 +80,16 @@ private bool emitBlockReturn(ref WasmCG cg, block* b, bool hasReturn)
 {
     if (b.bc == BC.retexp)
     {
+        if (!hasReturn)
+        {
+            if (b.Belem)
+                cg.genElemDiscard(b.Belem);
+            if (cg.framePublished)
+                emitShadowEpilogue(cg);
+            cg.emit(OP_RETURN);
+            cg.reachable = false;
+            return true;
+        }
         bool hasRetVal;
         if (b.Belem)
             hasRetVal = cg.genElem(b.Belem);
@@ -88,7 +98,7 @@ private bool emitBlockReturn(ref WasmCG cg, block* b, bool hasReturn)
             if (hasRetVal)
             {
                 const tym_t bty = tybasic(b.Belem.Ety);
-                WASM_TYPE retTy = cg.retByHiddenPtr ? WASM_I32 : wasmType(bty);
+                WASM_TYPE retTy = wasmType(bty);
                 uint retTmp = cg.allocTemp(retTy);
                 cg.emitLocal(OP_LOCAL_SET, retTmp);
                 emitShadowEpilogue(cg);

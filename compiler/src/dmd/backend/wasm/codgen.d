@@ -1602,7 +1602,10 @@ private bool genCall(ref WasmCG cg, elem* e)
     }
 
     if (sretLocal != uint.max)
+    {
         cg.emitFrameFree(sretLocal, sretSize);
+        cg.emitLocal(OP_LOCAL_GET, sretLocal);
+    }
 
     if (ctx.isCVariadic && varArgs.length)
         cg.emitFrameFree(spLocal, vaFrameSize);
@@ -1612,6 +1615,9 @@ private bool genCall(ref WasmCG cg, elem* e)
     // though the callee's signature is void: `unittest { assert(false); }`.
     if ((calleeSym && (calleeSym.Sflags & SFLexit)) || tybasic(e.Ety) == TYnoreturn)
         cg.emit(OP_UNREACHABLE);
+
+    if (sretLocal != uint.max)
+        return true;
 
     // Report what the callee's signature actually left on the stack — e.Ety can
     // disagree (a `ref void` return is a pointer to the frontend but no WASM

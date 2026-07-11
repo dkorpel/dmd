@@ -409,9 +409,7 @@ public WasmFuncType buildFuncType(type* t, Symbol* sfunc, uint hiddenLeadingPtrs
     if (variadic(t))
         ft.params ~= WASM_I32;
 
-    if (hiddenPtr)
-        ft.results ~= WASM_I32;
-    else if (ret && typeHasValue(ret.Tty))
+    if (!hiddenPtr && ret && typeHasValue(ret.Tty))
         ft.results ~= wasmType(ret.Tty);
 
     return ft;
