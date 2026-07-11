@@ -63,4 +63,3 @@ extern(C++) void shaEnum(shared(EPP)* a) {}
 extern(C++) void typeDArray(int[] a) {}
 extern(C++) void typeAArray(int[int] a) {}
 extern(C++) void typeDelegate(int delegate() a) {}
-// DISABLED: wasm

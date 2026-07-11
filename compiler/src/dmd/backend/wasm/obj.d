@@ -1173,8 +1173,8 @@ void WasmObj_term2(const(char)[] objfilename, ref WasmModule wmod, ref OutBuffer
 
 private void emitTargetFeaturesSection(ref OutBuffer out_)
 {
-    static immutable string[7] features =
-        ["atomics", "bulk-memory", "exception-handling", "mutable-globals", "nontrapping-fptoint", "reference-types", "sign-ext"];
+    static immutable string[8] features =
+        ["atomics", "bulk-memory", "exception-handling", "mutable-globals", "nontrapping-fptoint", "reference-types", "sign-ext", "simd128"];
     OutBuffer payload;
     payload.writeuLEB128(features.length);
     foreach (f; features)

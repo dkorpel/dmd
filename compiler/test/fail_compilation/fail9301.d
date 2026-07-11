@@ -10,4 +10,3 @@ void main()
 {
     __vector(void[16]) x = 0x0;
 }
-// DISABLED: wasm

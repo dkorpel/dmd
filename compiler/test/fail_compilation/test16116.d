@@ -13,4 +13,3 @@ void foo() {
     int i;
     v = v * i;
 }
-// DISABLED: wasm

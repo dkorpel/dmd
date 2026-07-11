@@ -181,6 +181,8 @@ void addPredefinedGlobalIdentifiers(const ref Target tgt)
         if (tgt.cpu >= CPU.avx2)
             predef("D_AVX2");
     }
+    else if (tgt.isWasm)
+        predef("D_SIMD");
 
     with (Target)
     {
@@ -771,6 +773,29 @@ extern (C++) struct Target
      */
     extern (C++) int isVectorTypeSupported(int sz, Type type) @safe
     {
+        if (isWasm)
+        {
+            switch (type.ty)
+            {
+            case TY.Tvoid:
+            case TY.Tint8:
+            case TY.Tuns8:
+            case TY.Tint16:
+            case TY.Tuns16:
+            case TY.Tint32:
+            case TY.Tuns32:
+            case TY.Tfloat32:
+            case TY.Tint64:
+            case TY.Tuns64:
+            case TY.Tfloat64:
+                break;
+            default:
+                return 2; // wrong base type
+            }
+            // wasm SIMD is 128-bit only
+            return sz == 16 ? 0 : 3;
+        }
+
         if (!isXmmSupported())
             return 1; // not supported
 
@@ -853,6 +878,53 @@ extern (C++) struct Target
         // Only operations on these sizes are supported (see isVectorTypeSupported)
         if (vecsize != 16 && vecsize != 32)
             return false;
+
+        if (isWasm)
+        {
+            // wasm SIMD is 128-bit only; support does not depend on a CPU level.
+            const isByte = elemty == TY.Tint8 || elemty == TY.Tuns8;
+            switch (op)
+            {
+            case EXP.uadd:
+                return tvec.isScalar();
+
+            case EXP.identity, EXP.notIdentity:
+            case EXP.not:
+            case EXP.mod, EXP.modAssign:
+            case EXP.pow, EXP.powAssign:
+                return false;
+
+            // wasm SIMD shifts are vector-by-scalar, but the frontend casts the
+            // shift count to the vector type (vector-by-vector); unsupported.
+            case EXP.leftShift, EXP.leftShiftAssign,
+                 EXP.rightShift, EXP.rightShiftAssign,
+                 EXP.unsignedRightShift, EXP.unsignedRightShiftAssign:
+                return false;
+
+            case EXP.negate:
+            case EXP.add, EXP.addAssign, EXP.min, EXP.minAssign:
+                return true;
+
+            case EXP.equal, EXP.notEqual:
+            case EXP.lessThan, EXP.greaterThan, EXP.lessOrEqual, EXP.greaterOrEqual:
+                return true;
+
+            case EXP.mul, EXP.mulAssign:
+                // no i8x16.mul in SIMD128
+                return !isByte;
+
+            case EXP.div, EXP.divAssign:
+                // only floating-point lane division exists
+                return tvec.isFloating();
+
+            case EXP.and, EXP.andAssign, EXP.or, EXP.orAssign, EXP.xor, EXP.xorAssign:
+            case EXP.tilde:
+                return tvec.isIntegral();
+
+            default:
+                return false;
+            }
+        }
 
         switch (op)
         {

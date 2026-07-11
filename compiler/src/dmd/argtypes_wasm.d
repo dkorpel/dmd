@@ -36,8 +36,9 @@ TypeTuple toArgTypes_wasm(Type t)
     if (tb.ty == Tvoid || t.size() == 0)
         return null;
 
-    // Scalars are single values
-    if (tb.isTypeBasic() || tb.isTypePointer() ||
+    // Scalars and 128-bit vectors are single values (a vector maps to a wasm
+    // v128 passed/returned by value, like LDC's -O0 SIMD ABI)
+    if (tb.isTypeBasic() || tb.isTypePointer() || tb.ty == Tvector ||
         tb.ty == Tclass || tb.ty == Taarray || tb.ty == Tnull || tb.ty == Tfunction)
         return new TypeTuple(t);
 

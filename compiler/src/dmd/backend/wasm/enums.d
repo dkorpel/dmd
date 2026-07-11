@@ -169,6 +169,123 @@ enum : ubyte
     OP_I64_EXTEND8_S = 0xC2,
     OP_I64_EXTEND16_S = 0xC3,
     OP_I64_EXTEND32_S = 0xC4,
+    OP_FD_PREFIX = 0xFD,
+}
+
+/// Sub-opcodes following the `0xFD` SIMD prefix (uLEB128-encoded)
+enum WASM_SIMD : uint
+{
+    V128_LOAD = 0x00,
+    V128_STORE = 0x0B,
+    V128_CONST = 0x0C,
+
+    I8X16_SPLAT = 0x0F,
+    I16X8_SPLAT = 0x10,
+    I32X4_SPLAT = 0x11,
+    I64X2_SPLAT = 0x12,
+    F32X4_SPLAT = 0x13,
+    F64X2_SPLAT = 0x14,
+
+    I8X16_EQ = 0x23,
+    I8X16_NE = 0x24,
+    I8X16_LT_S = 0x25,
+    I8X16_LT_U = 0x26,
+    I8X16_GT_S = 0x27,
+    I8X16_GT_U = 0x28,
+    I8X16_LE_S = 0x29,
+    I8X16_LE_U = 0x2A,
+    I8X16_GE_S = 0x2B,
+    I8X16_GE_U = 0x2C,
+
+    I16X8_EQ = 0x2D,
+    I16X8_NE = 0x2E,
+    I16X8_LT_S = 0x2F,
+    I16X8_LT_U = 0x30,
+    I16X8_GT_S = 0x31,
+    I16X8_GT_U = 0x32,
+    I16X8_LE_S = 0x33,
+    I16X8_LE_U = 0x34,
+    I16X8_GE_S = 0x35,
+    I16X8_GE_U = 0x36,
+
+    I32X4_EQ = 0x37,
+    I32X4_NE = 0x38,
+    I32X4_LT_S = 0x39,
+    I32X4_LT_U = 0x3A,
+    I32X4_GT_S = 0x3B,
+    I32X4_GT_U = 0x3C,
+    I32X4_LE_S = 0x3D,
+    I32X4_LE_U = 0x3E,
+    I32X4_GE_S = 0x3F,
+    I32X4_GE_U = 0x40,
+
+    F32X4_EQ = 0x41,
+    F32X4_NE = 0x42,
+    F32X4_LT = 0x43,
+    F32X4_GT = 0x44,
+    F32X4_LE = 0x45,
+    F32X4_GE = 0x46,
+
+    F64X2_EQ = 0x47,
+    F64X2_NE = 0x48,
+    F64X2_LT = 0x49,
+    F64X2_GT = 0x4A,
+    F64X2_LE = 0x4B,
+    F64X2_GE = 0x4C,
+
+    V128_NOT = 0x4D,
+    V128_AND = 0x4E,
+    V128_OR = 0x50,
+    V128_XOR = 0x51,
+
+    I8X16_NEG = 0x61,
+    I8X16_SHL = 0x6B,
+    I8X16_SHR_S = 0x6C,
+    I8X16_SHR_U = 0x6D,
+    I8X16_ADD = 0x6E,
+    I8X16_SUB = 0x71,
+
+    I16X8_NEG = 0x81,
+    I16X8_SHL = 0x8B,
+    I16X8_SHR_S = 0x8C,
+    I16X8_SHR_U = 0x8D,
+    I16X8_ADD = 0x8E,
+    I16X8_SUB = 0x91,
+    I16X8_MUL = 0x95,
+
+    I32X4_NEG = 0xA1,
+    I32X4_SHL = 0xAB,
+    I32X4_SHR_S = 0xAC,
+    I32X4_SHR_U = 0xAD,
+    I32X4_ADD = 0xAE,
+    I32X4_SUB = 0xB1,
+    I32X4_MUL = 0xB5,
+
+    I64X2_NEG = 0xC1,
+    I64X2_SHL = 0xCB,
+    I64X2_SHR_S = 0xCC,
+    I64X2_SHR_U = 0xCD,
+    I64X2_ADD = 0xCE,
+    I64X2_SUB = 0xD1,
+    I64X2_MUL = 0xD5,
+    I64X2_EQ = 0xD6,
+    I64X2_NE = 0xD7,
+    I64X2_LT_S = 0xD8,
+    I64X2_GT_S = 0xD9,
+    I64X2_LE_S = 0xDA,
+    I64X2_GE_S = 0xDB,
+
+    F32X4_NEG = 0xE1,
+    F32X4_ADD = 0xE4,
+    F32X4_SUB = 0xE5,
+    F32X4_MUL = 0xE6,
+    F32X4_DIV = 0xE7,
+
+    F64X2_NEG = 0xED,
+    F64X2_ADD = 0xF0,
+    F64X2_SUB = 0xF1,
+    F64X2_MUL = 0xF2,
+    F64X2_DIV = 0xF3,
 }
 
 /// Value type bytes
@@ -178,6 +295,7 @@ enum WASM_TYPE : ubyte
     I64 = 0x7E,
     F32 = 0x7D,
     F64 = 0x7C,
+    V128 = 0x7B,
     // Reference to an in-flight exception. Pushed by a `try_table`'s `catch_all_ref`
     // clause when unwinding into a `finally` (blocks.d openTryFrames), stashed in a
     // local (codgen.d exnLocalFor) across the finally body, then rethrown with

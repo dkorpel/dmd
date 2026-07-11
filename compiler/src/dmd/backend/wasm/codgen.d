@@ -53,6 +53,7 @@ import dmd.backend.type;
 import dmd.backend.symbol : globsym, symbol_generate;
 import dmd.backend.rtlsym : getRtlsym, RTLSYM;
 import dmd.backend.wasm.enums;
+import dmd.backend.wasm.simd;
 import dmd.backend.wasm.util : writeuLEB128_5;
 import dmd.backend.wasm.obj;
 import dmd.backend.wasm.blocks;
@@ -128,6 +129,18 @@ WASM_TYPE wasmType(tym_t ty)
     case TYnoreturn:
         return WASM_I32;
 
+    case TYfloat4:
+    case TYdouble2:
+    case TYschar16:
+    case TYuchar16:
+    case TYshort8:
+    case TYushort8:
+    case TYlong4:
+    case TYulong4:
+    case TYllong2:
+    case TYullong2:
+        return WASM_TYPE.V128;
+
     // These are not passed by value
     case TYstruct:
     case TYarray:
@@ -154,6 +167,7 @@ Symbol* newTempLocal(WASM_TYPE ty) nothrow
         case WASM_TYPE.I64:    tym = TYllong;  break;
         case WASM_TYPE.F32:    tym = TYfloat;  break;
         case WASM_TYPE.F64:    tym = TYdouble; break;
+        case WASM_TYPE.V128:   tym = TYuchar16; break;
         case WASM_TYPE.EXNREF: tym = TYvoid;   break;
     }
     auto s = symbol_generate(SC.auto_, type_fake(tym));
@@ -377,6 +391,13 @@ nothrow:
         code.write(&d, 8);
     }
 
+    /// Emit `v128.const` with a 16-byte immediate (the raw lane bytes).
+    void emitV128Const(ref const(ubyte)[16] bytes)
+    {
+        emit(OP_FD_PREFIX, uleb(WASM_SIMD.V128_CONST));
+        code.write(&bytes[0], 16);
+    }
+
     /// Access local at index `v`
     void emitLocal(WASM_OP op, long v)
     {
@@ -541,10 +562,13 @@ private struct MemOps
     ubyte loadOp;
     ubyte storeOp;
     ubyte alignLog2;
+    bool prefixed;
 }
 
 private MemOps memOpsFor(tym_t ty) @safe
 {
+    if (tyvector(tybasic(ty)))
+        return MemOps(WASM_SIMD.V128_LOAD, WASM_SIMD.V128_STORE, 4, true);
     switch (tybasic(ty))
     {
     case TYllong, TYullong:
@@ -611,14 +635,20 @@ private void emitMemoryFill(ref WasmCG cg)
 private void emitLoad(ref WasmCG cg, tym_t ty, uint offset = 0)
 {
     const m = memOpsFor(ty);
-    cg.emit(m.loadOp);
+    if (m.prefixed)
+        cg.emit(OP_FD_PREFIX, uleb(m.loadOp));
+    else
+        cg.emit(m.loadOp);
     cg.emitMemArg(m.alignLog2, offset);
 }
 
 private void emitStore(ref WasmCG cg, tym_t ty, uint offset = 0)
 {
     const m = memOpsFor(ty);
-    cg.emit(m.storeOp);
+    if (m.prefixed)
+        cg.emit(OP_FD_PREFIX, uleb(m.storeOp));
+    else
+        cg.emit(m.storeOp);
     cg.emitMemArg(m.alignLog2, offset);
 }
 
@@ -1695,6 +1725,7 @@ bool genElem(ref WasmCG cg, elem* e)
         case WASM_F64: fn = getRtlsym(f64Sym); break;
         case WASM_I32:
         case WASM_I64:
+        case WASM_TYPE.V128:
         case WASM_TYPE.EXNREF:
             assert(0);
         }
@@ -1752,6 +1783,9 @@ bool genElem(ref WasmCG cg, elem* e)
             // zero-extended i32.load16_u against a sign-extended literal
             // (test15.d test39).
             cg.emitConst(OP_I32_CONST, canonicalI32Const(cast(int) e.Vlong, e.Ety));
+            break;
+        case WASM_TYPE.V128:
+            cg.emitV128Const(e.Vuchar16);
             break;
         default:
             assert(0);
@@ -2042,6 +2076,9 @@ bool genElem(ref WasmCG cg, elem* e)
             cg.emit(OP_I32_CONST, sleb(0), e.E1, OP_I32_SUB);
             cg.maskSmallInt(e.Ety);
             return true;
+        case WASM_TYPE.V128:
+            cg.emit(e.E1, OP_FD_PREFIX, uleb(vecNegSubop(e.Ety)));
+            return true;
         default:
             assert(0);
         }
@@ -2051,6 +2088,7 @@ bool genElem(ref WasmCG cg, elem* e)
         {
         case WASM_F32: return unaryOp(OP_F32_ABS);
         case WASM_F64: return unaryOp(OP_F64_ABS);
+        case WASM_TYPE.V128:
         case WASM_TYPE.EXNREF:
             assert(0);
         case WASM_I32:
@@ -2079,6 +2117,7 @@ bool genElem(ref WasmCG cg, elem* e)
         case WASM_F64: return unaryOp(OP_F64_SQRT);
         case WASM_I32:
         case WASM_I64:
+        case WASM_TYPE.V128:
         case WASM_TYPE.EXNREF:
             assert(0);
         }
@@ -2102,6 +2141,7 @@ bool genElem(ref WasmCG cg, elem* e)
             case WASM_F64: fn = getRtlsym(RTLSYM.LDEXP); break;
             case WASM_I32:
             case WASM_I64:
+            case WASM_TYPE.V128:
             case WASM_TYPE.EXNREF:
                 assert(0);
             }
@@ -2135,6 +2175,7 @@ bool genElem(ref WasmCG cg, elem* e)
             case WASM_F64: cg.emit(OP_F64_NEG); break;
             case WASM_I32: cg.emit(OP_I32_SUB); break;
             case WASM_I64: cg.emit(OP_I64_SUB); break;
+            case WASM_TYPE.V128:
             case WASM_TYPE.EXNREF: assert(0);
             }
             cg.maskSmallInt(e.E1.Ety);
@@ -2159,6 +2200,9 @@ bool genElem(ref WasmCG cg, elem* e)
         case WASM_I32:
             cg.emit(e.E1, OP_I32_CONST, sleb(-1), OP_I32_XOR);
             cg.maskSmallInt(e.Ety);
+            return true;
+        case WASM_TYPE.V128:
+            cg.emit(e.E1, OP_FD_PREFIX, uleb(WASM_SIMD.V128_NOT));
             return true;
         case WASM_F32:
         case WASM_F64:
@@ -2466,6 +2510,7 @@ bool genElem(ref WasmCG cg, elem* e)
                 return unaryOp(OP_I32_CTZ);
             case WASM_F32:
             case WASM_F64:
+            case WASM_TYPE.V128:
             case WASM_TYPE.EXNREF:
                 assert(0);
         }
@@ -2481,6 +2526,7 @@ bool genElem(ref WasmCG cg, elem* e)
                 return true;
             case WASM_F32:
             case WASM_F64:
+            case WASM_TYPE.V128:
             case WASM_TYPE.EXNREF:
                 assert(0);
         }
@@ -2530,6 +2576,7 @@ bool genElem(ref WasmCG cg, elem* e)
                 break;
             case WASM_F32:
             case WASM_F64:
+            case WASM_TYPE.V128:
             case WASM_TYPE.EXNREF:
                 assert(0);
             }
@@ -2544,9 +2591,13 @@ bool genElem(ref WasmCG cg, elem* e)
     case OPvp_fp:
     case OPcvp_fp:
     case OPnp_fp:
+    case OPvecfill:
+        cg.genElem(e.E1);
+        cg.emit(OP_FD_PREFIX, uleb(vecSplatSubop(e.Ety)));
+        return true;
+
     case OPnp_f16p:
     case OPf16p_np:
-    case OPvecfill:
     case OPoffset:
         import core.stdc.stdio : printf;
         printf("wasm codegen non-goal Eoper: %s\n", oper_str(e.Eoper));
@@ -2655,12 +2706,18 @@ private ubyte pickByKind(tym_t ty, ubyte f32, ubyte f64, ubyte i64, ubyte i32)
     case WASM_F64: return f64;
     case WASM_I64: return i64;
     case WASM_I32: return i32;
+    case WASM_TYPE.V128:
     case WASM_TYPE.EXNREF: assert(0);
     }
 }
 
 private void emitBinop(ref WasmCG cg, int op, tym_t ty)
 {
+    if (tyvector(ty))
+    {
+        cg.emit(OP_FD_PREFIX, uleb(vecBinSubop(op, ty)));
+        return;
+    }
     if (op == OPmod && tyfloating(ty))
     {
         Symbol* fn = getRtlsym(tybasic(ty).wasmType == WASM_F32 ? RTLSYM.FMODF : RTLSYM.FMOD);
@@ -2702,6 +2759,12 @@ private void emitBinop(ref WasmCG cg, int op, tym_t ty)
 
 private void emitRelop(ref WasmCG cg, int op, tym_t ty)
 {
+    if (tyvector(ty))
+    {
+        cg.emit(OP_FD_PREFIX, uleb(vecRelSubop(op, ty)));
+        return;
+    }
+
     bool negate = false;
 
     {
@@ -3017,7 +3080,10 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
         }
         cg.emit(OP_LOCAL_GET, uleb(cg.shadowBaseLocal), OP_LOCAL_GET, uleb(sp.wasmLocalIdx));
         const m = memOpsFor(sp.ty);
-        cg.emit(m.storeOp);
+        if (m.prefixed)
+            cg.emit(OP_FD_PREFIX, uleb(m.storeOp));
+        else
+            cg.emit(m.storeOp);
         cg.emitMemArg(m.alignLog2, off);
     }
 
