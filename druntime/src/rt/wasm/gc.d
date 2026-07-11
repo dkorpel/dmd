@@ -130,32 +130,43 @@ private void memzero(void* p, size_t sz) @nogc nothrow
         b[i] = 0;
 }
 
-private void registerBlock(BlkHeader* h) @nogc nothrow
+// Grow a doubling pointer array (blocks/markStack), copying the first `count`
+// entries. Returns false and leaves the array untouched if malloc fails.
+private bool growPtrArray(ref BlkHeader** arr, ref size_t cap, size_t count) @nogc nothrow
 {
-    if (nblocks == capblocks)
+    size_t ncap = cap ? cap * 2 : 256;
+    auto nb = cast(BlkHeader**) malloc(ncap * (BlkHeader*).sizeof);
+    if (!nb)
     {
-        size_t ncap = capblocks ? capblocks * 2 : 256;
-        auto nb = cast(BlkHeader**) malloc(ncap * (BlkHeader*).sizeof);
-        if (!nb)
-        {
-            dbgAllocFail(ncap);
-            return;
-        }
-        foreach (i; 0 .. nblocks)
-            nb[i] = blocks[i];
-        if (blocks)
-            free(blocks);
-        blocks = nb;
-        capblocks = ncap;
+        dbgAllocFail(ncap);
+        return false;
     }
-    blocks[nblocks++] = h;
-    sorted = false;
+    foreach (i; 0 .. count)
+        nb[i] = arr[i];
+    if (arr)
+        free(arr);
+    arr = nb;
+    cap = ncap;
+    return true;
+}
+
+private void includeInHeapBounds(BlkHeader* h) @nogc nothrow
+{
     size_t lo = cast(size_t) h + HEADER;
     size_t hi = lo + h.size;
     if (lo < heapMin)
         heapMin = lo;
     if (hi > heapMax)
         heapMax = hi;
+}
+
+private void registerBlock(BlkHeader* h) @nogc nothrow
+{
+    if (nblocks == capblocks && !growPtrArray(blocks, capblocks, nblocks))
+        return;
+    blocks[nblocks++] = h;
+    sorted = false;
+    includeInHeapBounds(h);
 }
 
 private void* allocCore(size_t sz, uint ba, bool zero, TypeInfo ti = null) @nogc nothrow
@@ -264,22 +275,8 @@ private BlkHeader* findBlock(size_t v) @nogc nothrow
 
 private void pushMark(BlkHeader* h) @nogc nothrow
 {
-    if (markTop == markCap)
-    {
-        size_t ncap = markCap ? markCap * 2 : 256;
-        auto nb = cast(BlkHeader**) malloc(ncap * (BlkHeader*).sizeof);
-        if (!nb)
-        {
-            dbgAllocFail(ncap);
-            return;
-        }
-        foreach (i; 0 .. markTop)
-            nb[i] = markStack[i];
-        if (markStack)
-            free(markStack);
-        markStack = nb;
-        markCap = ncap;
-    }
+    if (markTop == markCap && !growPtrArray(markStack, markCap, markTop))
+        return;
     markStack[markTop++] = h;
 }
 
@@ -359,11 +356,7 @@ private void collectNow() @nogc nothrow
         {
             h.flags &= ~F_MARK;
             liveBytes += h.size;
-            size_t lo = cast(size_t) h + HEADER, hi = lo + h.size;
-            if (lo < heapMin)
-                heapMin = lo;
-            if (hi > heapMax)
-                heapMax = hi;
+            includeInHeapBounds(h);
             blocks[write++] = h;
         }
         else
@@ -377,11 +370,7 @@ private void collectNow() @nogc nothrow
     foreach (i; n .. nblocks)
     {
         BlkHeader* h = blocks[i];
-        size_t lo = cast(size_t) h + HEADER, hi = lo + h.size;
-        if (lo < heapMin)
-            heapMin = lo;
-        if (hi > heapMax)
-            heapMax = hi;
+        includeInHeapBounds(h);
         blocks[write++] = h;
     }
     nblocks = write;
