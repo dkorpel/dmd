@@ -85,6 +85,4 @@ void main() {
     dtorsTest();
 }
 
-/*
-DISABLED: wasm
-*/
+// DISABLED: wasm

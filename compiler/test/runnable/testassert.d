@@ -379,6 +379,4 @@ void main()
     testStaticOperators();
 }
 
-/*
-DISABLED: wasm
-*/
+// DISABLED: wasm

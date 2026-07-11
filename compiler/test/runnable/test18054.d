@@ -40,6 +40,4 @@ void main()
     test!(creal,   "0.3 + 0.5i");
 }
 
-/*
-DISABLED: wasm
-*/
+// DISABLED: wasm

@@ -17,6 +17,4 @@ void main()
 	ubyte[] arr = new ubyte[64];
 }
 
-/*
-DISABLED: wasm
-*/
+// DISABLED: wasm

@@ -13,6 +13,4 @@ int main()
     return size > limit * 13 / 10;
 }
 
-/*
-DISABLED: wasm
-*/
+// DISABLED: wasm

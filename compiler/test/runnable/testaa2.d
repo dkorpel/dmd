@@ -405,6 +405,4 @@ int main()
     return 0;
 }
 
-/*
-DISABLED: wasm
-*/
+// DISABLED: wasm

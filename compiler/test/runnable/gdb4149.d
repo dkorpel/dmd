@@ -23,6 +23,4 @@ void main()
     foo(x);
 }
 
-/*
-DISABLED: wasm
-*/
+// DISABLED: wasm

@@ -1592,6 +1592,4 @@ int main(char[][] args)
     return 0;
 }
 
-/*
-DISABLED: wasm
-*/
+// DISABLED: wasm

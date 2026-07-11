@@ -30,6 +30,4 @@ void main()
     assert(123 == n.re && 456 == n.im);
 }
 
-/*
-DISABLED: wasm
-*/
+// DISABLED: wasm

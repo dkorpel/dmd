@@ -113,6 +113,4 @@ void main()
     }
 }
 
-/*
-DISABLED: wasm
-*/
+// DISABLED: wasm

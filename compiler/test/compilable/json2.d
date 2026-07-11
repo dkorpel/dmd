@@ -8,6 +8,4 @@ TEST_OUTPUT_FILE: extra-files/json2.json
 
 import json;
 
-/*
-DISABLED: wasm
-*/
+// DISABLED: wasm

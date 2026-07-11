@@ -19,6 +19,4 @@ void main()
     funcB();
 }
 
-/*
-DISABLED: wasm
-*/
+// DISABLED: wasm

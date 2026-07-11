@@ -1318,6 +1318,4 @@ void main()
     printf("Success\n");
 }
 
-/*
-DISABLED: wasm
-*/
+// DISABLED: wasm

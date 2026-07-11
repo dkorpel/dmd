@@ -173,6 +173,4 @@ static assert(!__traits(isDeprecated, char));
 static assert(!__traits(isDeprecated, bool));
 static assert(!__traits(isDeprecated, S));
 
-/*
-DISABLED: wasm
-*/
+// DISABLED: wasm

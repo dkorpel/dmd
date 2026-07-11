@@ -21,6 +21,4 @@ void bar()
     new Fiber({ throw new Exception("fly"); }).call();
 }
 
-/*
-DISABLED: wasm
-*/
+// DISABLED: wasm

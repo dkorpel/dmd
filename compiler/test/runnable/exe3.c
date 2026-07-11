@@ -1047,6 +1047,4 @@ int main()
         return EXIT_SUCCESS;
 }
 
-/*
-DISABLED: wasm
-*/
+// DISABLED: wasm

@@ -15,6 +15,4 @@ void main(string[] args)
     // BP
 }
 
-/*
-DISABLED: wasm
-*/
+// DISABLED: wasm

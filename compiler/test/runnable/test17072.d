@@ -12,6 +12,4 @@ void main()
         Thread.sleep(dur!"msecs"(0));
 }
 
-/*
-DISABLED: wasm
-*/
+// DISABLED: wasm

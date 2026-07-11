@@ -27,6 +27,4 @@ int main(string[] args)
         return 0;
 }
 
-/*
-DISABLED: wasm
-*/
+// DISABLED: wasm

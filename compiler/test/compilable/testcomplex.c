@@ -12,6 +12,4 @@ int main()
     foo(z);
 }
 
-/*
-DISABLED: wasm
-*/
+// DISABLED: wasm

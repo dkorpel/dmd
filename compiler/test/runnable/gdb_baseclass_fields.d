@@ -30,6 +30,4 @@ void main()
   int bp = 1;
 }
 
-/*
-DISABLED: wasm
-*/
+// DISABLED: wasm

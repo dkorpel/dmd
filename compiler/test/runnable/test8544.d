@@ -16,6 +16,4 @@ void main(string[] args)
     assert(args[1] == to!string(cArgs.argv[1]));
 }
 
-/*
-DISABLED: wasm
-*/
+// DISABLED: wasm

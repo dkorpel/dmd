@@ -33,6 +33,4 @@ void main()
     a_func();
 }
 
-/*
-DISABLED: wasm
-*/
+// DISABLED: wasm

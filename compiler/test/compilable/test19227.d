@@ -26,6 +26,4 @@ void main()
     static assert(T.init != T.init);
 }
 
-/*
-DISABLED: wasm
-*/
+// DISABLED: wasm

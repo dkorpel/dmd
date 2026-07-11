@@ -17,6 +17,4 @@ void main()
     // BP
 }
 
-/*
-DISABLED: wasm
-*/
+// DISABLED: wasm

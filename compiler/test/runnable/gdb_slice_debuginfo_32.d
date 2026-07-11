@@ -10,6 +10,4 @@ GDB_MATCH: \$1 = 4
 
 int[] x;
 
-/*
-DISABLED: wasm
-*/
+// DISABLED: wasm
