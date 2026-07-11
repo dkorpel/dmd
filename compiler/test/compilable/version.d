@@ -1,8 +1,6 @@
-/* REQUIRED_ARGS:
-   DISABLED: wasm
-*/
-
 version (D_ModuleInfo)
+{ }
+else version (WebAssembly)
 { }
 else
 {

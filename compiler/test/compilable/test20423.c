@@ -1,5 +1,4 @@
 // https://github.com/dlang/dmd/issues/20423
-// DISABLED: wasm
 #include <stdarg.h>
 #include <stddef.h>
 #include <assert.h>
