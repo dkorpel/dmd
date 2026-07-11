@@ -1,7 +1,5 @@
 version (D_ModuleInfo)
 { }
-else version (WebAssembly)
-{ }
 else
 {
     static assert(0);

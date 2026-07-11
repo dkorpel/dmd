@@ -71,6 +71,5 @@ skipped and the ordinary linker output is kept.
 
 Limitations:
 - No Phobos
-- No ModuleInfo
 - No deprecated complex number types like `cfloat` and `ifloat`
 - `real` is 64-bit, not 128-bit
