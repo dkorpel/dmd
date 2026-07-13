@@ -521,7 +521,8 @@ if (exe & EX_windos)
 }
 if (exe & EX_WASM)
 {
-    // WASM: `real` maps to double (64-bit); no 80-bit x87 support.
+    // 64-bit real. wasi-libc uses 128-bit float for 'long double' in e.g.
+    // cosl, printf, but does so using software emulation
     _tysize[TYreal] = 8;
     _tysize[TYireal] = 8;
     _tysize[TYcreal] = 16;

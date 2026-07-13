@@ -3580,9 +3580,7 @@ elem* elstruct(elem* e, Goal goal)
     if (!e.ET)
         return e;
 
-    // WASM passes all aggregates by pointer (see argtypes_wasm / buildFuncType).
-    // Don't rewrite an OPstrpar argument into a register-sized integer value;
-    // leave it as OPstrpar so the backend passes the aggregate's address.
+    // WASM passes all aggregates by pointer for now
     if (e.Eoper == OPstrpar && config.objfmt == OBJ_WASM)
         return e;
     //printf("\tnumbytes = %d\n", cast(int)type_size(e.ET));
@@ -5596,10 +5594,7 @@ private elem* elva_start(elem* e, Goal goal)
     assert(e.Eoper == OPva_start);
 
     if (config.objfmt == OBJ_WASM)
-        // WASM lowers OPva_start directly in its own code generator: the
-        // variadic args were spilled by the caller and a pointer to that block
-        // is the trailing implicit parameter. The x86/x86_64 stack-walking
-        // rewrites below don't apply, so leave the node intact.
+        // WASM lowers OPva_start directly in its own code generator
         return e;
 
     if (funcsym_p.ty() & mTYnaked)
