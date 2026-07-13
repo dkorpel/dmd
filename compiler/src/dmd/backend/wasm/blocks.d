@@ -54,7 +54,6 @@ import dmd.backend.wasm.enums;
 import dmd.backend.wasm.codgen;
 
 import core.stdc.stdio : printf;
-import core.stdc.stdlib : getenv;
 
 nothrow:
 
@@ -85,7 +84,7 @@ private bool emitBlockReturn(ref WasmCG cg, block* b, bool hasReturn)
             if (b.Belem)
                 cg.genElemDiscard(b.Belem);
             if (cg.framePublished)
-                emitShadowEpilogue(cg);
+                cg.emitShadowEpilogue();
             cg.emit(OP_RETURN);
             cg.reachable = false;
             return true;
@@ -101,12 +100,12 @@ private bool emitBlockReturn(ref WasmCG cg, block* b, bool hasReturn)
                 WASM_TYPE retTy = wasmType(bty);
                 uint retTmp = cg.allocTemp(retTy);
                 cg.emit(OP_LOCAL_SET, uleb(retTmp));
-                emitShadowEpilogue(cg);
+                cg.emitShadowEpilogue();
                 cg.emit(OP_LOCAL_GET, uleb(retTmp));
             }
             else
             {
-                emitShadowEpilogue(cg);
+                cg.emitShadowEpilogue();
             }
         }
         cg.emit(OP_RETURN);
@@ -118,7 +117,7 @@ private bool emitBlockReturn(ref WasmCG cg, block* b, bool hasReturn)
         if (b.Belem)
             cg.genElemDiscard(b.Belem);
         if (cg.framePublished)
-            emitShadowEpilogue(cg);
+            cg.emitShadowEpilogue();
         if (hasReturn)
             cg.emit(OP_UNREACHABLE);
         cg.emit(OP_RETURN);
@@ -430,19 +429,6 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         if (info[h].isLoopHeader)
             needFrame(h, info[h].loopEnd + 1);
 
-    if (getenv("WASM_BLOCKS"))
-    {
-        printf("=== block graph (%d blocks) ===\n", N);
-        foreach (size_t i, b; blocks)
-        {
-            printf("  b%d bc=%d try=%d succ=[", cast(int) i, cast(int) b.bc,
-                b.Btry ? blockIdx(b.Btry) : -1);
-            foreach (int si; 0 .. cast(int) b.Bsucc.length)
-                printf("%s%d", si ? ",".ptr : "".ptr, blockIdx(b.Bsucc[si]));
-            printf("]\n");
-        }
-    }
-
     bool converged;
     {
         int iterations = 0;
@@ -535,15 +521,6 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         return;
     }
 
-    if (getenv("WASM_BLOCKS"))
-    {
-        foreach (ref const f; bframes)
-            printf("  frame [%d..%d] -> %d\n", f.begin, f.end, f.end + 1);
-        foreach (ref const t; tryRegs)
-            printf("  try [%d..%d] land %d %s\n", t.start, t.end,
-                t.end + 1, t.isCatch ? "catch".ptr : "finally".ptr);
-    }
-
     enum FrameKind
     {
         block,
@@ -623,7 +600,7 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         if (f.kind == FrameKind.catchLand)
         {
             if (tryRegs[f.tryIdx].isCatch)
-                emitCaughtStore(cg, tryRegs[f.tryIdx].tryBlock.jcatchvar);
+                cg.emitCaughtStore(tryRegs[f.tryIdx].tryBlock.jcatchvar);
             else
                 cg.emit(OP_LOCAL_SET,
                     uleb(cg.exnLocalFor(tryRegs[f.tryIdx].tryBlock.Bsucc[1].flag)));
@@ -721,7 +698,7 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         else
             openFramesAt(bi, -1, int.max);
 
-        if (emitBlockReturn(cg, b, hasReturn))
+        if (cg.emitBlockReturn(b, hasReturn))
             continue;
 
         if (b.bc == BC.jmptab || b.bc == BC.switch_)
@@ -762,7 +739,7 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
                 cg.emit(OP_LOCAL_SET, uleb(condLocal));
                 foreach (size_t ci, long cv; b.Bswitch)
                 {
-                    emitCaseEq(cg, condType, condLocal, cv);
+                    cg.emitCaseEq(condType, condLocal, cv);
                     branchToBlock(blockIdx(b.Bsucc[cast(int)(ci + 1)]), true);
                 }
                 if (defaultIdx != bi + 1)
@@ -802,24 +779,24 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
 
             if (takenIdx == nottakenIdx)
             {
-                emitCondToI32(cg, b.Belem);
+                cg.emitCondToI32(b.Belem);
                 cg.emit(OP_DROP);
                 if (takenIdx != bi + 1)
                     branchToBlock(takenIdx, false);
             }
             else if (takenIdx == bi + 1)
             {
-                emitCondInvert(cg, b.Belem);
+                cg.emitCondInvert(b.Belem);
                 branchToBlock(nottakenIdx, true);
             }
             else if (nottakenIdx == bi + 1)
             {
-                emitCondToI32(cg, b.Belem);
+                cg.emitCondToI32(b.Belem);
                 branchToBlock(takenIdx, true);
             }
             else
             {
-                emitCondToI32(cg, b.Belem);
+                cg.emitCondToI32(b.Belem);
                 branchToBlock(takenIdx, true);
                 branchToBlock(nottakenIdx, false);
             }
@@ -846,9 +823,6 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
 
 private void genBlocksDispatch(ref WasmCG cg, block*[] blocks, bool hasReturn)
 {
-    if (getenv("WASM_BLOCKS"))
-        printf("  (dispatch fallback)\n");
-
     const uint sel = cg.allocTemp(WASM_I32);
     cg.emit(OP_I32_CONST, sleb(0), OP_LOCAL_SET, uleb(sel));
 
@@ -874,7 +848,7 @@ private void genBlocksDispatch(ref WasmCG cg, block*[] blocks, bool hasReturn)
                 OP_BR, uleb(loopDepth + extraDepth));
         }
 
-        if (emitBlockReturn(cg, b, hasReturn))
+        if (cg.emitBlockReturn(b, hasReturn))
             continue;
 
         if (b.bc == BC.iftrue || b.bc == BC.ifthen)
@@ -885,7 +859,7 @@ private void genBlocksDispatch(ref WasmCG cg, block*[] blocks, bool hasReturn)
                 cg.genElem(b.Belem);
             else
                 cg.emit(OP_I32_CONST, sleb(0));
-            emitCondToI32(cg, b.Belem);
+            cg.emitCondToI32(b.Belem);
             cg.emit(OP_SELECT, OP_LOCAL_SET, uleb(sel), OP_BR, uleb(loopDepth));
         }
         else if (b.bc == BC.jmptab || b.bc == BC.switch_)
@@ -903,7 +877,7 @@ private void genBlocksDispatch(ref WasmCG cg, block*[] blocks, bool hasReturn)
             cg.emit(OP_LOCAL_SET, uleb(condLocal));
             foreach (size_t ci, long cv; b.Bswitch)
             {
-                emitCaseEq(cg, condType, condLocal, cv);
+                cg.emitCaseEq(condType, condLocal, cv);
                 cg.emit(OP_IF, WASM_VOID_BLOCK);
                 gotoBlock(blockIdx(b.Bsucc[cast(int)(ci + 1)]), 1);
                 cg.emit(OP_END);

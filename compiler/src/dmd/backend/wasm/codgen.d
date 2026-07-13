@@ -43,6 +43,7 @@
 module dmd.backend.wasm.codgen;
 
 import dmd.backend.debugprint;
+import core.stdc.stdio : printf;
 
 import dmd.backend.cc;
 import dmd.backend.cdef;
@@ -108,7 +109,7 @@ WASM_TYPE wasmType(tym_t ty)
         return WASM_PTR;
 
     default:
-        debug { import core.stdc.stdio : printf; printf("ty = %s, tybasic = %d\n", tym_str(ty), tybasic(ty)); }
+        debug { printf("ty = %s, tybasic = %d\n", tym_str(ty), tybasic(ty)); }
         assert(0);
     }
 }
@@ -1741,7 +1742,6 @@ bool genElem(ref WasmCG cg, elem* e)
             return true;
         }
 
-        import core.stdc.stdio : printf;
         printf("wasm codegen OPvar symbol neither data nor shadow: %s\n", &e.Vsym.Sident[0]);
         elem_print(e);
         assert(0);
@@ -2362,7 +2362,7 @@ bool genElem(ref WasmCG cg, elem* e)
             cg.emit(OP_LOCAL_TEE, uleb(dstTmp));
             genElemAddr(cg, e.E2);
             cg.emit(OP_I32_CONST, sleb(sz));
-            emitMemoryCopy(cg);
+            cg.emitMemoryCopy();
             cg.emit(OP_LOCAL_GET, uleb(dstTmp));
             return true;
         }
@@ -2374,7 +2374,7 @@ bool genElem(ref WasmCG cg, elem* e)
             cg.emit(e.E1, OP_LOCAL_TEE, uleb(dstTmp));
             cg.genElem(e.E2.E1, WASM_I32);
             cg.genElem(e.E2.E2, WASM_I32);
-            emitMemoryCopy(cg);
+            cg.emitMemoryCopy();
             cg.emit(OP_LOCAL_GET, uleb(dstTmp));
             return true;
         }
@@ -2404,7 +2404,7 @@ bool genElem(ref WasmCG cg, elem* e)
                 cg.emit(OP_LOCAL_GET, uleb(dstTmp));
                 cg.genElem(evalue, WASM_I32);
                 cg.genElem(enelems, WASM_I32);
-                emitMemoryFill(cg);
+                cg.emitMemoryFill();
             }
             else if (evalue.Eoper == OPconst && !tyfloating(evalue.Ety) &&
                 (evalue.Vullong & mask) == (splat(evalue.Vullong) & mask))
@@ -2412,7 +2412,7 @@ bool genElem(ref WasmCG cg, elem* e)
                 cg.emit(OP_LOCAL_GET, uleb(dstTmp), OP_I32_CONST, sleb(evalue.Vullong & 0xFF));
                 cg.genElem(enelems, WASM_I32);
                 cg.emit(OP_I32_CONST, sleb(width), OP_I32_MUL);
-                emitMemoryFill(cg);
+                cg.emitMemoryFill();
             }
             else
             {
@@ -2536,7 +2536,6 @@ bool genElem(ref WasmCG cg, elem* e)
     case OPnp_f16p:
     case OPf16p_np:
     case OPoffset:
-        import core.stdc.stdio : printf;
         printf("wasm codegen non-goal Eoper: %s\n", oper_str(e.Eoper));
         elem_print(e);
         assert(0);
@@ -2568,11 +2567,11 @@ private void emitBswap64(ref WasmCG cg)
     cg.emit(OP_LOCAL_TEE, uleb(t));
 
     cg.emit(OP_I32_WRAP_I64);
-    emitBswap32(cg);
+    cg.emitBswap32();
     cg.emit(OP_LOCAL_SET, uleb(lo));
 
     cg.emit(OP_LOCAL_GET, uleb(t), OP_I64_CONST, sleb(32), OP_I64_SHR_U, OP_I32_WRAP_I64);
-    emitBswap32(cg);
+    cg.emitBswap32();
     cg.emit(OP_LOCAL_SET, uleb(hi));
 
     cg.emit(OP_LOCAL_GET, uleb(lo), OP_I64_EXTEND_I32_U, OP_I64_CONST, sleb(32), OP_I64_SHL,
@@ -2997,7 +2996,7 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
         || funcNeedsFrameBase(startblock);
     cg.framePublished = cg.hasShadowFrame && funcMakesCall(startblock);
     if (cg.hasShadowFrame)
-        emitShadowPrologue(cg);
+        cg.emitShadowPrologue();
 
     foreach (ref sp; paramSpills)
     {
@@ -3008,7 +3007,7 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
             if (off)
                 cg.emit(OP_I32_CONST, sleb(cast(int) off), OP_I32_ADD);
             cg.emit(OP_LOCAL_GET, uleb(sp.wasmLocalIdx), OP_I32_CONST, sleb(sp.copyBytes));
-            emitMemoryCopy(cg);
+            cg.emitMemoryCopy();
             continue;
         }
         cg.emit(OP_LOCAL_GET, uleb(cg.shadowBaseLocal), OP_LOCAL_GET, uleb(sp.wasmLocalIdx));
@@ -3026,7 +3025,7 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
     if (cg.reachable)
     {
         if (cg.framePublished)
-            emitShadowEpilogue(cg);
+            cg.emitShadowEpilogue();
         if (hasReturn)
             cg.emit(OP_UNREACHABLE);
     }
