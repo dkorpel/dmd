@@ -345,29 +345,19 @@ nothrow:
     /// Emit a mixed sequence in one call: `ubyte` arguments are opcodes
     /// written verbatim, `elem*` arguments are code-generated via `genElem`,
     /// and integers wrapped in `uleb`/`sleb` are LEB128-encoded immediates.
-    void emit(Args...)(Args args) if (Args.length > 1)
+    void emit(Args...)(Args args)
     {
         foreach (a; args)
         {
             static if (is(typeof(a) : elem*))
                 genElem(this, a);
             else static if (is(typeof(a) == Uleb))
-                emitULEB(a.v);
+                code.writeuLEB128(a.v);
             else static if (is(typeof(a) == Sleb))
-                emitSLEB(a.v);
+                code.writesLEB128(a.v);
             else
                 emit(a);
         }
-    }
-
-    void emitULEB(uint v)
-    {
-        code.writeuLEB128(v);
-    }
-
-    void emitSLEB(long v)
-    {
-        code.writesLEB128(v);
     }
 
     /// Write constant value `v`. i32.const takes a signed LEB128 in i32 range,
@@ -376,7 +366,7 @@ nothrow:
     void emitConst(WASM_OP op, long v)
     {
         emit(op);
-        emitSLEB(op == OP_I32_CONST ? cast(int) v : v);
+        emit(sleb(op == OP_I32_CONST ? cast(int) v : v));
     }
 
     void emitF32Const(float f)
@@ -396,13 +386,6 @@ nothrow:
     {
         emit(OP_FD_PREFIX, uleb(WASM_SIMD.V128_CONST));
         code.write(&bytes[0], 16);
-    }
-
-    /// Access local at index `v`
-    void emitLocal(WASM_OP op, long v)
-    {
-        emit(op);
-        emitULEB(cast(uint) v);
     }
 
     /// 5-byte padded ULEB128 so wasm-ld has room to write a patched value over it
@@ -429,7 +412,7 @@ nothrow:
         }
         else
         {
-            emitSLEB(cast(int) addr);
+            emit(sleb(cast(int) addr));
         }
     }
 
@@ -444,7 +427,7 @@ nothrow:
         }
         else
         {
-            emitSLEB(cast(int) sym.Soffset);
+            emit(sleb(cast(int) sym.Soffset));
         }
     }
 
@@ -535,14 +518,12 @@ nothrow:
         emit(OP_I32_SUB);
         if (publish)
         {
-            emit(OP_LOCAL_TEE);
-            emitULEB(local);
+            emit(OP_LOCAL_TEE, uleb(local));
             emitSPSet();
         }
         else
         {
-            emit(OP_LOCAL_SET);
-            emitULEB(local);
+            emit(OP_LOCAL_SET, uleb(local));
         }
     }
 
@@ -550,7 +531,7 @@ nothrow:
     /// `__stack_pointer = local + size`.
     void emitFrameFree(uint local, uint size)
     {
-        emitLocal(OP_LOCAL_GET, local);
+        emit(OP_LOCAL_GET, uleb(local));
         emitConst(OP_I32_CONST, cast(int) size);
         emit(OP_I32_ADD);
         emitSPSet();
@@ -659,10 +640,10 @@ void emitCaughtStore(ref WasmCG cg, Symbol* jcatchvar)
 {
     if (cg.caughtTmp == uint.max)
         cg.caughtTmp = cg.allocTemp(WASM_I32);
-    cg.emitLocal(OP_LOCAL_SET, cg.caughtTmp);
+    cg.emit(OP_LOCAL_SET, uleb(cg.caughtTmp));
     const bool ok = emitSymAddr(cg, jcatchvar, 0);
     assert(ok);
-    cg.emitLocal(OP_LOCAL_GET, cg.caughtTmp);
+    cg.emit(OP_LOCAL_GET, uleb(cg.caughtTmp));
     emitStore(cg, TYnptr);
 }
 
@@ -781,7 +762,7 @@ bool emitSymBase(ref WasmCG cg, Symbol* s, uint off, out uint memOff)
 {
     if (auto p = s in cg.byRefParamLocal)
     {
-        cg.emitLocal(OP_LOCAL_GET, *p);
+        cg.emit(OP_LOCAL_GET, uleb(*p));
         memOff = off;
         return true;
     }
@@ -793,7 +774,7 @@ bool emitSymBase(ref WasmCG cg, Symbol* s, uint off, out uint memOff)
     }
     if (cg.inShadow(s))
     {
-        cg.emitLocal(OP_LOCAL_GET, cg.shadowBaseLocal);
+        cg.emit(OP_LOCAL_GET, uleb(cg.shadowBaseLocal));
         memOff = cast(uint) s.Soffset + off;
         return true;
     }
@@ -999,7 +980,7 @@ SavedLValue saveLValueAddr(ref WasmCG cg, elem* e)
         assert(ok);
     }
     r.addrTemp = cg.allocTemp(WASM_I32);
-    cg.emitLocal(OP_LOCAL_SET, r.addrTemp);
+    cg.emit(OP_LOCAL_SET, uleb(r.addrTemp));
     return r;
 }
 
@@ -1016,7 +997,7 @@ uint replayAddr(ref WasmCG cg, SavedLValue r)
         assert(ok);
         return memOff;
     }
-    cg.emitLocal(OP_LOCAL_GET, r.addrTemp);
+    cg.emit(OP_LOCAL_GET, uleb(r.addrTemp));
     return r.memOff;
 }
 
@@ -1309,7 +1290,7 @@ private void genVarArgs(ref WasmCG cg, elem*[] varArgs, ref uint spLocal, ref ui
         case VaKind.aggregate:
             if (sl.byteSize)
             {
-                cg.emitLocal(OP_LOCAL_GET, spLocal);
+                cg.emit(OP_LOCAL_GET, uleb(spLocal));
                 if (sl.off)
                     cg.emit(OP_I32_CONST, sleb(sl.off), OP_I32_ADD);
                 cg.emit(sl.e, OP_I32_CONST, sleb(sl.byteSize));
@@ -1319,7 +1300,7 @@ private void genVarArgs(ref WasmCG cg, elem*[] varArgs, ref uint spLocal, ref ui
         }
     }
 
-    cg.emitLocal(OP_LOCAL_GET, spLocal);
+    cg.emit(OP_LOCAL_GET, uleb(spLocal));
 }
 
 private elem* unwrapComma(ref WasmCG cg, elem* e)
@@ -1530,9 +1511,9 @@ private bool genCall(ref WasmCG cg, elem* e)
             cg.genElem(e.E2, WASM_I32);
             cg.emit(OP_I32_SUB, OP_I32_CONST, sleb(~15), OP_I32_AND);
             const uint tmp = cg.allocTemp(WASM_I32);
-            cg.emitLocal(OP_LOCAL_TEE, tmp);
+            cg.emit(OP_LOCAL_TEE, uleb(tmp));
             cg.emitSPSet();
-            cg.emitLocal(OP_LOCAL_GET, tmp);
+            cg.emit(OP_LOCAL_GET, uleb(tmp));
             return true;
         }
     }
@@ -1597,7 +1578,7 @@ private bool genCall(ref WasmCG cg, elem* e)
         sretSize = cast(uint)((type_size(fty.Tnext) + 15) & ~15);
         sretLocal = cg.allocTemp(WASM_I32);
         cg.emitFrameAlloc(sretSize, sretLocal);
-        cg.emitLocal(OP_LOCAL_GET, sretLocal);
+        cg.emit(OP_LOCAL_GET, uleb(sretLocal));
     }
 
     cg.callCtxStack ~= ctx;
@@ -1634,7 +1615,7 @@ private bool genCall(ref WasmCG cg, elem* e)
     if (sretLocal != uint.max)
     {
         cg.emitFrameFree(sretLocal, sretSize);
-        cg.emitLocal(OP_LOCAL_GET, sretLocal);
+        cg.emit(OP_LOCAL_GET, uleb(sretLocal));
     }
 
     if (ctx.isCVariadic && varArgs.length)
@@ -1851,7 +1832,7 @@ bool genElem(ref WasmCG cg, elem* e)
                 for (elem* c = e.E2; c !is rhsTail; c = c.E2)
                     cg.genElemDiscard(c.E1);
                 uint addrTmp = cg.allocTemp(WASM_I32);
-                cg.emitLocal(OP_LOCAL_SET, addrTmp);
+                cg.emit(OP_LOCAL_SET, uleb(addrTmp));
                 elem* lo = (rhsTail.Eoper == OPpair) ? rhsTail.E1 : rhsTail.E2;
                 elem* hi = (rhsTail.Eoper == OPpair) ? rhsTail.E2 : rhsTail.E1;
                 cg.emit(OP_LOCAL_GET, uleb(addrTmp), lo, OP_I32_STORE);
@@ -1874,12 +1855,12 @@ bool genElem(ref WasmCG cg, elem* e)
                 if (needValue)
                 {
                     vTmp = cg.allocTemp(wasmType(e.E1.Ety));
-                    cg.emitLocal(OP_LOCAL_TEE, vTmp);
+                    cg.emit(OP_LOCAL_TEE, uleb(vTmp));
                 }
                 cg.emitStore(e.E1.Ety, memOff);
                 if (needValue)
                 {
-                    cg.emitLocal(OP_LOCAL_GET, vTmp);
+                    cg.emit(OP_LOCAL_GET, uleb(vTmp));
                     return true;
                 }
                 return false;
@@ -1888,11 +1869,11 @@ bool genElem(ref WasmCG cg, elem* e)
             cg.emit(e.E2, OP_LOCAL_SET, uleb(valTmp));
             if (cg.emitLValueBase(e.E1, memOff))
             {
-                cg.emitLocal(OP_LOCAL_GET, valTmp);
+                cg.emit(OP_LOCAL_GET, uleb(valTmp));
                 cg.emitStore(e.E1.Ety, memOff);
                 if (needValue)
                 {
-                    cg.emitLocal(OP_LOCAL_GET, valTmp);
+                    cg.emit(OP_LOCAL_GET, uleb(valTmp));
                     return true;
                 }
                 return false;
@@ -1925,7 +1906,7 @@ bool genElem(ref WasmCG cg, elem* e)
             {
                 cg.genElem(e.E2, wasmType(e));
                 rTmp = cg.allocTemp(wasmType(e));
-                cg.emitLocal(OP_LOCAL_SET, rTmp);
+                cg.emit(OP_LOCAL_SET, uleb(rTmp));
             }
             const bool needValue = typeHasValue(e.Ety) && !discard;
             const uint storeOff = replayAddr(cg, lv);
@@ -1936,19 +1917,19 @@ bool genElem(ref WasmCG cg, elem* e)
             if (rhsPure)
                 cg.genElem(e.E2, wasmType(e));
             else
-                cg.emitLocal(OP_LOCAL_GET, rTmp);
+                cg.emit(OP_LOCAL_GET, uleb(rTmp));
             cg.emitBinop(opeqtoop(op), e.Ety);
             cg.maskSmallInt(e.E1.Ety);
             uint vTmp;
             if (needValue)
             {
                 vTmp = cg.allocTemp(wasmType(e.E1.Ety));
-                cg.emitLocal(OP_LOCAL_TEE, vTmp);
+                cg.emit(OP_LOCAL_TEE, uleb(vTmp));
             }
             cg.emitStore(e.E1.Ety, storeOff);
             if (needValue)
             {
-                cg.emitLocal(OP_LOCAL_GET, vTmp);
+                cg.emit(OP_LOCAL_GET, uleb(vTmp));
                 return true;
             }
             return false;
@@ -1986,7 +1967,7 @@ bool genElem(ref WasmCG cg, elem* e)
         }
 
     case OPframeptr:
-        cg.emitLocal(OP_LOCAL_GET, cg.shadowBaseLocal);
+        cg.emit(OP_LOCAL_GET, uleb(cg.shadowBaseLocal));
         return true;
 
     case OPva_start:
@@ -1995,7 +1976,7 @@ bool genElem(ref WasmCG cg, elem* e)
             if (e.E1.Eoper == OPrelconst && e.E1.Vsym && isParameter(e.E1.Vsym))
                 eva = e.E2;
             cg.genElem(eva);
-            cg.emitLocal(OP_LOCAL_GET, cg.numParams - 1);
+            cg.emit(OP_LOCAL_GET, uleb(cg.numParams - 1));
             cg.emit(OP_I32_STORE);
             cg.emitMemArg(2, 0);
         }
@@ -2014,7 +1995,7 @@ bool genElem(ref WasmCG cg, elem* e)
             if (!discard)
             {
                 oldTmp = cg.allocTemp(wasmType(e.E1));
-                cg.emitLocal(OP_LOCAL_TEE, oldTmp);
+                cg.emit(OP_LOCAL_TEE, uleb(oldTmp));
             }
 
             cg.genElem(e.E2, wasmType(e.E1.Ety));
@@ -2024,7 +2005,7 @@ bool genElem(ref WasmCG cg, elem* e)
 
             if (!discard)
             {
-                cg.emitLocal(OP_LOCAL_GET, oldTmp);
+                cg.emit(OP_LOCAL_GET, uleb(oldTmp));
                 return true;
             }
             return false;
@@ -2104,7 +2085,7 @@ bool genElem(ref WasmCG cg, elem* e)
                 uint m = cg.allocTemp(is64 ? WASM_I64 : WASM_I32);
                 cg.emit(OP_LOCAL_TEE, uleb(m), OP_LOCAL_GET, uleb(t));
                 cg.emit(is64 ? OP_I64_XOR : OP_I32_XOR);
-                cg.emitLocal(OP_LOCAL_GET, m);
+                cg.emit(OP_LOCAL_GET, uleb(m));
                 cg.emit(is64 ? OP_I64_SUB : OP_I32_SUB);
                 return true;
             }
@@ -2180,9 +2161,9 @@ bool genElem(ref WasmCG cg, elem* e)
             }
             cg.maskSmallInt(e.E1.Ety);
             const uint vTmp = cg.allocTemp(wty);
-            cg.emitLocal(OP_LOCAL_TEE, vTmp);
+            cg.emit(OP_LOCAL_TEE, uleb(vTmp));
             cg.emitStore(e.E1.Ety, storeOff);
-            cg.emitLocal(OP_LOCAL_GET, vTmp);
+            cg.emit(OP_LOCAL_GET, uleb(vTmp));
             return true;
         }
 
@@ -2421,11 +2402,11 @@ bool genElem(ref WasmCG cg, elem* e)
 
             uint dstTmp = cg.allocTemp(WASM_I32);
             genElemAddr(cg, e.E1);
-            cg.emitLocal(OP_LOCAL_TEE, dstTmp);
+            cg.emit(OP_LOCAL_TEE, uleb(dstTmp));
             genElemAddr(cg, e.E2);
             cg.emitConst(OP_I32_CONST, sz);
             emitMemoryCopy(cg);
-            cg.emitLocal(OP_LOCAL_GET, dstTmp);
+            cg.emit(OP_LOCAL_GET, uleb(dstTmp));
             return true;
         }
 
@@ -2437,7 +2418,7 @@ bool genElem(ref WasmCG cg, elem* e)
             cg.genElem(e.E2.E1, WASM_I32);
             cg.genElem(e.E2.E2, WASM_I32);
             emitMemoryCopy(cg);
-            cg.emitLocal(OP_LOCAL_GET, dstTmp);
+            cg.emit(OP_LOCAL_GET, uleb(dstTmp));
             return true;
         }
 
@@ -2463,7 +2444,7 @@ bool genElem(ref WasmCG cg, elem* e)
 
             if (width <= 1)
             {
-                cg.emitLocal(OP_LOCAL_GET, dstTmp);
+                cg.emit(OP_LOCAL_GET, uleb(dstTmp));
                 cg.genElem(evalue, WASM_I32);
                 cg.genElem(enelems, WASM_I32);
                 emitMemoryFill(cg);
@@ -2496,7 +2477,7 @@ bool genElem(ref WasmCG cg, elem* e)
                     OP_I32_ADD, OP_LOCAL_SET, uleb(curTmp));
                 cg.emit(OP_BR, uleb(0), OP_END, OP_END);
             }
-            cg.emitLocal(OP_LOCAL_GET, dstTmp);
+            cg.emit(OP_LOCAL_GET, uleb(dstTmp));
             return true;
         }
 
@@ -2614,13 +2595,13 @@ bool genElem(ref WasmCG cg, elem* e)
 private void emitBswap32(ref WasmCG cg)
 {
     uint t = cg.allocTemp(WASM_I32);
-    cg.emitLocal(OP_LOCAL_TEE, t);
-    cg.emit(OP_I32_CONST, sleb(24), OP_I32_SHR_U);
-    cg.emit(OP_LOCAL_GET, uleb(t), OP_I32_CONST, sleb(8), OP_I32_SHR_U,
-        OP_I32_CONST, sleb(0x0000_FF00), OP_I32_AND, OP_I32_OR);
-    cg.emit(OP_LOCAL_GET, uleb(t), OP_I32_CONST, sleb(8), OP_I32_SHL,
-        OP_I32_CONST, sleb(0x00FF_0000), OP_I32_AND, OP_I32_OR);
-    cg.emit(OP_LOCAL_GET, uleb(t), OP_I32_CONST, sleb(24), OP_I32_SHL, OP_I32_OR);
+    cg.emit(
+        OP_LOCAL_TEE, uleb(t),
+        OP_I32_CONST, sleb(24), OP_I32_SHR_U,
+        OP_LOCAL_GET, uleb(t), OP_I32_CONST, sleb(8), OP_I32_SHR_U, OP_I32_CONST, sleb(0x0000_FF00), OP_I32_AND, OP_I32_OR,
+        OP_LOCAL_GET, uleb(t), OP_I32_CONST, sleb(8), OP_I32_SHL, OP_I32_CONST, sleb(0x00FF_0000), OP_I32_AND, OP_I32_OR,
+        OP_LOCAL_GET, uleb(t), OP_I32_CONST, sleb(24), OP_I32_SHL, OP_I32_OR
+    );
 }
 
 private void emitBswap64(ref WasmCG cg)
@@ -2628,15 +2609,15 @@ private void emitBswap64(ref WasmCG cg)
     uint t = cg.allocTemp(WASM_I64);
     uint lo = cg.allocTemp(WASM_I32);
     uint hi = cg.allocTemp(WASM_I32);
-    cg.emitLocal(OP_LOCAL_TEE, t);
+    cg.emit(OP_LOCAL_TEE, uleb(t));
 
     cg.emit(OP_I32_WRAP_I64);
     emitBswap32(cg);
-    cg.emitLocal(OP_LOCAL_SET, lo);
+    cg.emit(OP_LOCAL_SET, uleb(lo));
 
     cg.emit(OP_LOCAL_GET, uleb(t), OP_I64_CONST, sleb(32), OP_I64_SHR_U, OP_I32_WRAP_I64);
     emitBswap32(cg);
-    cg.emitLocal(OP_LOCAL_SET, hi);
+    cg.emit(OP_LOCAL_SET, uleb(hi));
 
     cg.emit(OP_LOCAL_GET, uleb(lo), OP_I64_EXTEND_I32_U, OP_I64_CONST, sleb(32), OP_I64_SHL,
         OP_LOCAL_GET, uleb(hi), OP_I64_EXTEND_I32_U, OP_I64_OR);
@@ -2646,7 +2627,7 @@ private void emitBitTestOp(ref WasmCG cg, uint op, elem* bitnumE, elem* ptrE)
 {
     cg.genElem(bitnumE);
     const uint bitTmp = cg.allocTemp(WASM_I32);
-    cg.emitLocal(OP_LOCAL_SET, bitTmp);
+    cg.emit(OP_LOCAL_SET, uleb(bitTmp));
 
     cg.genElem(ptrE);
     cg.emit(OP_LOCAL_GET, uleb(bitTmp), OP_I32_CONST, sleb(5), OP_I32_SHR_U,
@@ -2655,16 +2636,16 @@ private void emitBitTestOp(ref WasmCG cg, uint op, elem* bitnumE, elem* ptrE)
     cg.emit(OP_LOCAL_TEE, uleb(addrTmp), OP_I32_LOAD);
     cg.emitMemArg(2, 0);
     const uint wordTmp = cg.allocTemp(WASM_I32);
-    cg.emitLocal(OP_LOCAL_SET, wordTmp);
+    cg.emit(OP_LOCAL_SET, uleb(wordTmp));
 
     cg.emit(OP_I32_CONST, sleb(1), OP_LOCAL_GET, uleb(bitTmp),
         OP_I32_CONST, sleb(31), OP_I32_AND, OP_I32_SHL);
     const uint maskTmp = cg.allocTemp(WASM_I32);
-    cg.emitLocal(OP_LOCAL_TEE, maskTmp);
+    cg.emit(OP_LOCAL_TEE, uleb(maskTmp));
 
     cg.emit(OP_LOCAL_GET, uleb(wordTmp), OP_I32_AND, OP_I32_CONST, sleb(0), OP_I32_NE);
     const uint resultTmp = cg.allocTemp(WASM_I32);
-    cg.emitLocal(OP_LOCAL_SET, resultTmp);
+    cg.emit(OP_LOCAL_SET, uleb(resultTmp));
 
     cg.emit(OP_LOCAL_GET, uleb(addrTmp), OP_LOCAL_GET, uleb(wordTmp), OP_LOCAL_GET, uleb(maskTmp));
     switch (op)
@@ -2684,7 +2665,7 @@ private void emitBitTestOp(ref WasmCG cg, uint op, elem* bitnumE, elem* ptrE)
     cg.emit(OP_I32_STORE);
     cg.emitMemArg(2, 0);
 
-    cg.emitLocal(OP_LOCAL_GET, resultTmp);
+    cg.emit(OP_LOCAL_GET, uleb(resultTmp));
 }
 
 private void genElemAddr(ref WasmCG cg, elem* e)
@@ -3071,7 +3052,7 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
         const uint off = cast(uint) sp.sym.Soffset + sp.byteOffset;
         if (sp.copyBytes)
         {
-            cg.emitLocal(OP_LOCAL_GET, cg.shadowBaseLocal);
+            cg.emit(OP_LOCAL_GET, uleb(cg.shadowBaseLocal));
             if (off)
                 cg.emit(OP_I32_CONST, sleb(cast(int) off), OP_I32_ADD);
             cg.emit(OP_LOCAL_GET, uleb(sp.wasmLocalIdx), OP_I32_CONST, sleb(sp.copyBytes));

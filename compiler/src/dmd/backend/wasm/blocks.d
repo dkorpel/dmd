@@ -100,9 +100,9 @@ private bool emitBlockReturn(ref WasmCG cg, block* b, bool hasReturn)
                 const tym_t bty = tybasic(b.Belem.Ety);
                 WASM_TYPE retTy = wasmType(bty);
                 uint retTmp = cg.allocTemp(retTy);
-                cg.emitLocal(OP_LOCAL_SET, retTmp);
+                cg.emit(OP_LOCAL_SET, uleb(retTmp));
                 emitShadowEpilogue(cg);
-                cg.emitLocal(OP_LOCAL_GET, retTmp);
+                cg.emit(OP_LOCAL_GET, uleb(retTmp));
             }
             else
             {
@@ -138,7 +138,7 @@ private bool emitBlockReturn(ref WasmCG cg, block* b, bool hasReturn)
 
 private void emitCaseEq(ref WasmCG cg, WASM_TYPE condType, uint condLocal, long cv)
 {
-    cg.emitLocal(OP_LOCAL_GET, condLocal);
+    cg.emit(OP_LOCAL_GET, uleb(condLocal));
     if (condType == WASM_I64)
         cg.emit(OP_I64_CONST, sleb(cv), OP_I64_EQ);
     else
@@ -605,7 +605,7 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         }
         else
             cg.emit(WASM_CATCH.CATCH_ALL_REF);
-        cg.emitULEB(0);
+        cg.emit(uleb(0));
     }
 
     void closeTop()
@@ -624,8 +624,8 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
             if (tryRegs[f.tryIdx].isCatch)
                 emitCaughtStore(cg, tryRegs[f.tryIdx].tryBlock.jcatchvar);
             else
-                cg.emitLocal(OP_LOCAL_SET,
-                    cg.exnLocalFor(tryRegs[f.tryIdx].tryBlock.Bsucc[1].flag));
+                cg.emit(OP_LOCAL_SET,
+                    uleb(cg.exnLocalFor(tryRegs[f.tryIdx].tryBlock.Bsucc[1].flag)));
             cg.reachable = true;
         }
         else
@@ -758,7 +758,7 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
             if (!useBrTable)
             {
                 const uint condLocal = cg.allocTemp(condType);
-                cg.emitLocal(OP_LOCAL_SET, condLocal);
+                cg.emit(OP_LOCAL_SET, uleb(condLocal));
                 foreach (size_t ci, long cv; b.Bswitch)
                 {
                     emitCaseEq(cg, condType, condLocal, cv);
@@ -783,9 +783,9 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
                         destIdx = blockIdx(b.Bsucc[cast(int)(ci + 1)]);
                         break;
                     }
-                cg.emitULEB(destDepth(destIdx));
+                cg.emit(uleb(destDepth(destIdx)));
             }
-            cg.emitULEB(destDepth(defaultIdx));
+            cg.emit(uleb(destDepth(defaultIdx)));
             cg.reachable = false;
             continue;
         }
@@ -848,26 +848,26 @@ private void genBlocksDispatch(ref WasmCG cg, block*[] blocks, bool hasReturn)
     if (getenv("WASM_BLOCKS"))
         printf("  (dispatch fallback)\n");
 
-    const int N = cast(int) blocks.length;
     const uint sel = cg.allocTemp(WASM_I32);
     cg.emit(OP_I32_CONST, sleb(0), OP_LOCAL_SET, uleb(sel));
 
     cg.emit(OP_LOOP, WASM_VOID_BLOCK);
-    foreach (int i; 0 .. N)
+    foreach (i; 0 .. blocks.length)
         cg.emit(OP_BLOCK, WASM_VOID_BLOCK);
-    cg.emit(OP_LOCAL_GET, uleb(sel), OP_BR_TABLE, uleb(cast(uint) N));
-    foreach (int i; 0 .. N)
-        cg.emitULEB(cast(uint) i);
-    cg.emitULEB(0);
+    cg.emit(OP_LOCAL_GET, uleb(sel), OP_BR_TABLE, uleb(cast(uint) blocks.length));
+    foreach (i; 0 .. blocks.length)
+        cg.emit(uleb(cast(uint) i));
+    cg.emit(uleb(0));
 
-    foreach (int i; 0 .. N)
+    const int N = cast(int) blocks.length;
+    foreach (i; 0 .. blocks.length)
     {
         cg.emit(OP_END);
         block* b = blocks[i];
 
         const uint loopDepth = cast(uint)(N - 1 - i);
 
-        void gotoBlock(int t, uint extraDepth)
+        void gotoBlock(size_t t, uint extraDepth)
         {
             cg.emit(OP_I32_CONST, sleb(t), OP_LOCAL_SET, uleb(sel),
                 OP_BR, uleb(loopDepth + extraDepth));
@@ -899,7 +899,7 @@ private void genBlocksDispatch(ref WasmCG cg, block*[] blocks, bool hasReturn)
             }
             const condType = b.Belem.wasmType;
             const uint condLocal = cg.allocTemp(condType);
-            cg.emitLocal(OP_LOCAL_SET, condLocal);
+            cg.emit(OP_LOCAL_SET, uleb(condLocal));
             foreach (size_t ci, long cv; b.Bswitch)
             {
                 emitCaseEq(cg, condType, condLocal, cv);
