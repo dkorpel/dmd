@@ -903,15 +903,15 @@ extern (C++) struct Target
 
             case EXP.negate:
             case EXP.add, EXP.addAssign, EXP.min, EXP.minAssign:
-                return true;
+                return tvec.isScalar();
 
             case EXP.equal, EXP.notEqual:
             case EXP.lessThan, EXP.greaterThan, EXP.lessOrEqual, EXP.greaterOrEqual:
-                return true;
+                return tvec.isScalar();
 
             case EXP.mul, EXP.mulAssign:
                 // no i8x16.mul in SIMD128
-                return !isByte;
+                return tvec.isScalar() && !isByte;
 
             case EXP.div, EXP.divAssign:
                 // only floating-point lane division exists
