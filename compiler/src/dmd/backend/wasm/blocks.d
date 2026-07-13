@@ -600,6 +600,7 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         cg.emit(OP_TRY_TABLE, WASM_VOID_BLOCK, uleb(1));
         if (isCatch)
         {
+            cg.noteTagUse();
             cg.emit(WASM_CATCH.CATCH);
             cg.emitTagOperand();
         }
@@ -797,7 +798,7 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
             if (b.Belem)
                 cg.genElem(b.Belem);
             else
-                cg.emitConst(OP_I32_CONST, 0);
+                cg.emit(OP_I32_CONST, sleb(0));
 
             if (takenIdx == nottakenIdx)
             {
@@ -883,7 +884,7 @@ private void genBlocksDispatch(ref WasmCG cg, block*[] blocks, bool hasReturn)
             if (b.Belem)
                 cg.genElem(b.Belem);
             else
-                cg.emitConst(OP_I32_CONST, 0);
+                cg.emit(OP_I32_CONST, sleb(0));
             emitCondToI32(cg, b.Belem);
             cg.emit(OP_SELECT, OP_LOCAL_SET, uleb(sel), OP_BR, uleb(loopDepth));
         }
