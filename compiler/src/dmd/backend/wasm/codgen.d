@@ -527,12 +527,6 @@ private void emitMemoryCopy(ref WasmCG cg)
     cg.emit(OP_FC_PREFIX, uleb(WASM_FC.MEMORY_COPY), uleb(0), uleb(0));
 }
 
-/// Emit `memory.fill 0`
-private void emitMemoryFill(ref WasmCG cg)
-{
-    cg.emit(OP_FC_PREFIX, uleb(WASM_FC.MEMORY_FILL), uleb(0));
-}
-
 private void emitLoad(ref WasmCG cg, tym_t ty, uint offset = 0)
 {
     const m = memOpsFor(ty);
@@ -667,7 +661,7 @@ bool emitSymAddr(ref WasmCG cg, Symbol* s, uint off)
         return true;
     }
     uint memOff;
-    if (!emitSymBase(cg, s, off, memOff))
+    if (!cg.emitSymBase(s, off, memOff))
         return false;
     if (memOff != 0)
         cg.emit(OP_I32_CONST, sleb(cast(int) memOff), OP_I32_ADD);
@@ -706,7 +700,7 @@ bool emitSymBase(ref WasmCG cg, Symbol* s, uint off, out uint memOff)
 bool emitSymLoad(ref WasmCG cg, Symbol* s, uint off, tym_t ty)
 {
     uint memOff;
-    if (!emitSymBase(cg, s, off, memOff))
+    if (!cg.emitSymBase(s, off, memOff))
         return false;
     cg.emitLoad(ty, memOff);
     return true;
@@ -745,87 +739,6 @@ private elem* splitConstOffset(elem* addr, out uint memOff)
         return addr;
     memOff = cast(uint) v;
     return base;
-}
-
-/// Coalesce a discarded comma chain of contiguous 4-byte integer zero stores
-/// (a struct/array default-init such as `Point p;`, lowered to per-field
-/// `*(base+k) = 0`) into the widest aligned stores — two adjacent 4-byte stores
-/// become one i64.store, matching ldc -O0. Only the exact all-zero shape with a
-/// common side-effect-free base is accepted; anything else returns false so the
-/// caller falls back to the general comma path.
-/// Params:
-///   cg    = codegen state
-///   comma = the OPcomma being evaluated in discard context
-/// Returns: true if the chain was recognized and emitted here.
-private bool tryCoalesceZeroInit(ref WasmCG cg, elem* comma)
-{
-    elem*[16] arms;
-    uint n;
-    elem* cur = comma;
-    while (cur.Eoper == OPcomma)
-    {
-        if (n >= arms.length)
-            return false;
-        arms[n++] = cur.E2;
-        cur = cur.E1;
-    }
-    if (n >= arms.length)
-        return false;
-    arms[n++] = cur;
-    if (n < 2)
-        return false;
-
-    elem* base;
-    uint[16] offs;
-    foreach (i; 0 .. n)
-    {
-        elem* s = arms[i];
-        if (s.Eoper != OPeq)
-            return false;
-        elem* dst = s.E1;
-        if (dst.Eoper != OPind || tysize(dst.Ety) != 4 || !tyintegral(dst.Ety))
-            return false;
-        elem* rhs = s.E2;
-        if (rhs.Eoper != OPconst || !tyintegral(rhs.Ety) || el_tolong(rhs) != 0)
-            return false;
-        uint off;
-        elem* b = splitConstOffset(dst.E1, off);
-        if (el_sideeffect(b))
-            return false;
-        if (i == 0)
-            base = b;
-        else if (!el_match(base, b))
-            return false;
-        offs[i] = off;
-    }
-
-    foreach (i; 1 .. n)
-    {
-        const key = offs[i];
-        uint j = i;
-        while (j > 0 && offs[j - 1] > key)
-        {
-            offs[j] = offs[j - 1];
-            --j;
-        }
-        offs[j] = key;
-    }
-
-    uint i;
-    while (i < n)
-    {
-        if (i + 1 < n && offs[i + 1] == offs[i] + 4)
-        {
-            cg.emit(base, OP_I64_CONST, sleb(0), OP_I64_STORE, uleb(2), uleb(offs[i]));
-            i += 2;
-        }
-        else
-        {
-            cg.emit(base, OP_I32_CONST, sleb(0), OP_I32_STORE, uleb(2), uleb(offs[i]));
-            i += 1;
-        }
-    }
-    return true;
 }
 
 /// Push the linear-memory address of an lvalue elem on the value stack.
@@ -1295,7 +1208,7 @@ private void emitSliceArg(ref WasmCG cg, elem* arg)
         return;
     }
 
-    if (emitSliceHalf(cg, a, /*ptrHalf*/ false) &&
+    if (cg.emitSliceHalf(a, /*ptrHalf*/ false) &&
         cg.emitSliceHalf(a, /*ptrHalf*/ true))
         return;
 
@@ -1331,10 +1244,10 @@ private bool emitStructParAddr(ref WasmCG cg, elem* e)
         cg.emitCondToI32(e.E1);
         const uint addrTmp = cg.allocTemp(WASM_I32);
         cg.emit(OP_IF, WASM_VOID_BLOCK);
-        if (!emitStructParAddr(cg, e.E2.E1))
+        if (!cg.emitStructParAddr(e.E2.E1))
             return false;
         cg.emit(OP_LOCAL_SET, uleb(addrTmp), OP_ELSE);
-        if (!emitStructParAddr(cg, e.E2.E2))
+        if (!cg.emitStructParAddr(e.E2.E2))
             return false;
         cg.emit(OP_LOCAL_SET, uleb(addrTmp), OP_END, OP_LOCAL_GET, uleb(addrTmp));
         return true;
@@ -1683,7 +1596,7 @@ bool genElem(ref WasmCG cg, elem* e)
         return true;
 
     case OPvar:
-        if (emitSymLoad(cg, e.Vsym, cast(uint) e.Voffset, e.Ety))
+        if (cg.emitSymLoad(e.Vsym, cast(uint) e.Voffset, e.Ety))
             return true;
 
         if (e.Vsym.Sfl == FL.func)
@@ -1712,7 +1625,7 @@ bool genElem(ref WasmCG cg, elem* e)
         assert(0);
 
     case OPaddr:
-        if (emitLValueAddr(cg, e.E1))
+        if (cg.emitLValueAddr(e.E1))
             return true;
         elem_print(e.E1);
         assert(0);
@@ -2144,14 +2057,14 @@ bool genElem(ref WasmCG cg, elem* e)
     case OPmsw:
         {
             elem* src = unwrapComma(cg, e.E1);
-            if (emitSliceHalf(cg, src, /*ptrHalf*/ true))
+            if (cg.emitSliceHalf(src, /*ptrHalf*/ true))
                 return true;
             cg.emit(src, OP_I64_CONST, sleb(32), OP_I64_SHR_U, OP_I32_WRAP_I64);
             return true;
         }
 
     case OPstrpar:
-        if (emitStructParAddr(cg, e.E1))
+        if (cg.emitStructParAddr(e.E1))
             return true;
 
         elem_print(e);
@@ -2176,8 +2089,6 @@ bool genElem(ref WasmCG cg, elem* e)
         return true;
 
     case OPcomma:
-        if (discard && tryCoalesceZeroInit(cg, e))
-            return false;
         cg.genElemDiscard(e.E1);
         if (discard)
         {
@@ -2300,7 +2211,6 @@ bool genElem(ref WasmCG cg, elem* e)
 
     case OPstreq:
         {
-
             uint sz = e.ET ? cast(uint) type_size(e.ET) : 0;
             if (sz == 0)
                 return false;
@@ -2352,7 +2262,7 @@ bool genElem(ref WasmCG cg, elem* e)
                 cg.emit(OP_LOCAL_GET, uleb(dstTmp));
                 cg.genElem(evalue, WASM_I32);
                 cg.genElem(enelems, WASM_I32);
-                cg.emitMemoryFill();
+                cg.emit(OP_FC_PREFIX, uleb(WASM_FC.MEMORY_FILL), uleb(0));
             }
             else if (evalue.Eoper == OPconst && !tyfloating(evalue.Ety) &&
                 (evalue.Vullong & mask) == (splat(evalue.Vullong) & mask))
@@ -2360,7 +2270,7 @@ bool genElem(ref WasmCG cg, elem* e)
                 cg.emit(OP_LOCAL_GET, uleb(dstTmp), OP_I32_CONST, sleb(evalue.Vullong & 0xFF));
                 cg.genElem(enelems, WASM_I32);
                 cg.emit(OP_I32_CONST, sleb(width), OP_I32_MUL);
-                cg.emitMemoryFill();
+                cg.emit(OP_FC_PREFIX, uleb(WASM_FC.MEMORY_FILL), uleb(0));
             }
             else
             {
@@ -2453,12 +2363,10 @@ bool genElem(ref WasmCG cg, elem* e)
             final switch (rty)
             {
             case WASM_I32:
-                cg.emit(OP_I32_CONST, sleb(31), OP_I32_AND, OP_I32_SHR_U,
-                    OP_I32_CONST, sleb(1), OP_I32_AND);
+                cg.emit(OP_I32_CONST, sleb(31), OP_I32_AND, OP_I32_SHR_U, OP_I32_CONST, sleb(1), OP_I32_AND);
                 break;
             case WASM_I64:
-                cg.emit(OP_I64_CONST, sleb(63), OP_I64_AND, OP_I64_SHR_U,
-                    OP_I64_CONST, sleb(1), OP_I64_AND);
+                cg.emit(OP_I64_CONST, sleb(63), OP_I64_AND, OP_I64_SHR_U, OP_I64_CONST, sleb(1), OP_I64_AND);
                 break;
             case WASM_F32:
             case WASM_F64:
@@ -2501,8 +2409,10 @@ private void emitBswap32(ref WasmCG cg)
     cg.emit(
         OP_LOCAL_TEE, uleb(t),
         OP_I32_CONST, sleb(24), OP_I32_SHR_U,
-        OP_LOCAL_GET, uleb(t), OP_I32_CONST, sleb(8), OP_I32_SHR_U, OP_I32_CONST, sleb(0x0000_FF00), OP_I32_AND, OP_I32_OR,
-        OP_LOCAL_GET, uleb(t), OP_I32_CONST, sleb(8), OP_I32_SHL, OP_I32_CONST, sleb(0x00FF_0000), OP_I32_AND, OP_I32_OR,
+        OP_LOCAL_GET, uleb(t), OP_I32_CONST, sleb(8), OP_I32_SHR_U,
+        OP_I32_CONST, sleb(0x0000_FF00), OP_I32_AND, OP_I32_OR,
+        OP_LOCAL_GET, uleb(t), OP_I32_CONST, sleb(8), OP_I32_SHL,
+        OP_I32_CONST, sleb(0x00FF_0000), OP_I32_AND, OP_I32_OR,
         OP_LOCAL_GET, uleb(t), OP_I32_CONST, sleb(24), OP_I32_SHL, OP_I32_OR
     );
 }
@@ -2530,26 +2440,25 @@ private void emitBitTestOp(ref WasmCG cg, uint op, elem* bitnumE, elem* ptrE)
 {
     cg.emit(bitnumE);
     const uint bitTmp = cg.allocTemp(WASM_I32);
-    cg.emit(OP_LOCAL_SET, uleb(bitTmp));
-
-    cg.emit(ptrE);
-    cg.emit(OP_LOCAL_GET, uleb(bitTmp), OP_I32_CONST, sleb(5), OP_I32_SHR_U,
-        OP_I32_CONST, sleb(2), OP_I32_SHL, OP_I32_ADD);
     const uint addrTmp = cg.allocTemp(WASM_I32);
-    cg.emit(OP_LOCAL_TEE, uleb(addrTmp), OP_I32_LOAD, uleb(2), uleb(0));
     const uint wordTmp = cg.allocTemp(WASM_I32);
-    cg.emit(OP_LOCAL_SET, uleb(wordTmp));
-
-    cg.emit(OP_I32_CONST, sleb(1), OP_LOCAL_GET, uleb(bitTmp),
-        OP_I32_CONST, sleb(31), OP_I32_AND, OP_I32_SHL);
     const uint maskTmp = cg.allocTemp(WASM_I32);
-    cg.emit(OP_LOCAL_TEE, uleb(maskTmp));
-
-    cg.emit(OP_LOCAL_GET, uleb(wordTmp), OP_I32_AND, OP_I32_CONST, sleb(0), OP_I32_NE);
     const uint resultTmp = cg.allocTemp(WASM_I32);
-    cg.emit(OP_LOCAL_SET, uleb(resultTmp));
 
-    cg.emit(OP_LOCAL_GET, uleb(addrTmp), OP_LOCAL_GET, uleb(wordTmp), OP_LOCAL_GET, uleb(maskTmp));
+    cg.emit(
+        OP_LOCAL_SET, uleb(bitTmp), ptrE,
+        OP_LOCAL_GET, uleb(bitTmp), OP_I32_CONST, sleb(5), OP_I32_SHR_U,
+        OP_I32_CONST, sleb(2), OP_I32_SHL, OP_I32_ADD,
+        OP_LOCAL_TEE, uleb(addrTmp), OP_I32_LOAD, uleb(2), uleb(0),
+        OP_LOCAL_SET, uleb(wordTmp)
+        OP_I32_CONST, sleb(1), OP_LOCAL_GET, uleb(bitTmp),
+        OP_I32_CONST, sleb(31), OP_I32_AND, OP_I32_SHL,
+        OP_LOCAL_TEE, uleb(maskTmp),
+        OP_LOCAL_GET, uleb(wordTmp), OP_I32_AND, OP_I32_CONST, sleb(0), OP_I32_NE,
+        OP_LOCAL_SET, uleb(resultTmp),
+        OP_LOCAL_GET, uleb(addrTmp), OP_LOCAL_GET, uleb(wordTmp), OP_LOCAL_GET, uleb(maskTmp)
+    );
+
     switch (op)
     {
     case OPbts:
@@ -2564,9 +2473,8 @@ private void emitBitTestOp(ref WasmCG cg, uint op, elem* bitnumE, elem* ptrE)
     default:
         assert(0);
     }
-    cg.emit(OP_I32_STORE, uleb(2), uleb(0));
-
-    cg.emit(OP_LOCAL_GET, uleb(resultTmp));
+    cg.emit(OP_I32_STORE, uleb(2), uleb(0),
+        OP_LOCAL_GET, uleb(resultTmp));
 }
 
 private void genElemAddr(ref WasmCG cg, elem* e)
@@ -2576,7 +2484,7 @@ private void genElemAddr(ref WasmCG cg, elem* e)
         cg.emit(OP_I32_CONST, sleb(0));
         return;
     }
-    if (!emitLValueAddr(cg, e))
+    if (!cg.emitLValueAddr(e))
         cg.genElem(e);
 }
 
@@ -2776,6 +2684,7 @@ uint funcIndex(Symbol* sfunc)
     return 0;
 }
 
+/// Emit `condElem != 0` or `!condElem` depending on `invert`
 void emitCondToI32(ref WasmCG cg, elem* condElem, bool invert = false)
 {
     const tb = tybasic(condElem.Ety);
@@ -2832,9 +2741,11 @@ void emitCondInvert(ref WasmCG cg, elem* condElem)
 void wasm_assignShadowOffsets(Symbol* sfunc, Symbol*[] symtab)
 {
     WasmCG cg;
+
     foreach (s; symtab)
         if (s.isParameter)
             cg.registerShadow(s);
+
     foreach (s; symtab)
     {
         if (s.isParameter)
