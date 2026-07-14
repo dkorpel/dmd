@@ -551,20 +551,21 @@ private int canonicalI32Const(int v, tym_t ty)
 /// ---
 private void emitTruncSat(ref WasmCG cg, WASM_TYPE from, WASM_TYPE to, bool uns)
 {
-    const subop = (to == WASM_I64 ? 4 : 0) | (from == WASM_F64 ? 2 : 0) | (uns ? 1 : 0);
+    const subop = WASM_FC.I32_TRUNC_SAT_F32_S
+        | (to == WASM_I64 ? 4 : 0) | (from == WASM_F64 ? 2 : 0) | (uns ? 1 : 0);
     cg.emit(OP_FC_PREFIX, uleb(subop));
 }
 
 /// Emit `memory.copy 0 0`
 private void emitMemoryCopy(ref WasmCG cg)
 {
-    cg.emit(OP_FC_PREFIX, uleb(10), uleb(0), uleb(0));
+    cg.emit(OP_FC_PREFIX, uleb(WASM_FC.MEMORY_COPY), uleb(0), uleb(0));
 }
 
 /// Emit `memory.fill 0`
 private void emitMemoryFill(ref WasmCG cg)
 {
-    cg.emit(OP_FC_PREFIX, uleb(11), uleb(0));
+    cg.emit(OP_FC_PREFIX, uleb(WASM_FC.MEMORY_FILL), uleb(0));
 }
 
 private void emitLoad(ref WasmCG cg, tym_t ty, uint offset = 0)
@@ -2420,19 +2421,19 @@ bool genElem(ref WasmCG cg, elem* e)
                 uint valTmp = cg.allocTemp(vt);
                 uint curTmp = cg.allocTemp(WASM_I32);
                 uint endTmp = cg.allocTemp(WASM_I32);
-                cg.emit(evalue, OP_LOCAL_SET, uleb(valTmp));
-                cg.emit(OP_LOCAL_GET, uleb(dstTmp), OP_LOCAL_TEE, uleb(curTmp));
+                cg.emit(evalue, OP_LOCAL_SET, uleb(valTmp),
+                    OP_LOCAL_GET, uleb(dstTmp), OP_LOCAL_TEE, uleb(curTmp));
                 cg.genElem(enelems, WASM_I32);
                 cg.emit(OP_I32_CONST, sleb(width), OP_I32_MUL, OP_I32_ADD,
                     OP_LOCAL_SET, uleb(endTmp));
-                cg.emit(OP_BLOCK, WASM_VOID_BLOCK, OP_LOOP, WASM_VOID_BLOCK);
-                cg.emit(OP_LOCAL_GET, uleb(curTmp), OP_LOCAL_GET, uleb(endTmp),
+                cg.emit(OP_BLOCK, WASM_VOID_BLOCK, OP_LOOP, WASM_VOID_BLOCK,
+                    OP_LOCAL_GET, uleb(curTmp), OP_LOCAL_GET, uleb(endTmp),
                     OP_I32_GE_U, OP_BR_IF, uleb(1));
                 cg.emit(OP_LOCAL_GET, uleb(curTmp), OP_LOCAL_GET, uleb(valTmp));
                 cg.emitStore(evalue.Ety);
                 cg.emit(OP_LOCAL_GET, uleb(curTmp), OP_I32_CONST, sleb(width),
-                    OP_I32_ADD, OP_LOCAL_SET, uleb(curTmp));
-                cg.emit(OP_BR, uleb(0), OP_END, OP_END);
+                    OP_I32_ADD, OP_LOCAL_SET, uleb(curTmp)
+                    OP_BR, uleb(0), OP_END, OP_END);
             }
             cg.emit(OP_LOCAL_GET, uleb(dstTmp));
             return true;

@@ -288,6 +288,23 @@ enum WASM_SIMD : uint
     F64X2_DIV = 0xF3,
 }
 
+/// Sub-opcodes following the `0xFC` prefix.
+/// Should be uLEB128-encoded unlike regular opcodes.
+enum WASM_FC : uint
+{
+    I32_TRUNC_SAT_F32_S = 0,
+    I32_TRUNC_SAT_F32_U = 1,
+    I32_TRUNC_SAT_F64_S = 2,
+    I32_TRUNC_SAT_F64_U = 3,
+    I64_TRUNC_SAT_F32_S = 4,
+    I64_TRUNC_SAT_F32_U = 5,
+    I64_TRUNC_SAT_F64_S = 6,
+    I64_TRUNC_SAT_F64_U = 7,
+
+    MEMORY_COPY = 10,
+    MEMORY_FILL = 11,
+}
+
 /// Value type bytes
 enum WASM_TYPE : ubyte
 {
