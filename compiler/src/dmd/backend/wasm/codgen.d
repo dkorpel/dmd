@@ -2539,17 +2539,7 @@ private void emitRelop(ref WasmCG cg, int op, tym_t ty)
     if (op == OPlg || op == OPleg)
     {
         const WASM_TYPE wt = wasmType(ty);
-        if (wt == WASM_I32 || wt == WASM_I64)
-        {
-            if (op == OPlg)
-                op = OPne;
-            else
-            {
-                cg.emit(OP_DROP, OP_DROP, OP_I32_CONST, Sleb(negate ? 0 : 1));
-                return;
-            }
-        }
-        else
+        if (wt == WASM_F32 || wt == WASM_F64)
         {
             const uint yTmp = cg.allocTemp(wt);
             const uint xTmp = cg.allocTemp(wt);
@@ -2566,6 +2556,12 @@ private void emitRelop(ref WasmCG cg, int op, tym_t ty)
                 cg.emit(OP_I32_EQZ);
             return;
         }
+        if (op == OPleg)
+        {
+            cg.emit(OP_DROP, OP_DROP, OP_I32_CONST, Sleb(negate ? 0 : 1));
+            return;
+        }
+        op = OPne;
     }
 
     static ubyte relOp(int op, tym_t ty)
