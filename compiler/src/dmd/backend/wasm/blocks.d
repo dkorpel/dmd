@@ -98,9 +98,9 @@ private bool emitBlockReturn(ref WasmCG cg, block* b, bool hasReturn)
                 const tym_t bty = tybasic(b.Belem.Ety);
                 WASM_TYPE retTy = wasmType(bty);
                 uint retTmp = cg.allocTemp(retTy);
-                cg.emit(OP_LOCAL_SET, uleb(retTmp));
+                cg.emit(OP_LOCAL_SET, Uleb(retTmp));
                 cg.emitShadowEpilogue();
-                cg.emit(OP_LOCAL_GET, uleb(retTmp));
+                cg.emit(OP_LOCAL_GET, Uleb(retTmp));
             }
             else
             {
@@ -136,11 +136,11 @@ private bool emitBlockReturn(ref WasmCG cg, block* b, bool hasReturn)
 
 private void emitCaseEq(ref WasmCG cg, WASM_TYPE condType, uint condLocal, long cv)
 {
-    cg.emit(OP_LOCAL_GET, uleb(condLocal));
+    cg.emit(OP_LOCAL_GET, Uleb(condLocal));
     if (condType == WASM_I64)
-        cg.emit(OP_I64_CONST, sleb(cv), OP_I64_EQ);
+        cg.emit(OP_I64_CONST, Sleb(cv), OP_I64_EQ);
     else
-        cg.emit(OP_I32_CONST, sleb(cast(int) cv), OP_I32_EQ);
+        cg.emit(OP_I32_CONST, Sleb(cast(int) cv), OP_I32_EQ);
 }
 
 private block*[] layoutTryRegions(block*[] blocks)
@@ -573,15 +573,15 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         stack ~= Frame(FrameKind.catchLand, end, -1, cg.reachable, ti);
         cg.emit(OP_BLOCK, isCatch ? WASM_I32 : WASM_TYPE.EXNREF);
         stack ~= Frame(FrameKind.tryTable, end, -1, cg.reachable, ti);
-        cg.emit(OP_TRY_TABLE, WASM_VOID_BLOCK, uleb(1));
+        cg.emit(OP_TRY_TABLE, WASM_VOID_BLOCK, Uleb(1));
         if (isCatch)
         {
             cg.noteTagUse();
-            cg.emit(WASM_CATCH.CATCH, tagReloc());
+            cg.emit(WASM_CATCH.CATCH, RelocOp(R_WASM.TAG_INDEX_LEB));
         }
         else
             cg.emit(WASM_CATCH.CATCH_ALL_REF);
-        cg.emit(uleb(0));
+        cg.emit(Uleb(0));
     }
 
     void closeTop()
@@ -601,7 +601,7 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
                 cg.emitCaughtStore(tryRegs[f.tryIdx].tryBlock.jcatchvar);
             else
                 cg.emit(OP_LOCAL_SET,
-                    uleb(cg.exnLocalFor(tryRegs[f.tryIdx].tryBlock.Bsucc[1].flag)));
+                    Uleb(cg.exnLocalFor(tryRegs[f.tryIdx].tryBlock.Bsucc[1].flag)));
             cg.reachable = true;
         }
         else
@@ -634,7 +634,7 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
 
     void branchToBlock(int t, bool conditional)
     {
-        cg.emit(conditional ? OP_BR_IF : OP_BR, uleb(destDepth(t)));
+        cg.emit(conditional ? OP_BR_IF : OP_BR, Uleb(destDepth(t)));
         if (!conditional)
             cg.reachable = false;
     }
@@ -734,7 +734,7 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
             if (!useBrTable)
             {
                 const uint condLocal = cg.allocTemp(condType);
-                cg.emit(OP_LOCAL_SET, uleb(condLocal));
+                cg.emit(OP_LOCAL_SET, Uleb(condLocal));
                 foreach (size_t ci, long cv; b.Bswitch)
                 {
                     cg.emitCaseEq(condType, condLocal, cv);
@@ -746,10 +746,10 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
             }
 
             if (vmin != 0)
-                cg.emit(OP_I32_CONST, sleb(cast(int)-vmin), OP_I32_ADD);
+                cg.emit(OP_I32_CONST, Sleb(cast(int)-vmin), OP_I32_ADD);
 
             const size_t tableLen = cast(size_t)(span + 1);
-            cg.emit(OP_BR_TABLE, uleb(cast(uint) tableLen));
+            cg.emit(OP_BR_TABLE, Uleb(cast(uint) tableLen));
             foreach (long v; vmin .. vmax + 1)
             {
                 int destIdx = defaultIdx;
@@ -759,9 +759,9 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
                         destIdx = blockIdx(b.Bsucc[cast(int)(ci + 1)]);
                         break;
                     }
-                cg.emit(uleb(destDepth(destIdx)));
+                cg.emit(Uleb(destDepth(destIdx)));
             }
-            cg.emit(uleb(destDepth(defaultIdx)));
+            cg.emit(Uleb(destDepth(defaultIdx)));
             cg.reachable = false;
             continue;
         }
@@ -773,7 +773,7 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
             if (b.Belem)
                 cg.genElem(b.Belem);
             else
-                cg.emit(OP_I32_CONST, sleb(0));
+                cg.emit(OP_I32_CONST, Sleb(0));
 
             if (takenIdx == nottakenIdx)
             {
@@ -822,15 +822,15 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
 private void genBlocksDispatch(ref WasmCG cg, block*[] blocks, bool hasReturn)
 {
     const uint sel = cg.allocTemp(WASM_I32);
-    cg.emit(OP_I32_CONST, sleb(0), OP_LOCAL_SET, uleb(sel));
+    cg.emit(OP_I32_CONST, Sleb(0), OP_LOCAL_SET, Uleb(sel));
 
     cg.emit(OP_LOOP, WASM_VOID_BLOCK);
     foreach (i; 0 .. blocks.length)
         cg.emit(OP_BLOCK, WASM_VOID_BLOCK);
-    cg.emit(OP_LOCAL_GET, uleb(sel), OP_BR_TABLE, uleb(cast(uint) blocks.length));
+    cg.emit(OP_LOCAL_GET, Uleb(sel), OP_BR_TABLE, Uleb(cast(uint) blocks.length));
     foreach (i; 0 .. blocks.length)
-        cg.emit(uleb(cast(uint) i));
-    cg.emit(uleb(0));
+        cg.emit(Uleb(cast(uint) i));
+    cg.emit(Uleb(0));
 
     const int N = cast(int) blocks.length;
     foreach (i; 0 .. blocks.length)
@@ -842,8 +842,8 @@ private void genBlocksDispatch(ref WasmCG cg, block*[] blocks, bool hasReturn)
 
         void gotoBlock(size_t t, uint extraDepth)
         {
-            cg.emit(OP_I32_CONST, sleb(t), OP_LOCAL_SET, uleb(sel),
-                OP_BR, uleb(loopDepth + extraDepth));
+            cg.emit(OP_I32_CONST, Sleb(t), OP_LOCAL_SET, Uleb(sel),
+                OP_BR, Uleb(loopDepth + extraDepth));
         }
 
         if (cg.emitBlockReturn(b, hasReturn))
@@ -851,14 +851,14 @@ private void genBlocksDispatch(ref WasmCG cg, block*[] blocks, bool hasReturn)
 
         if (b.bc == BC.iftrue || b.bc == BC.ifthen)
         {
-            cg.emit(OP_I32_CONST, sleb(blockIdx(succ(b, 0))),
-                OP_I32_CONST, sleb(blockIdx(succ(b, 1))));
+            cg.emit(OP_I32_CONST, Sleb(blockIdx(succ(b, 0))),
+                OP_I32_CONST, Sleb(blockIdx(succ(b, 1))));
             if (b.Belem)
                 cg.genElem(b.Belem);
             else
-                cg.emit(OP_I32_CONST, sleb(0));
+                cg.emit(OP_I32_CONST, Sleb(0));
             cg.emitCondToI32(b.Belem);
-            cg.emit(OP_SELECT, OP_LOCAL_SET, uleb(sel), OP_BR, uleb(loopDepth));
+            cg.emit(OP_SELECT, OP_LOCAL_SET, Uleb(sel), OP_BR, Uleb(loopDepth));
         }
         else if (b.bc == BC.jmptab || b.bc == BC.switch_)
         {
@@ -872,7 +872,7 @@ private void genBlocksDispatch(ref WasmCG cg, block*[] blocks, bool hasReturn)
             }
             const condType = b.Belem.wasmType;
             const uint condLocal = cg.allocTemp(condType);
-            cg.emit(OP_LOCAL_SET, uleb(condLocal));
+            cg.emit(OP_LOCAL_SET, Uleb(condLocal));
             foreach (size_t ci, long cv; b.Bswitch)
             {
                 cg.emitCaseEq(condType, condLocal, cv);
