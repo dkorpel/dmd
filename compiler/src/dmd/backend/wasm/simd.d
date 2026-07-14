@@ -40,6 +40,7 @@ WASM_SIMD vecBinSubop(int op, tym_t ty)
         case OPxor: return V128_XOR;
         default: break;
         }
+
         switch (tybasic(ty))
         {
         case TYfloat4:

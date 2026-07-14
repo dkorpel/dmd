@@ -511,20 +511,6 @@ void emitCaughtStore(ref WasmCG cg, Symbol* jcatchvar)
     cg.emitStore(TYnptr);
 }
 
-/// Emit a saturating float to int truncation (0xFC-prefixed trunc_sat family).
-/// The plain trunc opcodes trap on NaN/out-of-range input, where native
-/// targets produce an unspecified value without trapping.
-/// ---
-/// double d = 1e300;
-/// int i = cast(int) d; // i32.trunc_f64_s → "wasm trap: integer overflow"
-/// ---
-private void emitTruncSat(ref WasmCG cg, WASM_TYPE from, WASM_TYPE to, bool uns)
-{
-    const subop = WASM_FC.I32_TRUNC_SAT_F32_S
-        | (to == WASM_I64 ? 4 : 0) | (from == WASM_F64 ? 2 : 0) | (uns ? 1 : 0);
-    cg.emit(OP_FC_PREFIX, Uleb(subop));
-}
-
 private void emitCoerce(ref WasmCG cg, WASM_TYPE from, WASM_TYPE to)
 {
     if (from == to)
@@ -532,17 +518,20 @@ private void emitCoerce(ref WasmCG cg, WASM_TYPE from, WASM_TYPE to)
 
     static int X(WASM_TYPE from, WASM_TYPE to) { return from << 8 | to; }
 
-    // WASM traps on overflow, while D expects truncation
-    // case X(WASM_F32, WASM_I64): return cg.emit(OP_I32_REINTERPRET_F32, OP_I64_EXTEND_I32_U);
+    // Float to int uses the saturating trunc_sat family (0xFC-prefixed): the
+    // plain trunc opcodes trap on NaN/out-of-range input, whereas D expects
+    // native-style truncation without trapping:
+    //   double d = 1e300;
+    //   int i = cast(int) d; // i32.trunc_f64_s → "wasm trap: integer overflow"
 
     switch (X(from, to))
     {
         case X(WASM_F32, WASM_F64): return cg.emit(OP_F64_PROMOTE_F32);
-        case X(WASM_F32, WASM_I32): return cg.emitTruncSat(from, to, false);
-        case X(WASM_F32, WASM_I64): return cg.emitTruncSat(from, to, false);
+        case X(WASM_F32, WASM_I32): return cg.emit(OP_FC_PREFIX, Uleb(WASM_FC.I32_TRUNC_SAT_F32_S));
+        case X(WASM_F32, WASM_I64): return cg.emit(OP_FC_PREFIX, Uleb(WASM_FC.I64_TRUNC_SAT_F32_S));
         case X(WASM_F64, WASM_F32): return cg.emit(OP_F32_DEMOTE_F64);
-        case X(WASM_F64, WASM_I32): return cg.emitTruncSat(from, to, false);
-        case X(WASM_F64, WASM_I64): return cg.emitTruncSat(from, to, false);
+        case X(WASM_F64, WASM_I32): return cg.emit(OP_FC_PREFIX, Uleb(WASM_FC.I32_TRUNC_SAT_F64_S));
+        case X(WASM_F64, WASM_I64): return cg.emit(OP_FC_PREFIX, Uleb(WASM_FC.I64_TRUNC_SAT_F64_S));
         case X(WASM_I32, WASM_F32): return cg.emit(OP_F32_CONVERT_I32_S);
         case X(WASM_I32, WASM_F64): return cg.emit(OP_F64_CONVERT_I32_S);
         case X(WASM_I32, WASM_I64): return cg.emit(OP_I64_EXTEND_I32_S);
@@ -1465,10 +1454,9 @@ bool genElem(ref WasmCG cg, elem* e)
         return true;
     }
 
-    bool truncSat(WASM_TYPE from, WASM_TYPE to, bool uns)
+    bool truncSat(WASM_FC subop)
     {
-        cg.emit(e.E1);
-        cg.emitTruncSat(from, to, uns);
+        cg.emit(e.E1, OP_FC_PREFIX, Uleb(subop));
         return true;
     }
 
@@ -1975,10 +1963,10 @@ bool genElem(ref WasmCG cg, elem* e)
     case OP64_32: return unaryOp(OP_I32_WRAP_I64);
     case OPd_f: return unaryOp(OP_F32_DEMOTE_F64);
     case OPf_d: return unaryOp(OP_F64_PROMOTE_F32);
-    case OPd_s32: return truncSat(WASM_F64, WASM_I32, false);
-    case OPd_u32: return truncSat(WASM_F64, WASM_I32, true);
-    case OPd_s64: return truncSat(WASM_F64, WASM_I64, false);
-    case OPd_u64: return truncSat(WASM_F64, WASM_I64, true);
+    case OPd_s32: return truncSat(WASM_FC.I32_TRUNC_SAT_F64_S);
+    case OPd_u32: return truncSat(WASM_FC.I32_TRUNC_SAT_F64_U);
+    case OPd_s64: return truncSat(WASM_FC.I64_TRUNC_SAT_F64_S);
+    case OPd_u64: return truncSat(WASM_FC.I64_TRUNC_SAT_F64_U);
     case OPs32_d: return unaryOp(OP_F64_CONVERT_I32_S);
     case OPu32_d: return unaryOp(OP_F64_CONVERT_I32_U);
     case OPs64_d: return unaryOp(OP_F64_CONVERT_I64_S);
@@ -1992,12 +1980,12 @@ bool genElem(ref WasmCG cg, elem* e)
         return true;
     case OPd_s16:
         cg.genElem(e.E1);
-        cg.emitTruncSat(WASM_F64, WASM_I32, false);
+        cg.emit(OP_FC_PREFIX, Uleb(WASM_FC.I32_TRUNC_SAT_F64_S));
         cg.emit(OP_I32_EXTEND16_S);
         return true;
     case OPd_u16:
         cg.genElem(e.E1);
-        cg.emitTruncSat(WASM_F64, WASM_I32, false);
+        cg.emit(OP_FC_PREFIX, Uleb(WASM_FC.I32_TRUNC_SAT_F64_S));
         cg.emit(OP_I32_CONST, Sleb(0xFFFF), OP_I32_AND);
         return true;
 
@@ -2006,7 +1994,7 @@ bool genElem(ref WasmCG cg, elem* e)
         cg.genElem(e.E1);
         return true;
     case OPld_u64:
-        return truncSat(WASM_F64, WASM_I64, true);
+        return truncSat(WASM_FC.I64_TRUNC_SAT_F64_U);
 
     case OPmsw:
         {
