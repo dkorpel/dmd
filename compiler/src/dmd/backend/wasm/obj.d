@@ -6,7 +6,7 @@
  * relocation custom sections wasm-ld consumes.
  *
  * It also drives codgen.d's two-phase compilation. Per function, `func_term`
- * records the IR (a WasmFuncBody) and snapshots `globsym`; code generation is
+ * records the IR (a WasmFuncBody) and snapshots the local symbol table; code generation is
  * deferred. `term` then, once the whole module is visible: (1) pre-registers
  * every externally-called function and every function pointer held in data as
  * an import, so import indices are frozen before any bytecode is emitted (WASM
@@ -117,7 +117,7 @@ struct WasmFuncBody
     Symbol*[] locals; /// params first; temporaries hold a shared type-marker symbol
     uint numParams;
     OutBuffer* code;
-    Symbol*[] savedGlobsym;
+    Symbol*[] symtab; /// snapshot of the function's local symbol table (globsym at func_term time)
 
     WasmReloc[] relocs;
     uint codePayloadStart;
@@ -1138,18 +1138,12 @@ void WasmObj_term2(const(char)[] objfilename, ref WasmModule wmod, ref OutBuffer
         }
         wmod.internPendingTypes();
 
-        import dmd.backend.symbol : globsym;
-
         foreach (ref WasmFuncBody fb; wasmFuncBodies)
         {
             if (!fb.sym)
                 continue;
-            globsym.setLength(cast(uint) fb.savedGlobsym.length);
-            foreach (size_t i, s; fb.savedGlobsym)
-                globsym[i] = s;
             wasm_codgen2(cast(Symbol*) fb.sym, fb);
         }
-        globsym.setLength(0);
     }
 
     uint sectionIdx = 0;
@@ -1743,19 +1737,19 @@ void WasmObj_func_term(Symbol* sfunc)
 {
     import dmd.backend.symbol : globsym;
 
+    Symbol*[] symtab = globsym[].dup;
+
     foreach (ref WasmFuncBody fb; wasmFuncBodies)
     {
         if (fb.sym == sfunc)
         {
-            fb.savedGlobsym.length = globsym.length;
-            foreach (size_t i, s; globsym[])
-                fb.savedGlobsym[i] = s;
+            fb.symtab = symtab;
             break;
         }
     }
 
     import dmd.backend.wasm.codgen : wasm_assignShadowOffsets;
-    wasm_assignShadowOffsets(sfunc);
+    wasm_assignShadowOffsets(sfunc, symtab);
 }
 
 void WasmObj_write_pointerRef(Symbol* s, uint off)

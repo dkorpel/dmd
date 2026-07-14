@@ -51,7 +51,7 @@ import dmd.backend.el;
 import dmd.backend.oper;
 import dmd.backend.ty;
 import dmd.backend.type;
-import dmd.backend.symbol : globsym, symbol_generate;
+import dmd.backend.symbol : symbol_generate;
 import dmd.backend.rtlsym : getRtlsym, RTLSYM;
 import dmd.backend.wasm.enums;
 import dmd.backend.wasm.simd;
@@ -2432,7 +2432,7 @@ bool genElem(ref WasmCG cg, elem* e)
                 cg.emit(OP_LOCAL_GET, uleb(curTmp), OP_LOCAL_GET, uleb(valTmp));
                 cg.emitStore(evalue.Ety);
                 cg.emit(OP_LOCAL_GET, uleb(curTmp), OP_I32_CONST, sleb(width),
-                    OP_I32_ADD, OP_LOCAL_SET, uleb(curTmp)
+                    OP_I32_ADD, OP_LOCAL_SET, uleb(curTmp),
                     OP_BR, uleb(0), OP_END, OP_END);
             }
             cg.emit(OP_LOCAL_GET, uleb(dstTmp));
@@ -2884,13 +2884,13 @@ void emitCondInvert(ref WasmCG cg, elem* condElem)
 /// Must use the same registration order as wasm_codgen2 (params then locals).
 /// registerShadow is idempotent, so wasm_codgen2's later calls reuse these
 /// offsets and only re-derive the frame size.
-void wasm_assignShadowOffsets(Symbol* sfunc)
+void wasm_assignShadowOffsets(Symbol* sfunc, Symbol*[] symtab)
 {
     WasmCG cg;
-    foreach (s; globsym[])
+    foreach (s; symtab)
         if (s.isParameter)
             cg.registerShadow(s);
-    foreach (s; globsym[])
+    foreach (s; symtab)
     {
         if (s.isParameter)
             continue;
@@ -2925,7 +2925,7 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
     block* startblock = sfunc.Sfunc.Fstartblock;
     const bool canElidePodParams = !funcNeedsFrameBase(startblock);
 
-    foreach (s; globsym[])
+    foreach (s; fb.symtab)
     {
         if (!s.isParameter)
             continue;
@@ -2978,7 +2978,7 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
     }
     cg.numParams = cast(uint) ft.params.length;
 
-    foreach (s; globsym[])
+    foreach (s; fb.symtab)
     {
         if (s.isParameter)
             continue;
