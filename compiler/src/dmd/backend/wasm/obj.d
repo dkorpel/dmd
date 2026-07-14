@@ -1868,29 +1868,26 @@ void syncCanonicalFuncNames(ref WasmModule wmod)
         return;
     auto canon = &wmod.symIndex.canonByName;
     *canon = null;
-    uint[string] firstImport;
-    foreach (size_t j, ref const WasmFunc g; wmod.funcs)
+
+    foreach (j; wmod.numImports .. wmod.funcs.length)
     {
-        const(char)[] name = funcName(g);
-        if (!name.length)
-            continue;
-        const isImport = j < wmod.numImports;
-        if (!isImport && g.sym && g.sym.Sclass == SC.static_)
+        const(char)[] name = funcName(wmod.funcs[j]);
+        auto sym = wmod.funcs[j].sym;
+        if (!name.length || (sym && sym.Sclass == SC.static_))
             continue;
         string key = cast(string) name;
-        if (isImport)
-        {
-            if (key !in firstImport)
-                firstImport[key] = cast(uint) j;
-        }
-        else if (key !in *canon)
-        {
-            (*canon)[key] = cast(uint) j;
-        }
-    }
-    foreach (key, idx; firstImport)
         if (key !in *canon)
-            (*canon)[key] = idx;
+            (*canon)[key] = cast(uint) j;
+    }
+    foreach (j; 0 .. wmod.numImports)
+    {
+        const(char)[] name = funcName(wmod.funcs[j]);
+        if (!name.length)
+            continue;
+        string key = cast(string) name;
+        if (key !in *canon)
+            (*canon)[key] = cast(uint) j;
+    }
     wmod.symIndex.canonLen = wmod.funcs.length;
 }
 
