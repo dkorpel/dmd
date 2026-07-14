@@ -1737,6 +1737,8 @@ void WasmObj_func_term(Symbol* sfunc)
 {
     import dmd.backend.symbol : globsym;
 
+    // Yes it's bad that this is how the glue layer passes symbols,
+    // could use a refactor
     Symbol*[] symtab = globsym[].dup;
 
     foreach (ref WasmFuncBody fb; wasmFuncBodies)

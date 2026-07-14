@@ -72,7 +72,7 @@ WASM_TYPE wasmType(elem* e)
 /// Integer type holding a pointer. Only 32-bit supported now, refactor this to a variable for wasm64
 enum WASM_PTR = WASM_I32;
 
-/// Returns: WASM integral type for backend `ty`
+/// Returns: WASM type for backend `ty`
 WASM_TYPE wasmType(tym_t ty)
 {
     switch (tybasic(ty))
@@ -176,9 +176,9 @@ struct Uleb
 {
     uint v;
 
-    void emit(ref WasmCG cg, ref OutBuffer buf)
+    void emit(ref WasmCG cg, ref OutBuffer buf) nothrow
     {
-
+        buf.writeuLEB128(v);
     }
 }
 
@@ -187,9 +187,9 @@ struct Sleb
 {
     long v;
 
-    void emit(ref WasmCG cg, ref OutBuffer buf)
+    void emit(ref WasmCG cg, ref OutBuffer buf) nothrow
     {
-
+        buf.writesLEB128(v);
     }
 }
 
@@ -199,9 +199,27 @@ struct UlebPad
 {
     uint v;
 
-    void emit(ref WasmCG cg, ref OutBuffer buf)
+    void emit(ref WasmCG cg, ref OutBuffer buf) nothrow
     {
+        buf.writeuLEB128_5(v);
+    }
+}
 
+/// An operand that records a `WasmReloc` at the current code offset and then
+/// writes `symIdx` as a 5-byte padded ULEB128 placeholder for wasm-ld to patch
+/// at link time. Handled by the variadic `WasmCG.emit`; constructed via the
+/// `*Reloc` helpers.
+struct RelocOp
+{
+    ubyte type;      /// R_WASM relocation kind
+    uint symIdx;     /// index written as the padded operand
+    Symbol* sym;     /// referenced symbol, or null
+    uint addend = 0; /// byte offset added to `sym`'s address (data relocs only)
+
+    void emit(ref WasmCG cg, ref OutBuffer buf) nothrow
+    {
+        cg.relocs ~= WasmReloc(cast(uint) buf.length, type, symIdx, addend, sym);
+        buf.writeuLEB128_5(symIdx);
     }
 }
 
@@ -211,6 +229,25 @@ Uleb uleb(uint v) => Uleb(v);
 Sleb sleb(long v) => Sleb(v);
 /// Returns: `v` tagged for 5-byte padded unsigned LEB128 encoding in `WasmCG.emit`
 UlebPad ulebPad(uint v) => UlebPad(v);
+
+/// Returns: a direct-call function-index operand (R_WASM.FUNCTION_INDEX_LEB)
+RelocOp callReloc(uint fidx, Symbol* sym) => RelocOp(R_WASM.FUNCTION_INDEX_LEB, fidx, sym);
+/// Returns: a function-address table-slot operand (R_WASM.TABLE_INDEX_SLEB)
+RelocOp tableIndexReloc(uint fidx, Symbol* sym) => RelocOp(R_WASM.TABLE_INDEX_SLEB, fidx, sym);
+/// Returns: a `call_indirect` type-index operand (R_WASM.TYPE_INDEX_LEB)
+RelocOp typeIndexReloc(uint typeIdx) => RelocOp(R_WASM.TYPE_INDEX_LEB, typeIdx, null);
+/// Returns: the `__indirect_function_table` number operand (R_WASM.TABLE_NUMBER_LEB)
+RelocOp tableNumberReloc() => RelocOp(R_WASM.TABLE_NUMBER_LEB, 0, null);
+/// Returns: a tag-index operand for exception handling (R_WASM.TAG_INDEX_LEB)
+RelocOp tagReloc() => RelocOp(R_WASM.TAG_INDEX_LEB, 0, null);
+/// Returns: a __stack_pointer global-index operand (R_WASM.GLOBAL_INDEX_LEB),
+/// recorded so wasm-ld patches it to the merged global's final index. DMD imports
+/// __stack_pointer first (index 0), but a linked module may place it elsewhere,
+/// so the operand must be relocatable rather than a fixed 0.
+RelocOp stackPtrGlobalReloc() => RelocOp(R_WASM.GLOBAL_INDEX_LEB, 0, null);
+/// Returns: a data-address operand (R_WASM.MEMORY_ADDR_LEB) writing `addr`
+/// (= `sym`'s offset + `addend`) and recording a `sym`-relative relocation
+RelocOp dataAddrReloc(uint addr, uint addend, Symbol* sym) => RelocOp(R_WASM.MEMORY_ADDR_LEB, addr, sym, addend);
 
 /// Per-function code-generation state
 struct WasmCG
@@ -334,20 +371,17 @@ nothrow:
     /// Emit a mixed sequence in one call: `ubyte` arguments are opcodes
     /// written verbatim, `elem*` arguments are code-generated via `genElem`,
     /// integers wrapped in `uleb`/`sleb`/`ulebPad` are LEB128-encoded immediates,
-    /// `float`/`double` are written as their raw little-endian bytes, and a
-    /// `ubyte[16]` is written verbatim (a `v128.const` lane immediate).
+    /// `float`/`double` are written as their raw little-endian bytes, a
+    /// `ubyte[16]` is written verbatim (a `v128.const` lane immediate), and a
+    /// `RelocOp` records a relocation and writes its padded index operand.
     void emit(Args...)(Args args)
     {
         foreach (a; args)
         {
             static if (is(typeof(a) : elem*))
                 genElem(this, a);
-            else static if (is(typeof(a) == Uleb))
-                code.writeuLEB128(a.v);
-            else static if (is(typeof(a) == Sleb))
-                code.writesLEB128(a.v);
-            else static if (is(typeof(a) == UlebPad))
-                code.writeuLEB128_5(a.v);
+            else static if (__traits(hasMember, typeof(a), "emit"))
+                a.emit(this, code);
             else static if (is(typeof(a) == float))
                 code.write(&a, float.sizeof);
             else static if (is(typeof(a) == double))
@@ -363,65 +397,26 @@ nothrow:
 
     static bool symCanRelocate(const Symbol* sym)
     {
+        // assert(sym.Sident.ptr !is null);
         return sym.Sident.ptr !is null;
     }
 
     void emitDataAddr(Symbol* sym, uint addend)
     {
-        emit(OP_I32_CONST);
         const uint addr = cast(uint)(sym.Soffset + addend);
-
-        const bool canRelocate = symCanRelocate(sym);
-        if (canRelocate)
-        {
-            relocs ~= WasmReloc(cast(uint) code.length, R_WASM.MEMORY_ADDR_LEB, 0, addend, sym);
-            emit(ulebPad(addr));
-        }
+        if (symCanRelocate(sym))
+            emit(OP_I32_CONST, dataAddrReloc(addr, addend, sym));
         else
-        {
-            emit(sleb(cast(int) addr));
-        }
+            emit(OP_I32_CONST, sleb(cast(int) addr));
     }
 
     void emitDataBase(Symbol* sym)
     {
-        emit(OP_I32_CONST);
-        const bool canRelocate = symCanRelocate(sym);
-        if (canRelocate)
-        {
-            relocs ~= WasmReloc(cast(uint) code.length, R_WASM.MEMORY_ADDR_LEB, 0, 0, sym);
-            emit(ulebPad(cast(uint) sym.Soffset));
-        }
+        const uint off = cast(uint) sym.Soffset;
+        if (symCanRelocate(sym))
+            emit(OP_I32_CONST, dataAddrReloc(off, 0, sym));
         else
-        {
-            emit(sleb(cast(int) sym.Soffset));
-        }
-    }
-
-    void emitCall(uint fidx, Symbol* sym = null)
-    {
-        emit(OP_CALL);
-        relocs ~= WasmReloc(cast(uint) code.length, R_WASM.FUNCTION_INDEX_LEB, fidx, 0, sym);
-        emit(ulebPad(fidx));
-    }
-
-    void emitTableIndex(uint fidx, Symbol* sym)
-    {
-        emit(OP_I32_CONST);
-        relocs ~= WasmReloc(cast(uint) code.length, R_WASM.TABLE_INDEX_SLEB, fidx, 0, sym);
-        emit(ulebPad(fidx));
-    }
-
-    void emitCallIndirectType(uint typeIdx)
-    {
-        relocs ~= WasmReloc(cast(uint) code.length, R_WASM.TYPE_INDEX_LEB, typeIdx);
-        emit(ulebPad(typeIdx));
-    }
-
-    void emitCallIndirectTable()
-    {
-        relocs ~= WasmReloc(cast(uint) code.length, R_WASM.TABLE_NUMBER_LEB, 0, 0, null);
-        emit(ulebPad(0));
+            emit(OP_I32_CONST, sleb(cast(int) off));
     }
 
     /// Returns: the exnref local of the try/finally identified by its flag symbol
@@ -434,23 +429,6 @@ nothrow:
         return idx;
     }
 
-    void emitTagOperand()
-    {
-        relocs ~= WasmReloc(cast(uint) code.length, R_WASM.TAG_INDEX_LEB, 0, 0, null);
-        emit(ulebPad(0));
-    }
-
-    /// Emit a global-index operand referencing __stack_pointer as a 5-byte
-    /// padded ULEB128, recording a R_WASM.GLOBAL_INDEX_LEB relocation so wasm-ld
-    /// patches the operand to the merged global's final index. DMD imports
-    /// __stack_pointer first (index 0), but a linked module may place it
-    /// elsewhere, so the operand must be relocatable rather than a fixed 0.
-    void emitStackPtrGlobal()
-    {
-        relocs ~= WasmReloc(cast(uint) code.length, R_WASM.GLOBAL_INDEX_LEB, 0, 0, null);
-        emit(ulebPad(0));
-    }
-
     /// Reserve `size` bytes on the shadow stack, leaving the new (lower) frame
     /// base in `local`. When `publish` is true the new base is also written back
     /// to __stack_pointer (`local = (__stack_pointer -= size)`) so callees see
@@ -458,16 +436,11 @@ nothrow:
     /// (`local = __stack_pointer - size`), leaving the global untouched.
     void emitFrameAlloc(uint size, uint local, bool publish = true)
     {
-        emit(OP_GLOBAL_GET);
-        emitStackPtrGlobal();
-
-        emit(OP_I32_CONST, sleb(cast(int) size));
-        emit(OP_I32_SUB);
+        emit(OP_GLOBAL_GET, stackPtrGlobalReloc(),
+            OP_I32_CONST, sleb(cast(int) size), OP_I32_SUB);
         if (publish)
         {
-            emit(OP_LOCAL_TEE, uleb(local));
-            emit(OP_GLOBAL_SET);
-            emitStackPtrGlobal();
+            emit(OP_LOCAL_TEE, uleb(local), OP_GLOBAL_SET, stackPtrGlobalReloc());
         }
         else
         {
@@ -479,10 +452,8 @@ nothrow:
     /// `__stack_pointer = local + size`.
     void emitFrameFree(uint local, uint size)
     {
-        emit(OP_LOCAL_GET, uleb(local),
-            OP_I32_CONST, sleb(cast(int) size),
-            OP_I32_ADD, OP_GLOBAL_SET);
-        emitStackPtrGlobal();
+        emit(OP_LOCAL_GET, uleb(local), OP_I32_CONST, sleb(cast(int) size), OP_I32_ADD,
+            OP_GLOBAL_SET, stackPtrGlobalReloc());
     }
 }
 
@@ -1446,15 +1417,13 @@ private bool genCall(ref WasmCG cg, elem* e)
         if (calleeSym && e.E1.Eoper == OPvar && e.E2 && e.E2.Eoper != OPparam &&
             strcmp(&calleeSym.Sident[0], "alloca") == 0)
         {
-            cg.emit(OP_GLOBAL_GET);
-            cg.emitStackPtrGlobal();
+            cg.emit(OP_GLOBAL_GET, stackPtrGlobalReloc());
 
             cg.genElem(e.E2, WASM_I32);
             cg.emit(OP_I32_SUB, OP_I32_CONST, sleb(~15), OP_I32_AND);
             const uint tmp = cg.allocTemp(WASM_I32);
             cg.emit(OP_LOCAL_TEE, uleb(tmp),
-                OP_GLOBAL_SET);
-            cg.emitStackPtrGlobal();
+                OP_GLOBAL_SET, stackPtrGlobalReloc());
             cg.emit(OP_LOCAL_GET, uleb(tmp));
             return true;
         }
@@ -1535,7 +1504,7 @@ private bool genCall(ref WasmCG cg, elem* e)
 
     if (calleeSym)
     {
-        cg.emitCall(cg.funcIndex(calleeSym), calleeSym);
+        cg.emit(OP_CALL, callReloc(cg.funcIndex(calleeSym), calleeSym));
     }
     else
     {
@@ -1549,9 +1518,7 @@ private bool genCall(ref WasmCG cg, elem* e)
         typeIdx = cg.internType(buildFuncType(fty, null, hiddenLeading));
 
         elem* fn = (e.E1.Eoper == OPind && e.E1.E1) ? e.E1.E1 : e.E1;
-        cg.emit(fn, OP_CALL_INDIRECT);
-        cg.emitCallIndirectType(typeIdx);
-        cg.emitCallIndirectTable();
+        cg.emit(fn, OP_CALL_INDIRECT, typeIndexReloc(typeIdx), tableNumberReloc());
     }
 
     if (sretLocal != uint.max)
@@ -1652,7 +1619,7 @@ bool genElem(ref WasmCG cg, elem* e)
         case WASM_TYPE.EXNREF:
             assert(0);
         }
-        cg.emitCall(cg.funcIndex(fn), fn);
+        cg.emit(OP_CALL, callReloc(cg.funcIndex(fn), fn));
         return true;
     }
 
@@ -1673,8 +1640,7 @@ bool genElem(ref WasmCG cg, elem* e)
     case OPthrow:
         cg.noteTagUse();
         cg.genElem(e.E1, WASM_I32);
-        cg.emit(OP_THROW);
-        cg.emitTagOperand();
+        cg.emit(OP_THROW, tagReloc());
         return false;
 
     case OPrethrow:
@@ -1722,7 +1688,7 @@ bool genElem(ref WasmCG cg, elem* e)
 
         if (e.Vsym.Sfl == FL.func)
         {
-            cg.emitTableIndex(cg.funcIndex(e.Vsym), e.Vsym);
+            cg.emit(OP_I32_CONST, tableIndexReloc(cg.funcIndex(e.Vsym), e.Vsym));
             cg.emitLoad(e.Ety, cast(uint) e.Voffset);
             return true;
         }
@@ -1736,7 +1702,7 @@ bool genElem(ref WasmCG cg, elem* e)
         {
             if (rs.Sfl == FL.func)
             {
-                cg.emitTableIndex(cg.funcIndex(rs), rs);
+                cg.emit(OP_I32_CONST, tableIndexReloc(cg.funcIndex(rs), rs));
                 return true;
             }
 
@@ -2073,7 +2039,7 @@ bool genElem(ref WasmCG cg, elem* e)
             cg.genElem(expo);
             if (expo.wasmType != WASM_I32)
                 cg.emitCoerce(expo.wasmType, WASM_I32);
-            cg.emitCall(cg.funcIndex(fn), fn);
+            cg.emit(OP_CALL, callReloc(cg.funcIndex(fn), fn));
             return true;
         }
 
@@ -2637,7 +2603,7 @@ private void emitBinop(ref WasmCG cg, int op, tym_t ty)
     if (op == OPmod && tyfloating(ty))
     {
         Symbol* fn = getRtlsym(tybasic(ty).wasmType == WASM_F32 ? RTLSYM.FMODF : RTLSYM.FMOD);
-        cg.emitCall(cg.funcIndex(fn), fn);
+        cg.emit(OP_CALL, callReloc(cg.funcIndex(fn), fn));
         return;
     }
     static ubyte binOp(int op, tym_t ty)

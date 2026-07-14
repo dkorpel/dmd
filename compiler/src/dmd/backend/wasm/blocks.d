@@ -577,8 +577,7 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         if (isCatch)
         {
             cg.noteTagUse();
-            cg.emit(WASM_CATCH.CATCH);
-            cg.emitTagOperand();
+            cg.emit(WASM_CATCH.CATCH, tagReloc());
         }
         else
             cg.emit(WASM_CATCH.CATCH_ALL_REF);
