@@ -426,13 +426,10 @@ private struct MemOps
     ubyte loadOp;
     ubyte storeOp;
     ubyte alignLog2;
-    bool prefixed;
 }
 
 private MemOps memOpsFor(tym_t ty) @safe
 {
-    if (tyvector(tybasic(ty)))
-        return MemOps(WASM_SIMD.V128_LOAD, WASM_SIMD.V128_STORE, 4, true);
     switch (tybasic(ty))
     {
     case TYllong, TYullong:
@@ -473,22 +470,20 @@ private int canonicalI32Const(int v, tym_t ty)
 
 private void emitLoad(ref WasmCG cg, tym_t ty, uint offset = 0)
 {
+    if (tyvector(tybasic(ty)))
+        return cg.emit(OP_FD_PREFIX, Uleb(WASM_SIMD.V128_LOAD), Uleb(4), Uleb(offset));
+
     const m = memOpsFor(ty);
-    if (m.prefixed)
-        cg.emit(OP_FD_PREFIX, Uleb(m.loadOp));
-    else
-        cg.emit(m.loadOp);
-    cg.emit(Uleb(m.alignLog2), Uleb(offset));
+    cg.emit(m.loadOp, Uleb(m.alignLog2), Uleb(offset));
 }
 
 private void emitStore(ref WasmCG cg, tym_t ty, uint offset = 0)
 {
+    if (tyvector(tybasic(ty)))
+        return cg.emit(OP_FD_PREFIX, Uleb(WASM_SIMD.V128_STORE), Uleb(4), Uleb(offset));
+
     const m = memOpsFor(ty);
-    if (m.prefixed)
-        cg.emit(OP_FD_PREFIX, Uleb(m.storeOp));
-    else
-        cg.emit(m.storeOp);
-    cg.emit(Uleb(m.alignLog2), Uleb(offset));
+    cg.emit(m.storeOp, Uleb(m.alignLog2), Uleb(offset));
 }
 
 /// Store the caught exception payload (i32 on the value stack) into the
@@ -938,6 +933,17 @@ private void zeroExtendSmallInt(ref WasmCG cg, tym_t ty)
     default:
         break;
     }
+}
+
+/// Prepare the left operand of a logical right shift (`OPshr`/`OPshrass`). A
+/// signed sub-word operand is held in sign-extended canonical form (emitLoad,
+/// prior arithmetic), whose high bits would shift down into the result; force
+/// zero-extension. Unsigned operands are already zero-extended, and wider types
+/// no-op inside zeroExtendSmallInt.
+private void zeroExtendForLogicalShift(ref WasmCG cg, tym_t ty)
+{
+    if (!tyuns(ty))
+        cg.zeroExtendSmallInt(ty);
 }
 
 private void genVarArgs(ref WasmCG cg, elem*[] varArgs, ref uint spLocal, ref uint vaFrameSize)
@@ -1667,8 +1673,8 @@ bool genElem(ref WasmCG cg, elem* e)
             const uint storeOff = replayAddr(cg, lv);
             const uint loadOff = replayAddr(cg, lv);
             cg.emitLoad(e.E1.Ety, loadOff);
-            if (op == OPshrass && wasmType(e.E1.Ety) == WASM_I32 && !tyuns(e.E1.Ety))
-                cg.zeroExtendSmallInt(e.E1.Ety);
+            if (op == OPshrass)
+                cg.zeroExtendForLogicalShift(e.E1.Ety);
             if (rhsPure)
                 cg.genElem(e.E2, wasmType(e));
             else
@@ -1706,8 +1712,8 @@ bool genElem(ref WasmCG cg, elem* e)
         {
             const rty = wasmType(e.Ety);
             cg.genElem(e.E1, rty);
-            if (op == OPshr && rty == WASM_I32 && !tyuns(e.Ety))
-                cg.zeroExtendSmallInt(e.Ety);
+            if (op == OPshr)
+                cg.zeroExtendForLogicalShift(e.Ety);
             cg.genElem(e.E2, rty);
             cg.emitBinop(op, e.Ety);
             switch (op)
@@ -1731,39 +1737,38 @@ bool genElem(ref WasmCG cg, elem* e)
             if (e.E1.Eoper == OPrelconst && e.E1.Vsym && isParameter(e.E1.Vsym))
                 eva = e.E2;
             cg.genElem(eva);
-            cg.emit(OP_LOCAL_GET, Uleb(cg.numParams - 1));
-            cg.emit(OP_I32_STORE, Uleb(2), Uleb(0));
+            cg.emit(OP_LOCAL_GET, Uleb(cg.numParams - 1), OP_I32_STORE, Uleb(2), Uleb(0));
         }
         return false;
 
     case OPpostinc:
     case OPpostdec:
+    {
+        assert(e.E1.Eoper == OPvar || e.E1.Eoper == OPind);
+        auto lv = saveLValueAddr(cg, e.E1);
+        const uint storeOff = replayAddr(cg, lv);
+        const uint loadOff = replayAddr(cg, lv);
+        cg.emitLoad(e.E1.Ety, loadOff);
+
+        uint oldTmp;
+        if (!discard)
         {
-            assert(e.E1.Eoper == OPvar || e.E1.Eoper == OPind);
-            auto lv = saveLValueAddr(cg, e.E1);
-            const uint storeOff = replayAddr(cg, lv);
-            const uint loadOff = replayAddr(cg, lv);
-            cg.emitLoad(e.E1.Ety, loadOff);
-
-            uint oldTmp;
-            if (!discard)
-            {
-                oldTmp = cg.allocTemp(wasmType(e.E1));
-                cg.emit(OP_LOCAL_TEE, Uleb(oldTmp));
-            }
-
-            cg.genElem(e.E2, wasmType(e.E1.Ety));
-            cg.emitBinop(op == OPpostinc ? OPadd : OPmin, e.E1.Ety);
-            cg.maskSmallInt(e.E1.Ety);
-            cg.emitStore(e.E1.Ety, storeOff);
-
-            if (!discard)
-            {
-                cg.emit(OP_LOCAL_GET, Uleb(oldTmp));
-                return true;
-            }
-            return false;
+            oldTmp = cg.allocTemp(wasmType(e.E1));
+            cg.emit(OP_LOCAL_TEE, Uleb(oldTmp));
         }
+
+        cg.genElem(e.E2, wasmType(e.E1.Ety));
+        cg.emitBinop(op == OPpostinc ? OPadd : OPmin, e.E1.Ety);
+        cg.maskSmallInt(e.E1.Ety);
+        cg.emitStore(e.E1.Ety, storeOff);
+
+        if (!discard)
+        {
+            cg.emit(OP_LOCAL_GET, Uleb(oldTmp));
+            return true;
+        }
+        return false;
+    }
 
     case OPeqeq:
     case OPne:
@@ -1828,21 +1833,21 @@ bool genElem(ref WasmCG cg, elem* e)
             assert(0);
         case WASM_I32:
         case WASM_I64:
-            {
-                const bool is64 = (e.wasmType == WASM_I64);
-                uint t = cg.allocTemp(is64 ? WASM_I64 : WASM_I32);
-                cg.emit(e.E1, OP_LOCAL_TEE, Uleb(t));
-                if (is64)
-                    cg.emit(OP_I64_CONST, Sleb(63), OP_I64_SHR_S);
-                else
-                    cg.emit(OP_I32_CONST, Sleb(31), OP_I32_SHR_S);
-                uint m = cg.allocTemp(is64 ? WASM_I64 : WASM_I32);
-                cg.emit(OP_LOCAL_TEE, Uleb(m), OP_LOCAL_GET, Uleb(t));
-                cg.emit(is64 ? OP_I64_XOR : OP_I32_XOR);
-                cg.emit(OP_LOCAL_GET, Uleb(m));
-                cg.emit(is64 ? OP_I64_SUB : OP_I32_SUB);
-                return true;
-            }
+        {
+            const bool is64 = (e.wasmType == WASM_I64);
+            uint t = cg.allocTemp(is64 ? WASM_I64 : WASM_I32);
+            cg.emit(e.E1, OP_LOCAL_TEE, Uleb(t));
+            if (is64)
+                cg.emit(OP_I64_CONST, Sleb(63), OP_I64_SHR_S);
+            else
+                cg.emit(OP_I32_CONST, Sleb(31), OP_I32_SHR_S);
+            uint m = cg.allocTemp(is64 ? WASM_I64 : WASM_I32);
+            cg.emit(OP_LOCAL_TEE, Uleb(m), OP_LOCAL_GET, Uleb(t));
+            cg.emit(is64 ? OP_I64_XOR : OP_I32_XOR);
+            cg.emit(OP_LOCAL_GET, Uleb(m));
+            cg.emit(is64 ? OP_I64_SUB : OP_I32_SUB);
+            return true;
+        }
         }
 
     case OPsqrt:
@@ -1867,60 +1872,60 @@ bool genElem(ref WasmCG cg, elem* e)
         return libmCall(RTLSYM.RNDTOLF, RTLSYM.RNDTOL);
 
     case OPscale:
+    {
+        const resTy = e.wasmType;
+        Symbol* fn;
+        final switch (resTy)
         {
-            const resTy = e.wasmType;
-            Symbol* fn;
-            final switch (resTy)
-            {
-            case WASM_F32: fn = getRtlsym(RTLSYM.LDEXPF); break;
-            case WASM_F64: fn = getRtlsym(RTLSYM.LDEXP); break;
-            case WASM_I32:
-            case WASM_I64:
-            case WASM_TYPE.V128:
-            case WASM_TYPE.EXNREF:
-                assert(0);
-            }
-            // TODO: investigate this hack
-            elem* sig = tyfloating(e.E1.Ety) ? e.E1 : e.E2;
-            elem* expo = tyfloating(e.E1.Ety) ? e.E2 : e.E1;
-            cg.genElem(sig);
-            if (sig.wasmType != resTy)
-                cg.emitCoerce(sig.wasmType, resTy);
-            cg.genElem(expo);
-            if (expo.wasmType != WASM_I32)
-                cg.emitCoerce(expo.wasmType, WASM_I32);
-            cg.emit(OP_CALL, callReloc(cg.funcIndex(fn), fn));
-            return true;
+        case WASM_F32: fn = getRtlsym(RTLSYM.LDEXPF); break;
+        case WASM_F64: fn = getRtlsym(RTLSYM.LDEXP); break;
+        case WASM_I32:
+        case WASM_I64:
+        case WASM_TYPE.V128:
+        case WASM_TYPE.EXNREF:
+            assert(0);
         }
+        // TODO: investigate this hack
+        elem* sig = tyfloating(e.E1.Ety) ? e.E1 : e.E2;
+        elem* expo = tyfloating(e.E1.Ety) ? e.E2 : e.E1;
+        cg.genElem(sig);
+        if (sig.wasmType != resTy)
+            cg.emitCoerce(sig.wasmType, resTy);
+        cg.genElem(expo);
+        if (expo.wasmType != WASM_I32)
+            cg.emitCoerce(expo.wasmType, WASM_I32);
+        cg.emit(OP_CALL, callReloc(cg.funcIndex(fn), fn));
+        return true;
+    }
 
     case OPnegass:
+    {
+        assert(e.E1.Eoper == OPvar || e.E1.Eoper == OPind);
+        auto lv = saveLValueAddr(cg, e.E1);
+        const wty = e.E1.Ety.wasmType;
+        const uint storeOff = replayAddr(cg, lv);
+        if (wty == WASM_I32)
+            cg.emit(OP_I32_CONST, Sleb(0));
+        else if (wty == WASM_I64)
+            cg.emit(OP_I64_CONST, Sleb(0));
+        const uint loadOff = replayAddr(cg, lv);
+        cg.emitLoad(e.E1.Ety, loadOff);
+        final switch (wty)
         {
-            assert(e.E1.Eoper == OPvar || e.E1.Eoper == OPind);
-            auto lv = saveLValueAddr(cg, e.E1);
-            const wty = e.E1.Ety.wasmType;
-            const uint storeOff = replayAddr(cg, lv);
-            if (wty == WASM_I32)
-                cg.emit(OP_I32_CONST, Sleb(0));
-            else if (wty == WASM_I64)
-                cg.emit(OP_I64_CONST, Sleb(0));
-            const uint loadOff = replayAddr(cg, lv);
-            cg.emitLoad(e.E1.Ety, loadOff);
-            final switch (wty)
-            {
-            case WASM_F32: cg.emit(OP_F32_NEG); break;
-            case WASM_F64: cg.emit(OP_F64_NEG); break;
-            case WASM_I32: cg.emit(OP_I32_SUB); break;
-            case WASM_I64: cg.emit(OP_I64_SUB); break;
-            case WASM_TYPE.V128:
-            case WASM_TYPE.EXNREF: assert(0);
-            }
-            cg.maskSmallInt(e.E1.Ety);
-            const uint vTmp = cg.allocTemp(wty);
-            cg.emit(OP_LOCAL_TEE, Uleb(vTmp));
-            cg.emitStore(e.E1.Ety, storeOff);
-            cg.emit(OP_LOCAL_GET, Uleb(vTmp));
-            return true;
+        case WASM_F32: cg.emit(OP_F32_NEG); break;
+        case WASM_F64: cg.emit(OP_F64_NEG); break;
+        case WASM_I32: cg.emit(OP_I32_SUB); break;
+        case WASM_I64: cg.emit(OP_I64_SUB); break;
+        case WASM_TYPE.V128:
+        case WASM_TYPE.EXNREF: assert(0);
         }
+        cg.maskSmallInt(e.E1.Ety);
+        const uint vTmp = cg.allocTemp(wty);
+        cg.emit(OP_LOCAL_TEE, Uleb(vTmp));
+        cg.emitStore(e.E1.Ety, storeOff);
+        cg.emit(OP_LOCAL_GET, Uleb(vTmp));
+        return true;
+    }
 
     case OPnot:
         cg.genElem(e.E1);
@@ -2145,98 +2150,98 @@ bool genElem(ref WasmCG cg, elem* e)
         return true;
 
     case OPstreq:
-        {
-            uint sz = e.ET ? cast(uint) type_size(e.ET) : 0;
-            if (sz == 0)
-                return false;
+    {
+        uint sz = e.ET ? cast(uint) type_size(e.ET) : 0;
+        if (sz == 0)
+            return false;
 
-            uint dstTmp = cg.allocTemp(WASM_I32);
-            genElemAddr(cg, e.E1);
-            cg.emit(OP_LOCAL_TEE, Uleb(dstTmp));
-            genElemAddr(cg, e.E2);
-            cg.emit(OP_I32_CONST, Sleb(sz));
-            cg.emit(OP_FC_PREFIX, Uleb(WASM_FC.MEMORY_COPY), Uleb(0), Uleb(0));
-            cg.emit(OP_LOCAL_GET, Uleb(dstTmp));
-            return true;
-        }
+        uint dstTmp = cg.allocTemp(WASM_I32);
+        genElemAddr(cg, e.E1);
+        cg.emit(OP_LOCAL_TEE, Uleb(dstTmp));
+        genElemAddr(cg, e.E2);
+        cg.emit(OP_I32_CONST, Sleb(sz));
+        cg.emit(OP_FC_PREFIX, Uleb(WASM_FC.MEMORY_COPY), Uleb(0), Uleb(0));
+        cg.emit(OP_LOCAL_GET, Uleb(dstTmp));
+        return true;
+    }
 
     case OPmemcpy:
-        {
-            assert(e.E2.Eoper == OPparam);
-            uint dstTmp = cg.allocTemp(WASM_I32);
-            cg.emit(e.E1, OP_LOCAL_TEE, Uleb(dstTmp));
-            cg.genElem(e.E2.E1, WASM_I32);
-            cg.genElem(e.E2.E2, WASM_I32);
-            cg.emit(OP_FC_PREFIX, Uleb(WASM_FC.MEMORY_COPY), Uleb(0), Uleb(0));
-            cg.emit(OP_LOCAL_GET, Uleb(dstTmp));
-            return true;
-        }
+    {
+        assert(e.E2.Eoper == OPparam);
+        uint dstTmp = cg.allocTemp(WASM_I32);
+        cg.emit(e.E1, OP_LOCAL_TEE, Uleb(dstTmp));
+        cg.genElem(e.E2.E1, WASM_I32);
+        cg.genElem(e.E2.E2, WASM_I32);
+        cg.emit(OP_FC_PREFIX, Uleb(WASM_FC.MEMORY_COPY), Uleb(0), Uleb(0));
+        cg.emit(OP_LOCAL_GET, Uleb(dstTmp));
+        return true;
+    }
 
     case OPmemset:
+    {
+        // IR: OPmemset(dst, OPparam(nelems, val)). Result is dst.
+        //   struct BB { ulong bits; }
+        //   BB[8] arr; arr[] = BB(0); // val is 8 bytes wide, nelems is 8
+        assert(e.E2.Eoper == OPparam);
+        elem* enelems = e.E2.E1;
+        elem* evalue = e.E2.E2;
+        const width = cast(uint) tysize(evalue.Ety);
+
+        uint dstTmp = cg.allocTemp(WASM_I32);
+        cg.emit(e.E1, OP_LOCAL_SET, Uleb(dstTmp));
+
+        ulong splat(ulong v)
         {
-            // IR: OPmemset(dst, OPparam(nelems, val)). Result is dst.
-            //   struct BB { ulong bits; }
-            //   BB[8] arr; arr[] = BB(0); // val is 8 bytes wide, nelems is 8
-            assert(e.E2.Eoper == OPparam);
-            elem* enelems = e.E2.E1;
-            elem* evalue = e.E2.E2;
-            const width = cast(uint) tysize(evalue.Ety);
-
-            uint dstTmp = cg.allocTemp(WASM_I32);
-            cg.emit(e.E1, OP_LOCAL_SET, Uleb(dstTmp));
-
-            ulong splat(ulong v)
-            {
-                const b = v & 0xFF;
-                return b * 0x0101_0101_0101_0101;
-            }
-            const ulong mask = width >= 8 ? ulong.max : (1UL << (width * 8)) - 1;
-
-            // WASM memset only supports 1-byte elements
-            // splat() mask checks whether 8-byte element is actually just 1 byte repeated 8 times
-            if (width <= 1)
-            {
-                cg.emit(OP_LOCAL_GET, Uleb(dstTmp));
-                cg.genElem(evalue, WASM_I32);
-                cg.genElem(enelems, WASM_I32);
-                cg.emit(OP_FC_PREFIX, Uleb(WASM_FC.MEMORY_FILL), Uleb(0));
-            }
-            else if (evalue.Eoper == OPconst && !tyfloating(evalue.Ety) &&
-                (evalue.Vullong & mask) == (splat(evalue.Vullong) & mask))
-            {
-                cg.emit(OP_LOCAL_GET, Uleb(dstTmp), OP_I32_CONST, Sleb(evalue.Vullong & 0xFF));
-                cg.genElem(enelems, WASM_I32);
-                cg.emit(OP_I32_CONST, Sleb(width), OP_I32_MUL);
-                cg.emit(OP_FC_PREFIX, Uleb(WASM_FC.MEMORY_FILL), Uleb(0));
-            }
-            else
-            {
-                // Can't use MEMORY_FILL, manual loop:
-                //   val = evalue;
-                //   cur = dst;
-                //   end = cur + nelems * width;
-                //   while (cur < end) { *cur = val; cur += width; }
-                const vt = evalue.wasmType;
-                uint valTmp = cg.allocTemp(vt);
-                uint curTmp = cg.allocTemp(WASM_I32);
-                uint endTmp = cg.allocTemp(WASM_I32);
-                cg.emit(evalue, OP_LOCAL_SET, Uleb(valTmp),
-                    OP_LOCAL_GET, Uleb(dstTmp), OP_LOCAL_TEE, Uleb(curTmp));
-                cg.genElem(enelems, WASM_I32);
-                cg.emit(OP_I32_CONST, Sleb(width), OP_I32_MUL, OP_I32_ADD,
-                    OP_LOCAL_SET, Uleb(endTmp),
-                    OP_BLOCK, WASM_VOID_BLOCK, OP_LOOP, WASM_VOID_BLOCK,
-                    OP_LOCAL_GET, Uleb(curTmp), OP_LOCAL_GET, Uleb(endTmp),
-                    OP_I32_GE_U, OP_BR_IF, Uleb(1));
-                cg.emit(OP_LOCAL_GET, Uleb(curTmp), OP_LOCAL_GET, Uleb(valTmp));
-                cg.emitStore(evalue.Ety);
-                cg.emit(OP_LOCAL_GET, Uleb(curTmp), OP_I32_CONST, Sleb(width),
-                    OP_I32_ADD, OP_LOCAL_SET, Uleb(curTmp),
-                    OP_BR, Uleb(0), OP_END, OP_END);
-            }
-            cg.emit(OP_LOCAL_GET, Uleb(dstTmp));
-            return true;
+            const b = v & 0xFF;
+            return b * 0x0101_0101_0101_0101;
         }
+        const ulong mask = width >= 8 ? ulong.max : (1UL << (width * 8)) - 1;
+
+        // WASM memset only supports 1-byte elements
+        // splat() mask checks whether 8-byte element is actually just 1 byte repeated 8 times
+        if (width <= 1)
+        {
+            cg.emit(OP_LOCAL_GET, Uleb(dstTmp));
+            cg.genElem(evalue, WASM_I32);
+            cg.genElem(enelems, WASM_I32);
+            cg.emit(OP_FC_PREFIX, Uleb(WASM_FC.MEMORY_FILL), Uleb(0));
+        }
+        else if (evalue.Eoper == OPconst && !tyfloating(evalue.Ety) &&
+            (evalue.Vullong & mask) == (splat(evalue.Vullong) & mask))
+        {
+            cg.emit(OP_LOCAL_GET, Uleb(dstTmp), OP_I32_CONST, Sleb(evalue.Vullong & 0xFF));
+            cg.genElem(enelems, WASM_I32);
+            cg.emit(OP_I32_CONST, Sleb(width), OP_I32_MUL);
+            cg.emit(OP_FC_PREFIX, Uleb(WASM_FC.MEMORY_FILL), Uleb(0));
+        }
+        else
+        {
+            // Can't use MEMORY_FILL, manual loop:
+            //   val = evalue;
+            //   cur = dst;
+            //   end = cur + nelems * width;
+            //   while (cur < end) { *cur = val; cur += width; }
+            const vt = evalue.wasmType;
+            uint valTmp = cg.allocTemp(vt);
+            uint curTmp = cg.allocTemp(WASM_I32);
+            uint endTmp = cg.allocTemp(WASM_I32);
+            cg.emit(evalue, OP_LOCAL_SET, Uleb(valTmp),
+                OP_LOCAL_GET, Uleb(dstTmp), OP_LOCAL_TEE, Uleb(curTmp));
+            cg.genElem(enelems, WASM_I32);
+            cg.emit(OP_I32_CONST, Sleb(width), OP_I32_MUL, OP_I32_ADD,
+                OP_LOCAL_SET, Uleb(endTmp),
+                OP_BLOCK, WASM_VOID_BLOCK, OP_LOOP, WASM_VOID_BLOCK,
+                OP_LOCAL_GET, Uleb(curTmp), OP_LOCAL_GET, Uleb(endTmp),
+                OP_I32_GE_U, OP_BR_IF, Uleb(1));
+            cg.emit(OP_LOCAL_GET, Uleb(curTmp), OP_LOCAL_GET, Uleb(valTmp));
+            cg.emitStore(evalue.Ety);
+            cg.emit(OP_LOCAL_GET, Uleb(curTmp), OP_I32_CONST, Sleb(width),
+                OP_I32_ADD, OP_LOCAL_SET, Uleb(curTmp),
+                OP_BR, Uleb(0), OP_END, OP_END);
+        }
+        cg.emit(OP_LOCAL_GET, Uleb(dstTmp));
+        return true;
+    }
 
     case OPbsf:
         final switch (e.E1.wasmType)
@@ -2270,15 +2275,15 @@ bool genElem(ref WasmCG cg, elem* e)
         }
 
     case OPpopcnt:
-        {
-            const opnd = e.E1.wasmType;
-            cg.emit(e.E1, opnd == WASM_I64 ? OP_I64_POPCNT : OP_I32_POPCNT);
-            if (opnd == WASM_I64 && e.wasmType == WASM_I32)
-                cg.emit(OP_I32_WRAP_I64);
-            else if (opnd == WASM_I32 && e.wasmType == WASM_I64)
-                cg.emit(OP_I64_EXTEND_I32_U);
-            return true;
-        }
+    {
+        const opnd = e.E1.wasmType;
+        cg.emit(e.E1, opnd == WASM_I64 ? OP_I64_POPCNT : OP_I32_POPCNT);
+        if (opnd == WASM_I64 && e.wasmType == WASM_I32)
+            cg.emit(OP_I32_WRAP_I64);
+        else if (opnd == WASM_I32 && e.wasmType == WASM_I64)
+            cg.emit(OP_I64_EXTEND_I32_U);
+        return true;
+    }
 
     case OPbswap:
         cg.emit(e.E1);
@@ -2359,8 +2364,8 @@ private void emitBswap32(ref WasmCG cg)
 private void emitBswap64(ref WasmCG cg)
 {
     // t = input (i64 on stack);
-    // lo = bswap32(t);          // low word, byte-reversed
-    // hi = bswap32(t >> 32);    // high word, byte-reversed
+    // lo = bswap32(t);
+    // hi = bswap32(t >> 32);
     // result = (u64(lo) << 32) | u64(hi);
     uint t = cg.allocTemp(WASM_I64);
     uint lo = cg.allocTemp(WASM_I32);
@@ -2810,12 +2815,7 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
             continue;
         }
         cg.emit(OP_LOCAL_GET, Uleb(cg.shadowBaseLocal), OP_LOCAL_GET, Uleb(sp.wasmLocalIdx));
-        const m = memOpsFor(sp.ty);
-        if (m.prefixed)
-            cg.emit(OP_FD_PREFIX, Uleb(m.storeOp));
-        else
-            cg.emit(m.storeOp);
-        cg.emit(Uleb(m.alignLog2), Uleb(off));
+        cg.emitStore(sp.ty, off);
     }
 
     if (startblock)
