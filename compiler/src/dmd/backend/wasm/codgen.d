@@ -471,12 +471,6 @@ private int canonicalI32Const(int v, tym_t ty)
     }
 }
 
-/// Emit `memory.copy 0 0`
-private void emitMemoryCopy(ref WasmCG cg)
-{
-    cg.emit(OP_FC_PREFIX, Uleb(WASM_FC.MEMORY_COPY), Uleb(0), Uleb(0));
-}
-
 private void emitLoad(ref WasmCG cg, tym_t ty, uint offset = 0)
 {
     const m = memOpsFor(ty);
@@ -518,11 +512,11 @@ private void emitCoerce(ref WasmCG cg, WASM_TYPE from, WASM_TYPE to)
 
     static int X(WASM_TYPE from, WASM_TYPE to) { return from << 8 | to; }
 
-    // Float to int uses the saturating trunc_sat family (0xFC-prefixed): the
+    // Float to int uses the saturating trunc_sat family: the
     // plain trunc opcodes trap on NaN/out-of-range input, whereas D expects
     // native-style truncation without trapping:
     //   double d = 1e300;
-    //   int i = cast(int) d; // i32.trunc_f64_s → "wasm trap: integer overflow"
+    //   int i = cast(int) d; // i32.trunc_f64_s => "wasm trap: integer overflow"
 
     switch (X(from, to))
     {
@@ -1057,7 +1051,7 @@ private void genVarArgs(ref WasmCG cg, elem*[] varArgs, ref uint spLocal, ref ui
                 if (sl.off)
                     cg.emit(OP_I32_CONST, Sleb(sl.off), OP_I32_ADD);
                 cg.emit(sl.e, OP_I32_CONST, Sleb(sl.byteSize));
-                cg.emitMemoryCopy();
+                cg.emit(OP_FC_PREFIX, Uleb(WASM_FC.MEMORY_COPY), Uleb(0), Uleb(0));
             }
             break;
         }
@@ -1886,6 +1880,7 @@ bool genElem(ref WasmCG cg, elem* e)
             case WASM_TYPE.EXNREF:
                 assert(0);
             }
+            // TODO: investigate this hack
             elem* sig = tyfloating(e.E1.Ety) ? e.E1 : e.E2;
             elem* expo = tyfloating(e.E1.Ety) ? e.E2 : e.E1;
             cg.genElem(sig);
@@ -1980,30 +1975,35 @@ bool genElem(ref WasmCG cg, elem* e)
         return true;
     case OPd_s16:
         cg.genElem(e.E1);
-        cg.emit(OP_FC_PREFIX, Uleb(WASM_FC.I32_TRUNC_SAT_F64_S));
-        cg.emit(OP_I32_EXTEND16_S);
+        cg.emit(OP_FC_PREFIX, Uleb(WASM_FC.I32_TRUNC_SAT_F64_S), OP_I32_EXTEND16_S);
         return true;
     case OPd_u16:
         cg.genElem(e.E1);
-        cg.emit(OP_FC_PREFIX, Uleb(WASM_FC.I32_TRUNC_SAT_F64_S));
-        cg.emit(OP_I32_CONST, Sleb(0xFFFF), OP_I32_AND);
+        cg.emit(OP_FC_PREFIX, Uleb(WASM_FC.I32_TRUNC_SAT_F64_S), OP_I32_CONST, Sleb(0xFFFF), OP_I32_AND);
         return true;
 
     case OPd_ld:
     case OPld_d:
-        cg.genElem(e.E1);
+        cg.genElem(e.E1); // real == double on wasm
         return true;
     case OPld_u64:
         return truncSat(WASM_FC.I64_TRUNC_SAT_F64_U);
+    case OP16_8:
+        cg.emit(e.E1, OP_I32_CONST, Sleb(0xFF), OP_I32_AND);
+        return true;
+
+    case OP32_16:
+        cg.emit(e.E1, OP_I32_CONST, Sleb(0xFFFF), OP_I32_AND);
+        return true;
 
     case OPmsw:
-        {
-            elem* src = unwrapComma(cg, e.E1);
-            if (cg.emitSliceHalf(src, /*ptrHalf*/ true))
-                return true;
-            cg.emit(src, OP_I64_CONST, Sleb(32), OP_I64_SHR_U, OP_I32_WRAP_I64);
+    {
+        elem* src = unwrapComma(cg, e.E1);
+        if (cg.emitSliceHalf(src, /*ptrHalf*/ true))
             return true;
-        }
+        cg.emit(src, OP_I64_CONST, Sleb(32), OP_I64_SHR_U, OP_I32_WRAP_I64);
+        return true;
+    }
 
     case OPstrpar:
         if (cg.emitStructParAddr(e.E1))
@@ -2014,21 +2014,14 @@ bool genElem(ref WasmCG cg, elem* e)
 
     case OPpair:
     case OPrpair:
-        {
-            elem* lo = (op == OPpair) ? e.E1 : e.E2;
-            elem* hi = (op == OPpair) ? e.E2 : e.E1;
-            cg.emit(lo, OP_I64_EXTEND_I32_U, hi, OP_I64_EXTEND_I32_U,
-                OP_I64_CONST, Sleb(32), OP_I64_SHL, OP_I64_OR);
-            return true;
-        }
-
-    case OP16_8:
-        cg.emit(e.E1, OP_I32_CONST, Sleb(0xFF), OP_I32_AND);
+    {
+        elem* lo = (op == OPpair) ? e.E1 : e.E2;
+        elem* hi = (op == OPpair) ? e.E2 : e.E1;
+        cg.emit(lo, OP_I64_EXTEND_I32_U, hi, OP_I64_EXTEND_I32_U,
+            OP_I64_CONST, Sleb(32), OP_I64_SHL, OP_I64_OR);
         return true;
+    }
 
-    case OP32_16:
-        cg.emit(e.E1, OP_I32_CONST, Sleb(0xFFFF), OP_I32_AND);
-        return true;
 
     case OPcomma:
         cg.genElemDiscard(e.E1);
@@ -2040,88 +2033,88 @@ bool genElem(ref WasmCG cg, elem* e)
         return cg.genElem(e.E2);
 
     case OPcond:
+    {
+        cg.genElem(e.E1);
+        cg.emitCondToI32(e.E1);
+        const bool voidCond = !typeHasValue(e.Ety);
+        cg.emit(OP_IF);
+        if (voidCond)
+            cg.emit(WASM_VOID_BLOCK);
+        else
+            cg.emit(e.wasmType);
+
+        // An arm may push a different width than the cond's type (e2ir types
+        // an AA struct-assign cond as the 8-byte struct but its arms yield an
+        // opAssign ref); pad/coerce so the if-block type checks:
+        //   void main() {
+        //       struct Bar { int id; this(this) {} ~this() {} }
+        //       Bar[string] bars;
+        //       bars["test"] = Bar(42);
+        //   }
+        void fitArm(bool pushed, elem* arm)
         {
-            cg.genElem(e.E1);
-            cg.emitCondToI32(e.E1);
-            const bool voidCond = !typeHasValue(e.Ety);
-            cg.emit(OP_IF);
             if (voidCond)
-                cg.emit(WASM_VOID_BLOCK);
-            else
-                cg.emit(e.wasmType);
-
-            // An arm may push a different width than the cond's type (e2ir types
-            // an AA struct-assign cond as the 8-byte struct but its arms yield an
-            // opAssign ref); pad/coerce so the if-block type checks:
-            //   void main() {
-            //       struct Bar { int id; this(this) {} ~this() {} }
-            //       Bar[string] bars;
-            //       bars["test"] = Bar(42);
-            //   }
-            void fitArm(bool pushed, elem* arm)
             {
-                if (voidCond)
-                {
-                    if (pushed)
-                        cg.emit(OP_DROP);
-                    return;
-                }
-                if (!pushed)
-                {
-                    cg.emit(OP_I32_CONST, Sleb(0));
-                    cg.emitCoerce(WASM_I32, e.wasmType);
-                    return;
-                }
-                cg.emitCoerce(wasmType(arm.Ety), e.wasmType);
+                if (pushed)
+                    cg.emit(OP_DROP);
+                return;
             }
-
-            fitArm(cg.genElem(e.E2.E1), e.E2.E1);
-            cg.emit(OP_ELSE);
-            fitArm(cg.genElem(e.E2.E2), e.E2.E2);
-            cg.emit(OP_END);
-            return !voidCond;
+            if (!pushed)
+            {
+                cg.emit(OP_I32_CONST, Sleb(0));
+                cg.emitCoerce(WASM_I32, e.wasmType);
+                return;
+            }
+            cg.emitCoerce(wasmType(arm.Ety), e.wasmType);
         }
+
+        fitArm(cg.genElem(e.E2.E1), e.E2.E1);
+        cg.emit(OP_ELSE);
+        fitArm(cg.genElem(e.E2.E2), e.E2.E2);
+        cg.emit(OP_END);
+        return !voidCond;
+    }
 
     case OPoror:
     case OPandand:
+    {
+        const bool isOr = op == OPoror;
+        if (discard)
         {
-            const bool isOr = op == OPoror;
-            if (discard)
-            {
-                cg.emit(OP_BLOCK, WASM_VOID_BLOCK, e.E1);
-                cg.emitCondToI32(e.E1, !isOr);
-                cg.emit(OP_BR_IF, Uleb(0));
-                cg.genElemDiscard(e.E2);
-                cg.emit(OP_END);
-                return false;
-            }
-            // Decide synth-vs-coerce from whether E2 actually pushed, not from
-            // typeHasValue(E2.Ety): a nested OPoror/OPandand always leaves an i32
-            // yet can be typed void, which would double-count. `a || b || dtor()`
-            // in a struct destructor (test17246.d): a void RHS leaves nothing, so
-            // synthesise a result for the if-block type check.
-            void rhsToI32()
-            {
-                if (cg.genElem(e.E2))
-                    cg.emitCondToI32(e.E2);
-                else
-                    cg.emit(OP_I32_CONST, Sleb(0));
-            }
-            cg.genElem(e.E1);
-            cg.emitCondToI32(e.E1);
-            cg.emit(OP_IF, WASM_I32);
-            if (isOr)
-                cg.emit(OP_I32_CONST, Sleb(1));
-            else
-                rhsToI32();
-            cg.emit(OP_ELSE);
-            if (isOr)
-                rhsToI32();
+            cg.emit(OP_BLOCK, WASM_VOID_BLOCK, e.E1);
+            cg.emitCondToI32(e.E1, !isOr);
+            cg.emit(OP_BR_IF, Uleb(0));
+            cg.genElemDiscard(e.E2);
+            cg.emit(OP_END);
+            return false;
+        }
+        // Decide synth-vs-coerce from whether E2 actually pushed, not from
+        // typeHasValue(E2.Ety): a nested OPoror/OPandand always leaves an i32
+        // yet can be typed void, which would double-count. `a || b || dtor()`
+        // in a struct destructor (test17246.d): a void RHS leaves nothing, so
+        // synthesise a result for the if-block type check.
+        void rhsToI32()
+        {
+            if (cg.genElem(e.E2))
+                cg.emitCondToI32(e.E2);
             else
                 cg.emit(OP_I32_CONST, Sleb(0));
-            cg.emit(OP_END);
-            return true;
         }
+        cg.genElem(e.E1);
+        cg.emitCondToI32(e.E1);
+        cg.emit(OP_IF, WASM_I32);
+        if (isOr)
+            cg.emit(OP_I32_CONST, Sleb(1));
+        else
+            rhsToI32();
+        cg.emit(OP_ELSE);
+        if (isOr)
+            rhsToI32();
+        else
+            cg.emit(OP_I32_CONST, Sleb(0));
+        cg.emit(OP_END);
+        return true;
+    }
 
     case OPbool:
         cg.genElem(e.E1);
@@ -2162,7 +2155,7 @@ bool genElem(ref WasmCG cg, elem* e)
             cg.emit(OP_LOCAL_TEE, Uleb(dstTmp));
             genElemAddr(cg, e.E2);
             cg.emit(OP_I32_CONST, Sleb(sz));
-            cg.emitMemoryCopy();
+            cg.emit(OP_FC_PREFIX, Uleb(WASM_FC.MEMORY_COPY), Uleb(0), Uleb(0));
             cg.emit(OP_LOCAL_GET, Uleb(dstTmp));
             return true;
         }
@@ -2174,7 +2167,7 @@ bool genElem(ref WasmCG cg, elem* e)
             cg.emit(e.E1, OP_LOCAL_TEE, Uleb(dstTmp));
             cg.genElem(e.E2.E1, WASM_I32);
             cg.genElem(e.E2.E2, WASM_I32);
-            cg.emitMemoryCopy();
+            cg.emit(OP_FC_PREFIX, Uleb(WASM_FC.MEMORY_COPY), Uleb(0), Uleb(0));
             cg.emit(OP_LOCAL_GET, Uleb(dstTmp));
             return true;
         }
@@ -2813,7 +2806,7 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
             if (off)
                 cg.emit(OP_I32_CONST, Sleb(cast(int) off), OP_I32_ADD);
             cg.emit(OP_LOCAL_GET, Uleb(sp.wasmLocalIdx), OP_I32_CONST, Sleb(sp.copyBytes));
-            cg.emitMemoryCopy();
+            cg.emit(OP_FC_PREFIX, Uleb(WASM_FC.MEMORY_COPY), Uleb(0), Uleb(0));
             continue;
         }
         cg.emit(OP_LOCAL_GET, Uleb(cg.shadowBaseLocal), OP_LOCAL_GET, Uleb(sp.wasmLocalIdx));
