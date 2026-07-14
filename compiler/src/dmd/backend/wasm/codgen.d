@@ -440,12 +440,6 @@ nothrow:
         emit(ulebPad(0));
     }
 
-    void emitMemArg(uint align_, uint offset)
-    {
-        code.writeuLEB128(align_);
-        code.writeuLEB128(offset);
-    }
-
     /// Emit a global-index operand referencing __stack_pointer as a 5-byte
     /// padded ULEB128, recording a R_WASM.GLOBAL_INDEX_LEB relocation so wasm-ld
     /// patches the operand to the merged global's final index. DMD imports
@@ -575,7 +569,7 @@ private void emitLoad(ref WasmCG cg, tym_t ty, uint offset = 0)
         cg.emit(OP_FD_PREFIX, uleb(m.loadOp));
     else
         cg.emit(m.loadOp);
-    cg.emitMemArg(m.alignLog2, offset);
+    cg.emit(uleb(m.alignLog2), uleb(offset));
 }
 
 private void emitStore(ref WasmCG cg, tym_t ty, uint offset = 0)
@@ -585,7 +579,7 @@ private void emitStore(ref WasmCG cg, tym_t ty, uint offset = 0)
         cg.emit(OP_FD_PREFIX, uleb(m.storeOp));
     else
         cg.emit(m.storeOp);
-    cg.emitMemArg(m.alignLog2, offset);
+    cg.emit(uleb(m.alignLog2), uleb(offset));
 }
 
 /// Store the caught exception payload (i32 on the value stack) into the
@@ -851,14 +845,12 @@ private bool tryCoalesceZeroInit(ref WasmCG cg, elem* comma)
     {
         if (i + 1 < n && offs[i + 1] == offs[i] + 4)
         {
-            cg.emit(base, OP_I64_CONST, sleb(0), OP_I64_STORE);
-            cg.emitMemArg(2, offs[i]);
+            cg.emit(base, OP_I64_CONST, sleb(0), OP_I64_STORE, uleb(2), uleb(offs[i]));
             i += 2;
         }
         else
         {
-            cg.emit(base, OP_I32_CONST, sleb(0), OP_I32_STORE);
-            cg.emitMemArg(2, offs[i]);
+            cg.emit(base, OP_I32_CONST, sleb(0), OP_I32_STORE, uleb(2), uleb(offs[i]));
             i += 1;
         }
     }
@@ -1231,15 +1223,12 @@ private void genVarArgs(ref WasmCG cg, elem*[] varArgs, ref uint spLocal, ref ui
             cg.emit(OP_LOCAL_GET, uleb(spLocal), sl.e);
             if (sl.promoteF32)
                 cg.emit(OP_F64_PROMOTE_F32);
-            cg.emit(sl.storeOp);
-            cg.emitMemArg(sl.alignLog2, sl.off);
+            cg.emit(sl.storeOp, uleb(sl.alignLog2), uleb(sl.off));
             break;
 
         case VaKind.slicePair:
-            cg.emit(OP_LOCAL_GET, uleb(spLocal), sl.e.E2, OP_I32_STORE);
-            cg.emitMemArg(2, sl.off);
-            cg.emit(OP_LOCAL_GET, uleb(spLocal), sl.e.E1, OP_I32_STORE);
-            cg.emitMemArg(2, sl.off + 4);
+            cg.emit(OP_LOCAL_GET, uleb(spLocal), sl.e.E2, OP_I32_STORE, uleb(2), uleb(sl.off));
+            cg.emit(OP_LOCAL_GET, uleb(spLocal), sl.e.E1, OP_I32_STORE, uleb(2), uleb(sl.off + 4));
             break;
 
         case VaKind.aggregate:
@@ -1277,8 +1266,7 @@ private bool emitSliceHalf(ref WasmCG cg, elem* e, bool ptrHalf)
     if (e.Eoper == OPrelconst && e.Vsym &&
         cg.emitSymBase(e.Vsym, cast(uint) e.Voffset + half, memOff))
     {
-        cg.emit(OP_I32_LOAD);
-        cg.emitMemArg(2, memOff);
+        cg.emit(OP_I32_LOAD, uleb(2), uleb(memOff));
         return true;
     }
     const tym_t ety = tybasic(e.Ety);
@@ -1287,14 +1275,12 @@ private bool emitSliceHalf(ref WasmCG cg, elem* e, bool ptrHalf)
     if (e.Eoper == OPvar && e.Vsym &&
         cg.emitSymBase(e.Vsym, cast(uint) e.Voffset + half, memOff))
     {
-        cg.emit(OP_I32_LOAD);
-        cg.emitMemArg(2, memOff);
+        cg.emit(OP_I32_LOAD, uleb(2), uleb(memOff));
         return true;
     }
     if (e.Eoper == OPind && e.E1)
     {
-        cg.emit(e.E1, OP_I32_LOAD);
-        cg.emitMemArg(2, half);
+        cg.emit(e.E1, OP_I32_LOAD, uleb(2), uleb(half));
         return true;
     }
     return false;
@@ -1399,10 +1385,8 @@ private bool emitStructParAddr(ref WasmCG cg, elem* e)
 private void loadSliceHalves(ref WasmCG cg)
 {
     const uint addrTmp = cg.allocTemp(WASM_I32);
-    cg.emit(OP_LOCAL_TEE, uleb(addrTmp), OP_I32_LOAD);
-    cg.emitMemArg(2, 0);
-    cg.emit(OP_LOCAL_GET, uleb(addrTmp), OP_I32_LOAD);
-    cg.emitMemArg(2, 4);
+    cg.emit(OP_LOCAL_TEE, uleb(addrTmp), OP_I32_LOAD, uleb(2), uleb(0));
+    cg.emit(OP_LOCAL_GET, uleb(addrTmp), OP_I32_LOAD, uleb(2), uleb(4));
 }
 
 private bool isParamSpine(const(elem)* e)
@@ -1793,10 +1777,8 @@ bool genElem(ref WasmCG cg, elem* e)
                 cg.emit(OP_LOCAL_SET, uleb(addrTmp));
                 elem* lo = (rhsTail.Eoper == OPpair) ? rhsTail.E1 : rhsTail.E2;
                 elem* hi = (rhsTail.Eoper == OPpair) ? rhsTail.E2 : rhsTail.E1;
-                cg.emit(OP_LOCAL_GET, uleb(addrTmp), lo, OP_I32_STORE);
-                cg.emitMemArg(2, 0);
-                cg.emit(OP_LOCAL_GET, uleb(addrTmp), hi, OP_I32_STORE);
-                cg.emitMemArg(2, 4);
+                cg.emit(OP_LOCAL_GET, uleb(addrTmp), lo, OP_I32_STORE, uleb(2), uleb(0));
+                cg.emit(OP_LOCAL_GET, uleb(addrTmp), hi, OP_I32_STORE, uleb(2), uleb(4));
                 return false;
             }
             const bool needValue = typeHasValue(e.Ety) && !discard;
@@ -1935,8 +1917,7 @@ bool genElem(ref WasmCG cg, elem* e)
                 eva = e.E2;
             cg.genElem(eva);
             cg.emit(OP_LOCAL_GET, uleb(cg.numParams - 1));
-            cg.emit(OP_I32_STORE);
-            cg.emitMemArg(2, 0);
+            cg.emit(OP_I32_STORE, uleb(2), uleb(0));
         }
         return false;
 
@@ -2589,8 +2570,7 @@ private void emitBitTestOp(ref WasmCG cg, uint op, elem* bitnumE, elem* ptrE)
     cg.emit(OP_LOCAL_GET, uleb(bitTmp), OP_I32_CONST, sleb(5), OP_I32_SHR_U,
         OP_I32_CONST, sleb(2), OP_I32_SHL, OP_I32_ADD);
     const uint addrTmp = cg.allocTemp(WASM_I32);
-    cg.emit(OP_LOCAL_TEE, uleb(addrTmp), OP_I32_LOAD);
-    cg.emitMemArg(2, 0);
+    cg.emit(OP_LOCAL_TEE, uleb(addrTmp), OP_I32_LOAD, uleb(2), uleb(0));
     const uint wordTmp = cg.allocTemp(WASM_I32);
     cg.emit(OP_LOCAL_SET, uleb(wordTmp));
 
@@ -2618,8 +2598,7 @@ private void emitBitTestOp(ref WasmCG cg, uint op, elem* bitnumE, elem* ptrE)
     default:
         assert(0);
     }
-    cg.emit(OP_I32_STORE);
-    cg.emitMemArg(2, 0);
+    cg.emit(OP_I32_STORE, uleb(2), uleb(0));
 
     cg.emit(OP_LOCAL_GET, uleb(resultTmp));
 }
@@ -3017,7 +2996,7 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
             cg.emit(OP_FD_PREFIX, uleb(m.storeOp));
         else
             cg.emit(m.storeOp);
-        cg.emitMemArg(m.alignLog2, off);
+        cg.emit(uleb(m.alignLog2), uleb(off));
     }
 
     if (startblock)
