@@ -621,7 +621,7 @@ bool emitSymAddr(ref WasmCG cg, Symbol* s, uint off)
 {
     if (isDataSym(s.Sfl))
     {
-        emit(OP_I32_CONST, dataAddrReloc(cast(uint)(s.Soffset + off), off, sym));
+        cg.emit(OP_I32_CONST, dataAddrReloc(cast(uint)(s.Soffset + off), off, s));
         return true;
     }
     uint memOff;
@@ -2771,39 +2771,32 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
         if (!s.isParameter)
             continue;
         const tym_t pty = tybasic(s.ty());
+        const bool isSliceDg = isSliceOrDelegate(s.Stype);
+        const bool isStructLike = pty == TYstruct || pty == TYarray;
         const bool elidePodParam = canElidePodParams
             && pty == TYstruct && !isNonPodStruct(s.Stype)
             && paramReadOnlyPod(s, startblock);
         if (!elidePodParam)
             cg.registerShadow(s);
-        if (!isSliceOrDelegate(s.Stype) && pty != TYstruct && pty != TYarray
-            && !typeHasValue(pty))
+        if (!isSliceDg && !isStructLike && !typeHasValue(pty))
             continue;
         const uint i0 = cast(uint) cg.locals.length;
-        if (isSliceOrDelegate(s.Stype))
+        if (isSliceDg)
         {
             cg.locals ~= newTempLocal(WASM_PTR);
             cg.locals ~= newTempLocal(WASM_PTR);
             paramSpills ~= ParamSpill(i0, s, 0, TYuint);
             paramSpills ~= ParamSpill(i0 + 1, s, 4, TYuint);
         }
-        else if (pty == TYstruct && isNonPodStruct(s.Stype))
-        {
-            cg.locals ~= newTempLocal(WASM_PTR);
-            paramSpills ~= ParamSpill(i0, s, 0, TYuint);
-        }
-        else if (pty == TYstruct || pty == TYarray)
+        else if (isStructLike)
         {
             cg.locals ~= newTempLocal(WASM_PTR);
             if (elidePodParam)
-            {
                 cg.byRefParamLocal[s] = i0;
-            }
+            else if (isNonPodStruct(s.Stype))
+                paramSpills ~= ParamSpill(i0, s, 0, TYuint);
             else
-            {
-                const uint sz = cast(uint) type_size(s.Stype);
-                paramSpills ~= ParamSpill(i0, s, 0, TYuint, sz);
-            }
+                paramSpills ~= ParamSpill(i0, s, 0, TYuint, cast(uint) type_size(s.Stype));
         }
         else
         {
