@@ -267,7 +267,7 @@ struct WasmCG
     /// skip the trailing `unreachable` when the body can't fall off the end.
     bool reachable = true;
 
-    /// Scope for an in-progress call. Pushed on entry to genCall, popped on exit.
+    /// Scope for an in-progress call.
     /// Leaves of the OPparam tree consult the top of the stack to decide how to
     /// emit themselves (split slice into two i32s, queue as variadic, plain emit).
     CallCtx[] callCtxStack;
@@ -471,20 +471,6 @@ private int canonicalI32Const(int v, tym_t ty)
     }
 }
 
-/// Emit a saturating float to int truncation (0xFC-prefixed trunc_sat family).
-/// The plain trunc opcodes trap on NaN/out-of-range input, where native
-/// targets produce an unspecified value without trapping.
-/// ---
-/// double d = 1e300;
-/// int i = cast(int) d; // i32.trunc_f64_s → "wasm trap: integer overflow"
-/// ---
-private void emitTruncSat(ref WasmCG cg, WASM_TYPE from, WASM_TYPE to, bool uns)
-{
-    const subop = WASM_FC.I32_TRUNC_SAT_F32_S
-        | (to == WASM_I64 ? 4 : 0) | (from == WASM_F64 ? 2 : 0) | (uns ? 1 : 0);
-    cg.emit(OP_FC_PREFIX, Uleb(subop));
-}
-
 /// Emit `memory.copy 0 0`
 private void emitMemoryCopy(ref WasmCG cg)
 {
@@ -525,44 +511,45 @@ void emitCaughtStore(ref WasmCG cg, Symbol* jcatchvar)
     cg.emitStore(TYnptr);
 }
 
+/// Emit a saturating float to int truncation (0xFC-prefixed trunc_sat family).
+/// The plain trunc opcodes trap on NaN/out-of-range input, where native
+/// targets produce an unspecified value without trapping.
+/// ---
+/// double d = 1e300;
+/// int i = cast(int) d; // i32.trunc_f64_s → "wasm trap: integer overflow"
+/// ---
+private void emitTruncSat(ref WasmCG cg, WASM_TYPE from, WASM_TYPE to, bool uns)
+{
+    const subop = WASM_FC.I32_TRUNC_SAT_F32_S
+        | (to == WASM_I64 ? 4 : 0) | (from == WASM_F64 ? 2 : 0) | (uns ? 1 : 0);
+    cg.emit(OP_FC_PREFIX, Uleb(subop));
+}
+
 private void emitCoerce(ref WasmCG cg, WASM_TYPE from, WASM_TYPE to)
 {
     if (from == to)
         return;
 
-    if (from == WASM_F32 && to == WASM_I64)
-    {
-        cg.emit(OP_I32_REINTERPRET_F32, OP_I64_EXTEND_I32_U);
-        return;
-    }
-    if (from == WASM_I64 && to == WASM_F32)
-    {
-        cg.emit(OP_I32_WRAP_I64, OP_F32_REINTERPRET_I32);
-        return;
-    }
-    if ((from == WASM_F32 || from == WASM_F64) && (to == WASM_I32 || to == WASM_I64))
-        return cg.emitTruncSat(from, to, false);
+    static int X(WASM_TYPE from, WASM_TYPE to) { return from << 8 | to; }
 
-    static ubyte coerceOp(WASM_TYPE from, WASM_TYPE to)
-    {
-        static int X(WASM_TYPE from, WASM_TYPE to) { return from << 8 | to; }
+    // WASM traps on overflow, while D expects truncation
+    // case X(WASM_F32, WASM_I64): return cg.emit(OP_I32_REINTERPRET_F32, OP_I64_EXTEND_I32_U);
 
-        switch (X(from, to))
-        {
-            case X(WASM_I64, WASM_I32): return OP_I32_WRAP_I64;
-            case X(WASM_I32, WASM_I64): return OP_I64_EXTEND_I32_S;
-            case X(WASM_F32, WASM_F64): return OP_F64_PROMOTE_F32;
-            case X(WASM_F64, WASM_F32): return OP_F32_DEMOTE_F64;
-            case X(WASM_I32, WASM_F32): return OP_F32_CONVERT_I32_S;
-            case X(WASM_I32, WASM_F64): return OP_F64_CONVERT_I32_S;
-            case X(WASM_I64, WASM_F64): return OP_F64_CONVERT_I64_S;
-            default: assert(0);
-        }
-    }
-
-    if (auto op = coerceOp(from, to))
+    switch (X(from, to))
     {
-        cg.emit(op);
+        case X(WASM_F32, WASM_F64): return cg.emit(OP_F64_PROMOTE_F32);
+        case X(WASM_F32, WASM_I32): return cg.emitTruncSat(from, to, false);
+        case X(WASM_F32, WASM_I64): return cg.emitTruncSat(from, to, false);
+        case X(WASM_F64, WASM_F32): return cg.emit(OP_F32_DEMOTE_F64);
+        case X(WASM_F64, WASM_I32): return cg.emitTruncSat(from, to, false);
+        case X(WASM_F64, WASM_I64): return cg.emitTruncSat(from, to, false);
+        case X(WASM_I32, WASM_F32): return cg.emit(OP_F32_CONVERT_I32_S);
+        case X(WASM_I32, WASM_F64): return cg.emit(OP_F64_CONVERT_I32_S);
+        case X(WASM_I32, WASM_I64): return cg.emit(OP_I64_EXTEND_I32_S);
+        case X(WASM_I64, WASM_F32): return cg.emit(OP_I32_WRAP_I64, OP_F32_REINTERPRET_I32);
+        case X(WASM_I64, WASM_F64): return cg.emit(OP_F64_CONVERT_I64_S);
+        case X(WASM_I64, WASM_I32): return cg.emit(OP_I32_WRAP_I64);
+        default: assert(0);
     }
 }
 
@@ -571,12 +558,7 @@ private bool isDataSym(FL fl) @safe @nogc nothrow
 {
     switch (fl)
     {
-    case FL.data:
-    case FL.tlsdata:
-    case FL.udata:
-    case FL.extern_:
-    case FL.csdata:
-    case FL.datseg:
+    case FL.data, FL.tlsdata, FL.udata, FL.extern_, FL.csdata, FL.datseg:
         return true;
     default:
         return false;
@@ -1285,17 +1267,31 @@ private void consumeCallArg(ref WasmCG cg, elem* e)
     cg.emit(e);
 }
 
-private bool genAlloca(ref WasmCG cg, elem* e)
+/// Recover the function type of a call's callee. Prefers the callee symbol's
+/// type, then the type attached to `e.E1`, then an indirect call through a
+/// function-pointer variable. Returns null if none applies.
+private type* resolveFuncType(elem* e, Symbol* calleeSym)
 {
-    const uint tmp = cg.allocTemp(WASM_I32);
-    cg.emit(OP_GLOBAL_GET, RelocOp(R_WASM.GLOBAL_INDEX_LEB));
-    cg.genElem(e.E2, WASM_I32);
-    cg.emit(
-        OP_I32_SUB, OP_I32_CONST, Sleb(~15), OP_I32_AND,
-        OP_LOCAL_TEE, Uleb(tmp),
-        OP_GLOBAL_SET, RelocOp(R_WASM.GLOBAL_INDEX_LEB),
-        OP_LOCAL_GET, Uleb(tmp));
-    return true;
+    if (calleeSym && calleeSym.Stype)
+        return calleeSym.Stype;
+
+    if (e.E1.ET && tyfunc(e.E1.ET.Tty))
+        return e.E1.ET;
+
+    // Resolve indirect calls (int function(int) fp = &foo)
+    elem* fe = e.E1;
+    if (fe && fe.Eoper == OPind && fe.E1)
+        fe = fe.E1;
+    Symbol* fsym = (fe && (fe.Eoper == OPvar || fe.Eoper == OPrelconst)) ? fe.Vsym : null;
+    if (fsym && fsym.Stype)
+    {
+        type* st = fsym.Stype;
+        if (st.Tnext && tyfunc(st.Tnext.Tty))
+            return st.Tnext;
+        if (tyfunc(st.Tty))
+            return st;
+    }
+    return null;
 }
 
 private bool genCall(ref WasmCG cg, elem* e)
@@ -1303,36 +1299,11 @@ private bool genCall(ref WasmCG cg, elem* e)
     Symbol* calleeSym = e.E1.Vsym;
 
     // yeah... this is how the backend checks for alloca
-    {
-        import core.stdc.string : strcmp;
-        if (calleeSym && e.E1.Eoper == OPvar && e.E2 && e.E2.Eoper != OPparam &&
-            calleeSym.identifier == "alloca")
-        {
-            return cg.genAlloca(e);
-        }
-    }
+    if (calleeSym && e.E1.Eoper == OPvar && e.E2 && e.E2.Eoper != OPparam &&
+        calleeSym.identifier == "alloca")
+        return cg.genAlloca(e);
 
-    type* fty = calleeSym ? calleeSym.Stype : null;
-    if (!fty)
-    {
-        if (e.E1 && e.E1.ET && tyfunc(e.E1.ET.Tty))
-            fty = e.E1.ET;
-    }
-    if (!fty)
-    {
-        elem* fe = e.E1;
-        if (fe && fe.Eoper == OPind && fe.E1)
-            fe = fe.E1;
-        Symbol* fsym = (fe && (fe.Eoper == OPvar || fe.Eoper == OPrelconst)) ? fe.Vsym : null;
-        if (fsym && fsym.Stype)
-        {
-            type* st = fsym.Stype;
-            if (st.Tnext && tyfunc(st.Tnext.Tty))
-                fty = st.Tnext;
-            else if (tyfunc(st.Tty))
-                fty = st;
-        }
-    }
+    type* fty = resolveFuncType(e, calleeSym);
 
     CallCtx ctx;
     ctx.remainingParams = (fty && fty.Tparamtypes) ? *fty.Tparamtypes : null;
@@ -1394,8 +1365,7 @@ private bool genCall(ref WasmCG cg, elem* e)
         uint typeIdx;
         assert(fty);
 
-        const bool retPtr = fty.Tnext && returnByPtr(fty.Tnext);
-        const uint nonLeading = (retPtr ? 1 : 0) + (dstyleVariadic(fty) ? 1 : 0);
+        const uint nonLeading = (retByPtrCall ? 1 : 0) + (dstyleVariadic(fty) ? 1 : 0);
         const uint hiddenLeading = ctx.skipCount > nonLeading
             ? ctx.skipCount - nonLeading : 0;
         typeIdx = cg.internType(buildFuncType(fty, null, hiddenLeading));
@@ -1437,6 +1407,19 @@ private bool genCall(ref WasmCG cg, elem* e)
     if (fty)
         return buildFuncType(fty, calleeSym).results.length != 0;
     return typeHasValue(e.Ety);
+}
+
+private bool genAlloca(ref WasmCG cg, elem* e)
+{
+    const uint tmp = cg.allocTemp(WASM_I32);
+    cg.emit(OP_GLOBAL_GET, RelocOp(R_WASM.GLOBAL_INDEX_LEB));
+    cg.genElem(e.E2, WASM_I32);
+    cg.emit(
+        OP_I32_SUB, OP_I32_CONST, Sleb(~15), OP_I32_AND,
+        OP_LOCAL_TEE, Uleb(tmp),
+        OP_GLOBAL_SET, RelocOp(R_WASM.GLOBAL_INDEX_LEB),
+        OP_LOCAL_GET, Uleb(tmp));
+    return true;
 }
 
 /// Code generation for an element

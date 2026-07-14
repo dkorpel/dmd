@@ -898,7 +898,6 @@ private void genBlocksDispatch(ref WasmCG cg, block*[] blocks, bool hasReturn)
         }
     }
 
-    cg.emit(OP_END);
-    cg.emit(OP_UNREACHABLE);
+    cg.emit(OP_END, OP_UNREACHABLE);
     cg.reachable = false;
 }
