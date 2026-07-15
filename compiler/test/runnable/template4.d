@@ -590,7 +590,11 @@ template sqrt(real x, real root = x/2, int ntries = 0)
 void test20()
 {
     real x = sqrt!(2);
-    printf("%.20Lg\n", x); // 1.4142135623730950487
+    // wasm's `real` is 64-bit; %Lg's vararg layout is wider, so print via %g there
+    static if (real.sizeof > double.sizeof)
+        printf("%.20Lg\n", x); // 1.4142135623730950487
+    else
+        printf("%.20g\n", cast(double) x);
 }
 
 /*********************************************************/

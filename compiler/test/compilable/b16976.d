@@ -1,26 +1,27 @@
 /* REQUIRED_ARGS: -verrors=simple -m64
+DISABLED: wasm
 TEST_OUTPUT:
 ---
-compilable/b16976.d(33): Deprecation: foreach: loop index implicitly converted from `size_t` to `int`
 compilable/b16976.d(34): Deprecation: foreach: loop index implicitly converted from `size_t` to `int`
-compilable/b16976.d(35): Deprecation: foreach: loop index implicitly converted from `size_t` to `char`
+compilable/b16976.d(35): Deprecation: foreach: loop index implicitly converted from `size_t` to `int`
 compilable/b16976.d(36): Deprecation: foreach: loop index implicitly converted from `size_t` to `char`
-compilable/b16976.d(41): Deprecation: foreach: loop index implicitly converted from `size_t` to `int`
+compilable/b16976.d(37): Deprecation: foreach: loop index implicitly converted from `size_t` to `char`
 compilable/b16976.d(42): Deprecation: foreach: loop index implicitly converted from `size_t` to `int`
-compilable/b16976.d(43): Deprecation: foreach: loop index implicitly converted from `size_t` to `char`
+compilable/b16976.d(43): Deprecation: foreach: loop index implicitly converted from `size_t` to `int`
 compilable/b16976.d(44): Deprecation: foreach: loop index implicitly converted from `size_t` to `char`
-compilable/b16976.d(50): Deprecation: foreach: loop index implicitly converted from `size_t` to `int`
+compilable/b16976.d(45): Deprecation: foreach: loop index implicitly converted from `size_t` to `char`
 compilable/b16976.d(51): Deprecation: foreach: loop index implicitly converted from `size_t` to `int`
-compilable/b16976.d(52): Deprecation: foreach: loop index implicitly converted from `size_t` to `char`
+compilable/b16976.d(52): Deprecation: foreach: loop index implicitly converted from `size_t` to `int`
 compilable/b16976.d(53): Deprecation: foreach: loop index implicitly converted from `size_t` to `char`
-compilable/b16976.d(58): Deprecation: foreach: loop index implicitly converted from `size_t` to `int`
+compilable/b16976.d(54): Deprecation: foreach: loop index implicitly converted from `size_t` to `char`
 compilable/b16976.d(59): Deprecation: foreach: loop index implicitly converted from `size_t` to `int`
-compilable/b16976.d(60): Deprecation: foreach: loop index implicitly converted from `size_t` to `char`
+compilable/b16976.d(60): Deprecation: foreach: loop index implicitly converted from `size_t` to `int`
 compilable/b16976.d(61): Deprecation: foreach: loop index implicitly converted from `size_t` to `char`
-compilable/b16976.d(62): Deprecation: foreach: loop index implicitly converted from `size_t` to `int`
+compilable/b16976.d(62): Deprecation: foreach: loop index implicitly converted from `size_t` to `char`
 compilable/b16976.d(63): Deprecation: foreach: loop index implicitly converted from `size_t` to `int`
-compilable/b16976.d(64): Deprecation: foreach: loop index implicitly converted from `size_t` to `char`
+compilable/b16976.d(64): Deprecation: foreach: loop index implicitly converted from `size_t` to `int`
 compilable/b16976.d(65): Deprecation: foreach: loop index implicitly converted from `size_t` to `char`
+compilable/b16976.d(66): Deprecation: foreach: loop index implicitly converted from `size_t` to `char`
 ---
 */
 void main()

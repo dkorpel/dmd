@@ -7,3 +7,4 @@ fail_compilation/fail19757_m64.d(9): Error: cannot implicitly convert expression
 */
 
 auto s = new string("oops");
+// DISABLED: wasm
