@@ -263,75 +263,77 @@ nothrow:
     }
 }
 
-/// Structured control flow synthesis (block CFG => WASM)
-void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
+private bool branchesOut(BC bc)
 {
-    block*[] blocks;
-    for (block* b = startblock; b; b = b.Bnext)
-        blocks ~= b;
+    return bc == BC.goto_ || bc == BC.iftrue || bc == BC.ifthen
+        || bc == BC.jmptab || bc == BC.switch_;
+}
+
+private bool isTableBranch(BC bc)
+{
+    return bc == BC.jmptab || bc == BC.switch_;
+}
+
+private bool isLandingFlow(BC bc)
+{
+    return bc == BC._finally || bc == BC._lpad || bc == BC.jcatch;
+}
+
+private struct TryReg
+{
+    int start;
+    int end;
+    bool isCatch;
+    block* tryBlock;
+}
+
+private struct BFrame
+{
+    int begin;
+    int end;
+}
+
+// Phase 1: flag blocks targeted by a back edge as loop headers, then widen
+// overlapping loop regions so they nest.
+private void computeLoopHeaders(block*[] blocks, BlkInfo[] info)
+{
     const int N = cast(int) blocks.length;
-    if (N == 0)
-        return;
-
-    foreach (b; blocks)
-        if (b.bc == BC._try)
-        {
-            blocks = layoutTryRegions(blocks);
-            break;
-        }
-
     foreach (size_t i, b; blocks)
-        b.Bdfoidx = cast(int) i;
-
-    BlkInfo[] info = new BlkInfo[N];
-    foreach (size_t i, b; blocks)
-    {
-        if (b.bc == BC.goto_ || b.bc == BC.iftrue || b.bc == BC.ifthen
-            || b.bc == BC.jmptab || b.bc == BC.switch_
-            || b.bc == BC._finally || b.bc == BC._lpad || b.bc == BC.jcatch)
-        {
+        if (branchesOut(b.bc) || isLandingFlow(b.bc))
             foreach (s; b.Bsucc)
-            {
                 if (s && s.Bdfoidx <= cast(int) i)
                 {
                     info[s.Bdfoidx].isLoopHeader = true;
                     if (info[s.Bdfoidx].loopEnd < cast(int) i)
                         info[s.Bdfoidx].loopEnd = cast(int) i;
                 }
-            }
-        }
-    }
 
+    bool changed = true;
+    while (changed)
     {
-        bool changed = true;
-        while (changed)
+        changed = false;
+        foreach (int h1; 0 .. N)
         {
-            changed = false;
-            foreach (int h1; 0 .. N)
-            {
-                if (!info[h1].isLoopHeader)
-                    continue;
-                foreach (int h2; h1 + 1 .. N)
-                    if (info[h2].isLoopHeader && h2 <= info[h1].loopEnd
-                        && info[h2].loopEnd > info[h1].loopEnd)
-                    {
-                        info[h1].loopEnd = info[h2].loopEnd;
-                        changed = true;
-                    }
-            }
+            if (!info[h1].isLoopHeader)
+                continue;
+            foreach (int h2; h1 + 1 .. N)
+                if (info[h2].isLoopHeader && h2 <= info[h1].loopEnd
+                    && info[h2].loopEnd > info[h1].loopEnd)
+                {
+                    info[h1].loopEnd = info[h2].loopEnd;
+                    changed = true;
+                }
         }
     }
+}
 
-    struct TryReg
-    {
-        int start;
-        int end;
-        bool isCatch;
-        block* tryBlock;
-    }
-
+// Phase 2: pair each BC._try with its landing pad. `tryBroken` is set if a
+// region has no landing pad, runs backwards, or partially overlaps another try
+// region or a loop region (none of which can be expressed as nested frames).
+private TryReg[] computeTryRegions(block*[] blocks, const BlkInfo[] info, out bool tryBroken)
+{
+    const int N = cast(int) blocks.length;
     TryReg[] tryRegs;
-    bool tryBroken = false;
     foreach (int i; 0 .. N)
     {
         block* b = blocks[i];
@@ -353,43 +355,43 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         if (land == int.max || land <= i)
         {
             tryBroken = true;
-            break;
+            return tryRegs;
         }
         tryRegs ~= TryReg(i, land - 1, isCatch, b);
     }
 
-    if (!tryBroken)
+    static bool overlapPartially(int a1, int a2, int b1, int b2)
     {
-        static bool overlapPartially(int a1, int a2, int b1, int b2)
-        {
-            return a1 <= b2 && b1 <= a2
-                && !(a1 <= b1 && b2 <= a2) && !(b1 <= a1 && a2 <= b2);
-        }
-
-        outerTry: foreach (size_t ti, ref const TryReg t; tryRegs)
-        {
-            foreach (ref const TryReg u; tryRegs[ti + 1 .. $])
-                if (overlapPartially(t.start, t.end, u.start, u.end))
-                {
-                    tryBroken = true;
-                    break outerTry;
-                }
-            foreach (int h; 0 .. N)
-                if (info[h].isLoopHeader
-                    && overlapPartially(t.start, t.end, h, info[h].loopEnd))
-                {
-                    tryBroken = true;
-                    break outerTry;
-                }
-        }
+        return a1 <= b2 && b1 <= a2
+            && !(a1 <= b1 && b2 <= a2) && !(b1 <= a1 && a2 <= b2);
     }
 
-    struct BFrame
+    foreach (size_t ti, ref const TryReg t; tryRegs)
     {
-        int begin;
-        int end;
+        foreach (ref const TryReg u; tryRegs[ti + 1 .. $])
+            if (overlapPartially(t.start, t.end, u.start, u.end))
+            {
+                tryBroken = true;
+                return tryRegs;
+            }
+        foreach (int h; 0 .. N)
+            if (info[h].isLoopHeader
+                && overlapPartially(t.start, t.end, h, info[h].loopEnd))
+            {
+                tryBroken = true;
+                return tryRegs;
+            }
     }
+    return tryRegs;
+}
 
+// Phase 3: collect a `block` frame per forward branch target, then widen each
+// frame's begin until frames nest LIFO and respect loop/try regions. `converged`
+// is false if widening didn't reach a fixed point within the iteration bound.
+private BFrame[] computeFrames(block*[] blocks, const BlkInfo[] info,
+    const TryReg[] tryRegs, out bool converged)
+{
+    const int N = cast(int) blocks.length;
     BFrame[] bframes;
 
     void needFrame(int source, int target)
@@ -407,9 +409,9 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
     foreach (int i; 0 .. N)
     {
         block* b = blocks[i];
-        const bool table = b.bc == BC.jmptab || b.bc == BC.switch_;
-        if (table || b.bc == BC.goto_ || b.bc == BC.iftrue || b.bc == BC.ifthen)
+        if (branchesOut(b.bc))
         {
+            const bool table = isTableBranch(b.bc);
             foreach (s; b.Bsucc)
             {
                 const int t = blockIdx(s);
@@ -417,7 +419,7 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
                     needFrame(i, t);
             }
         }
-        else if (b.bc == BC._finally || b.bc == BC._lpad || b.bc == BC.jcatch)
+        else if (isLandingFlow(b.bc))
         {
             const int t = blockIdx(succ(b, b.bc == BC._finally ? 1 : 0));
             if (t != int.max && t > i + 1)
@@ -428,93 +430,119 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         if (info[h].isLoopHeader)
             needFrame(h, info[h].loopEnd + 1);
 
-    bool converged;
+    int iterations = 0;
+    bool changed = true;
+    while (changed && iterations <= cast(int) bframes.length * N + 2)
     {
-        int iterations = 0;
-        bool changed = true;
-        while (changed && iterations <= cast(int) bframes.length * N + 2)
+        changed = false;
+        iterations++;
+        foreach (ref f; bframes)
         {
-            changed = false;
-            iterations++;
-            foreach (ref f; bframes)
+            void respectRegion(int h, int le)
             {
-                void respectRegion(int h, int le)
+                if (f.begin > h && f.begin <= le && f.end > le)
                 {
-                    if (f.begin > h && f.begin <= le && f.end > le)
-                    {
-                        f.begin = h;
-                        changed = true;
-                    }
-                    else if (f.begin < h && f.end >= h && f.end < le)
-                    {
-                        f.begin = h;
-                        changed = true;
-                    }
+                    f.begin = h;
+                    changed = true;
                 }
-
-                foreach (int h; 0 .. N)
-                    if (info[h].isLoopHeader)
-                        respectRegion(h, info[h].loopEnd);
-                foreach (ref const TryReg t; tryRegs)
-                    respectRegion(t.start, t.end);
-                foreach (ref const g; bframes)
-                    if (g.begin < f.begin && f.begin <= g.end && g.end < f.end)
-                    {
-                        f.begin = g.begin;
-                        changed = true;
-                    }
+                else if (f.begin < h && f.end >= h && f.end < le)
+                {
+                    f.begin = h;
+                    changed = true;
+                }
             }
-        }
-        converged = !changed;
-    }
 
-    bool structurable = converged && !tryBroken;
-    if (structurable)
+            foreach (int h; 0 .. N)
+                if (info[h].isLoopHeader)
+                    respectRegion(h, info[h].loopEnd);
+            foreach (ref const TryReg t; tryRegs)
+                respectRegion(t.start, t.end);
+            foreach (ref const g; bframes)
+                if (g.begin < f.begin && f.begin <= g.end && g.end < f.end)
+                {
+                    f.begin = g.begin;
+                    changed = true;
+                }
+        }
+    }
+    converged = !changed;
+    return bframes;
+}
+
+// Phase 4: verify every branch lands on a frame that encloses it — a target must
+// be a loop header still open at the source, or have a `block` frame beginning
+// at or before the source. Anything else needs the dispatch-loop fallback.
+private bool isStructurable(block*[] blocks, const BlkInfo[] info,
+    const TryReg[] tryRegs, const BFrame[] bframes)
+{
+    const int N = cast(int) blocks.length;
+
+    bool branchOK(int i, int t)
     {
-        bool branchOK(int i, int t)
-        {
-            if (t == int.max)
-                return true;
-            if (t <= i)
-                return info[t].isLoopHeader && info[t].loopEnd >= i;
-            foreach (ref const f; bframes)
-                if (f.end == t - 1)
-                    return f.begin <= i;
+        if (t == int.max)
             return true;
-        }
-
-        outer: foreach (int i; 0 .. N)
-        {
-            block* b = blocks[i];
-            if (b.bc == BC._finally)
-            {
-                const int t = blockIdx(succ(b, 1));
-                if (t != i + 1 && !branchOK(i, t))
-                {
-                    structurable = false;
-                    break outer;
-                }
-                continue;
-            }
-            const bool branches = b.bc == BC.goto_ || b.bc == BC.iftrue
-                || b.bc == BC.ifthen || b.bc == BC.jmptab || b.bc == BC.switch_;
-            if (!branches)
-                continue;
-            foreach (s; b.Bsucc)
-            {
-                const int t = blockIdx(s);
-                if (t == i + 1 && b.bc != BC.jmptab && b.bc != BC.switch_)
-                    continue;
-                if (!branchOK(i, t))
-                {
-                    structurable = false;
-                    break outer;
-                }
-            }
-        }
+        if (t <= i)
+            return info[t].isLoopHeader && info[t].loopEnd >= i;
+        foreach (ref const f; bframes)
+            if (f.end == t - 1)
+                return f.begin <= i;
+        return true;
     }
 
-    if (!structurable)
+    foreach (int i; 0 .. N)
+    {
+        block* b = blocks[i];
+        if (b.bc == BC._finally)
+        {
+            const int t = blockIdx(succ(b, 1));
+            if (t != i + 1 && !branchOK(i, t))
+                return false;
+            continue;
+        }
+        if (!branchesOut(b.bc))
+            continue;
+        foreach (s; b.Bsucc)
+        {
+            const int t = blockIdx(s);
+            if (t == i + 1 && !isTableBranch(b.bc))
+                continue;
+            if (!branchOK(i, t))
+                return false;
+        }
+    }
+    return true;
+}
+
+/// Structured control flow synthesis (block CFG => WASM)
+void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
+{
+    block*[] blocks;
+    for (block* b = startblock; b; b = b.Bnext)
+        blocks ~= b;
+    const int N = cast(int) blocks.length;
+    if (N == 0)
+        return;
+
+    foreach (b; blocks)
+        if (b.bc == BC._try)
+        {
+            blocks = layoutTryRegions(blocks);
+            break;
+        }
+
+    foreach (size_t i, b; blocks)
+        b.Bdfoidx = cast(int) i;
+
+    BlkInfo[] info = new BlkInfo[N];
+    computeLoopHeaders(blocks, info);
+
+    bool tryBroken;
+    TryReg[] tryRegs = computeTryRegions(blocks, info, tryBroken);
+
+    bool converged;
+    BFrame[] bframes = computeFrames(blocks, info, tryRegs, converged);
+
+    if (!(converged && !tryBroken && isStructurable(blocks, info, tryRegs, bframes)))
     {
         genBlocksDispatch(cg, blocks, hasReturn);
         return;
@@ -800,8 +828,7 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
             }
             continue;
         }
-        else if (b.bc == BC.goto_ || b.bc == BC._finally
-            || b.bc == BC._lpad || b.bc == BC.jcatch)
+        else if (b.bc == BC.goto_ || isLandingFlow(b.bc))
         {
             if (b.Belem)
                 cg.genElemDiscard(b.Belem);
