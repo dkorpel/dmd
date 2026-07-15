@@ -42,11 +42,21 @@ extern (C)
     void* register_default_gcs() @weak
     {
         pragma(inline, false);
-        // do not call, they register implicitly through pragma(crt_constructor)
-        // avoid being optimized away
-        auto reg1 = &_d_register_conservative_gc;
-        auto reg2 = &_d_register_manual_gc;
-        return reg1 < reg2 ? reg1 : reg2;
+        version (WebAssembly)
+        {
+            // Call, the wasm backend does not run pragma(crt_constructor) functions
+            _d_register_conservative_gc();
+            _d_register_manual_gc();
+            return null;
+        }
+        else
+        {
+            // do not call, they register implicitly through pragma(crt_constructor)
+            // avoid being optimized away
+            auto reg1 = &_d_register_conservative_gc;
+            auto reg2 = &_d_register_manual_gc;
+            return reg1 < reg2 ? reg1 : reg2;
+        }
     }
 
     void gc_init()

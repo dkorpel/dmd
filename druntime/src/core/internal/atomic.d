@@ -135,6 +135,11 @@ else // X86 and X86_64
         static assert(order != MemoryOrder.rel && order != MemoryOrder.acq_rel,
                       "invalid MemoryOrder for atomicLoad()");
 
+        version (WebAssembly)
+            return *src;
+        else
+        {
+
         // We place some storage on the stack,
         //  get a pointer to that (which is also stored on the stack)
         //  and then store the result of the load into the storage.
@@ -234,6 +239,8 @@ else // X86 and X86_64
         }
         else
             return *src;
+
+        } // end else !WebAssembly
     }
 
     void atomicStore(MemoryOrder order = MemoryOrder.seq, T)(T* dest, T value) pure nothrow @nogc @trusted
@@ -242,7 +249,12 @@ else // X86 and X86_64
         static assert(order != MemoryOrder.acq && order != MemoryOrder.acq_rel,
                       "Invalid MemoryOrder for atomicStore()");
 
-        static if (T.sizeof == size_t.sizeof * 2)
+        version (WebAssembly)
+        {
+            *dest = value;
+            return;
+        }
+        else static if (T.sizeof == size_t.sizeof * 2)
         {
             version (D_InlineAsm_X86)
             {
@@ -349,6 +361,12 @@ else // X86 and X86_64
                 }
             }, [DestReg, ValReg, ResReg]));
         }
+        else version (WebAssembly)
+        {
+            T old = *dest;
+            *dest = cast(T)(old + value);
+            return old;
+        }
         else
             static assert (false, "Unsupported architecture.");
     }
@@ -363,6 +381,14 @@ else // X86 and X86_64
     if (CanCAS!T)
     {
         static assert(order != MemoryOrder.acq, "Invalid MemoryOrder for atomicExchange()");
+
+        version (WebAssembly)
+        {
+            T old = *dest;
+            *dest = value;
+            return old;
+        }
+
         // We place some storage on the stack,
         //  this storage and cast it to appropriete type.
         // This is calling convention agnostic.
@@ -509,7 +535,12 @@ else // X86 and X86_64
         static assert (succ >= fail, "The first MemoryOrder argument for atomicCompareExchangeStrongNoResult() cannot be weaker than the second argument");
         bool success;
 
-        static if (T.sizeof == size_t.sizeof * 2)
+        version (WebAssembly)
+        {
+            if (*dest == compare) { *dest = value; success = true; }
+            return success;
+        }
+        else static if (T.sizeof == size_t.sizeof * 2)
         {
             // some values simply cannot be loa'd here, so we'll use an intermediary pointer that we can move instead
             T* valuePointer = &value;
