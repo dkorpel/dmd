@@ -190,29 +190,9 @@ version (Windows)
 
 enum STATUS_FAILED = -1;
 
-/***********************************
- * Invoke wasm-ld to link WebAssembly object files.
- *
- * wasm-ld is a real linker (not a compiler driver), so flags are passed
- * directly without any `-Xlinker` wrapping, and host system libraries
- * such as -lpthread are omitted.
- *
- * Params:
- *   verbose = print the command before executing
- *   eSink   = sink for error messages
- * Returns: 0 on success, non-zero on failure
- */
-// Fallback WASM library directories derived from argv0.
-// Only consulted when the user did not pass `-L-L<dir>` pointing at a directory
-// that contains `libdruntime-wasm.a` / `libc.a`.
-//
-// libdruntime-wasm.a is built by `make wasm -C druntime` and lands in the
-// per-target generated tree (`exe_dir/../../wasm/release/wasm32`) — same
-// pattern as native libdruntime.a at `generated/<os>/<build>/<model>/`.
-//
-// libc.a is a vendored wasi-libc binary kept at `druntime/libc.a`, reached
-// via `exe_dir/../../../../druntime`.
-private const(char)[] argv0WasmGeneratedDir() nothrow
+// Fallback WASM library directory relative to the dmd executable, used when the
+// user did not pass a `-L-L<dir>` locating libdruntime-wasm.a / libc.a.
+private const(char)[] argv0RelativeDir(const(char)[] suffix) nothrow
 {
     import dmd.root.filename : FileName;
     const(char)* argv0ptr = global.params.argv0.ptr;
@@ -220,28 +200,25 @@ private const(char)[] argv0WasmGeneratedDir() nothrow
     const argv0 = argv0ptr[0 .. strlen(argv0ptr)];
     if (!argv0.length) return null;
     const exeDir = FileName.path(argv0).idup;
-    return FileName.combine(exeDir, "../../../wasm/release/wasm32");
+    return FileName.combine(exeDir, suffix);
 }
 
-private const(char)[] argv0DruntimeDir() nothrow
+// Push a `-<prefix><arg>` flag (e.g. "-Ldir", "-lfoo") onto argv.
+private void pushFlag(ref Strings argv, string prefix, const(char)[] arg) nothrow
 {
-    import dmd.root.filename : FileName;
-    const(char)* argv0ptr = global.params.argv0.ptr;
-    if (!argv0ptr) return null;
-    const argv0 = argv0ptr[0 .. strlen(argv0ptr)];
-    if (!argv0.length) return null;
-    const exeDir = FileName.path(argv0).idup;
-    return FileName.combine(exeDir, "../../../../druntime");
+    if (!arg.length) return;
+    char* s = cast(char*) mem.xmalloc(prefix.length + arg.length + 1);
+    memcpy(s, prefix.ptr, prefix.length);
+    memcpy(s + prefix.length, arg.ptr, arg.length);
+    s[prefix.length + arg.length] = 0;
+    argv.push(s);
 }
 
 /***********************************
  * Optimize a linked WebAssembly binary in place with Binaryen's `wasm-opt`.
  *
- * Invoked after a successful `wasm-ld` link when the user passed `-O`. It is
- * best-effort: if `wasm-opt` is not installed the step is silently skipped, and
+ * Best-effort: if `wasm-opt` is not installed the step is silently skipped, and
  * if it runs but fails the already-valid linker output is kept with a warning.
- * The enabled feature set is taken from the module's `target_features` section,
- * so no explicit `--enable-*` flags are needed.
  *
  * Params:
  *   wasmfile = path to the linked `.wasm` to rewrite in place
@@ -280,9 +257,7 @@ private void runWasmOpt(const(char)[] wasmfile, bool verbose, ErrorSink eSink)
         if (childpid == 0)
         {
             execvp(argv[0], argv.tdata());
-            // exec failed (e.g. wasm-opt not installed): use the conventional
-            // 127 "command not found" status so the parent skips it silently.
-            _exit(127);
+            _exit(127); // 127 = "command not found": parent skips silently
         }
         else if (childpid == -1)
             return;
@@ -303,12 +278,25 @@ private void runWasmOpt(const(char)[] wasmfile, bool verbose, ErrorSink eSink)
     }
 }
 
+/***********************************
+ * Link WebAssembly object files with wasm-ld.
+ *
+ * wasm-ld is a real linker (not a compiler driver), so link switches are passed
+ * through directly (no `-Xlinker` wrapping) and host-native switches (-rpath,
+ * -soname, ...) and shared libraries (.so/.dylib/.dll) are dropped. When `-O`
+ * is set the output is post-processed by wasm-opt.
+ *
+ * Params:
+ *   verbose = print the command before executing
+ *   params  = compiler parameters (objfiles, exefile, link switches, ...)
+ *   eSink   = sink for error messages
+ * Returns: 0 on success, non-zero on failure
+ */
 private int runWasmLINK(bool verbose, ref Param params, ErrorSink eSink)
 {
-    // `-defaultlib=` (explicitly empty) opts out of libdruntime-wasm.a and the
-    // druntime `_start`: the program brings its own runtime (custom object.d).
-    // Runtime hooks it references but does not define (e.g. _d_throwc) become
-    // host imports via --allow-undefined, like betterC.
+    // Explicitly empty `-defaultlib=` opts out of libdruntime-wasm.a and its
+    // `_start`: the program brings its own runtime. Undefined runtime hooks
+    // become host imports via --allow-undefined, like betterC.
     const bool customRuntime = !params.betterC && finalDefaultlibname() is null;
     const bool hasDruntime = !params.betterC && !customRuntime;
 
@@ -334,54 +322,23 @@ private int runWasmLINK(bool verbose, ref Param params, ErrorSink eSink)
         return STATUS_FAILED;
 
     if (hasDruntime)
-    {
-        // Full D runtime: _start (WASI entry) is provided by libdruntime-wasm.a.
-        // wasmtime calls _start; proc_exit called from _start propagates exit codes.
-        argv.push("--export=_start");
-        argv.push("--allow-undefined"); // allow unresolved WASI imports
-        argv.push("--gc-sections");
-    }
-    else
-    {
-        // betterC: link the standalone crt1_betterc.wasm shim, which provides a
-        // WASI `_start` that calls the user's `main` (wasmtime invokes `_start`,
-        // not `main`).  With `_start` present wasm-ld uses it as the default
-        // entry, so `--no-entry` is omitted.
-        argv.push("--allow-undefined");
-        argv.push("--gc-sections");
-    }
+        argv.push("--export=_start"); // WASI entry from libdruntime-wasm.a
+    argv.push("--allow-undefined");   // unresolved WASI imports
+    argv.push("--gc-sections");
 
-    // Push our vendored -L paths FIRST so `-l:libc.a` / `-l:libdruntime-wasm.a`
-    // resolve against the WASM-targeted archives, not host /usr/lib (which a
-    // user's dmd.conf may put on the search path via -L-L/usr/lib).
-    // Always needed: even betterC programs routinely call into libc
-    // (printf/puts/memcmp), and an archive only pulls referenced members.
-    {
-        void pushLPathEarly(const(char)[] dir)
-        {
-            if (!dir.length) return;
-            char* lflag = cast(char*) mem.xmalloc(2 + dir.length + 1);
-            lflag[0] = '-'; lflag[1] = 'L';
-            memcpy(lflag + 2, dir.ptr, dir.length);
-            lflag[2 + dir.length] = 0;
-            argv.push(lflag);
-        }
-        pushLPathEarly(argv0WasmGeneratedDir());
-        pushLPathEarly(argv0DruntimeDir());
-    }
+    // Vendored -L paths go first so `-l:libc.a` / `-l:libdruntime-wasm.a`
+    // resolve against the WASM archives, not host /usr/lib that a user's
+    // dmd.conf may have on the search path.
+    pushFlag(argv, "-L", argv0RelativeDir("../../../wasm/release/wasm32"));
+    pushFlag(argv, "-L", argv0RelativeDir("../../../../druntime"));
 
-    // Default shadow stack of 1 MiB (wasm-ld's default is 64 KiB; wasi-sdk and
-    // Rust default to 1 MiB).
+    // Default shadow stack of 1 MiB (wasm-ld defaults to 64 KiB), unless the
+    // user passed their own -L-z -Lstack-size=N.
     {
-        // Skipped when the user passes their own -L-z -Lstack-size=N.
         bool userStackSize = false;
         foreach (pi, p; params.linkswitches)
-        {
-            if (!p || params.linkswitchIsForCC[pi])
-                continue;
-            if (startsWith(p[0 .. strlen(p)], "stack-size="))
+            if (p && !params.linkswitchIsForCC[pi] && startsWith(p[0 .. strlen(p)], "stack-size="))
                 userStackSize = true;
-        }
         if (!userStackSize)
         {
             argv.push("-z");
@@ -389,14 +346,12 @@ private int runWasmLINK(bool verbose, ref Param params, ErrorSink eSink)
         }
     }
 
-    // Link switches: pass directly to wasm-ld, filtering out switches that
-    // are host-native only (e.g. -rpath, which wasm-ld rejects or ignores).
+    // Link switches passed through, dropping host-native ones wasm-ld rejects.
     foreach (pi, p; params.linkswitches)
     {
         if (!p || !p[0] || params.linkswitchIsForCC[pi])
             continue;
         const sw = p[0 .. strlen(p)];
-        // Skip rpath / shared-library flags — meaningless / harmful for WASM.
         if (startsWith(sw, "-rpath") || startsWith(sw, "--rpath") ||
             startsWith(sw, "-Wl,-rpath") || startsWith(sw, "-soname") ||
             startsWith(sw, "-dynamic"))
@@ -404,50 +359,25 @@ private int runWasmLINK(bool verbose, ref Param params, ErrorSink eSink)
         argv.push(p);
     }
 
-    // User-specified .a archives (from pragma(lib) or -L flags)
+    // User libraries: .a archives pass through; shared libraries don't exist
+    // for WASM so .so/.dylib/.dll are dropped, everything else becomes -l<name>.
     foreach (p; params.libfiles)
         if (FileName.equalsExt(p, "a"))
             argv.push(p);
-
-    // User-specified named libraries: only pass .a archives for WASM
-    // (shared libraries don't exist in WASM; skip .so / .dylib / .dll).
     foreach (p; params.libfiles)
     {
-        if (FileName.equalsExt(p, "a"))
-            continue;  // already handled above
-        // Drop platform shared libraries silently.
-        if (FileName.equalsExt(p, "so") || FileName.equalsExt(p, "dylib") ||
-            FileName.equalsExt(p, "dll"))
+        if (FileName.equalsExt(p, "a") || FileName.equalsExt(p, "so") ||
+            FileName.equalsExt(p, "dylib") || FileName.equalsExt(p, "dll"))
             continue;
-        const plen = strlen(p);
-        char* s = cast(char*)mem.xmalloc(plen + 3);
-        s[0] = '-'; s[1] = 'l';
-        memcpy(s + 2, p, plen + 1);
-        argv.push(s);
+        pushFlag(argv, "-l", p[0 .. strlen(p)]);
     }
 
-    // Auto-link druntime and libc when not betterC.
-    // A NON-empty -defaultlib= is still replaced with libdruntime-wasm.a:
-    // DFLAGS from the host dmd.conf may set -defaultlib=libphobos2.so (native
-    // default) which is irrelevant for WASM and would cause wasm-ld to fail.
-    // Only the explicitly empty form opts out (customRuntime above).
-    //
-    // Resolution: rely on wasm-ld's own search path. User-supplied
-    // `-L-L<dir>` flags were already forwarded above, so they take
-    // precedence. Append an argv0-relative fallback so out-of-the-box
-    // builds keep working when no explicit path is configured.
-    // -L paths for these archives were pushed earlier so they outrank any
-    // host paths a user's dmd.conf may have appended via linkswitches.
-    if (hasDruntime)
-        argv.push("-l:libdruntime-wasm.a");
-    else
-        // WASI _start shim for a user-supplied `main`: both -betterC and a
-        // custom-runtime (`-defaultlib=`) program provide their own `main`
-        // but no `_start`, so link the standalone shim to bridge WASI's entry.
-        argv.push("-l:crt1_betterc.wasm");
-    // libc.a is linked in both modes: betterC programs commonly call printf /
-    // puts / memcmp, and an archive only contributes the members referenced.
-    argv.push("-l:libc.a"); // WASI C runtime (printf, memcpy, etc.)
+    // Auto-link druntime (or the betterC WASI `_start` shim) plus libc. A
+    // non-empty -defaultlib= (e.g. native libphobos2.so from dmd.conf) is still
+    // replaced with libdruntime-wasm.a; only the empty form opts out. libc.a is
+    // linked in both modes since betterC routinely calls printf/puts/memcmp.
+    argv.push(hasDruntime ? "-l:libdruntime-wasm.a" : "-l:crt1_betterc.wasm");
+    argv.push("-l:libc.a");
 
     foreach (p; params.dllfiles)
         argv.push(p);
