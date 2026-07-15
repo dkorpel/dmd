@@ -3234,6 +3234,11 @@ Type typeSemantic(Type type, Loc loc, Scope* sc)
 
     Type visitComplex(TypeBasic t)
     {
+        if (target.isWasm)
+        {
+            .error(loc, "complex type `%s` is not supported for the WebAssembly target", t.toErrMsg());
+            return error();
+        }
         return visitType(t);
     }
 
