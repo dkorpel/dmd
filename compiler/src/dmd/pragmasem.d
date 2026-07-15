@@ -731,3 +731,4 @@ private bool pragmaMangleSemantic(Loc loc, Scope* sc, Expressions* args, Dsymbol
     }
     return true;
 }
+
