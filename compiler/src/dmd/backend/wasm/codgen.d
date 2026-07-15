@@ -813,6 +813,20 @@ private bool elemMakesCall(elem* e)
     const op = e.Eoper;
     if (op == OPcall || op == OPucall)
         return true;
+    // These opers lower to a synthetic libm call (see genElem/emitBinop): the
+    // callee reads __stack_pointer to build its own frame, so the enclosing
+    // function must publish its decremented stack pointer like any other caller.
+    switch (op)
+    {
+    case OPsin, OPcos, OPrint, OPrndtol, OPscale:
+        return true;
+    case OPmod, OPmodass:
+        if (tyfloating(tybasic(e.Ety)) || (e.E1 && tyfloating(tybasic(e.E1.Ety))))
+            return true;
+        break;
+    default:
+        break;
+    }
     if (OTleaf(op))
         return false;
     if (OTunary(op))
