@@ -443,7 +443,7 @@ WASM_DMD    ?= $(DMD)
 WASM_ROOT   := $(ROOT_OF_THEM_ALL)/wasm/release/wasm32
 WASM_LIB    := $(WASM_ROOT)/libdruntime-wasm.a
 WASM_RT_DIR := src/rt/wasm
-WASM_MODULES := start sync errors
+WASM_MODULES := start errors
 WASM_OBJS   := $(addprefix $(WASM_ROOT)/rt_,$(addsuffix .o,$(WASM_MODULES)))
 WASM_FLAGS  := -c -mwasm32 -os=wasm -betterC -conf= -Isrc -Iimport -w -de
 
@@ -452,16 +452,14 @@ WASM_FLAGS  := -c -mwasm32 -os=wasm -betterC -conf= -Isrc -Iimport -w -de
 # (core.sys.*, rt.deh_*, rt.sections_* ...) self-gate to empty on wasm via
 # their existing `version` guards, and the handful of modules that are
 # genuinely incompatible are gated out with `version (WebAssembly)` in their
-# own sources (rt.alloca, rt.deh, rt.llmath).  Only two modules can't be
-# version-guarded cleanly and are filtered out here:
+# own sources (rt.alloca, rt.deh, rt.llmath).  Only one module can't be
+# version-guarded cleanly and is filtered out here:
 #   core/stdc/complex.d          - native complex types are unsupported by the
 #                                  wasm backend (codegen ICE)
-#   rt/monitor_.d, rt/critical_.d - replaced by the no-op stubs in rt/wasm/sync.d
+# rt.monitor_/rt.critical_ compile as-is via their existing WASI no-op arms.
 # Three wasm-only modules are not part of $(SRCS) and are appended explicitly.
 WASM_DRT_EXCLUDE := \
-	src/core/stdc/complex.d \
-	src/rt/monitor_.d \
-	src/rt/critical_.d
+	src/core/stdc/complex.d
 WASM_DRT_SRCS := $(filter-out $(WASM_DRT_EXCLUDE),$(SRCS)) \
 	src/rt/sections_wasm.d \
 	src/rt/wasm/extra.d \
