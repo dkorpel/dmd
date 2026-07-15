@@ -120,8 +120,11 @@ bool ISX64REF(Declaration var)
             auto ts = var.type.isTypeStruct();
             return !(var.storage_class & STC.lazy_) && ts && ts.sym.hasMoveCtor && ts.sym.hasCopyCtor;
         }
-        else if (target.os & Target.OS.Posix)
+        else if ((target.os & Target.OS.Posix) || target.isWasm)
         {
+            // WASM shares the Posix rule: non-POD structs pass by invisible
+            // reference so a destructive move ctor can write back through the
+            // parameter. passTypeByRef is AArch64-only, hence a no-op on WASM.
             return !(var.storage_class & STC.lazy_) && var.type.isTypeStruct() && !var.type.isTypeStruct().sym.isPOD() ||
                 passTypeByRef(target, var.type);
         }
@@ -145,7 +148,7 @@ bool ISX64REF(ref IRState irs, Expression exp)
         auto ts = exp.type.isTypeStruct();
         return ts && ts.sym.hasMoveCtor && ts.sym.hasCopyCtor;
     }
-    else if (irs.target.os & Target.OS.Posix)
+    else if ((irs.target.os & Target.OS.Posix) || irs.target.isWasm)
     {
         return exp.type.isTypeStruct() && !exp.type.isTypeStruct().sym.isPOD() || passTypeByRef(*irs.target, exp.type);
     }
@@ -1449,7 +1452,15 @@ elem* toElem(Expression e, ref IRState irs)
                 // Call _d_newitemT()
                 ex = toElem(ne.lowering, irs);
             else
+            {
+                import dmd.target : target;
+                if (target.isWasm)
+                {
+                    irs.eSink.error(ne.loc, "`new` is not supported for the WebAssembly target (no `_d_newitemT` hook in druntime)");
+                    return el_long(TYnptr, 0);
+                }
                 assert(0, "This case should have been rewritten to `_d_newitemT` in the semantic phase");
+            }
 
             ectype = null;
 
@@ -1527,7 +1538,15 @@ elem* toElem(Expression e, ref IRState irs)
                 // Call _d_newitemT()
                 e = toElem(ne.lowering, irs);
             else
+            {
+                import dmd.target : target;
+                if (target.isWasm)
+                {
+                    irs.eSink.error(ne.loc, "`new` is not supported for the WebAssembly target (no `_d_newitemT` hook in druntime)");
+                    return el_long(TYnptr, 0);
+                }
                 assert(0, "This case should have been rewritten to `_d_newitemT` in the semantic phase");
+            }
 
             if (ne.arguments && ne.arguments.length == 1)
             {
@@ -4294,7 +4313,19 @@ elem* toElem(Expression e, ref IRState irs)
  */
 elem* toElemRVO(Expression e, elem* ehidden, ref IRState irs)
 {
-    assert(e.type.toBasetype().ty == Tstruct || e.type.toBasetype().ty == Tsarray);
+    // WASM: slices, delegates and (under betterC class restrictions) class
+    // references can also reach here, because they're returned via a hidden
+    // pointer (see backend/wasm/obj.d returnByPtr). For these non-aggregate
+    // types the destination must still be threaded through as ehidden so the
+    // callee writes directly into it (NRVO); otherwise the call allocates a
+    // discarded temp and the result is never copied to the destination.
+    import dmd.target : target;
+    const wasmNonAgg = target.isWasm &&
+        e.type.toBasetype().ty != Tstruct && e.type.toBasetype().ty != Tsarray;
+    if (wasmNonAgg && !ehidden)
+        return toElem(e, irs);
+    assert(wasmNonAgg ||
+        e.type.toBasetype().ty == Tstruct || e.type.toBasetype().ty == Tsarray);
 
     elem* doCommaRVO(CommaExp ce)
     {
@@ -4367,7 +4398,20 @@ elem* toElemRVO(Expression e, elem* ehidden, ref IRState irs)
         case EXP.question:      return doCondRVO(e.isCondExp());
         case EXP.call:          return doCallRVO(e.isCallExp());
         case EXP.structLiteral: return doStructLiteralRVO(e.isStructLiteralExp());
-        default:                assert(0);
+        default:
+            // WASM: a slice/delegate/class returned by hidden pointer whose RHS
+            // is not a call/comma/cond — store the value into *ehidden directly.
+            assert(wasmNonAgg);
+            elem* ev = toElem(e, irs);
+            elem* ed = el_copytree(ehidden);
+            if (tybasic(ed.Ety) == TYnptr)
+            {
+                ed = el_una(OPind, ev.Ety, ed);
+                ed.ET = ev.ET;
+            }
+            elem* ea = el_bin(OPeq, ev.Ety, ed, ev);
+            elem_setLoc(ea, e.loc);
+            return ea;
     }
 }
 
@@ -4396,7 +4440,12 @@ elem* Dsymbol_toElem(Dsymbol s, ref IRState irs)
         else
         {
             Symbol* sp = toSymbol(s);
-            symbol_add(sp);
+            // The wasm EH_NONE lowering inlines finally bodies at each early
+            // exit (see s2ir's wasmEmitFinallies), so a declaration inside a
+            // finally can be lowered more than once; the copies share the
+            // frame slot, which each initializes before use.
+            if (!target.isWasm || sp.Ssymnum == SYMIDX.max)
+                symbol_add(sp);
             //printf("\tadding symbol '%s'\n", sp.Sident);
             if (vd._init)
             {
@@ -4796,8 +4845,8 @@ elem* toElemCast(CastExp ce, elem* e, bool isLvalue, ref IRState irs)
         return Lret(ce, e);
     }
 
-    // OSX AArch64 long doubles are 64 bits
-    bool RealIsDouble = target.os == Target.os.OSX && target.isAArch64;
+    // OSX AArch64 and wasm32 long doubles are 64 bits
+    bool RealIsDouble = target.realsize == 8;
 
     /* Reduce combinatorial explosion by rewriting the 'to' and 'from' types to a
      * generic equivalent (as far as casting goes)
@@ -5884,8 +5933,12 @@ elem* callfunc(Loc loc,
                  */
                 e.E1 = el_una(OPind, e.E2.Ety | mTYvolatile, e.E1);
             }
-            if (op == OPscale)
+            if (op == OPscale && !target.isWasm)
             {
+                // x87 fscale needs both operands in FP registers, so widen the
+                // integer exponent to real. The wasm backend instead calls C
+                // ldexp(real n, int exp) and identifies the operands by type, so
+                // it must keep the exponent integral — skip this rewrite there.
                 elem* et = e.E1;
                 e.E1 = el_una(OPs32_d, TYdouble, e.E2);
                 e.E1 = el_una(OPd_ld, TYreal, e.E1);
@@ -5928,6 +5981,12 @@ elem* callfunc(Loc loc,
             e = el_una(op,mTYvolatile | tyret,ep);
         else if (op == OPva_start)
             e = constructVa_start(ep);
+        else if (op == OPmemsize)
+        {
+            assert(!ep);
+            e = el_long(tyret, 0);
+            e.Eoper = OPmemsize;
+        }
         else if (op == OPtoPrec)
         {
             const bool RealIsDouble = _tysize[TYreal] == 8;
@@ -5978,6 +6037,11 @@ elem* callfunc(Loc loc,
     }
     else
     {
+        // For an indirect call there's no callee Symbol to carry the
+        // function type into the backend, so stash is here
+        // for function pointers, delegates, and virtual/interface dispatch
+        if (ec && ec.Eoper != OPvar)
+            ec.ET = Type_toCtype(tf);
         // `OPcallns` used to be passed here for certain pure functions,
         // but optimizations based on pure have to be retought, see:
         // https://issues.dlang.org/show_bug.cgi?id=22277
@@ -5996,6 +6060,14 @@ elem* callfunc(Loc loc,
                 assert(length < ubyte.max); // 254 should be enough for anybody
                 e.numParams = cast(ubyte)(tf.parameterList.length + 1); // +1 means variadic
             }
+            // The wasm backend can't see whether an indirect variadic call
+            // carries a hidden context-pointer argument (delegate context /
+            // static link); tell it via numParams = 1 + that count.
+            // ---
+            // void foo2(void delegate(int, ...) dg) { dg(20, 3.14); }
+            // ---
+            if (target.isWasm)
+                e.numParams = cast(ubyte)(1 + ((ethis2 !is null || ethis !is null) ? 1 : 0));
         }
     }
 
@@ -6009,7 +6081,7 @@ elem* callfunc(Loc loc,
     }
     else if (retmethod == RET.stack)
     {
-        if (irs.target.os == Target.OS.OSX && eresult)
+        if ((irs.target.os == Target.OS.OSX || irs.target.isWasm) && eresult)
         {
             /* ABI quirk: hidden pointer is not returned in registers
              */
@@ -6402,10 +6474,11 @@ Lagain:
     {
         case Tfloat80:
         case Timaginary80:
-            r = RTLSYM.MEMSET80;
+            // OSX AArch64 and wasm32 long doubles are 64 bits
+            r = target.realsize == 8 ? RTLSYM.MEMSETDOUBLE : RTLSYM.MEMSET80;
             break;
         case Tcomplex80:
-            r = RTLSYM.MEMSET160;
+            r = target.realsize == 8 ? RTLSYM.MEMSET128 : RTLSYM.MEMSET160;
             break;
         case Tcomplex64:
             r = RTLSYM.MEMSET128;
@@ -6425,7 +6498,10 @@ Lagain:
 
         case Tstruct:
         {
-            if (target.isX86)
+            // The argtypes register classification can turn a plain struct
+            // into a complex type (e.g. 4 ints -> Tcomplex64), which the wasm
+            // backend cannot pass by value; use the size-based helpers.
+            if (target.isX86 || target.isWasm)
                 goto default;
 
             TypeStruct tc = cast(TypeStruct)tb2;
@@ -6449,7 +6525,12 @@ Lagain:
                 case 2:      r = RTLSYM.MEMSET16;   break;
                 case 4:      r = RTLSYM.MEMSET32;   break;
                 case 8:      r = RTLSYM.MEMSET64;   break;
-                case 16:     r = (target.isX86_64 || target.isAArch64) ? RTLSYM.MEMSET128ii : RTLSYM.MEMSET128; break;
+                case 16:
+                    if (target.isWasm)
+                        r = RTLSYM.MEMSETN;
+                    else
+                        r = (target.isX86_64 || target.isAArch64) ? RTLSYM.MEMSET128ii : RTLSYM.MEMSET128;
+                    break;
                 default:     r = RTLSYM.MEMSETN;    break;
             }
 
@@ -7472,6 +7553,7 @@ elem* callCAssert(ref IRState irs, Loc loc, Expression exp, Expression emsg, con
     {
         case Musl:
         case Glibc:
+        case WASI: // wasi-libc is musl-based
             // __assert_fail(exp, file, line, func);
             assertSym = getRtlsym(RTLSYM.C__ASSERT_FAIL);
             elem* efunc = getFuncName();
@@ -7551,7 +7633,7 @@ elem* constructVa_start(elem* e)
 
     e.Eoper = OPva_start;
     e.Ety = TYvoid;
-    if (target.isX86_64 || target.isAArch64)
+    if (target.isX86_64 || target.isAArch64 || target.isWasm)
     {
         // (OPparam &va &arg)
         // call as (OPva_start &va)

@@ -214,6 +214,8 @@ Symbol* toSymbol(Dsymbol s)
                 fprintf(stderr, "VarDeclaration.toSymbol(%s) needThis kind: %s\n", vd.toPrettyChars(), vd.kind());
             assert(!vd.needThis());
 
+            checkWasmComplex(vd.loc, vd.type);
+
             import dmd.common.outbuffer : OutBuffer;
             OutBuffer buf;
             bool isNRVO = false;
@@ -255,6 +257,14 @@ Symbol* toSymbol(Dsymbol s)
             {
                 if (target.os == Target.OS.Windows && target.isX86_64 && vd.isParameter())
                     t = type_fake(TYnptr);
+                else if (target.isWasm)
+                {
+                    // `lazy T` parameters mangle as `T delegate()`; WASM needs
+                    // the precise delegate type for the emitted function signature.
+                    type* tret = Type_toCtype(vd.type);
+                    type* tf = type_function(TYnfunc, null, false, tret);
+                    t = type_delegate(tf);
+                }
                 else
                     t = type_fake(TYdelegate);          // Tdelegate as C type
                 t.Tcount++;
@@ -426,6 +436,8 @@ Symbol* toSymbol(Dsymbol s)
                 return;
             }
 
+            checkWasmComplex(fd.loc, fd.type);
+
             const(char)* id = mangleExact(fd);
 
             //printf("FuncDeclaration.toSymbol(%s %s)\n", fd.kind(), fd.toChars());
@@ -469,6 +481,16 @@ Symbol* toSymbol(Dsymbol s)
 
             s.prettyIdent = fd.toPrettyChars(true);
 
+            if (target.isWasm)
+            {
+                import dmd.backend.wasm.obj : WasmObj_registerImportModule,
+                    WasmObj_registerImportName, WasmObj_registerExportName;
+                const mangledName = id[0 .. strlen(id)];
+                registerWasmUdaName(fd, mangledName, Id.udaWasmImportModule, &WasmObj_registerImportModule);
+                registerWasmUdaName(fd, mangledName, Id.udaWasmImportName, &WasmObj_registerImportName);
+                registerWasmUdaName(fd, mangledName, Id.udaWasmExportName, &WasmObj_registerExportName);
+            }
+
             /* Make C static functions SCstatic
              */
             s.Sclass = (fd.storage_class & STC.static_ && fd.isCsymbol())
@@ -479,6 +501,19 @@ Symbol* toSymbol(Dsymbol s)
             func_t* f = s.Sfunc;
             if (fd.isMember2() && fd.isStatic())
                 f.Fflags |= Fstatic;
+
+            // The WASM backend derives a function's exact type signature (and
+            // thus its implicit leading 'this'/static-link parameter) from these
+            // flags. toObjFile sets them only when a body is emitted, so external
+            // member/nested declarations would otherwise get a wrong import type.
+            // Set them here so imports match how callers push arguments.
+            if (target.isWasm)
+            {
+                if (fd.isNested())
+                    f.Fflags3 |= Fnested;
+                else if (fd.needThis())
+                    f.Fflags3 |= Fmember;
+            }
 
             if (fd.isSafe())
                 f.Fflags |= F3safe;
@@ -940,4 +975,41 @@ Classsym* fake_classsym(Identifier id)
     assert(t.Tmangle == 0);
     t.Tmangle = Mangle.d;
     return t.Ttag;
+}
+
+/**
+ * If `fd` carries the `core.attribute` UDA named `udaId` (one of
+ * `@wasmImportModule`, `@wasmImportName` or `@wasmExportName`), pass its string
+ * argument to `register` alongside `fd`'s mangled name.
+ * Called only when targeting WebAssembly.
+ */
+private void registerWasmUdaName(FuncDeclaration fd, const(char)[] mangledName,
+    Identifier udaId, void function(const(char)[], const(char)[]) nothrow register)
+{
+    import dmd.attrib : foreachUdaNoSemantic, isCoreUda;
+
+    // Several UDAs on one declaration (or one alias expanding to an AliasSeq of
+    // them) arrive as a nested tuple rather than as separate elements.
+    int visit(Expression e)
+    {
+        if (auto te = e.isTupleExp())
+        {
+            foreach (el; *te.exps)
+                if (auto result = visit(el))
+                    return result;
+            return 0;
+        }
+        auto lit = e.isStructLiteralExp();
+        if (!lit || !lit.sd)
+            return 0;
+        if (!isCoreUda(lit.sd, udaId))
+            return 0;
+        assert(lit.elements.length == 1);
+        auto se = (*lit.elements)[0].isStringExp();
+        assert(se);
+        register(mangledName, se.peekString());
+        return 1;
+    }
+
+    foreachUdaNoSemantic(fd, &visit);
 }
