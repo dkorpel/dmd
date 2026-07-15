@@ -195,22 +195,41 @@ private uint pushDataSeg(uint size, uint align_, Symbol* sym, const(char)[] name
     return base;
 }
 
+/// Lazy lookup caches over the append-only `wasmFuncBodies` and `wmod.funcs`
+/// arrays and the data symbol table. A single Symbol* legitimately appears in
+/// several maps at once, yielding a different number in each, because they index
+/// different tables: a defined function has a slot in the body list, in the
+/// module function index space, and under its name.
 struct WasmSymIndex
 {
+    // Defined functions (a body is emitted in this module), keyed to their
+    // position in `wasmFuncBodies`:
+    //   int add(int a, int b) { return a + b; }
     uint[Symbol*] bodyBySym;
     uint[string] bodyByName;
     size_t bodyIndexed;
 
+    // Imported functions: declared but defined elsewhere, occupying
+    // `wmod.funcs[0 .. numImports]`:
+    //   extern(C) int puts(const(char)*);   // body resolved by the linker/host
     uint[Symbol*] importBySym;
     size_t importIndexed;
 
+    // Canonical function index per name: collapses same-named definitions (e.g.
+    // comdat/weak template instances emitted in several modules) to one target so
+    // a `call` doesn't dispatch to a shadowed duplicate:
+    //   int foo(T)(T x) { return cast(int) x; }   // foo!int instantiated twice
     uint[string] canonByName;
     size_t canonLen = size_t.max;
 
+    // Any function in the module function index space (imports + defined),
+    // used to turn a call-target Symbol or name into its `call` immediate.
     uint[Symbol*] funcBySym;
     uint[string] funcByName;
     size_t funcLen = size_t.max;
 
+    // Data symbols: globals, string literals, TypeInfo, ModuleInfo, ...:
+    //   __gshared int counter = 5;
     uint[Symbol*] dataBySym;
     uint[string] dataByName;
 }
@@ -347,7 +366,7 @@ bool returnByPtr(type* t)
 /// Build a WasmFuncType from a backend function type.
 /// Aggregates are passed/returned by pointer; aggregate return adds a hidden i32 first.
 /// Slices and delegates are split into 2 params.
-/// `sfunc` may be null for indirect calls — Fmember/Fnested fixups are skipped.
+/// `sfunc` may be null for indirect calls
 /// `hiddenLeadingPtrs` is the number of hidden i32 pointers (delegate context,
 /// multi-context array, ...) that the caller prepends to the argument list but
 /// that don't appear in `t`'s Tparamtypes. For indirect calls (sfunc == null)
@@ -360,9 +379,7 @@ public WasmFuncType buildFuncType(type* t, Symbol* sfunc, uint hiddenLeadingPtrs
     if (sfunc)
     {
         if (sfunc.identifier == "_Dmain")
-        {
             return WasmFuncType([WASM_I32, WASM_PTR], [WASM_I32]);
-        }
         if (sfunc.identifier == "__main_argc_argv")
             return WasmFuncType([WASM_I32, WASM_I32], [WASM_I32]);
         if (sfunc.identifier == "__main_void")
@@ -1676,11 +1693,8 @@ void WasmObj_func_start(Symbol* sfunc)
  * Emit an adjustor thunk as a real WASM function.
  *
  * An interface method's vtable slot holds a thunk that subtracts the
- * interface offset from the incoming `this` pointer before forwarding to the
- * concrete method.  The x86 path (cod3_thunk in dout.d) emits machine code
- * directly; on wasm we synthesise a function body that forwards every
- * parameter unchanged except `this`, which is adjusted by `d`, then calls
- * sfunc and returns its result.
+ * interface offset `d` from the incoming `this` pointer before forwarding to the
+ * concrete method.
  *
  * Only the direct-call form (i == -1) produced by toThunkSymbol is handled;
  * the virtual-dispatch form (i != -1) is x86-specific and never reached here.

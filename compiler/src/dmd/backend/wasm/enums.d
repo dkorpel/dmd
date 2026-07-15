@@ -289,7 +289,7 @@ enum WASM_SIMD : uint
 }
 
 /// Sub-opcodes following the `0xFC` prefix.
-/// Should be uLEB128-encoded unlike regular opcodes.
+/// Should be uLEB128-encoded unlike regular opcodes which are 1 byte
 enum WASM_FC : uint
 {
     I32_TRUNC_SAT_F32_S = 0,
