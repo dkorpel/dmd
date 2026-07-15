@@ -28,33 +28,6 @@ extern (C) long clock() @nogc nothrow
     return cast(long) t;
 }
 
-extern (C) string[] rt_args() @nogc nothrow @system { return null; }
-
-// Registers the static data segment with the GC. rt.memory.initStaticDataGC is
-// not nothrow, but the wasm _start shim (rt.wasm.start) is -betterC and cannot
-// catch, so wrap it here where try/catch is available.
-extern (C) void _d_wasm_initStaticDataGC() nothrow
-{
-    import rt.memory : initStaticDataGC;
-    try
-        initStaticDataGC();
-    catch (Throwable)
-        assert(0, "initStaticDataGC failed");
-}
-
-private extern(C) extern __gshared void* __start_minfo;
-private extern(C) extern __gshared void* __stop_minfo;
-
-extern (C) void rt_moduleUnitTests() nothrow
-{
-    auto b = cast(immutable(ModuleInfo)**) &__start_minfo;
-    auto e = cast(immutable(ModuleInfo)**) &__stop_minfo;
-    foreach (m; b[0 .. e - b])
-        if (m !is null)
-            if (auto f = m.unitTest)
-                (cast(void function() nothrow) f)();
-}
-
 // wasi-libc emits these for 128 bit multiply (strtod/scanf long double paths)
 extern (C) void __multi3(ulong* res, ulong alo, ulong ahi, ulong blo, ulong bhi)
 {

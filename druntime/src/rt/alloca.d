@@ -203,6 +203,12 @@ extern (C) void* __alloca(int nbytes)
         import core.stdc.stdlib : malloc;
 	return malloc(nbytes);   // TODO AArch64
   }
+  else version (WebAssembly)
+  {
+        // The wasm backend lowers `alloca()` calls directly to a shadow-stack
+        // bump, so this magic helper is never referenced.
+        assert(0, "__alloca is not used on WebAssembly");
+  }
   else
         static assert(0);
 }

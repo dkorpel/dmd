@@ -58,5 +58,9 @@ else version (Win64)
     public import rt.deh_win64_posix;
 else version (Posix)
     public import rt.deh_win64_posix;
+else version (WebAssembly)
+{
+    // Exception handling on wasm is provided by rt.wasm.eh (exnref proposal).
+}
 else
     static assert (0, "Unsupported architecture");

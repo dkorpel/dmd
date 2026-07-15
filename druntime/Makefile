@@ -447,87 +447,25 @@ WASM_MODULES := start sync errors
 WASM_OBJS   := $(addprefix $(WASM_ROOT)/rt_,$(addsuffix .o,$(WASM_MODULES)))
 WASM_FLAGS  := -c -mwasm32 -os=wasm -betterC -conf= -Isrc -Iimport -w -de
 
-# Real (cross-platform) druntime modules that supply non-template runtime
-# functions referenced by user code: object.d class methods (Exception.__ctor,
-# TypeInfo_*), array growth/append helpers, the new AA, dynamic-cast and
-# dassert support, etc.  Unlike the rt/wasm stubs above these need full D
-# (TypeInfo, `throw`), so they are built WITHOUT -betterC.  Modules requiring
-# unimplemented wasm bits (rt/sections, core.memory._initialize, threads) are
-# deliberately excluded for now.
-WASM_DRT_SRCS := \
-	src/object.d \
-	src/core/memory.d \
-	src/rt/invariant_.d \
-	src/rt/lifetime.d \
-	src/rt/memset.d \
-	src/rt/aApply.d \
-	src/rt/aApplyR.d \
-	src/rt/arraycat.d \
-	src/core/internal/array/utils.d \
-	src/core/internal/array/capacity.d \
-	src/core/internal/array/appending.d \
-	src/core/internal/array/concatenation.d \
-	src/core/internal/array/construction.d \
-	src/core/internal/array/arrayassign.d \
-	src/core/internal/util/array.d \
-	src/core/internal/hash.d \
-	src/core/internal/newaa.d \
-	src/core/internal/cast_.d \
-	src/core/internal/dassert.d \
-	src/core/internal/convert.d \
-	src/core/internal/utf.d \
-	src/core/interpolation.d \
-	src/core/demangle.d \
-	src/core/stdc/stdarg.d \
-	src/core/stdc/stdlib.d \
-	src/core/stdc/math.d \
-	src/core/exception.d \
-	src/core/internal/container/common.d \
-	src/core/internal/profile_gc.d \
-	src/rt/util/typeinfo.d \
-	src/rt/trace.d \
-	src/rt/profilegc.d \
-	src/rt/tracegc.d \
-	src/core/bitop.d \
-	src/core/int128.d \
-	src/core/cpuid.d \
-	src/core/internal/spinlock.d \
-	src/core/internal/abort.d \
-	src/rt/minfo.d \
+# The wasm druntime is built from the same shared source list as the native
+# build ($(SRCS)) rather than a hand-curated subset: OS-specific modules
+# (core.sys.*, rt.deh_*, rt.sections_* ...) self-gate to empty on wasm via
+# their existing `version` guards, and the handful of modules that are
+# genuinely incompatible are gated out with `version (WebAssembly)` in their
+# own sources (rt.alloca, rt.deh, rt.llmath).  Only two modules can't be
+# version-guarded cleanly and are filtered out here:
+#   core/stdc/complex.d          - native complex types are unsupported by the
+#                                  wasm backend (codegen ICE)
+#   rt/monitor_.d, rt/critical_.d - replaced by the no-op stubs in rt/wasm/sync.d
+# Three wasm-only modules are not part of $(SRCS) and are appended explicitly.
+WASM_DRT_EXCLUDE := \
+	src/core/stdc/complex.d \
+	src/rt/monitor_.d \
+	src/rt/critical_.d
+WASM_DRT_SRCS := $(filter-out $(WASM_DRT_EXCLUDE),$(SRCS)) \
 	src/rt/sections_wasm.d \
-	src/rt/config.d \
-	src/rt/cover.d \
 	src/rt/wasm/extra.d \
-	src/rt/wasm/eh.d \
-	src/rt/ehalloc.d \
-	src/rt/memory.d \
-	src/rt/tlsgc.d \
-	src/core/time.d \
-	src/core/atomic.d \
-	src/core/internal/atomic.d \
-	src/core/gc/gcinterface.d \
-	src/core/gc/config.d \
-	src/core/internal/parseoptions.d \
-	src/core/gc/registry.d \
-	src/core/internal/gc/proxy.d \
-	src/core/internal/gc/os.d \
-	src/core/internal/gc/bits.d \
-	src/core/internal/gc/pooltable.d \
-	src/core/internal/gc/blkcache.d \
-	src/core/internal/gc/blockmeta.d \
-	src/core/internal/gc/impl/proto/gc.d \
-	src/core/internal/gc/impl/manual/gc.d \
-	src/core/internal/gc/impl/conservative/gc.d \
-	src/core/internal/container/treap.d \
-	src/core/sync/mutex.d \
-	src/core/sync/exception.d \
-	src/core/thread/context.d \
-	src/core/thread/types.d \
-	src/core/thread/threadgroup.d \
-	src/core/thread/threadbase.d \
-	src/core/thread/osthread.d \
-	src/core/thread/wasi_impl.d \
-	src/core/thread/package.d
+	src/rt/wasm/eh.d
 WASM_DRT_FLAGS := -c -mwasm32 -os=wasm -conf= -Isrc -Iimport -w -de
 # Map a source path to a unique object name (several sources share a basename,
 # e.g. impl/{proto,manual,conservative}/gc.d and thread/package.d): strip the
