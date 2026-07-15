@@ -667,6 +667,118 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
             cg.reachable = false;
     }
 
+    // A switch/jmptab lowers to a dense `br_table` when the case span is small
+    // and roughly as compact as a compare chain, otherwise to a sequence of
+    // `case == cond` compares each guarding a `br_if`.
+    void emitSwitch(block* b, int bi)
+    {
+        const int defaultIdx = blockIdx(b.Bsucc[0]);
+        cg.genElem(b.Belem);
+
+        if (b.Bswitch.length == 0)
+        {
+            cg.emit(OP_DROP);
+            if (defaultIdx != bi + 1)
+                branchToBlock(defaultIdx, false);
+            return;
+        }
+
+        long vmin = long.max;
+        long vmax = long.min;
+        foreach (v; b.Bswitch)
+        {
+            if (v < vmin)
+                vmin = v;
+            if (v > vmax)
+                vmax = v;
+        }
+
+        enum maxJumpTableSize = 1024;
+
+        const condType = b.Belem.wasmType;
+        const ulong span = cast(ulong) vmax - cast(ulong) vmin;
+        const bool useBrTable = condType == WASM_I32
+            && span < maxJumpTableSize
+            && span < b.Bswitch.length * 4UL + 4;
+
+        if (!useBrTable)
+        {
+            const uint condLocal = cg.allocTemp(condType);
+            cg.emit(OP_LOCAL_SET, Uleb(condLocal));
+            foreach (size_t ci, long cv; b.Bswitch)
+            {
+                cg.emitCaseEq(condType, condLocal, cv);
+                branchToBlock(blockIdx(b.Bsucc[cast(int)(ci + 1)]), true);
+            }
+            if (defaultIdx != bi + 1)
+                branchToBlock(defaultIdx, false);
+            return;
+        }
+
+        if (vmin != 0)
+            cg.emit(OP_I32_CONST, Sleb(cast(int)-vmin), OP_I32_ADD);
+
+        const size_t tableLen = cast(size_t)(span + 1);
+        cg.emit(OP_BR_TABLE, Uleb(cast(uint) tableLen));
+        foreach (long v; vmin .. vmax + 1)
+        {
+            int destIdx = defaultIdx;
+            foreach (size_t ci, long cv; b.Bswitch)
+                if (cv == v)
+                {
+                    destIdx = blockIdx(b.Bsucc[cast(int)(ci + 1)]);
+                    break;
+                }
+            cg.emit(Uleb(destDepth(destIdx)));
+        }
+        cg.emit(Uleb(destDepth(defaultIdx)));
+        cg.reachable = false;
+    }
+
+    void emitCondBranch(block* b, int bi)
+    {
+        const int takenIdx = blockIdx(succ(b, 0));
+        const int nottakenIdx = blockIdx(succ(b, 1));
+
+        if (b.Belem)
+            cg.genElem(b.Belem);
+        else
+            cg.emit(OP_I32_CONST, Sleb(0));
+
+        if (takenIdx == nottakenIdx)
+        {
+            cg.emitCondToI32(b.Belem);
+            cg.emit(OP_DROP);
+            if (takenIdx != bi + 1)
+                branchToBlock(takenIdx, false);
+        }
+        else if (takenIdx == bi + 1)
+        {
+            cg.emitCondInvert(b.Belem);
+            branchToBlock(nottakenIdx, true);
+        }
+        else if (nottakenIdx == bi + 1)
+        {
+            cg.emitCondToI32(b.Belem);
+            branchToBlock(takenIdx, true);
+        }
+        else
+        {
+            cg.emitCondToI32(b.Belem);
+            branchToBlock(takenIdx, true);
+            branchToBlock(nottakenIdx, false);
+        }
+    }
+
+    void emitGoto(block* b, int bi)
+    {
+        if (b.Belem)
+            cg.genElemDiscard(b.Belem);
+        const int t = blockIdx(succ(b, b.bc == BC._finally ? 1 : 0));
+        if (t != int.max && t != bi + 1)
+            branchToBlock(t, false);
+    }
+
     foreach (const bi; 0 .. N)
     {
         block* b = blocks[bi];
@@ -728,117 +840,12 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
             continue;
 
         if (b.bc == BC.jmptab || b.bc == BC.switch_)
-        {
-            const int defaultIdx = blockIdx(b.Bsucc[0]);
-
-            cg.genElem(b.Belem);
-
-            if (b.Bswitch.length == 0)
-            {
-                cg.emit(OP_DROP);
-                if (defaultIdx != bi + 1)
-                    branchToBlock(defaultIdx, false);
-                continue;
-            }
-
-            long vmin = long.max;
-            long vmax = long.min;
-            foreach (v; b.Bswitch)
-            {
-                if (v < vmin)
-                    vmin = v;
-                if (v > vmax)
-                    vmax = v;
-            }
-
-            enum maxJumpTableSize = 1024;
-
-            const condType = b.Belem.wasmType;
-            const ulong span = cast(ulong) vmax - cast(ulong) vmin;
-            const bool useBrTable = condType == WASM_I32
-                && span < maxJumpTableSize
-                && span < b.Bswitch.length * 4UL + 4;
-
-            if (!useBrTable)
-            {
-                const uint condLocal = cg.allocTemp(condType);
-                cg.emit(OP_LOCAL_SET, Uleb(condLocal));
-                foreach (size_t ci, long cv; b.Bswitch)
-                {
-                    cg.emitCaseEq(condType, condLocal, cv);
-                    branchToBlock(blockIdx(b.Bsucc[cast(int)(ci + 1)]), true);
-                }
-                if (defaultIdx != bi + 1)
-                    branchToBlock(defaultIdx, false);
-                continue;
-            }
-
-            if (vmin != 0)
-                cg.emit(OP_I32_CONST, Sleb(cast(int)-vmin), OP_I32_ADD);
-
-            const size_t tableLen = cast(size_t)(span + 1);
-            cg.emit(OP_BR_TABLE, Uleb(cast(uint) tableLen));
-            foreach (long v; vmin .. vmax + 1)
-            {
-                int destIdx = defaultIdx;
-                foreach (size_t ci, long cv; b.Bswitch)
-                    if (cv == v)
-                    {
-                        destIdx = blockIdx(b.Bsucc[cast(int)(ci + 1)]);
-                        break;
-                    }
-                cg.emit(Uleb(destDepth(destIdx)));
-            }
-            cg.emit(Uleb(destDepth(defaultIdx)));
-            cg.reachable = false;
-            continue;
-        }
+            emitSwitch(b, bi);
         else if (b.bc == BC.ifthen || b.bc == BC.iftrue)
-        {
-            const int takenIdx = blockIdx(succ(b, 0));
-            const int nottakenIdx = blockIdx(succ(b, 1));
-
-            if (b.Belem)
-                cg.genElem(b.Belem);
-            else
-                cg.emit(OP_I32_CONST, Sleb(0));
-
-            if (takenIdx == nottakenIdx)
-            {
-                cg.emitCondToI32(b.Belem);
-                cg.emit(OP_DROP);
-                if (takenIdx != bi + 1)
-                    branchToBlock(takenIdx, false);
-            }
-            else if (takenIdx == bi + 1)
-            {
-                cg.emitCondInvert(b.Belem);
-                branchToBlock(nottakenIdx, true);
-            }
-            else if (nottakenIdx == bi + 1)
-            {
-                cg.emitCondToI32(b.Belem);
-                branchToBlock(takenIdx, true);
-            }
-            else
-            {
-                cg.emitCondToI32(b.Belem);
-                branchToBlock(takenIdx, true);
-                branchToBlock(nottakenIdx, false);
-            }
-            continue;
-        }
+            emitCondBranch(b, bi);
         else if (b.bc == BC.goto_ || isLandingFlow(b.bc))
-        {
-            if (b.Belem)
-                cg.genElemDiscard(b.Belem);
-            const int t = blockIdx(succ(b, b.bc == BC._finally ? 1 : 0));
-            if (t != int.max && t != bi + 1)
-                branchToBlock(t, false);
-            continue;
-        }
-
-        if (b.Belem)
+            emitGoto(b, bi);
+        else if (b.Belem)
             cg.genElemDiscard(b.Belem);
     }
 
