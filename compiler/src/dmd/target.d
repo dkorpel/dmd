@@ -449,24 +449,13 @@ extern (C++) struct Target
     FPTypeProperties!double DoubleProperties;   ///
     FPTypeProperties!real_t RealProperties;     ///
 
-    // Copy properties from one floating point type to another. Used when the
-    // target's `real` is narrower than the host's real_t, so `real` properties
-    // must mirror those of `double` (or `float`). All FPTypeProperties fields
-    // are real_t/long regardless of the template argument, so this is a plain
-    // field-by-field copy across instantiations.
+    // Copy `real` properties from a narrower type, for targets where the host's
+    // real_t is wider than the target's `real`. All FPTypeProperties fields are
+    // real_t/long regardless of the template argument, so the layouts match.
     extern (D) private static void copyFPProperties(Dst, Src)(ref Dst dst, ref const Src src)
     {
-        dst.max        = src.max;
-        dst.min_normal = src.min_normal;
-        dst.nan        = src.nan;
-        dst.infinity   = src.infinity;
-        dst.epsilon    = src.epsilon;
-        dst.dig        = src.dig;
-        dst.mant_dig   = src.mant_dig;
-        dst.max_exp    = src.max_exp;
-        dst.min_exp    = src.min_exp;
-        dst.max_10_exp = src.max_10_exp;
-        dst.min_10_exp = src.min_10_exp;
+        foreach (i, ref field; dst.tupleof)
+            field = src.tupleof[i];
     }
 
     private Type tvalist; // cached lazy result of va_listType()

@@ -565,8 +565,8 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
         void finish()
         {
             block* finallyBlock;
-            // EH_NONE lowers finallys with insertFinallyBlockGotos, which
-            // requires return blocks to have no successors yet
+            // EH_DWARF/EH_WASM/EH_NONE link finally successors in a later pass
+            // (insertFinallyBlock{Calls,Gotos}); return blocks must have none yet.
             if (config.ehmethod != EHmethod.EH_DWARF &&
                 config.ehmethod != EHmethod.EH_WASM &&
                 config.ehmethod != EHmethod.EH_NONE &&
@@ -580,7 +580,6 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
             block_setLoc(blx.curblock, s.loc);
             block_next(blx, bc, null);
         }
-
         if (!s.exp)
         {
             bc = BC.ret;
@@ -840,8 +839,7 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
         if (target.isWasm && config.ehmethod == EHmethod.EH_NONE)
         {
             // No exception runtime; evaluate expression for side effects, then halt.
-            elem* e2 = toElemDtor(s.exp, irs);
-            block_appendexp(blx.curblock, e2);
+            block_appendexp(blx.curblock, toElemDtor(s.exp, irs));
             elem* eh = el_calloc();
             eh.Ety = TYnoreturn;
             eh.Eoper = OPhalt;
@@ -923,8 +921,7 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
             blx.curblock.Bsucc.push(breakblock);
             block_next(blx, BC.goto_, null);
 
-            block* pad = blx.curblock;
-            tryblock.Bsucc.push(pad);
+            tryblock.Bsucc.push(blx.curblock);
             block_goto(blx, BC.jcatch, null);
 
             assert(s.catches);
