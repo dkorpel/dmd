@@ -3338,8 +3338,7 @@ Lmark:
                 rootsLock.unlock();
             }
 
-            version (WASI) {} // WASI is single-threaded
-            else thread_suspendAll();
+            thread_suspendAll();
 
             prepare();
 

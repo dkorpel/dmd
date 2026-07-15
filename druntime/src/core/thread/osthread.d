@@ -981,16 +981,29 @@ in (fn)
     }
     else version (WebAssembly)
     {
-        // Wasm is special in that this isn't really possible
-        // to dump "registers" (Wasm locals & value stack) onto
-        // the linear-memory "C" stack easily.
-        //
-        // Spilling has to be done somehow else.
+        version (DigitalMars)
+        {
+            // Wasm has no register file to flush: the backend already spills
+            // every value live across a call into the linear-memory shadow
+            // stack, so &local (an address-taken local, forced onto that
+            // stack) is the current stack top and everything live sits above.
+            ubyte local = void;
+            sp = &local;
+        }
+        else version (LDC)
+        {
+            // Wasm is special in that this isn't really possible
+            // to dump "registers" (Wasm locals & value stack) onto
+            // the linear-memory "C" stack easily.
+            //
+            // Spilling has to be done somehow else.
+            import ldc.intrinsics;
 
-        import ldc.intrinsics;
-
-        static if (LLVM_major >= 22) sp = llvm_stackaddress();
-        else sp = llvm_stacksave();
+            static if (LLVM_major >= 22) sp = llvm_stackaddress();
+            else sp = llvm_stacksave();
+        }
+        else
+            static assert(false, "Unsupported WebAssembly compiler.");
     }
     else
     {
@@ -1054,6 +1067,23 @@ private extern(D) void* getStackTop() nothrow @nogc
     }
     else version (GNU)
         return __builtin_frame_address(0);
+    else version (WebAssembly)
+    {
+        version (DigitalMars)
+        {
+            // &local is forced onto the shadow stack: the lowest live address.
+            ubyte local = void;
+            void* sp = &local;
+            return sp;
+        }
+        else version (LDC)
+        {
+            import ldc.intrinsics : llvm_stackaddress;
+            return llvm_stackaddress();
+        }
+        else
+            static assert(false, "Unsupported WebAssembly compiler.");
+    }
     else
         static assert(false, "Architecture not supported.");
 }
@@ -1133,8 +1163,24 @@ private extern(D) void* getStackBottom() nothrow @nogc
         thr_stksegment(&stk);
         return stk.ss_sp;
     }
+    else version (WebAssembly)
+    {
+        version (DigitalMars)
+        {
+            // wasm-ld lays the shadow stack out as [.., __stack_high); it grows
+            // down, so __stack_high's address is the bottom (highest address).
+            return &__stack_high;
+        }
+        else
+            static assert(false, "Platform not supported.");
+    }
     else
         static assert(false, "Platform not supported.");
+}
+
+version (WebAssembly) version (DigitalMars)
+{
+    private extern(C) extern __gshared ubyte __stack_high;
 }
 
 /**
@@ -1503,7 +1549,11 @@ private extern (D) bool suspend( Thread t ) nothrow @nogc
     }
     else version (WASI)
     {
-        onThreadError( "Unable to suspend thread" );
+        // Single-threaded: the only thread ever suspended is the caller itself.
+        // Record its current stack top so thread_scanAll scans the live frames;
+        // there is nothing to actually stop.
+        if ( !t.m_lock )
+            t.m_curr.tstack = getStackTop();
     }
     else
         static assert(0, "unsupported os");
@@ -1528,8 +1578,6 @@ extern (C) void thread_preStopTheWorld() nothrow {
  */
 extern (C) void thread_suspendAll() nothrow
 {
-    version (WASI) onThreadError( "Unable to suspend all threads" );
-
     // NOTE: We've got an odd chicken & egg problem here, because while the GC
     //       is required to call thread_init before calling any other thread
     //       routines, thread_init may allocate memory which could in turn
@@ -1693,7 +1741,9 @@ private extern (D) void resume(ThreadBase _t) nothrow @nogc
     }
     else version (WASI)
     {
-        onThreadError( "Unable to resume thread" );
+        // Single-threaded: nothing was actually stopped, just restore tstack.
+        if ( !t.m_lock )
+            t.m_curr.tstack = t.m_curr.bstack;
     }
     else
         static assert(false, "Platform not supported.");

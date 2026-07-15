@@ -443,7 +443,7 @@ WASM_DMD    ?= $(DMD)
 WASM_ROOT   := $(ROOT_OF_THEM_ALL)/wasm/release/wasm32
 WASM_LIB    := $(WASM_ROOT)/libdruntime-wasm.a
 WASM_RT_DIR := src/rt/wasm
-WASM_MODULES := start gc sync errors
+WASM_MODULES := start sync errors
 WASM_OBJS   := $(addprefix $(WASM_ROOT)/rt_,$(addsuffix .o,$(WASM_MODULES)))
 WASM_FLAGS  := -c -mwasm32 -os=wasm -betterC -conf= -Isrc -Iimport -w -de
 
@@ -499,9 +499,41 @@ WASM_DRT_SRCS := \
 	src/rt/cover.d \
 	src/rt/wasm/extra.d \
 	src/rt/wasm/eh.d \
-	src/rt/ehalloc.d
+	src/rt/ehalloc.d \
+	src/rt/memory.d \
+	src/rt/tlsgc.d \
+	src/core/time.d \
+	src/core/atomic.d \
+	src/core/internal/atomic.d \
+	src/core/gc/gcinterface.d \
+	src/core/gc/config.d \
+	src/core/internal/parseoptions.d \
+	src/core/gc/registry.d \
+	src/core/internal/gc/proxy.d \
+	src/core/internal/gc/os.d \
+	src/core/internal/gc/bits.d \
+	src/core/internal/gc/pooltable.d \
+	src/core/internal/gc/blkcache.d \
+	src/core/internal/gc/blockmeta.d \
+	src/core/internal/gc/impl/proto/gc.d \
+	src/core/internal/gc/impl/manual/gc.d \
+	src/core/internal/gc/impl/conservative/gc.d \
+	src/core/internal/container/treap.d \
+	src/core/sync/mutex.d \
+	src/core/sync/exception.d \
+	src/core/thread/context.d \
+	src/core/thread/types.d \
+	src/core/thread/threadgroup.d \
+	src/core/thread/threadbase.d \
+	src/core/thread/osthread.d \
+	src/core/thread/wasi_impl.d \
+	src/core/thread/package.d
 WASM_DRT_FLAGS := -c -mwasm32 -os=wasm -conf= -Isrc -Iimport -w -de
-WASM_DRT_OBJS := $(foreach s,$(WASM_DRT_SRCS),$(WASM_ROOT)/drt_$(notdir $(basename $(s))).o)
+# Map a source path to a unique object name (several sources share a basename,
+# e.g. impl/{proto,manual,conservative}/gc.d and thread/package.d): strip the
+# leading src/, drop the extension, and turn path separators into underscores.
+wasm_obj = $(WASM_ROOT)/drt_$(subst /,_,$(basename $(patsubst src/%,%,$(1)))).o
+WASM_DRT_OBJS := $(foreach s,$(WASM_DRT_SRCS),$(call wasm_obj,$(s)))
 
 # Standalone _start shim for betterC programs (NOT part of libdruntime-wasm.a,
 # which betterC does not link).  dmd.link adds this object in betterC mode.
@@ -518,7 +550,7 @@ $(WASM_BETTERC_CRT) : $(WASM_RT_DIR)/start_betterc.d $(DMD)
 # One pattern-free rule per real druntime source (sources live in different
 # directories, so a static pattern rule can't map them).
 define WASM_DRT_RULE
-$(WASM_ROOT)/drt_$(notdir $(basename $(1))).o : $(1) $(DMD)
+$(call wasm_obj,$(1)) : $(1) $(DMD)
 	@mkdir -p $$(dir $$@)
 	$(WASM_DMD) $(WASM_DRT_FLAGS) -of$$@ $(1)
 endef

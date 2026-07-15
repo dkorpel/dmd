@@ -37,7 +37,3 @@ void _d_setSameMutex(shared Object ownee, shared Object owner) @trusted {}
 alias DEvent = void delegate(Object);
 void rt_attachDisposeEvent(Object h, DEvent e) {}
 void rt_detachDisposeEvent(Object h, DEvent e) {}
-
-void thread_init() @nogc {}
-void thread_term() @nogc {}
-void thread_joinAll() {}

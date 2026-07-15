@@ -9,7 +9,6 @@ module rt.wasm.start;
 nothrow:
 extern (C):
 
-void gc_init();
 void gc_term();
 
 private extern(C) void __wasm_call_ctors() @nogc nothrow;
@@ -32,6 +31,12 @@ extern(C) void rt_moduleTlsCtor();
 extern(C) void rt_moduleUnitTests();
 extern(C) void rt_moduleTlsDtor();
 extern(C) void rt_moduleDtor();
+
+extern(C) void _d_initMonoTime() @nogc nothrow;
+extern(C) void thread_init() @nogc nothrow;
+extern(C) void thread_term() @nogc nothrow;
+// nothrow wrapper for rt.memory.initStaticDataGC (which may throw)
+extern(C) void _d_wasm_initStaticDataGC() nothrow;
 
 private alias MainFunc = extern(C) int function(char[][] args);
 
@@ -64,8 +69,11 @@ private extern(C) int _d_eh_wasm_runMain(MainFunc mainFunc, char[][] args);
 
 int _d_run_main(int argc, char** argv, MainFunc mainFunc)
 {
-    gc_init();
+    // Mirror rt_init (rt.dmain2)
     initSections();
+    _d_initMonoTime();
+    thread_init();
+    _d_wasm_initStaticDataGC();
     rt_moduleCtor();
     rt_moduleTlsCtor();
     rt_moduleUnitTests();
@@ -73,10 +81,9 @@ int _d_run_main(int argc, char** argv, MainFunc mainFunc)
     rt_moduleTlsDtor();
     rt_moduleDtor();
     gc_term();
+    thread_term();
     return result;
 }
-
-void _d_initMonoTime() @nogc {}
 
 import core.attribute : wasmImportModule;
 

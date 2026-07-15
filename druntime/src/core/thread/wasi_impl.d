@@ -79,6 +79,7 @@ class Thread : ThreadBase
         }
 
         onThreadError("cannot start new threads on WASI");
+        assert(0);
     }
 
     override final Throwable join( bool rethrow = true )
