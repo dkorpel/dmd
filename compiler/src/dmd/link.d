@@ -190,6 +190,280 @@ version (Windows)
 
 enum STATUS_FAILED = -1;
 
+// Fallback WASM library directory relative to the dmd executable, used when the
+// user did not pass a `-L-L<dir>` locating libdruntime-wasm.a / libc.a.
+private const(char)[] argv0RelativeDir(const(char)[] suffix) nothrow
+{
+    import dmd.root.filename : FileName;
+    const(char)* argv0ptr = global.params.argv0.ptr;
+    if (!argv0ptr) return null;
+    const argv0 = argv0ptr[0 .. strlen(argv0ptr)];
+    if (!argv0.length) return null;
+    const exeDir = FileName.path(argv0).idup;
+    return FileName.combine(exeDir, suffix);
+}
+
+// Push a `-<prefix><arg>` flag (e.g. "-Ldir", "-lfoo") onto argv.
+private void pushFlag(ref Strings argv, string prefix, const(char)[] arg) nothrow
+{
+    if (!arg.length) return;
+    char* s = cast(char*) mem.xmalloc(prefix.length + arg.length + 1);
+    memcpy(s, prefix.ptr, prefix.length);
+    memcpy(s + prefix.length, arg.ptr, arg.length);
+    s[prefix.length + arg.length] = 0;
+    argv.push(s);
+}
+
+/***********************************
+ * Optimize a linked WebAssembly binary in place with Binaryen's `wasm-opt`.
+ *
+ * Best-effort: if `wasm-opt` is not installed the step is silently skipped, and
+ * if it runs but fails the already-valid linker output is kept with a warning.
+ *
+ * Params:
+ *   wasmfile = path to the linked `.wasm` to rewrite in place
+ *   verbose  = print the command before executing
+ *   eSink    = sink for messages
+ */
+private void runWasmOpt(const(char)[] wasmfile, bool verbose, ErrorSink eSink)
+{
+    if (!wasmfile.length)
+        return;
+    const(char)* wasmopt = getenv("WASM_OPT");
+    const(char)* file = wasmfile.xarraydup.ptr;
+
+    Strings argv;
+    argv.push(wasmopt ? wasmopt : "wasm-opt");
+    argv.push("-O");
+    argv.push(file);
+    argv.push("-o");
+    argv.push(file);
+
+    if (verbose)
+    {
+        OutBuffer cmdbuf;
+        foreach (i; 0 .. argv.length)
+        {
+            cmdbuf.writestring(argv[i]);
+            cmdbuf.writeByte(' ');
+        }
+        eSink.message(Loc.initial, "%s", cmdbuf.peekChars());
+    }
+    argv.push(null);
+
+    version (Posix)
+    {
+        pid_t childpid = vfork();
+        if (childpid == 0)
+        {
+            execvp(argv[0], argv.tdata());
+            _exit(127); // 127 = "command not found": parent skips silently
+        }
+        else if (childpid == -1)
+            return;
+        int status;
+        waitpid(childpid, &status, 0);
+        if (WIFEXITED(status))
+        {
+            const es = WEXITSTATUS(status);
+            if (es && es != 127)
+                eSink.warning(Loc.initial, "wasm-opt exited with status %d; keeping unoptimized output", es);
+        }
+    }
+    else version (Windows)
+    {
+        const int status = spawnvp(_P_WAIT, argv[0], argv.tdata());
+        if (status > 0)
+            eSink.warning(Loc.initial, "wasm-opt exited with status %d; keeping unoptimized output", status);
+    }
+}
+
+/***********************************
+ * Link WebAssembly object files with wasm-ld.
+ *
+ * wasm-ld is a real linker (not a compiler driver), so link switches are passed
+ * through directly (no `-Xlinker` wrapping) and host-native switches (-rpath,
+ * -soname, ...) and shared libraries (.so/.dylib/.dll) are dropped. When `-O`
+ * is set the output is post-processed by wasm-opt.
+ *
+ * Params:
+ *   verbose = print the command before executing
+ *   params  = compiler parameters (objfiles, exefile, link switches, ...)
+ *   eSink   = sink for error messages
+ * Returns: 0 on success, non-zero on failure
+ */
+private int runWasmLINK(bool verbose, ref Param params, ErrorSink eSink)
+{
+    // Explicitly empty `-defaultlib=` opts out of libdruntime-wasm.a and its
+    // `_start`: the program brings its own runtime. Undefined runtime hooks
+    // become host imports via --allow-undefined, like betterC.
+    const bool customRuntime = !params.betterC && finalDefaultlibname() is null;
+    const bool hasDruntime = !params.betterC && !customRuntime;
+
+    Strings argv;
+    const(char)* wasmld = getenv("WASM_LD");
+    argv.push(wasmld ? wasmld : "wasm-ld");
+
+    argv.append(&params.objfiles);
+
+    argv.push("-o");
+    if (params.exefile)
+    {
+        argv.push(params.exefile.xarraydup.ptr);
+    }
+    else
+    {
+        const(char)[] n = FileName.name(params.objfiles[0].toDString);
+        const(char)[] ex = FileName.forceExt(n, target.obj_ext);
+        params.exefile = ex;
+        argv.push(ex.xarraydup.ptr);
+    }
+    if (!ensurePathToNameExists(Loc.initial, params.exefile))
+        return STATUS_FAILED;
+
+    if (hasDruntime)
+        argv.push("--export=_start"); // WASI entry from libdruntime-wasm.a
+    argv.push("--allow-undefined");   // unresolved WASI imports
+    argv.push("--gc-sections");
+
+    // Vendored -L paths go first so `-l:libc.a` / `-l:libdruntime-wasm.a`
+    // resolve against the WASM archives, not host /usr/lib that a user's
+    // dmd.conf may have on the search path.
+    pushFlag(argv, "-L", argv0RelativeDir("../../../wasm/release/wasm32"));
+    pushFlag(argv, "-L", argv0RelativeDir("../../../../druntime"));
+
+    // Default shadow stack of 1 MiB (wasm-ld defaults to 64 KiB), unless the
+    // user passed their own -L-z -Lstack-size=N.
+    {
+        bool userStackSize = false;
+        foreach (pi, p; params.linkswitches)
+            if (p && !params.linkswitchIsForCC[pi] && startsWith(p[0 .. strlen(p)], "stack-size="))
+                userStackSize = true;
+        if (!userStackSize)
+        {
+            argv.push("-z");
+            argv.push("stack-size=1048576");
+        }
+    }
+
+    // Link switches passed through, dropping host-native ones wasm-ld rejects.
+    foreach (pi, p; params.linkswitches)
+    {
+        if (!p || !p[0] || params.linkswitchIsForCC[pi])
+            continue;
+        const sw = p[0 .. strlen(p)];
+        if (startsWith(sw, "-rpath") || startsWith(sw, "--rpath") ||
+            startsWith(sw, "-Wl,-rpath") || startsWith(sw, "-soname") ||
+            startsWith(sw, "-dynamic"))
+            continue;
+        argv.push(p);
+    }
+
+    // User libraries: .a archives pass through; shared libraries don't exist
+    // for WASM so .so/.dylib/.dll are dropped, everything else becomes -l<name>.
+    foreach (p; params.libfiles)
+        if (FileName.equalsExt(p, "a"))
+            argv.push(p);
+    foreach (p; params.libfiles)
+    {
+        if (FileName.equalsExt(p, "a") || FileName.equalsExt(p, "so") ||
+            FileName.equalsExt(p, "dylib") || FileName.equalsExt(p, "dll"))
+            continue;
+        pushFlag(argv, "-l", p[0 .. strlen(p)]);
+    }
+
+    // Auto-link druntime (or the betterC WASI `_start` shim) plus libc. A
+    // non-empty -defaultlib= (e.g. native libphobos2.so from dmd.conf) is still
+    // replaced with libdruntime-wasm.a; only the empty form opts out. libc.a is
+    // linked in both modes since betterC routinely calls printf/puts/memcmp.
+    argv.push(hasDruntime ? "-l:libdruntime-wasm.a" : "-l:crt1_betterc.wasm");
+    argv.push("-l:libc.a");
+
+    foreach (p; params.dllfiles)
+        argv.push(p);
+
+    OutBuffer cmdbuf;
+    foreach (i; 0 .. argv.length)
+    {
+        cmdbuf.writestring(argv[i]);
+        cmdbuf.writeByte(' ');
+    }
+    const(char)* linkerCommand = cmdbuf.peekChars();
+    if (verbose)
+        eSink.message(Loc.initial, "%s", linkerCommand);
+    argv.push(null);
+
+    version (Posix)
+    {
+        int[2] fds;
+        if (pipe(fds.ptr) == -1)
+        {
+            perror("unable to create pipe to linker");
+            return -1;
+        }
+        pid_t childpid = vfork();
+        if (childpid == 0)
+        {
+            dup2(fds[1], STDERR_FILENO);
+            close(fds[0]);
+            execvp(argv[0], argv.tdata());
+            perror(argv[0]);
+            _exit(-1);
+        }
+        else if (childpid == -1)
+        {
+            perror("unable to fork");
+            return STATUS_FAILED;
+        }
+        close(fds[1]);
+        OutBuffer outputBuf;
+        const pipeSuccess = pipeProcessOutput(fds[0], outputBuf);
+        int status;
+        waitpid(childpid, &status, 0);
+        if (WIFEXITED(status))
+        {
+            status = WEXITSTATUS(status);
+            if (status)
+            {
+                if (!pipeSuccess)
+                {
+                    perror("error with the linker pipe");
+                    return -1;
+                }
+                eSink.error(Loc.initial, "linker exited with status %d", status);
+                eSink.errorSupplemental(Loc.initial, "%s", linkerCommand);
+            }
+        }
+        else if (WIFSIGNALED(status))
+        {
+            eSink.error(Loc.initial, "linker killed by signal %d", WTERMSIG(status));
+            status = 1;
+        }
+        if (status == 0 && driverParams.optimize)
+            runWasmOpt(params.exefile, verbose, eSink);
+        return status;
+    }
+    else version (Windows)
+    {
+        const int status = spawnvp(_P_WAIT, argv[0], argv.tdata());
+        if (status == -1)
+            eSink.error(Loc.initial, "can't run '%s', check PATH", argv[0]);
+        else if (status)
+        {
+            eSink.error(Loc.initial, "linker exited with status %d", status);
+            eSink.errorSupplemental(Loc.initial, "%s", linkerCommand);
+        }
+        if (status == 0 && driverParams.optimize)
+            runWasmOpt(params.exefile, verbose, eSink);
+        return status;
+    }
+    else
+    {
+        eSink.error(Loc.initial, "WASM linking not supported on this platform");
+        return -1;
+    }
+}
+
 /*****************************
  * Run the linker.
  * Params:
@@ -199,6 +473,9 @@ enum STATUS_FAILED = -1;
  */
 public int runLINK(bool verbose, ErrorSink eSink)
 {
+    if (target.isWasm)
+        return runWasmLINK(verbose, global.params, eSink);
+
     const phobosLibname = finalDefaultlibname();
 
     void setExeFile()
@@ -879,10 +1156,24 @@ public int runProgram(const char[] exefile, const char*[] runargs, bool verbose,
 {
     //printf("runProgram()\n");
 
+    // For WebAssembly targets, run through wasmtime
+    const(char)* wasmtime;
+    if (target.isWasm)
+    {
+        wasmtime = getenv("WASMTIME");
+        if (!wasmtime)
+            wasmtime = "wasmtime";
+    }
+
     // print command line to user
     if (verbose)
     {
         OutBuffer buf;
+        if (wasmtime)
+        {
+            buf.writestring(wasmtime);
+            buf.writestring(" run ");
+        }
         buf.writestring(exefile);
         foreach (arg; runargs)
         {
@@ -894,6 +1185,11 @@ public int runProgram(const char[] exefile, const char*[] runargs, bool verbose,
 
     // Build argv[]
     Strings argv;
+    if (wasmtime)
+    {
+        argv.push(wasmtime);
+        argv.push("run");
+    }
     argv.push(exefile.xarraydup.ptr);
     foreach (arg; runargs)
     {
@@ -932,12 +1228,18 @@ public int runProgram(const char[] exefile, const char*[] runargs, bool verbose,
         if (childpid == 0)
         {
             const(char)[] fn = argv[0].toDString();
-            // Make it "./fn" if needed
-            if (!FileName.absolute(fn))
+            // For native targets, make it "./fn" so the freshly built
+            // executable in the current directory is run. For WASM, argv[0] is
+            // the wasmtime launcher, which must be located via PATH, so leave
+            // it unprefixed and let execvp search PATH.
+            if (!target.isWasm && !FileName.absolute(fn))
                 fn = FileName.combine(".", fn);
             fn.toCStringThen!((fnp) {
-                    execv(fnp.ptr, argv.tdata());
-                    // If execv returns, it failed to execute
+                    // Use execvp so PATH is searched for the launcher; a name
+                    // containing a slash (e.g. "./prog") is executed directly.
+                    import core.sys.posix.unistd : execvp;
+                    execvp(fnp.ptr, argv.tdata());
+                    // If execvp returns, it failed to execute
                     perror(fnp.ptr);
                 });
             _exit(-1);
