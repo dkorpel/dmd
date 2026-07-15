@@ -4,6 +4,13 @@
 extern(C) int printf(const char*, ...);
 extern(C) size_t strlen(const char*);
 
+// wasm (and other targets where `real` is 64-bit) has no extended `long
+// double`; its C `%Lg` vararg layout is wider than `real`, so print via %g.
+static if (real.sizeof > double.sizeof)
+    enum Lg = "z = %Lg\n";
+else
+    enum Lg = "z = %g\n";
+
 /**************************************/
 
 alias strlen foo1;
@@ -355,15 +362,15 @@ void test17()
   {
     real z = 10;
     z %= 4;
-    printf("z = %Lg\n", z);
+    printf(Lg.ptr, z);
     assert(z == 2);
     z = 10;
     z = z % 4;
-    printf("z = %Lg\n", z);
+    printf(Lg.ptr, z);
     assert(z == 2);
     z = 4;
     z = 10 % z;
-    printf("z = %Lg\n", z);
+    printf(Lg.ptr, z);
     assert(z == 2);
   }
 }

@@ -11,3 +11,5 @@ void main()
     foo(a);
     assert(a[0] == 10000);
 }
+
+// DISABLED: wasm

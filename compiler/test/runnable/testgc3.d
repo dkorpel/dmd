@@ -27,3 +27,8 @@ void main()
     printf("finished\n");
     aa[] = null;
 }
+
+// This inserts 10M entries into 10k AAs, growing the heap to ~450 MB. It
+// completes correctly under wasm (~4s) but exceeds the runner's 10s timeout
+// when several wasmtime jobs contend for the CPU in parallel.
+// DISABLED: wasm
