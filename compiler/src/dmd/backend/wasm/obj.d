@@ -738,7 +738,7 @@ private bool emitLinkingSection(ref OutBuffer out_, ref WasmModule wmod)
         else
         {
             uint dflags = 0;
-            if (sym.Sclass == SC.comdat)
+            if (sym.Sclass == SC.comdat || sym.Sclass == SC.comdef)
                 dflags |= WASM_SYM.BINDING_WEAK;
             else if (sym.Sclass != SC.global)
                 dflags |= WASM_SYM.BINDING_LOCAL;
@@ -1255,6 +1255,7 @@ void WasmObj_compiler(const(char)* p)
 
 void WasmObj_wkext(Symbol* s1, Symbol* s2)
 {
+    assert(0, "wkext is x86-only, unreachable on wasm");
 }
 
 void WasmObj_alias(const(char)* n1, const(char)* n2)
@@ -1446,12 +1447,32 @@ int WasmObj_external(Symbol* s)
 
 int WasmObj_common_block(Symbol* s, targ_size_t size, targ_size_t count)
 {
-    return 0;
+    const uint total = cast(uint)(size * count);
+    if (!total || !s)
+        return WASM_DATA;
+
+    uint align_ = 4;
+    if (s.Stype)
+    {
+        uint sz = tyalignsize(s.Stype.Tty);
+        if (sz > 0 && sz <= 8)
+            align_ = sz;
+    }
+    if (s.Salignment > cast(int) align_)
+        align_ = cast(uint) s.Salignment;
+
+    const uint base = pushDataSeg(total, align_, s, s.identifier);
+    foreach (_; 0 .. total)
+        wmod.activeSeg.data.writeByte(0);
+    s.Soffset = base;
+    s.Sseg = WASM_DATA;
+    wmod.activeSegIdx = -1;
+    return WASM_DATA;
 }
 
 int WasmObj_common_block(Symbol* s, int flag, targ_size_t size, targ_size_t count)
 {
-    return 0;
+    return WasmObj_common_block(s, size, count);
 }
 
 void WasmObj_lidata(int seg, targ_size_t offset, targ_size_t count)
@@ -1553,10 +1574,12 @@ int WasmObj_reftoident(int seg, targ_size_t offset, Symbol* s, targ_size_t val, 
 
 void WasmObj_far16thunk(Symbol* s)
 {
+    assert(0, "far16thunk is 16-bit-x86-only, unreachable on wasm");
 }
 
 void WasmObj_fltused()
 {
+    assert(0, "fltused is x86-only, unreachable on wasm");
 }
 
 uint wmod_numImports()
@@ -1792,7 +1815,7 @@ void WasmObj_write_pointerRef(Symbol* s, uint off)
 
 int WasmObj_jmpTableSegment(Symbol* s)
 {
-    return 0;
+    assert(0, "jmpTableSegment is x86-only; wasm switches lower to br_table");
 }
 
 Symbol* WasmObj_tlv_bootstrap()
@@ -1802,15 +1825,17 @@ Symbol* WasmObj_tlv_bootstrap()
 
 void WasmObj_gotref(Symbol* s)
 {
+    assert(0, "GOT/PIC is x86/ELF-only, unreachable on wasm");
 }
 
 Symbol* WasmObj_getGOTsym()
 {
-    return null;
+    assert(0, "GOT/PIC is x86/ELF-only, unreachable on wasm");
 }
 
 void WasmObj_refGOTsym()
 {
+    assert(0, "GOT/PIC is x86/ELF-only, unreachable on wasm");
 }
 
 private:

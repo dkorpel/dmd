@@ -646,8 +646,7 @@ void toObjFile(Dsymbol ds, bool multiobj)
 
             // See if we can convert a comdat to a comdef,
             // which saves on exe file space.
-            if (config.objfmt != OBJ_WASM &&
-                s.Sclass == SC.comdat &&
+            if (s.Sclass == SC.comdat &&
                 s.Sdt &&
                 dtallzeros(s.Sdt) &&
                 !vd.isThreadlocal())
