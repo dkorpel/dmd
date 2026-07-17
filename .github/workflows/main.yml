@@ -340,6 +340,15 @@ jobs:
           curl https://wasmtime.dev/install.sh -sSf | bash -s -- --version v46.0.1
           echo "$HOME/.wasmtime/bin" >> $GITHUB_PATH
 
+      # Cache the pinned wasi-sdk sysroot tarball the `wasm` target downloads for
+      # libc.a. Keep the key's version in sync with WASI_SDK_VERSION in
+      # druntime/Makefile.
+      - name: Cache wasi-sysroot
+        uses: actions/cache@v4
+        with:
+          path: generated/wasm/wasi-sysroot-33.tar.gz
+          key: wasi-sysroot-33.0+m
+
       - name: Build WASM druntime
         run: make -j$N -C druntime wasm
 

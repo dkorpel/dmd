@@ -69,6 +69,7 @@ When compiling with `-O`, DMD post-processes the linked `.wasm` with Binaryen's
 variable). This is best-effort: if `wasm-opt` is not installed the step is
 skipped and the ordinary linker output is kept.
 
+
 Limitations:
 - No Phobos
 - No deprecated complex number types like `cfloat` and `ifloat`

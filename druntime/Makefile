@@ -475,6 +475,26 @@ WASM_DRT_OBJS := $(foreach s,$(WASM_DRT_SRCS),$(call wasm_obj,$(s)))
 # which betterC does not link).  dmd.link adds this object in betterC mode.
 WASM_BETTERC_CRT := $(WASM_ROOT)/crt1_betterc.wasm
 
+# wasi-libc: the C library the wasm druntime and betterC link against for
+# printf/puts/memcmp/malloc-backing/... . dmd.link adds `-l:libc.a` from
+# $(WASM_ROOT).  Rather than vendoring a binary blob or building wasi-libc from
+# source, fetch the prebuilt libc.a from a pinned, checksummed wasi-sdk sysroot
+# release (github.com/WebAssembly/wasi-sdk), matching the wasm32-wasip1 ABI the
+# druntime targets (@wasmImportModule("wasi_snapshot_preview1")).
+#
+# Keep WASI_SDK_VERSION in sync with the actions/cache key in
+# .github/workflows/main.yml.  Set WASI_LIBC_LOCAL to a path to skip the
+# download and copy a locally-built libc.a instead (e.g. from a wasi-libc
+# checkout).
+WASM_LIBC            := $(WASM_ROOT)/libc.a
+WASI_SDK_VERSION     ?= 33
+WASI_SYSROOT_SHA256  ?= 063bc1b56582b9923e08ac9b89e58789618d851763f01530b3ff20b9e5df0ca3
+# GitHub percent-encodes the '+' in the asset name as %2B in the download URL.
+WASI_SYSROOT_URL     ?= https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-$(WASI_SDK_VERSION)/wasi-sysroot-$(WASI_SDK_VERSION).0%2Bm.tar.gz
+WASI_SYSROOT_TARBALL := $(ROOT_OF_THEM_ALL)/wasm/wasi-sysroot-$(WASI_SDK_VERSION).tar.gz
+WASI_LIBC_LOCAL      ?=
+SHA256SUM            ?= sha256sum
+
 $(WASM_ROOT)/rt_%.o : $(WASM_RT_DIR)/%.d $(DMD)
 	@mkdir -p $(dir $@)
 	$(WASM_DMD) $(WASM_FLAGS) -of$@ $<
@@ -500,8 +520,20 @@ $(WASM_LIB): $(WASM_OBJS) $(WASM_DRT_OBJS)
 	rm -f $@
 	$(WASM_DMD) -lib -mwasm32 -os=wasm -conf= -of$@ $(WASM_OBJS) $(WASM_DRT_OBJS)
 
+$(WASM_LIBC):
+	@mkdir -p $(WASM_ROOT)
+ifneq ($(WASI_LIBC_LOCAL),)
+	cp $(WASI_LIBC_LOCAL) $@
+else
+	@mkdir -p $(dir $(WASI_SYSROOT_TARBALL))
+	test -f $(WASI_SYSROOT_TARBALL) || curl -fSL -o $(WASI_SYSROOT_TARBALL) '$(WASI_SYSROOT_URL)'
+	echo '$(WASI_SYSROOT_SHA256)  $(WASI_SYSROOT_TARBALL)' | $(SHA256SUM) -c -
+	tar -xzOf $(WASI_SYSROOT_TARBALL) --wildcards --no-anchored '*/wasm32-wasip1/libc.a' > $@
+	test -s $@ || { echo "wasm32-wasip1/libc.a not found in $(WASI_SYSROOT_TARBALL)"; rm -f $@; exit 1; }
+endif
+
 .PHONY: wasm
-wasm: copy $(WASM_LIB) $(WASM_BETTERC_CRT)
+wasm: copy $(WASM_LIB) $(WASM_BETTERC_CRT) $(WASM_LIBC)
 
 UT_SRCS:=$(SRCS)
 UT_MODULES:=$(patsubst src/%.d,$(ROOT)/unittest/%,$(UT_SRCS))

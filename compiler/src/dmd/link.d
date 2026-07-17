@@ -190,19 +190,6 @@ version (Windows)
 
 enum STATUS_FAILED = -1;
 
-// Fallback WASM library directory relative to the dmd executable, used when the
-// user did not pass a `-L-L<dir>` locating libdruntime-wasm.a / libc.a.
-private const(char)[] argv0RelativeDir(const(char)[] suffix) nothrow
-{
-    import dmd.root.filename : FileName;
-    const(char)* argv0ptr = global.params.argv0.ptr;
-    if (!argv0ptr) return null;
-    const argv0 = argv0ptr[0 .. strlen(argv0ptr)];
-    if (!argv0.length) return null;
-    const exeDir = FileName.path(argv0).idup;
-    return FileName.combine(exeDir, suffix);
-}
-
 // Push a `-<prefix><arg>` flag (e.g. "-Ldir", "-lfoo") onto argv.
 private void pushFlag(ref Strings argv, string prefix, const(char)[] arg) nothrow
 {
@@ -325,12 +312,6 @@ private int runWasmLINK(bool verbose, ref Param params, ErrorSink eSink)
         argv.push("--export=_start"); // WASI entry from libdruntime-wasm.a
     argv.push("--allow-undefined");   // unresolved WASI imports
     argv.push("--gc-sections");
-
-    // Vendored -L paths go first so `-l:libc.a` / `-l:libdruntime-wasm.a`
-    // resolve against the WASM archives, not host /usr/lib that a user's
-    // dmd.conf may have on the search path.
-    pushFlag(argv, "-L", argv0RelativeDir("../../../wasm/release/wasm32"));
-    pushFlag(argv, "-L", argv0RelativeDir("../../../../druntime"));
 
     // Default shadow stack of 1 MiB (wasm-ld defaults to 64 KiB), unless the
     // user passed their own -L-z -Lstack-size=N.
