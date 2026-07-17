@@ -649,8 +649,13 @@ string[string] getEnvironment()
         env["PIC_FLAG"] = "";
         env.setDefault("ARGS", "");
         // REQUIRED_ARGS: inject WASM target flags; honour extra user args.
+        // The wasm archive search dir goes here rather than in DFLAGS because a
+        // test may override DFLAGS (e.g. runnable/minimal.d), and wasm-ld always
+        // needs to find libdruntime-wasm.a / libc.a / the betterC crt shim.
+        auto wasmLibPath = testPath(`../../generated/wasm/release/wasm32`);
         const extra = environment.get("REQUIRED_ARGS", "");
-        env["REQUIRED_ARGS"] = "-mwasm32 -os=wasm" ~ (extra.length ? " " ~ extra : "");
+        env["REQUIRED_ARGS"] = "-mwasm32 -os=wasm -L-L%s".format(wasmLibPath)
+            ~ (extra.length ? " " ~ extra : "");
         // --dir=/ preopens the host filesystem so absolute paths resolve
         // (RESULTS_DIR in EXECUTE_ARGS). WASI has no working directory, so
         // relative guest paths resolve against "/"; PWD lets the coverage
@@ -661,7 +666,8 @@ string[string] getEnvironment()
         // so the suite makes progress instead of stalling indefinitely.
         env.setDefault("EXEC_BINARY_WRAPPER",
             "timeout -k 1 10 wasmtime run -W exceptions=y -W max-memory-size=2147483648 --dir=/ --env PWD=" ~ std.file.getcwd());
-        // Provide druntime import path (used when -conf= is passed, which strips dmd.conf).
+        // -conf= strips dmd.conf, so the import path a normal dmd.conf supplies
+        // via -I%@P%/... is provided here instead.
         auto druntimePath = environment.get("DRUNTIME_PATH", testPath(`../../druntime`));
         env["DFLAGS"] = "-I%s/import".format(druntimePath);
         return env;
