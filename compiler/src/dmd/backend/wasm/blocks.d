@@ -2,8 +2,8 @@
  * WebAssembly control-flow structuring.
  *
  * DMD's block CFG is unstructured: every block has a list of `Bsucc` edges to
- * any other block. WebAssembly has no `goto`, only structured regions 
- * `block`/`loop`/`if` bracketed by `end`, left by a `br N` that targets the N-th enclosing region. 
+ * any other block. WebAssembly has no `goto`, only structured regions
+ * `block`/`loop`/`if` bracketed by `end`, left by a `br N` that targets the N-th enclosing region.
  * This module converts the former into the latter.
  *
  * Algorithm:
@@ -64,54 +64,57 @@ private block* succ(block* b, int n)
     return null;
 }
 
+private bool emitReturnExp(ref WasmCG cg, block* b, bool hasReturn)
+{
+    if (!hasReturn)
+        return cg.emitReturnVoid(b, hasReturn);
+
+    bool hasRetVal;
+    if (b.Belem)
+        hasRetVal = cg.genElem(b.Belem);
+    if (cg.framePublished)
+    {
+        if (hasRetVal)
+        {
+            const tym_t bty = tybasic(b.Belem.Ety);
+            WASM_TYPE retTy = wasmType(bty);
+            uint retTmp = cg.allocTemp(retTy);
+            cg.emit(OP_LOCAL_SET, Uleb(retTmp));
+            cg.emitShadowEpilogue();
+            cg.emit(OP_LOCAL_GET, Uleb(retTmp));
+        }
+        else
+        {
+            cg.emitShadowEpilogue();
+        }
+    }
+    cg.emit(OP_RETURN);
+    cg.reachable = false;
+    return true;
+}
+
+private bool emitReturnVoid(ref WasmCG cg, block* b, bool hasReturn)
+{
+    if (b.Belem)
+        cg.genElemDiscard(b.Belem);
+    if (cg.framePublished)
+        cg.emitShadowEpilogue();
+    if (hasReturn)
+        cg.emit(OP_UNREACHABLE);
+    cg.emit(OP_RETURN);
+    cg.reachable = false;
+    return true;
+}
+
 private bool emitBlockReturn(ref WasmCG cg, block* b, bool hasReturn)
 {
     if (b.bc == BC.retexp)
     {
-        if (!hasReturn)
-        {
-            if (b.Belem)
-                cg.genElemDiscard(b.Belem);
-            if (cg.framePublished)
-                cg.emitShadowEpilogue();
-            cg.emit(OP_RETURN);
-            cg.reachable = false;
-            return true;
-        }
-        bool hasRetVal;
-        if (b.Belem)
-            hasRetVal = cg.genElem(b.Belem);
-        if (cg.framePublished)
-        {
-            if (hasRetVal)
-            {
-                const tym_t bty = tybasic(b.Belem.Ety);
-                WASM_TYPE retTy = wasmType(bty);
-                uint retTmp = cg.allocTemp(retTy);
-                cg.emit(OP_LOCAL_SET, Uleb(retTmp));
-                cg.emitShadowEpilogue();
-                cg.emit(OP_LOCAL_GET, Uleb(retTmp));
-            }
-            else
-            {
-                cg.emitShadowEpilogue();
-            }
-        }
-        cg.emit(OP_RETURN);
-        cg.reachable = false;
-        return true;
+        return cg.emitReturnExp(b, hasReturn);
     }
     else if (b.bc == BC.ret)
     {
-        if (b.Belem)
-            cg.genElemDiscard(b.Belem);
-        if (cg.framePublished)
-            cg.emitShadowEpilogue();
-        if (hasReturn)
-            cg.emit(OP_UNREACHABLE);
-        cg.emit(OP_RETURN);
-        cg.reachable = false;
-        return true;
+        return cg.emitReturnVoid(b, hasReturn);
     }
     else if (b.bc == BC.exit || b.bc == BC._ret)
     {
@@ -829,14 +832,29 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         if (cg.emitBlockReturn(b, hasReturn))
             continue;
 
-        if (b.bc == BC.jmptab || b.bc == BC.switch_)
+        final switch (b.bc)
+        {
+        case BC.jmptab, BC.switch_:
             emitSwitch(b, bi);
-        else if (b.bc == BC.ifthen || b.bc == BC.iftrue)
+            break;
+
+        case BC.ifthen, BC.iftrue:
             emitCondBranch(b, bi);
-        else if (b.bc == BC.goto_ || isLandingFlow(b.bc))
+            break;
+
+        case BC.goto_, BC._finally, BC._lpad, BC.jcatch:
             emitGoto(b, bi);
-        else if (b.Belem)
-            cg.genElemDiscard(b.Belem);
+            break;
+
+        case BC.none, BC.asm_, BC.try_, BC.catch_, BC.jump,
+             BC._try, BC._filter, BC._except:
+            if (b.Belem)
+                cg.genElemDiscard(b.Belem);
+            break;
+
+        case BC.ret, BC.retexp, BC.exit, BC._ret:
+            assert(0, "handled by emitBlockReturn above");
+        }
     }
 
     while (stack.length > 0)
@@ -846,7 +864,7 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
 /*
 Fallback: a CFG that can't be made laminar (goto into a loop body, `goto case`
 to an earlier case) fails validation and is emitted
-with a dispatch loop. 
+with a dispatch loop.
 A selector local drives a `br_table` inside one big
 `loop`, one wrapper `block` per basic block, so every branch becomes "set
 selector, br to the loop". Correct for any CFG, but slower code.
@@ -906,8 +924,9 @@ private void genBlocksDispatch(ref WasmCG cg, block*[] blocks, bool hasReturn)
         if (cg.emitBlockReturn(b, hasReturn))
             continue;
 
-        if (b.bc == BC.iftrue || b.bc == BC.ifthen)
+        final switch (b.bc)
         {
+        case BC.iftrue, BC.ifthen:
             cg.emit(OP_I32_CONST, Sleb(blockIdx(succ(b, 0))),
                 OP_I32_CONST, Sleb(blockIdx(succ(b, 1))));
             if (b.Belem)
@@ -916,9 +935,9 @@ private void genBlocksDispatch(ref WasmCG cg, block*[] blocks, bool hasReturn)
                 cg.emit(OP_I32_CONST, Sleb(0));
             cg.emitCondToI32(b.Belem);
             cg.emit(OP_SELECT, OP_LOCAL_SET, Uleb(sel), OP_BR, Uleb(loopDepth));
-        }
-        else if (b.bc == BC.jmptab || b.bc == BC.switch_)
-        {
+            break;
+
+        case BC.jmptab, BC.switch_:
             const int defaultIdx = blockIdx(b.Bsucc[0]);
             cg.genElem(b.Belem);
             if (b.Bswitch.length == 0)
@@ -938,20 +957,27 @@ private void genBlocksDispatch(ref WasmCG cg, block*[] blocks, bool hasReturn)
                 cg.emit(OP_END);
             }
             gotoBlock(defaultIdx, 0);
-        }
-        else if (b.bc == BC.goto_ || b.bc == BC._finally)
-        {
+            break;
+
+        case BC.goto_, BC._finally:
             if (b.Belem)
                 cg.genElemDiscard(b.Belem);
             if (block* target = succ(b, b.bc == BC._finally ? 1 : 0))
                 gotoBlock(blockIdx(target), 0);
-        }
-        else
-        {
+            break;
+
+        case BC.none, BC.asm_, BC.try_, BC.catch_, BC.jump,
+             BC._try, BC._filter, BC._except, BC.jcatch, BC._lpad:
             if (b.Belem)
                 cg.genElemDiscard(b.Belem);
             if (i + 1 < blocks.length)
                 gotoBlock(i + 1, 0);
+            break;
+
+        case BC.ret:
+        case BC.retexp:
+        case BC.exit, BC._ret:
+            assert(0, "handled by emitBlockReturn above");
         }
     }
 

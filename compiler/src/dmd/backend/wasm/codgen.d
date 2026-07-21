@@ -1441,8 +1441,6 @@ bool genElem(ref WasmCG cg, elem* e, WASM_TYPE type)
 /// Returns: true if a value was produced (and dropped).
 bool genElemDiscard(ref WasmCG cg, elem* e)
 {
-    assert(e);
-
     if (!el_sideeffect(e))
         return false;
     cg.discardResult = true;
