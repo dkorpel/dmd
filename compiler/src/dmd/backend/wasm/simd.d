@@ -1,12 +1,8 @@
 /**
  * WebAssembly SIMD128 support for the code generator.
  *
- * Maps DMD's generic `__vector(T[N])` operations (backend opers on the 16-byte
- * vector tyms `TYfloat4`…`TYullong2`) to their `0xFD`-prefixed SIMD sub-opcodes.
- * Only the lane-shape → sub-opcode selection lives here; the actual byte
- * emission and elem walking stay in codgen.d. The x86 `__simd`/XMM intrinsic
- * surface (raw XMM opcodes carried by `OPvector`/`OPvecsto`) is out of scope;
- * those opers are never generated for wasm, so their arms stay `assert(0)`.
+ * DMD's generic `__vector(T[N])` map to 16-byte backend types `TYfloat4` ... `TYullong2`.
+ * This module maps it to `0xFD`-prefixed SIMD sub-opcodes.
  */
 
 module dmd.backend.wasm.simd;
@@ -189,11 +185,6 @@ WASM_SIMD vecRelSubop(int op, tym_t ty)
     }
 }
 
-/**
- * Splat sub-opcode for `OPvecfill` (scalar operand broadcast to all lanes).
- * Params: ty = the vector type mask
- * Returns: the `<shape>.splat` sub-opcode
- */
 WASM_SIMD vecSplatSubop(tym_t ty)
 {
     with (WASM_SIMD)
@@ -209,11 +200,6 @@ WASM_SIMD vecSplatSubop(tym_t ty)
     }
 }
 
-/**
- * Negation sub-opcode for `OPneg`.
- * Params: ty = the vector type mask
- * Returns: the `<shape>.neg` sub-opcode
- */
 WASM_SIMD vecNegSubop(tym_t ty)
 {
     with (WASM_SIMD)

@@ -1,11 +1,10 @@
 /**
  * WebAssembly control-flow structuring.
  *
- * WebAssembly has no arbitrary `goto`: control flow is expressed with nested
- * structured regions — `block`/`loop`/`if` bracketed by `end`, left by a `br N`
- * that targets the N-th enclosing region. This module turns DMD's unstructured
- * block CFG (arbitrary `Bsucc` edges) into that nested form and drives codgen.d
- * to emit the region opcodes and branches.
+ * DMD's block CFG is unstructured: every block has a list of `Bsucc` edges to
+ * any other block. WebAssembly has no `goto`, only structured regions 
+ * `block`/`loop`/`if` bracketed by `end`, left by a `br N` that targets the N-th enclosing region. 
+ * This module converts the former into the latter.
  *
  * Algorithm:
  *   1. Assign each block a reverse-post-order index. A successor edge B => A
@@ -27,15 +26,6 @@
  * blocks so each `BC._try` header is immediately followed by the blocks it
  * guards and then its landing-pad group (blockopt (-O) and the inliner scatter
  * them); the catch clause lands on the block just past the try body.
- *
- * Fallback: a CFG that can't be made laminar (goto into a loop body, `goto case`
- * to an earlier case, some optimizer layouts) fails validation and is emitted
- * with a dispatch loop — a selector local drives a `br_table` inside one big
- * `loop`, one wrapper `block` per basic block, so every branch becomes "set
- * selector, br to the loop". Correct for any CFG, but slower code.
- *
- * Set WASM_BLOCKS=1 in the environment to dump the block graph and the repaired
- * frames when debugging structuring bugs.
  *
  * Copyright:   Copyright (C) 1999-2026 by The D Language Foundation, All Rights Reserved
  * License:     $(LINK2 https://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
@@ -853,6 +843,40 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         closeTop();
 }
 
+/*
+Fallback: a CFG that can't be made laminar (goto into a loop body, `goto case`
+to an earlier case) fails validation and is emitted
+with a dispatch loop. 
+A selector local drives a `br_table` inside one big
+`loop`, one wrapper `block` per basic block, so every branch becomes "set
+selector, br to the loop". Correct for any CFG, but slower code.
+
+---
+void irreducible(bool jumpIn, int i) {
+    if (jumpIn) goto body;
+
+    while (i < 5) {
+    body:
+        i++;
+    }
+}
+
+---
+
+---
+void dispatched(bool jumpIn, int i) {
+    int state = jumpIn ? 1 : 0; // 0: Header, 1: Body, 2: Exit
+
+    while (state != 2) {
+        switch (state) {
+            case 0: state = (i < 5) ? 1 : 2; break; // Loop header check
+            case 1: i++; state = 0;          break; // Loop body
+            default: break;
+        }
+    }
+}
+---
+*/
 private void genBlocksDispatch(ref WasmCG cg, block*[] blocks, bool hasReturn)
 {
     const uint sel = cg.allocTemp(WASM_I32);
@@ -866,13 +890,12 @@ private void genBlocksDispatch(ref WasmCG cg, block*[] blocks, bool hasReturn)
         cg.emit(Uleb(cast(uint) i));
     cg.emit(Uleb(0));
 
-    const int N = cast(int) blocks.length;
     foreach (i; 0 .. blocks.length)
     {
         cg.emit(OP_END);
         block* b = blocks[i];
 
-        const uint loopDepth = cast(uint)(N - 1 - i);
+        const uint loopDepth = cast(uint)(blocks.length - 1 - i);
 
         void gotoBlock(size_t t, uint extraDepth)
         {
@@ -927,7 +950,7 @@ private void genBlocksDispatch(ref WasmCG cg, block*[] blocks, bool hasReturn)
         {
             if (b.Belem)
                 cg.genElemDiscard(b.Belem);
-            if (i + 1 < N)
+            if (i + 1 < blocks.length)
                 gotoBlock(i + 1, 0);
         }
     }

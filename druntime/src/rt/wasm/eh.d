@@ -70,5 +70,3 @@ bool _d_eh_wasm_match(Object o, TypeInfo_Class ci) nothrow @nogc @trusted
     }
     return false;
 }
-
-
