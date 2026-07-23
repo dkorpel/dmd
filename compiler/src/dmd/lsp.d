@@ -225,13 +225,59 @@ bool writeLocation(ref OutBuffer buf, Dsymbol s)
     return true;
 }
 
+version (Posix)
+{
+    import core.sys.posix.setjmp : jmp_buf, setjmp;
+
+    /// Recovery point for a compiler fatal() raised while analyzing a document.
+    /// analyzeModule arms this and the fatalErrorHandler installed in lspMain
+    /// longjmp()s back to it, so an unrecoverable analysis (e.g. a failed
+    /// `static assert`) abandons that one request instead of exiting the server.
+    private __gshared jmp_buf lspFatalEnv;
+    private __gshared bool lspFatalArmed;
+    private __gshared ErrorSinkCompiler lspFatalSavedSink;
+    private __gshared uint lspFatalSavedErrors;
+}
+
 /// Run the dmd pipeline (read → parse → semantic) on the document at `uri`.
 /// Errors are routed through `lsp.eSink`; caller is responsible for clearing
 /// `lsp.eSink.diagnostics` beforehand and for calling `deinitializeModule()`
 /// when done with the returned module.
 ///
-/// Returns: the post-semantic Module, or null on read/parse failure.
+/// A compiler fatal() during analysis is caught and turned into a null return
+/// (diagnostics collected up to that point remain in `lsp.eSink`), so a single
+/// bad document cannot bring the server down.
+///
+/// Returns: the post-semantic Module, or null on read/parse failure or a
+/// recovered fatal().
 Module analyzeModule(ref Lsp lsp, string uri)
+{
+    version (Posix)
+    {
+        // Save the pre-analysis globals where the recovery path can reach them:
+        // longjmp() unwinds past analyzeModuleImpl's scope(exit), so it cannot
+        // restore them itself.
+        lspFatalSavedSink = global.errorSink;
+        lspFatalSavedErrors = global.errors;
+        if (setjmp(lspFatalEnv) != 0)
+        {
+            // A fatal() fired during analysis and jumped us back here.
+            lspFatalArmed = false;
+            global.errorSink = lspFatalSavedSink;
+            global.errors = lspFatalSavedErrors;
+            return null;
+        }
+        lspFatalArmed = true;
+        Module m = analyzeModuleImpl(lsp, uri);
+        lspFatalArmed = false;
+        return m;
+    }
+    else
+        return analyzeModuleImpl(lsp, uri);
+}
+
+/// The actual analysis pipeline; see analyzeModule for the fatal() guard.
+private Module analyzeModuleImpl(ref Lsp lsp, string uri)
 {
     Type_init();
     Module._init();
@@ -267,9 +313,17 @@ Module analyzeModule(ref Lsp lsp, string uri)
         return null;
     m.importedFrom = m;
     m.importAll(null);
+
+    // Mirror the compile driver (main.d): each semantic pass is followed by its
+    // runDeferredSemantic* drain, so symbols whose analysis was postponed
+    // (forward references, circular imports) are resolved before the next pass
+    // instead of being left half-analyzed.
     m.dsymbolSemantic(null);
+    runDeferredSemantic();
     m.semantic2(null);
+    runDeferredSemantic2();
     m.semantic3(null);
+    runDeferredSemantic3();
     return m;
 }
 
@@ -570,6 +624,29 @@ int lspMain()
     Lsp lsp;
     lsp.eSink = new ErrorSinkLsp();
     auto eSink = lsp.eSink;
+
+    // Keep a compiler fatal() from taking the whole server down. dmd signals
+    // many unrecoverable conditions - a failed `static assert`, an unresolvable
+    // import, an internal error - by calling fatal(), which exits the process.
+    // That is fine for a one-shot compile but fatal (literally) for a long-lived
+    // language server: a single bad file, or a transient false error while the
+    // user is mid-edit, would kill it. While an analysis is in progress we route
+    // fatal() back to the recovery point armed in analyzeModule instead (see
+    // lspFatalEnv), abandoning just that analysis. Outside an analysis we let
+    // fatal() exit normally.
+    version (Posix)
+    {
+        import dmd.errors : fatalErrorHandler;
+        import core.sys.posix.setjmp : longjmp;
+        fatalErrorHandler = () {
+            if (lspFatalArmed)
+            {
+                lspFatalArmed = false;
+                longjmp(lspFatalEnv, 1); // does not return
+            }
+            return false; // not analyzing: allow the normal exit
+        };
+    }
 
     char[] buffer = new char[16 * 1024];
 
