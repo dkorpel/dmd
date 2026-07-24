@@ -16532,6 +16532,8 @@ Expression dotIdSemanticProp(DotIdExp exp, Scope* sc, bool gag)
         Expression e = dotExp(exp.e1.type, sc, exp.e1, exp.ident, flag);
         if (e)
         {
+            if (auto dve = e.isDotVarExp())
+                dve.identLoc = exp.identLoc;
             e = e.expressionSemantic(sc);
         }
         return e;
