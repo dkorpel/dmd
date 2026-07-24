@@ -2467,7 +2467,7 @@ private Expression resolveUFCS(Scope* sc, CallExp ce)
         {
             if (arrayExpressionSemantic(ce.arguments.peekSlice(), sc))
             {
-                if (global.params.lsp)
+                if (onConstantFold)
                     if (Expression ey = die.dotIdSemanticProp(sc, 1))
                         lspRecordCallee(ey);
                 return ErrorExp.get();
@@ -5604,8 +5604,7 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
             if (s.errors)
             {
                 if (onConstantFold)
-                    if (auto d = s.isDeclaration())
-                        onConstantFold(d, exp.loc);
+                    onConstantFold(s, exp.loc);
                 return setError();
             }
 
@@ -12508,9 +12507,7 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
             if (global.params.lsp && e1x.op == EXP.error)
             {
                 Expression e2x = exp.e2.expressionSemantic(sc);
-                if (e2x.op != EXP.error)
-                    return setResult(Expression.combine(e2x, e1x));
-                return setResult(e1x);
+                return setResult(e2x.op == EXP.error ? e1x : Expression.combine(e2x, e1x));
             }
 
             /* We have f = value.
