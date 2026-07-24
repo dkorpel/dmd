@@ -19,6 +19,7 @@ import dmd.astenums;
 import dmd.ast_node;
 import dmd.attrib;
 import dmd.common.outbuffer;
+import dmd.dcast : implicitConvTo;
 import dmd.dclass;
 import dmd.declaration;
 import dmd.dmodule;
@@ -529,8 +530,39 @@ void collectMembers(AggregateDeclaration ad, ref Dsymbol[] syms)
     }
 }
 
+/// Append this module's top-level functions whose first parameter accepts
+/// `baseType` (callable via UFCS on a value of that type) to `syms`.
+void collectUfcsCandidates(Module m, Type baseType, ref Dsymbol[] syms)
+{
+    if (!m.members || !baseType)
+        return;
+    void scan(ref Dsymbols members)
+    {
+        foreach (s; members)
+        {
+            if (auto ad = s.isAttribDeclaration())
+            {
+                if (auto d = ad.include(null))
+                    scan(*d);
+                continue;
+            }
+            auto fd = s.isFuncDeclaration();
+            if (!fd || !fd.ident || fd.ident.toString().startsWith("__") || fd.isGenerated)
+                continue;
+            auto tf = fd.type ? fd.type.isTypeFunction() : null;
+            if (!tf || tf.parameterList.length == 0)
+                continue;
+            auto pt = tf.parameterList[0].type;
+            if (pt && implicitConvTo(baseType, pt) != MATCH.nomatch)
+                syms ~= fd;
+        }
+    }
+    scan(*m.members);
+}
+
 /// Compute completion items for the request in `params`: members of the
-/// aggregate before a `.`, or module-level types and functions otherwise.
+/// aggregate before a `.` plus UFCS-callable module functions, or module-level
+/// types and functions otherwise.
 /// No templates; only plainly declared types and functions are offered.
 void completionItems(ref Lsp lsp, Params params, ref OutBuffer buf)
 {
@@ -556,6 +588,7 @@ void completionItems(ref Lsp lsp, Params params, ref OutBuffer buf)
             if (auto sym = typeSymbolOf(finder.result.type))
                 if (auto ad = sym.isAggregateDeclaration())
                     collectMembers(ad, syms);
+            collectUfcsCandidates(m, finder.result.type, syms);
         }
     }
     else if (m.members)
@@ -648,8 +681,31 @@ CallContext findEnclosingCall(const(char)[] content, size_t off)
     return CallContext(false, 0, 0);
 }
 
+/// Finds the CallExp whose callee is the given expression node.
+extern(C++) final class CallFinder : SemanticTimeTransitiveVisitor
+{
+    alias visit = typeof(super).visit;
+
+    Expression callee;
+    CallExp result;
+
+    extern (D) this(Expression callee)
+    {
+        this.callee = callee;
+    }
+
+    override void visit(CallExp e)
+    {
+        if (e.e1 is callee)
+            this.result = e;
+        super.visit(e);
+    }
+}
+
 /// Handle textDocument/signatureHelp: resolve the callee of the call
 /// enclosing the cursor and emit one SignatureInformation per overload.
+/// For a UFCS call the receiver counts as the signature's first parameter,
+/// so `activeParameter` is shifted past it.
 void signatureHelp(ref Lsp lsp, Params params, ref OutBuffer buf)
 {
     lsp.eSink.diagnostics = null;
@@ -673,6 +729,16 @@ void signatureHelp(ref Lsp lsp, Params params, ref OutBuffer buf)
                 visitor.visit(m);
                 if (auto target = definitionTarget(visitor.result))
                     fd = target.isFuncDeclaration();
+                if (fd)
+                {
+                    if (auto e = isExpression(visitor.result))
+                    {
+                        scope callFinder = new CallFinder(e);
+                        callFinder.visit(m);
+                        if (callFinder.result && callFinder.result.isUfcsRewrite)
+                            activeParam++;
+                    }
+                }
             }
             deinitializeModule();
         }
