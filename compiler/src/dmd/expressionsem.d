@@ -2299,6 +2299,8 @@ private Expression searchUFCS(Scope* sc, UnaExp ue, Identifier ident)
     else
     {
         //printf("-searchUFCS() %s\n", s.toChars());
+        if (auto die = ue.isDotIdExp())
+            loc = die.identLoc;
         return new DsymbolExp(loc, s);
     }
 }
