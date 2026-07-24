@@ -822,16 +822,11 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
         /// In LSP mode, a foreach whose aggregate has errors still analyzes its
         /// body (loop variables declared with `error` type when uninferrable),
         /// so the statements inside stay navigable.
-        Statement lspBody()
+        void setErrorOrLspBody()
         {
-            auto sym = new ScopeDsymbol();
-            sym.parent = sc.scopesym;
-            sym.endlinnum = fs.endloc.linnum;
-            Scope* sc2 = sc.push(sym);
-            sc2.inLoop = true;
-            sc2.sbreak = fs;
-            sc2.scontinue = fs;
-            auto stmts = new Statements();
+            if (!global.params.lsp)
+                return setError();
+            auto stmts = Statements();
             foreach (p; *fs.parameters)
             {
                 auto var = new VarDeclaration(p.loc.isValid ? p.loc : loc, p.type ? p.type : Type.terror, p.ident, null);
@@ -840,10 +835,11 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
             }
             if (fs._body)
                 stmts.push(fs._body);
-            Statement s = new CompoundStatement(loc, stmts);
-            s = s.statementSemantic(sc2);
-            sc2.pop();
-            return s;
+            Statement s = new CompoundStatement(loc, stmts.move());
+            const inLoopSave = sc.inLoop;
+            sc.inLoop = true;
+            result = s.semanticScope(sc, fs, fs, null);
+            sc.inLoop = inLoopSave;
         }
 
         fs.func = sc.func;
@@ -855,14 +851,7 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
         fs.aggr = resolveProperties(sc, fs.aggr);
         fs.aggr = fs.aggr.optimize(WANTvalue);
         if (fs.aggr.op == EXP.error)
-        {
-            if (global.params.lsp)
-            {
-                result = lspBody();
-                return;
-            }
-            return setError();
-        }
+            return setErrorOrLspBody();
         Expression oaggr = fs.aggr;     // remember original for error messages
         if (fs.aggr.type && fs.aggr.type.toBasetype().isTypeStruct() &&
             fs.aggr.type.toBasetype().isTypeStruct().sym.dtor &&
@@ -912,12 +901,7 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
                 }
             }
 
-            if (global.params.lsp)
-            {
-                result = lspBody();
-                return;
-            }
-            return setError();
+            return setErrorOrLspBody();
         }
 
         Dsymbol sapplyOld = sapply; // 'sapply' will be NULL if and after 'inferApplyArgTypes' errors
@@ -979,12 +963,7 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
                         explainForeachArgMismatch(fd, fs.parameters, fs.aggr.type.mod);
             }
 
-            if (global.params.lsp)
-            {
-                result = lspBody();
-                return;
-            }
-            return setError();
+            return setErrorOrLspBody();
         }
 
         Type tab = fs.aggr.type.toBasetype();

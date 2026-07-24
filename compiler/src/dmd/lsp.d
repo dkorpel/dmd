@@ -265,24 +265,24 @@ extern(C++) class LspVisitor : SemanticTimeTransitiveVisitor
 /// one level of pointer indirection), or null for other types.
 Dsymbol typeSymbolOf(Type t)
 {
-    if (!t)
-        return null;
     // check enums before toBasetype(), which resolves them to their base type
-    if (auto te = t.isTypeEnum())
-        return te.sym;
-    t = t.toBasetype();
-    if (auto tp = t.isTypePointer())
+    static Dsymbol direct(Type t)
     {
-        t = tp.next;
         if (auto te = t.isTypeEnum())
             return te.sym;
         t = t.toBasetype();
+        if (auto ts = t.isTypeStruct())
+            return ts.sym;
+        if (auto tc = t.isTypeClass())
+            return tc.sym;
+        return null;
     }
-    if (auto ts = t.isTypeStruct())
-        return ts.sym;
-    if (auto tc = t.isTypeClass())
-        return tc.sym;
-    return null;
+    if (!t)
+        return null;
+    if (auto s = direct(t))
+        return s;
+    auto tp = t.toBasetype().isTypePointer();
+    return tp ? direct(tp.next) : null;
 }
 
 /// Resolve the AST node under the cursor to the declaration it references,
@@ -400,25 +400,25 @@ struct FoldedRef
 }
 
 private __gshared FoldedRef[] foldedRefs;
+private __gshared const(char)[] foldedRefFilename;
 
-private void recordConstantFold(Declaration d, Loc loc)
+private void recordConstantFold(Dsymbol d, Loc loc)
 {
     SourceLoc sl = SourceLoc(loc);
-    if (sl.line == 0)
+    if (sl.line == 0 || sl.filename != foldedRefFilename)
         return;
     foldedRefs ~= FoldedRef(d, sl);
 }
 
 private void recordTypeResolved(Type t, Dsymbol s, Identifier ident, Loc loc)
 {
-    SourceLoc sl = SourceLoc(loc);
-    if (sl.line == 0)
-        return;
-    if (auto ts = typeSymbolOf(t))
-        if (ts.ident is ident)
-            foldedRefs ~= FoldedRef(ts, sl);
-    if (s && s.ident is ident)
-        foldedRefs ~= FoldedRef(s, sl);
+    Dsymbol ts = typeSymbolOf(t);
+    if (ts && ts.ident !is ident)
+        ts = null;
+    if (!ts && s && s.ident is ident)
+        ts = s;
+    if (ts)
+        recordConstantFold(ts, loc);
 }
 
 private Module analyzeModuleImpl(ref Lsp lsp, string uri)
@@ -431,6 +431,7 @@ private Module analyzeModuleImpl(ref Lsp lsp, string uri)
     onTypeResolved = &recordTypeResolved;
 
     SourceLoc sl = toSourceLoc(uri, Position(0, 0));
+    foldedRefFilename = sl.filename;
     const(char)[] p = FileName.name(sl.filename); // strip path
     auto ext = FileName.ext(sl.filename);
     p = p[0 .. $ - ext.length - 1];
@@ -1306,23 +1307,20 @@ void references(ref Lsp lsp, Params params, ref OutBuffer buf)
     scope finder = new ReferenceVisitor(target);
     finder.add(target.loc, target.isCtorDeclaration() ? cast(int) "this".length : finder.targetLen);
     finder.visit(m);
+    static TemplateDeclaration instanceTd(Dsymbol d)
+    {
+        auto ti = d.isInstantiated();
+        return ti && ti.tempdecl ? ti.tempdecl.isTemplateDeclaration() : null;
+    }
     TemplateDeclaration targetTd = target.isTemplateDeclaration();
     if (!targetTd && target.parent)
-    {
         if (auto td = target.parent.isTemplateDeclaration())
-            targetTd = td.onemember is target ? td : null;
-        else if (auto ti = target.parent.isTemplateInstance())
-            targetTd = ti.tempdecl ? ti.tempdecl.isTemplateDeclaration() : null;
-    }
-    static bool fromInstanceOf(Dsymbol d, TemplateDeclaration td)
-    {
-        if (!d.parent)
-            return false;
-        auto ti = d.parent.isTemplateInstance();
-        return ti && ti.tempdecl is td;
-    }
+            if (td.onemember is target)
+                targetTd = td;
+    if (!targetTd)
+        targetTd = instanceTd(target);
     foreach (fr; foldedRefs)
-        if (fr.d is target || (targetTd && (fr.d is targetTd || fromInstanceOf(fr.d, targetTd))))
+        if (fr.d is target || (targetTd && (fr.d is targetTd || instanceTd(fr.d) is targetTd)))
             finder.addSourceLoc(fr.loc, finder.targetLen);
     buf.writestring(`[`);
     bool first = true;

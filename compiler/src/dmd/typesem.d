@@ -5795,7 +5795,7 @@ void resolve(Type mt, Loc loc, Scope* sc, out Expression pe, out Type pt, out Ds
         if (pt)
             pt = pt.addMod(mt.mod);
         if (pt && onTypeResolved)
-            onTypeResolved(pt, null, mt.ident, mt.loc != Loc.initial ? mt.loc : loc);
+            onTypeResolved(pt, null, mt.ident, mt.loc.isValid ? mt.loc : loc);
     }
 
     void visitInstance(TypeInstance mt)
@@ -5812,7 +5812,7 @@ void resolve(Type mt, Loc loc, Scope* sc, out Expression pe, out Type pt, out Ds
             pt = pt.addMod(mt.mod);
         if (pt && onTypeResolved)
             onTypeResolved(pt, mt.tempinst.tempdecl, mt.tempinst.name,
-                mt.loc != Loc.initial ? mt.loc : loc);
+                mt.loc.isValid ? mt.loc : loc);
         //if (pt) printf("pt = %d '%s'\n", pt.ty, pt.toChars());
     }
 

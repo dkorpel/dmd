@@ -48,9 +48,10 @@ void ObjectNotFound(Loc loc, Identifier id)
     fatal();
 }
 
-/// When set (by the LSP server), called whenever a reference to a constant
-/// declaration is folded away, so its use location is not lost.
-__gshared void function(Declaration d, Loc loc) onConstantFold;
+/// When set (by the LSP server), called whenever a reference to a symbol
+/// won't survive in the AST (a constant declaration folded away, or a use in
+/// erroring code), so its use location is not lost.
+__gshared void function(Dsymbol d, Loc loc) onConstantFold;
 
 /// When set (by the LSP server), called whenever a type written as an
 /// identifier (or template instance, with `s` its template declaration)
