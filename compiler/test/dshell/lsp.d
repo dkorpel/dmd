@@ -93,6 +93,13 @@ immutable Case[] cases = [
         script: (ref c) { c.completion(5, 6); },
         expected: [`"label":"field","kind":5`, `"label":"method","kind":2`],
     },
+    // Member completion also offers module-level functions callable via UFCS
+    {
+        name: "completion-ufcs",
+        source: "module comp_ufcs;\n\nstruct V { int x; }\nint scaled(V v, int f) { return v.x * f; }\nint other(int i) { return i; }\nvoid main() {\n    V v;\n    v.\n}\n",
+        script: (ref c) { c.completion(7, 6); },
+        expected: [`"label":"x","kind":5`, `"label":"scaled","kind":3`],
+    },
     // Completion without a leading `.` lists module-level types and functions
     {
         name: "completion-module-scope",
@@ -121,6 +128,14 @@ immutable Case[] cases = [
         source: "module sig_method;\n\nstruct S { int scale(int factor) { return factor; } }\nvoid main() { S s; s.scale(2); }\n",
         script: (ref c) { c.signatureHelp(3, 27); },
         expected: [`"label":"scale(int factor)"`, `"activeParameter":0`],
+    },
+    // UFCS call: the receiver is the signature's first parameter, so
+    // activeParameter skips past it
+    {
+        name: "signatureHelp-ufcs",
+        source: "module sig_ufcs;\n\nstruct V { int x; }\nint scaled(V v, int f) { return v.x * f; }\nvoid main() { V v; v.scaled(2); }\n",
+        script: (ref c) { c.signatureHelp(4, 28); },
+        expected: [`"label":"scaled(V v, int f)"`, `"activeParameter":1`],
     },
     // Outside any call, no signatures are offered
     {
@@ -153,6 +168,13 @@ immutable Case[] cases = [
         script: (ref c) { c.references(2, 4); },
         expected: [`{"line":2,"character":4}`, `{"line":3,"character":14}`,
                    `{"line":3,"character":29}`, `{"line":3,"character":33}`],
+    },
+    // A UFCS use site is found and its range points at the identifier, not the dot
+    {
+        name: "references-ufcs",
+        source: "module refs_ufcs;\n\nstruct V { int x; }\nint norm(V v) { return v.x; }\nvoid main() { V v; int n = v.norm(); }\n",
+        script: (ref c) { c.references(3, 5); },
+        expected: [`{"line":3,"character":4}`, `{"line":4,"character":29}`],
     },
     // references works from a use site and finds method calls by identity
     {
