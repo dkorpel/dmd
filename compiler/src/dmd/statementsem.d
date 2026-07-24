@@ -250,6 +250,11 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
         s.exp = s.exp.expressionSemantic(sc);
         s.exp = resolveProperties(sc, s.exp);
         s.exp = s.exp.addDtorHook(sc);
+        if (global.params.lsp && s.exp.op != EXP.error && s.exp.type && s.exp.type.ty == Terror)
+        {
+            result = s;
+            return;
+        }
         if (checkNonAssignmentArrayOp(s.exp))
             s.exp = ErrorExp.get();
         if (auto f = isFuncAddress(s.exp))
@@ -810,6 +815,33 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
         const loc = fs.loc;
         const dim = fs.parameters.length;
 
+        /// In LSP mode, a foreach whose aggregate has errors still analyzes its
+        /// body (loop variables declared with `error` type when uninferrable),
+        /// so the statements inside stay navigable.
+        Statement lspBody()
+        {
+            auto sym = new ScopeDsymbol();
+            sym.parent = sc.scopesym;
+            sym.endlinnum = fs.endloc.linnum;
+            Scope* sc2 = sc.push(sym);
+            sc2.inLoop = true;
+            sc2.sbreak = fs;
+            sc2.scontinue = fs;
+            auto stmts = new Statements();
+            foreach (p; *fs.parameters)
+            {
+                auto var = new VarDeclaration(p.loc.isValid ? p.loc : loc, p.type ? p.type : Type.terror, p.ident, null);
+                var.storage_class |= STC.foreach_;
+                stmts.push(new ExpStatement(var.loc, var));
+            }
+            if (fs._body)
+                stmts.push(fs._body);
+            Statement s = new CompoundStatement(loc, stmts);
+            s = s.statementSemantic(sc2);
+            sc2.pop();
+            return s;
+        }
+
         fs.func = sc.func;
         if (fs.func.fes)
             fs.func = fs.func.fes.func;
@@ -819,7 +851,14 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
         fs.aggr = resolveProperties(sc, fs.aggr);
         fs.aggr = fs.aggr.optimize(WANTvalue);
         if (fs.aggr.op == EXP.error)
+        {
+            if (global.params.lsp)
+            {
+                result = lspBody();
+                return;
+            }
             return setError();
+        }
         Expression oaggr = fs.aggr;     // remember original for error messages
         if (fs.aggr.type && fs.aggr.type.toBasetype().isTypeStruct() &&
             fs.aggr.type.toBasetype().isTypeStruct().sym.dtor &&
@@ -869,6 +908,11 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
                 }
             }
 
+            if (global.params.lsp)
+            {
+                result = lspBody();
+                return;
+            }
             return setError();
         }
 
@@ -924,6 +968,11 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
             else
                 eSink.error(fs.loc, "cannot uniquely infer `foreach` argument types");
 
+            if (global.params.lsp)
+            {
+                result = lspBody();
+                return;
+            }
             return setError();
         }
 
@@ -1866,9 +1915,10 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
 
         ctorflow_then.freeFieldinit();          // free extra copy of the data
 
-        if (ifs.condition.op == EXP.error ||
+        if (!global.params.lsp &&
+            (ifs.condition.op == EXP.error ||
             (ifs.ifbody && ifs.ifbody.isErrorStatement()) ||
-            (ifs.elsebody && ifs.elsebody.isErrorStatement()))
+            (ifs.elsebody && ifs.elsebody.isErrorStatement())))
         {
             return setError();
         }

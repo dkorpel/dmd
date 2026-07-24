@@ -211,7 +211,9 @@ extern(C++) class LspVisitor : SemanticTimeTransitiveVisitor
 
     override void visit(VarExp e)
     {
-        if (inLoc(e.loc, e.var.ident))
+        // Skip compiler-synthesized references like a struct's `__init` symbol
+        // (a SymbolDeclaration sharing the struct's name and location)
+        if (!e.var.isSymbolDeclaration() && inLoc(e.loc, e.var.ident))
             this.result = e;
     }
 
@@ -242,6 +244,21 @@ extern(C++) class LspVisitor : SemanticTimeTransitiveVisitor
                 this.result = e;
         super.visit(e);
     }
+
+    override void visit(ScopeExp e)
+    {
+        if (e.sds && e.sds.ident && inLoc(e.loc, e.sds.ident))
+            this.result = e;
+        super.visit(e);
+    }
+
+    override void visit(TypeExp e)
+    {
+        if (auto s = typeSymbolOf(e.type))
+            if (s.ident && inLoc(e.loc, s.ident))
+                this.result = e;
+        super.visit(e);
+    }
 }
 
 /// Returns: the declaration of a struct/class/interface/enum type (following
@@ -250,15 +267,21 @@ Dsymbol typeSymbolOf(Type t)
 {
     if (!t)
         return null;
+    // check enums before toBasetype(), which resolves them to their base type
+    if (auto te = t.isTypeEnum())
+        return te.sym;
     t = t.toBasetype();
     if (auto tp = t.isTypePointer())
-        t = tp.next.toBasetype();
+    {
+        t = tp.next;
+        if (auto te = t.isTypeEnum())
+            return te.sym;
+        t = t.toBasetype();
+    }
     if (auto ts = t.isTypeStruct())
         return ts.sym;
     if (auto tc = t.isTypeClass())
         return tc.sym;
-    if (auto te = t.isTypeEnum())
-        return te.sym;
     return null;
 }
 
@@ -276,6 +299,10 @@ Dsymbol definitionTarget(ASTNode obj)
             return sle.sd;
         if (auto ne = e.isNewExp())
             return ne.member ? ne.member : typeSymbolOf(ne.type);
+        if (auto se = e.isScopeExp())
+            return se.sds;
+        if (auto te = e.isTypeExp())
+            return typeSymbolOf(te.type);
         return null;
     }
     return isDsymbol(obj);
@@ -362,11 +389,13 @@ Module analyzeModule(ref Lsp lsp, string uri)
 }
 
 /// The actual analysis pipeline; see analyzeModule for the fatal() guard.
-/// Use of a constant declaration whose reference was folded out of the AST
-/// (enum member, manifest constant), recorded via the `onConstantFold` hook.
+/// Use of a symbol whose reference doesn't survive in the AST: a folded-away
+/// constant (enum member, manifest constant, via the `onConstantFold` hook) or
+/// a type name written in source (via `onTypeResolved` — types are interned,
+/// so the written spelling's location is otherwise discarded).
 struct FoldedRef
 {
-    Declaration d;
+    Dsymbol d;
     SourceLoc loc;
 }
 
@@ -380,6 +409,18 @@ private void recordConstantFold(Declaration d, Loc loc)
     foldedRefs ~= FoldedRef(d, sl);
 }
 
+private void recordTypeResolved(Type t, Dsymbol s, Identifier ident, Loc loc)
+{
+    SourceLoc sl = SourceLoc(loc);
+    if (sl.line == 0)
+        return;
+    if (auto ts = typeSymbolOf(t))
+        if (ts.ident is ident)
+            foldedRefs ~= FoldedRef(ts, sl);
+    if (s && s.ident is ident)
+        foldedRefs ~= FoldedRef(s, sl);
+}
+
 private Module analyzeModuleImpl(ref Lsp lsp, string uri)
 {
     Type_init();
@@ -387,6 +428,7 @@ private Module analyzeModuleImpl(ref Lsp lsp, string uri)
     Loc._init();
     foldedRefs = null;
     onConstantFold = &recordConstantFold;
+    onTypeResolved = &recordTypeResolved;
 
     SourceLoc sl = toSourceLoc(uri, Position(0, 0));
     const(char)[] p = FileName.name(sl.filename); // strip path
@@ -462,9 +504,10 @@ ASTNode findCursorObject(ref Lsp lsp, Params params)
     return foldedRefAt(sl.line, sl.column, sl.filename);
 }
 
-/// Find the declaration of a folded-away constant use covering the cursor,
-/// for spots where the referencing expression no longer exists in the AST.
-private Declaration foldedRefAt(int line, int column, const(char)[] filename)
+/// Find the declaration of a folded-away constant use or written type name
+/// covering the cursor, for spots where the referencing expression or type
+/// spelling no longer exists in the AST.
+private Dsymbol foldedRefAt(int line, int column, const(char)[] filename)
 {
     foreach (fr; foldedRefs)
     {
@@ -1219,6 +1262,20 @@ extern(C++) final class ReferenceVisitor : SemanticTimeTransitiveVisitor
             add(e.typeLoc.isValid ? e.typeLoc : e.loc, aggLen());
         super.visit(e);
     }
+
+    override void visit(ScopeExp e)
+    {
+        if (e.sds is target)
+            add(e.loc, targetLen);
+        super.visit(e);
+    }
+
+    override void visit(TypeExp e)
+    {
+        if (typeSymbolOf(e.type) is target)
+            add(e.loc, targetLen);
+        super.visit(e);
+    }
 }
 
 /// Handle textDocument/references: the declaration of the symbol under the
@@ -1249,8 +1306,23 @@ void references(ref Lsp lsp, Params params, ref OutBuffer buf)
     scope finder = new ReferenceVisitor(target);
     finder.add(target.loc, target.isCtorDeclaration() ? cast(int) "this".length : finder.targetLen);
     finder.visit(m);
+    TemplateDeclaration targetTd = target.isTemplateDeclaration();
+    if (!targetTd && target.parent)
+    {
+        if (auto td = target.parent.isTemplateDeclaration())
+            targetTd = td.onemember is target ? td : null;
+        else if (auto ti = target.parent.isTemplateInstance())
+            targetTd = ti.tempdecl ? ti.tempdecl.isTemplateDeclaration() : null;
+    }
+    static bool fromInstanceOf(Dsymbol d, TemplateDeclaration td)
+    {
+        if (!d.parent)
+            return false;
+        auto ti = d.parent.isTemplateInstance();
+        return ti && ti.tempdecl is td;
+    }
     foreach (fr; foldedRefs)
-        if (fr.d is target)
+        if (fr.d is target || (targetTd && (fr.d is targetTd || fromInstanceOf(fr.d, targetTd))))
             finder.addSourceLoc(fr.loc, finder.targetLen);
     buf.writestring(`[`);
     bool first = true;

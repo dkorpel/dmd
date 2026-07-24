@@ -2389,6 +2389,18 @@ private void hookDtors(CondExp ce, Scope* sc)
 }
 
 
+/// In LSP mode, record a use of the callee of a call whose arguments have
+/// errors, since the resolved callee expression won't survive in the AST.
+private void lspRecordCallee(Expression e1)
+{
+    if (!onConstantFold || !e1)
+        return;
+    if (auto dve = e1.isDotVarExp())
+        onConstantFold(dve.var, dve.identLoc.isValid ? dve.identLoc : dve.loc);
+    else if (auto ve = e1.isVarExp())
+        onConstantFold(ve.var, ve.loc);
+}
+
 /******************************
  * Pull out callable entity with UFCS.
  */
@@ -2454,7 +2466,12 @@ private Expression resolveUFCS(Scope* sc, CallExp ce)
         else
         {
             if (arrayExpressionSemantic(ce.arguments.peekSlice(), sc))
+            {
+                if (global.params.lsp)
+                    if (Expression ey = die.dotIdSemanticProp(sc, 1))
+                        lspRecordCallee(ey);
                 return ErrorExp.get();
+            }
 
             if (Expression ey = die.dotIdSemanticProp(sc, 1))
             {
@@ -2846,7 +2863,11 @@ Lagain:
             return ErrorExp.get();
         }
         if (v.type.ty == Terror)
+        {
+            if (onConstantFold)
+                onConstantFold(v, loc);
             return ErrorExp.get();
+        }
 
         if ((v.storage_class & STC.manifest) && v._init)
         {
@@ -2939,6 +2960,8 @@ Lagain:
 
     if (Type t = dmd.dsymbolsem.getType(s))
     {
+        if (onTypeResolved)
+            onTypeResolved(t, null, s.ident, loc);
         return (new TypeExp(loc, t)).expressionSemantic(sc);
     }
 
@@ -5579,7 +5602,12 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
         if (s)
         {
             if (s.errors)
+            {
+                if (onConstantFold)
+                    if (auto d = s.isDeclaration())
+                        onConstantFold(d, exp.loc);
                 return setError();
+            }
 
             Expression e;
 
@@ -7999,7 +8027,10 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
         }
         if (arrayExpressionSemantic(exp.arguments.peekSlice(), sc) ||
             preFunctionParameters(sc, exp.argumentList, global.errorSink))
+        {
+            lspRecordCallee(exp.e1);
             return setError();
+        }
 
         // Check for call operator overload
         if (t1)
@@ -12472,6 +12503,14 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
                     se.arrayop = true;
 
                 e1x = e1x.expressionSemantic(sc);
+            }
+
+            if (global.params.lsp && e1x.op == EXP.error)
+            {
+                Expression e2x = exp.e2.expressionSemantic(sc);
+                if (e2x.op != EXP.error)
+                    return setResult(Expression.combine(e2x, e1x));
+                return setResult(e1x);
             }
 
             /* We have f = value.

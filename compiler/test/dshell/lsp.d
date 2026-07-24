@@ -355,6 +355,59 @@ immutable Case[] cases = [
         script: (ref c) { c.definition(8, 16); },
         expected: [`"line":2`, `"character":4`],
     },
+    // References on a struct include type names written in declarations
+    {
+        name: "references-type-use",
+        source: "module refs_type;\n\nstruct Vec { int x; }\nVec add(Vec a) { Vec r; return r; }\n",
+        script: (ref c) { c.references(2, 7); },
+        expected: [`{"line":2,"character":7}`, `{"line":3,"character":0}`,
+                   `{"line":3,"character":8}`, `{"line":3,"character":17}`],
+    },
+    // Go-to-definition on an enum type name written in a declaration
+    {
+        name: "definition-enum-type-use",
+        source: "module def_enumtype;\n\nenum State { IDLE, BUSY }\nvoid f() { State s; }\n",
+        script: (ref c) { c.definition(3, 11); },
+        expected: [`"line":2`, `"character":5`],
+    },
+    // References on a type used for static member access `G.f()`
+    {
+        name: "references-type-static-access",
+        source: "module refs_statictype;\n\nstruct G { static int f(int x) { return x; } }\nvoid h() { int y = G.f(1); }\n",
+        script: (ref c) { c.references(2, 7); },
+        expected: [`{"line":2,"character":7}`, `{"line":3,"character":19}`],
+    },
+    // References on a static member function called via the type name
+    {
+        name: "references-static-member-call",
+        source: "module refs_staticfn;\n\nstruct G { static int f(int x) { return x; } }\nvoid h() { int y = G.f(1); }\n",
+        script: (ref c) { c.references(2, 22); },
+        expected: [`{"line":2,"character":22}`, `{"line":3,"character":21}`],
+    },
+    // The body of a foreach whose aggregate has errors stays navigable
+    {
+        name: "references-error-foreach",
+        source: "module refs_errfeach;\n\nint g(int x) { return x; }\nvoid f()\n{\n    int total;\n    foreach (v; noSuchThing) { total = g(total); }\n}\n",
+        script: (ref c) { c.references(5, 8); },
+        expected: [`{"line":5,"character":8}`, `{"line":6,"character":31}`,
+                   `{"line":6,"character":41}`],
+    },
+    // Uses of the error-typed loop variable itself are found
+    {
+        name: "references-error-foreach-var",
+        source: "module refs_errfvar;\n\nvoid f()\n{\n    foreach (num; noSuchThing) { int y = num + num; }\n}\n",
+        script: (ref c) { c.references(4, 13); },
+        expected: [`{"line":4,"character":13}`, `{"line":4,"character":41}`,
+                   `{"line":4,"character":47}`],
+    },
+    // The callee of a call whose arguments have errors is still a reference,
+    // also through an assignment whose left-hand side has errors
+    {
+        name: "references-callee-error-args",
+        source: "module refs_errcall;\n\nstruct G { static int f(int x) { return x; } }\nvoid h()\n{\n    foreach (num; noSuchThing) { num.member = G.f(num.val); }\n}\n",
+        script: (ref c) { c.references(2, 22); },
+        expected: [`{"line":2,"character":22}`, `{"line":5,"character":48}`],
+    },
 ];
 
 // ----------------------------------------------------------------------------
