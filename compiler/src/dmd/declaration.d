@@ -52,6 +52,12 @@ void ObjectNotFound(Loc loc, Identifier id)
 /// declaration is folded away, so its use location is not lost.
 __gshared void function(Declaration d, Loc loc) onConstantFold;
 
+/// When set (by the LSP server), called whenever a type written as an
+/// identifier (or template instance, with `s` its template declaration)
+/// resolves to `t`, since the written type's location is discarded after
+/// semantic (types are interned).
+__gshared void function(Type t, Dsymbol s, Identifier ident, Loc loc) onTypeResolved;
+
 /* Accumulator for successive matches.
  */
 struct MatchAccumulator
