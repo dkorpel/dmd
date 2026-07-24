@@ -8031,7 +8031,7 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
                         (*exp.arguments)[0].type.mutableOf != sd.type.mutableOf())
                         goto Lx;
 
-                    auto sle = new StructLiteralExp(exp.loc, sd, null, exp.e1.type);
+                    auto sle = new StructLiteralExp(exp.e1.loc, sd, null, exp.e1.type);
                     if (!sd.fill(exp.loc, *sle.elements, true))
                         return setError();
                     if (checkFrameAccess(exp.loc, sc, sd, sle.elements.length))
@@ -8049,11 +8049,15 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
                     Expression e = sle;
                     if (auto cf = sd.ctor.isCtorDeclaration())
                     {
-                        e = new DotVarExp(exp.loc, e, cf, true);
+                        auto dve = new DotVarExp(exp.loc, e, cf, true);
+                        dve.identLoc = exp.e1.loc;
+                        e = dve;
                     }
                     else if (auto td = sd.ctor.isTemplateDeclaration())
                     {
-                        e = new DotIdExp(exp.loc, e, td.ident);
+                        auto die = new DotIdExp(exp.loc, e, td.ident);
+                        die.identLoc = exp.e1.loc;
+                        e = die;
                     }
                     else if (auto os = sd.ctor.isOverloadSet())
                     {
@@ -8106,7 +8110,7 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
                     }
                 }
 
-                Expression e = new StructLiteralExp(exp.loc, sd, resolvedArgs, exp.e1.type);
+                Expression e = new StructLiteralExp(exp.e1.loc, sd, resolvedArgs, exp.e1.type);
                 e = e.expressionSemantic(sc);
                 result = e;
                 return;

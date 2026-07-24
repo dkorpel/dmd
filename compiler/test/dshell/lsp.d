@@ -100,6 +100,42 @@ immutable Case[] cases = [
         script: (ref c) { c.completion(7, 6); },
         expected: [`"label":"x","kind":5`, `"label":"scaled","kind":3`],
     },
+    // `this.` completes to the enclosing aggregate's members
+    {
+        name: "completion-this",
+        source: "module comp_this;\n\nstruct S\n{\n    int field;\n    void m()\n    {\n        this.\n    }\n}\n",
+        script: (ref c) { c.completion(7, 13); },
+        expected: [`"label":"field","kind":5`, `"label":"m","kind":2`],
+    },
+    // A type name before the `.` completes to its members (enum members here)
+    {
+        name: "completion-enum-type",
+        source: "module comp_enum;\n\nenum E { one, two }\nvoid main() {\n    E.\n}\n",
+        script: (ref c) { c.completion(4, 6); },
+        expected: [`"label":"one","kind":20`, `"label":"two","kind":20`],
+    },
+    // Types nested inside aggregates are found too
+    {
+        name: "completion-nested-enum",
+        source: "module comp_nested;\n\nstruct S { enum E { one } }\nvoid main() {\n    S.E.\n}\n",
+        script: (ref c) { c.completion(4, 8); },
+        expected: [`"label":"one","kind":20`],
+    },
+    // Static members of a struct offered after the type name
+    {
+        name: "completion-type-static",
+        source: "module comp_static;\n\nstruct M { enum one = 1; static int two() { return 2; } }\nvoid main() {\n    M.\n}\n",
+        script: (ref c) { c.completion(4, 6); },
+        expected: [`"label":"one"`, `"label":"two"`],
+    },
+    // A `.` after a non-identifier (like `]`) offers nothing rather than
+    // falling back to module-level symbols
+    {
+        name: "completion-baredot",
+        source: "module comp_baredot;\n\nvoid main() {\n    int[3] a;\n    a[0].\n}\n",
+        script: (ref c) { c.completion(4, 9); },
+        expected: [`"items":[]`],
+    },
     // Completion without a leading `.` lists module-level types and functions
     {
         name: "completion-module-scope",
@@ -144,6 +180,34 @@ immutable Case[] cases = [
         script: (ref c) { c.signatureHelp(2, 0); },
         expected: [`"signatures":[]`],
     },
+    // unittest bodies are analyzed too (-lsp implies -unittest)
+    {
+        name: "signatureHelp-unittest",
+        source: "module sig_ut;\n\nint tw(int x) { return x; }\nunittest { int y = tw(1); }\n",
+        script: (ref c) { c.signatureHelp(3, 22); },
+        expected: [`"label":"tw(int x)"`, `"activeParameter":0`],
+    },
+    // Parameter storage classes appear in the signature labels
+    {
+        name: "signatureHelp-ref",
+        source: "module sig_ref;\n\nvoid f(ref int x, float y) {}\nvoid main() { int a; f(a, 1); }\n",
+        script: (ref c) { c.signatureHelp(3, 26); },
+        expected: [`"label":"f(ref int x, float y)"`, `"label":"ref int x"`, `"activeParameter":1`],
+    },
+    // A struct literal call shows the fields as parameters
+    {
+        name: "signatureHelp-structliteral",
+        source: "module sig_lit;\n\nstruct P { int x; float y; }\nvoid main() { P p = P(1, 2); }\n",
+        script: (ref c) { c.signatureHelp(3, 25); },
+        expected: [`"label":"P(int x, float y)"`, `"activeParameter":1`],
+    },
+    // A struct constructor call shows the constructor named after the struct
+    {
+        name: "signatureHelp-ctor",
+        source: "module sig_ctor;\n\nstruct C { int a; this(int a, int b) { this.a = a + b; } }\nvoid main() { auto c = C(1, 2); }\n",
+        script: (ref c) { c.signatureHelp(3, 25); },
+        expected: [`"label":"C(int a, int b)"`, `"activeParameter":0`],
+    },
     // textDocument/documentSymbol returns a hierarchical symbol tree
     {
         name: "documentSymbol-tree",
@@ -160,6 +224,20 @@ immutable Case[] cases = [
         source: "module docsym_attrib;\n@safe:\n\nprivate enum N = 3;\nvoid f() {}\n",
         script: (ref c) { c.documentSymbol(); },
         expected: [`"name":"N","kind":13`, `"name":"f","kind":12`],
+    },
+    // Constructors appear as `this` with the Constructor kind
+    {
+        name: "documentSymbol-ctor",
+        source: "module docsym_ctor;\n\nstruct C { int a; this(int a) { this.a = a; } }\n",
+        script: (ref c) { c.documentSymbol(); },
+        expected: [`"name":"this","kind":9`],
+    },
+    // Go-to-definition on a struct literal jumps to the struct
+    {
+        name: "definition-structliteral",
+        source: "module def_lit;\n\nstruct P { int x; float y; }\nvoid main() { P p = P(1, 2); }\n",
+        script: (ref c) { c.definition(3, 20); },
+        expected: [`"line":2`, `"character":7`],
     },
     // textDocument/references lists the declaration and every use in the file
     {

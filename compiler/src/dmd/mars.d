@@ -995,6 +995,7 @@ bool parseCommandLine(const ref Strings arguments, const size_t argc, out Param 
         else if (arg == "-lsp")
         {
             params.lsp = true;
+            params.useUnitTests = true;
         }
         else if (arg.length > 6 && arg[0..6] == "--DRT-")
         {

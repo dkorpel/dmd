@@ -174,7 +174,20 @@ extern(C++) class LspVisitor : SemanticTimeTransitiveVisitor
 
     override void visit(DotVarExp e)
     {
-        if (e.var && e.var.ident && inLoc(e.identLoc, e.var.ident))
+        // A struct constructor call `S(...)` lowers to `sle.__ctor(...)` with
+        // identLoc at the type name, so match against the aggregate's name
+        Identifier id = e.var ? e.var.ident : null;
+        if (auto ctor = e.var ? e.var.isCtorDeclaration() : null)
+            if (auto ad = ctor.isMember())
+                id = ad.ident;
+        if (id && inLoc(e.identLoc, id))
+            this.result = e;
+        super.visit(e);
+    }
+
+    override void visit(StructLiteralExp e)
+    {
+        if (e.sd && e.sd.ident && inLoc(e.loc, e.sd.ident))
             this.result = e;
         super.visit(e);
     }
@@ -208,6 +221,8 @@ Dsymbol definitionTarget(ASTNode obj)
             return ve.var;
         if (auto dve = e.isDotVarExp())
             return dve.var;
+        if (auto sle = e.isStructLiteralExp())
+            return sle.sd;
         return null;
     }
     return isDsymbol(obj);
@@ -229,7 +244,9 @@ bool writeLocation(ref OutBuffer buf, Dsymbol s)
     SourceLoc sl = SourceLoc(s.loc);
     if (sl.filename.length == 0 || sl.line == 0)
         return false;
-    const len = s.ident ? cast(int) s.ident.toString().length : 1;
+    int len = s.ident ? cast(int) s.ident.toString().length : 1;
+    if (s.isCtorDeclaration())
+        len = cast(int) "this".length;
     writeLocationAt(buf, sl, len);
     return true;
 }
@@ -323,6 +340,7 @@ private Module analyzeModuleImpl(ref Lsp lsp, string uri)
 
     if (!m.read(loc))
         return null;
+    m.importedFrom = m;
     m = m.parse();
     if (!m)
         return null;
@@ -382,6 +400,8 @@ private int completionKind(Dsymbol s)
         return 22;                         // Struct
     if (s.isEnumDeclaration())
         return 13;                         // Enum
+    if (s.isEnumMember())
+        return 20;                         // EnumMember
     if (auto vd = s.isVarDeclaration())
         return vd.isField() ? 5 : 6;       // Field : Variable
     return 1;                              // Text (fallback)
@@ -470,15 +490,13 @@ CompletionContext completionContext(const(char)[] content, Position pos)
     CompletionContext result;
     if (i > 0 && content[i - 1] == '.')
     {
+        result.member = true;
         const end = i - 1;
         size_t start = end;
         while (start > 0 && isIdentChar(content[start - 1]))
             start--;
         if (start < end)
-        {
-            result.member = true;
             result.baseIdent = content[start .. end];
-        }
     }
     return result;
 }
@@ -502,6 +520,55 @@ extern(C++) final class VarFinder : SemanticTimeTransitiveVisitor
             this.result = d;
         super.visit(d);
     }
+}
+
+/// Finds the innermost function whose body's line range contains `line`.
+extern(C++) final class FuncFinder : SemanticTimeTransitiveVisitor
+{
+    alias visit = typeof(super).visit;
+
+    int line;
+    FuncDeclaration result;
+
+    extern (D) this(int line)
+    {
+        this.line = line;
+    }
+
+    override void visit(FuncDeclaration d)
+    {
+        if (d.loc.isValid && d.endloc.isValid)
+        {
+            const start = SourceLoc(d.loc).line;
+            const end = SourceLoc(d.endloc).line;
+            if (start <= line && line <= end)
+                this.result = d;
+        }
+        super.visit(d);
+    }
+}
+
+/// Finds an aggregate or enum declaration named `name`, looking through
+/// attribute blocks and into nested aggregates.
+Dsymbol findTypeSymbol(ref Dsymbols members, const(char)[] name)
+{
+    foreach (s; members)
+    {
+        if (auto ad = s.isAttribDeclaration())
+        {
+            if (auto d = ad.include(null))
+                if (auto found = findTypeSymbol(*d, name))
+                    return found;
+            continue;
+        }
+        if (s.ident && s.ident.toString() == name && (s.isAggregateDeclaration() || s.isEnumDeclaration()))
+            return s;
+        if (auto agg = s.isAggregateDeclaration())
+            if (agg.members)
+                if (auto found = findTypeSymbol(*agg.members, name))
+                    return found;
+    }
+    return null;
 }
 
 /// Append the fields and methods of `ad` (and base classes) to `syms`,
@@ -581,15 +648,61 @@ void completionItems(ref Lsp lsp, Params params, ref OutBuffer buf)
     Dsymbol[] syms;
     if (ctx.member)
     {
-        scope finder = new VarFinder(ctx.baseIdent);
-        finder.visit(m);
-        if (finder.result)
+        Type baseType;
+        Dsymbol typeSym;
+        if (ctx.baseIdent.length == 0)
         {
-            if (auto sym = typeSymbolOf(finder.result.type))
-                if (auto ad = sym.isAggregateDeclaration())
-                    collectMembers(ad, syms);
-            collectUfcsCandidates(m, finder.result.type, syms);
         }
+        else if (ctx.baseIdent == "this")
+        {
+            scope ff = new FuncFinder(params.position.line + 1);
+            ff.visit(m);
+            if (ff.result)
+            {
+                if (auto ad = ff.result.isMember2())
+                {
+                    typeSym = ad;
+                    baseType = ad.type;
+                }
+            }
+        }
+        else
+        {
+            scope finder = new VarFinder(ctx.baseIdent);
+            finder.visit(m);
+            if (finder.result)
+            {
+                baseType = finder.result.type;
+                typeSym = typeSymbolOf(baseType);
+            }
+            else if (m.members)
+            {
+                typeSym = findTypeSymbol(*m.members, ctx.baseIdent);
+                if (!typeSym)
+                {
+                    if (auto s = m.search(Loc.initial, Identifier.idPool(ctx.baseIdent)))
+                    {
+                        s = s.toAlias();
+                        if (s.isAggregateDeclaration() || s.isEnumDeclaration())
+                            typeSym = s;
+                    }
+                }
+            }
+        }
+        if (typeSym)
+        {
+            if (auto ad = typeSym.isAggregateDeclaration())
+                collectMembers(ad, syms);
+            else if (auto ed = typeSym.isEnumDeclaration())
+            {
+                if (ed.members)
+                    foreach (s; *ed.members)
+                        if (s.isEnumMember())
+                            syms ~= s;
+            }
+        }
+        if (baseType)
+            collectUfcsCandidates(m, baseType, syms);
     }
     else if (m.members)
     {
@@ -605,40 +718,34 @@ void completionItems(ref Lsp lsp, Params params, ref OutBuffer buf)
     deinitializeModule();
 }
 
-/// Convert a list of Parameters into LSP SignatureInformation JSON for a
-/// single signature, written into `buf`.
-void writeSignature(ref OutBuffer buf, const(char)[] name, Parameter[] params_)
+/// Convert a function type's parameters into LSP SignatureInformation JSON for
+/// a single signature, written into `buf`.
+void writeSignature(ref OutBuffer buf, const(char)[] name, TypeFunction tf)
 {
-    buf.printf(`{"label":"%.*s(`, cast(int)name.length, name.ptr);
-    bool first = true;
-    foreach (p; params_)
+    import dmd.hdrgen : parameterToChars;
+
+    const(char)[][] labels;
+    foreach (i; 0 .. tf.parameterList.length)
+        labels ~= parameterToChars(tf.parameterList[i], tf, false).toDString;
+
+    buf.writestring(`{"label":"`);
+    OutBuffer label;
+    label.printf("%.*s(", cast(int)name.length, name.ptr);
+    foreach (i, l; labels)
     {
-        if (!first)
-            buf.writestring(", ");
-        first = false;
-        if (p.type)
-            buf.printf("%s", p.type.toChars);
-        if (p.ident)
-            buf.printf(" %s", p.ident.toChars);
+        if (i)
+            label.writestring(", ");
+        label.writestring(l);
     }
-    buf.writestring(`)","parameters":[`);
-    first = true;
-    foreach (p; params_)
+    label.writestring(")");
+    buf.writeJsonString(label.extractSlice);
+    buf.writestring(`","parameters":[`);
+    foreach (i, l; labels)
     {
-        if (!first)
+        if (i)
             buf.writestring(",");
-        first = false;
         buf.writestring(`{"label":"`);
-        OutBuffer label;
-        if (p.type)
-            label.printf("%s", p.type.toChars);
-        if (p.ident)
-        {
-            if (p.type)
-                label.writestring(" ");
-            label.printf("%s", p.ident.toChars);
-        }
-        buf.writeJsonString(label.extractSlice);
+        buf.writeJsonString(l);
         buf.writestring(`"}`);
     }
     buf.writestring(`]}`);
@@ -710,6 +817,8 @@ void signatureHelp(ref Lsp lsp, Params params, ref OutBuffer buf)
 {
     lsp.eSink.diagnostics = null;
     FuncDeclaration fd;
+    const(char)[] aggName;
+    TypeFunction fieldTf;
     int activeParam;
     if (auto content = params.textDocument.uri in lsp.openDocuments)
     {
@@ -728,9 +837,35 @@ void signatureHelp(ref Lsp lsp, Params params, ref OutBuffer buf)
                 scope visitor = new LspVisitor(pos.line + 1, pos.character + 1);
                 visitor.visit(m);
                 if (auto target = definitionTarget(visitor.result))
+                {
                     fd = target.isFuncDeclaration();
+                    if (!fd)
+                    {
+                        if (auto ad = target.isAggregateDeclaration())
+                        {
+                            aggName = ad.ident.toString();
+                            if (ad.ctor)
+                                fd = ad.ctor.isFuncDeclaration();
+                            if (!fd)
+                            {
+                                if (auto sd = ad.isStructDeclaration())
+                                {
+                                    auto ps = new Parameters();
+                                    foreach (v; sd.fields)
+                                        ps.push(new Parameter(v.loc, STC.none, v.type, v.ident, null, null, null));
+                                    fieldTf = new TypeFunction(ParameterList(ps), Type.tvoid, LINK.d);
+                                }
+                            }
+                        }
+                    }
+                }
                 if (fd)
                 {
+                    if (fd.isCtorDeclaration())
+                    {
+                        if (auto pad = fd.isMember())
+                            aggName = pad.ident.toString();
+                    }
                     if (auto e = isExpression(visitor.result))
                     {
                         scope callFinder = new CallFinder(e);
@@ -782,14 +917,13 @@ void signatureHelp(ref Lsp lsp, Params params, ref OutBuffer buf)
         auto tf = f.type ? f.type.isTypeFunction() : null;
         if (!tf)
             continue;
-        Parameter[] ps;
-        foreach (i; 0 .. tf.parameterList.length)
-            ps ~= tf.parameterList[i];
         if (!first)
             buf.writestring(",");
         first = false;
-        writeSignature(buf, f.ident.toString(), ps);
+        writeSignature(buf, aggName ? aggName : f.ident.toString(), tf);
     }
+    if (overloads.length == 0 && fieldTf && aggName)
+        writeSignature(buf, aggName, fieldTf);
     buf.printf(`],"activeSignature":%d,"activeParameter":%d}`, activeSig, activeParam);
 }
 
@@ -818,7 +952,14 @@ private int documentSymbolKind(Dsymbol s)
 /// Returns: false (and writes nothing) for unnamed, generated, or locationless symbols.
 private bool writeDocumentSymbol(ref OutBuffer buf, Dsymbol s)
 {
-    if (!s.ident || s.ident.toString().startsWith("__"))
+    const(char)[] name = s.ident ? s.ident.toString() : null;
+    int kind = documentSymbolKind(s);
+    if (s.isCtorDeclaration())
+    {
+        name = "this";
+        kind = 9;                          // Constructor
+    }
+    if (name.length == 0 || name.startsWith("__"))
         return false;
     if (auto fd = s.isFuncDeclaration())
         if (fd.isGenerated)
@@ -826,10 +967,10 @@ private bool writeDocumentSymbol(ref OutBuffer buf, Dsymbol s)
     SourceLoc sl = SourceLoc(s.loc);
     if (sl.filename.length == 0 || sl.line == 0)
         return false;
-    const len = cast(int) s.ident.toString().length;
+    const len = cast(int) name.length;
     buf.writestring(`{"name":"`);
-    buf.writeJsonString(s.ident.toString());
-    buf.printf(`","kind":%d,`, documentSymbolKind(s));
+    buf.writeJsonString(name);
+    buf.printf(`","kind":%d,`, kind);
 
     int endLine = sl.line - 1;
     int endCol = sl.column - 1 + len;
