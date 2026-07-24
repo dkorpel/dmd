@@ -1620,6 +1620,7 @@ extern (C++) final class NewExp : Expression
 {
     Expression thisexp;         // if !=null, 'this' for class being allocated
     Type newtype;
+    Loc typeLoc;                // location of newtype's name as written in source; `loc` points at `new`
     Expressions* arguments;     // Array of Expression's
     ArgumentLabels* names;         // Array of names(name and location of name) corresponding to expressions
     Expression placement;       // if !=null, then PlacementExpression

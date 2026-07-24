@@ -205,6 +205,8 @@ private Expression fromConstInitializer(int result, Expression e1)
         e = e.copy();
         e.type = e1.type;
     }
+    if (e !is e1 && onConstantFold)
+        onConstantFold(v, ve.loc);
     e.loc = e1.loc;
 
     return e;

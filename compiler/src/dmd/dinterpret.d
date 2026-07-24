@@ -2088,6 +2088,8 @@ public:
 
     Expression getVarExp(Loc loc, InterState* istate, Declaration d, CTFEGoal goal)
     {
+        if (onConstantFold && (d.isEnumMember() || d.storage_class & STC.manifest))
+            onConstantFold(d, loc);
         Expression e = CTFEExp.cantexp;
         if (VarDeclaration v = d.isVarDeclaration())
         {

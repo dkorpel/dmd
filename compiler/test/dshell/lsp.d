@@ -283,6 +283,78 @@ immutable Case[] cases = [
         script: (ref c) { c.didChange("module diag_change;\n\nint x = 1;\n"); },
         expected: [`undefined identifier`, `"diagnostics":[]`],
     },
+    // A method called without an explicit `this.` is still found, with the
+    // range on the identifier rather than the call's parenthesis
+    {
+        name: "references-implicit-this",
+        source: "module refs_impthis;\n\nclass C\n{\n    void act() {}\n    void step() { act(); }\n}\n",
+        script: (ref c) { c.references(4, 9); },
+        expected: [`{"line":4,"character":9}`, `{"line":5,"character":18}`],
+    },
+    // Enum member uses are constant-folded out of the AST; the fold hook
+    // still records them (initializer, comparison, case label), and the
+    // cursor resolves on a folded use site
+    {
+        name: "references-enum-member",
+        source: "module refs_enum;\n\nenum E { one, two }\nE g = E.one;\nvoid f()\n{\n    E l = E.two;\n    if (l == E.one) {}\n    switch (l) { case E.one: break; default: break; }\n}\n",
+        script: (ref c) { c.references(7, 16); },
+        expected: [`{"line":2,"character":9}`, `{"line":3,"character":8}`,
+                   `{"line":7,"character":15}`, `{"line":8,"character":24}`],
+    },
+    // Manifest constant uses survive constant folding too
+    {
+        name: "references-manifest",
+        source: "module refs_manifest;\n\nenum dt = 2;\nint f() { return dt + dt; }\n",
+        script: (ref c) { c.references(2, 5); },
+        expected: [`{"line":2,"character":5}`, `{"line":3,"character":17}`,
+                   `{"line":3,"character":22}`],
+    },
+    // From the constructor declaration: the decl range spans `this` and a
+    // `new C(...)` use points at the class name
+    {
+        name: "references-ctor-new",
+        source: "module refs_ctor;\n\nclass C\n{\n    this(int a) {}\n}\nvoid f() { auto c = new C(1); }\n",
+        script: (ref c) { c.references(4, 4); },
+        expected: [`"start":{"line":4,"character":4},"end":{"line":4,"character":8}`,
+                   `"start":{"line":6,"character":24},"end":{"line":6,"character":25}`],
+    },
+    // Go-to-definition on `new C` jumps to the constructor
+    {
+        name: "definition-new",
+        source: "module def_new;\n\nclass C\n{\n    this(int a) {}\n}\nvoid f() { auto c = new C(1); }\n",
+        script: (ref c) { c.definition(6, 24); },
+        expected: [`"line":4`, `"character":4`],
+    },
+    // References on a struct include struct literal calls
+    {
+        name: "references-structliteral",
+        source: "module refs_slit;\n\nstruct P { int x; }\nvoid f() { P p = P(3); }\n",
+        script: (ref c) { c.references(2, 7); },
+        expected: [`{"line":2,"character":7}`, `{"line":3,"character":17}`],
+    },
+    // A parameter is found from its declaration in the signature
+    {
+        name: "references-param",
+        source: "module refs_param;\n\nint f(int abc) { return abc * abc; }\n",
+        script: (ref c) { c.references(2, 10); },
+        expected: [`{"line":2,"character":10}`, `{"line":2,"character":24}`,
+                   `{"line":2,"character":30}`],
+    },
+    // A foreach variable's declaration location is the variable name,
+    // not the `foreach` keyword
+    {
+        name: "references-foreach-var",
+        source: "module refs_feach;\n\nvoid f()\n{\n    int[3] a;\n    foreach (v; a) { int y = v; }\n}\n",
+        script: (ref c) { c.references(5, 13); },
+        expected: [`{"line":5,"character":13}`, `{"line":5,"character":29}`],
+    },
+    // A statement after an error in a nested block keeps its analysis
+    {
+        name: "definition-after-nested-error",
+        source: "module refs_err;\n\nint g() { return 3; }\nvoid f()\n{\n    if (true)\n    {\n        auto e = undefinedXYZ;\n        int y = g();\n    }\n}\n",
+        script: (ref c) { c.definition(8, 16); },
+        expected: [`"line":2`, `"character":4`],
+    },
 ];
 
 // ----------------------------------------------------------------------------
