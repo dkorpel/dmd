@@ -100,12 +100,66 @@ immutable Case[] cases = [
         script: (ref c) { c.completion(6, 4); },
         expected: [`"label":"Point","kind":22`, `"label":"Color","kind":13`, `"label":"area","kind":3`],
     },
-    // textDocument/signatureHelp currently emits a hard-coded signature
+    // textDocument/signatureHelp resolves the enclosing call; cursor is on
+    // the second argument
     {
-        name: "signatureHelp-stub",
-        source: "module sig_test;\n\nvoid f() {}\n",
+        name: "signatureHelp-call",
+        source: "module sig_test;\n\nint add(int x, int y) { return x + y; }\nvoid main() { add(1, 2); }\n",
+        script: (ref c) { c.signatureHelp(3, 21); },
+        expected: [`"label":"add(int x, int y)"`, `"activeParameter":1`],
+    },
+    // All overloads are listed; activeSignature picks the arity that fits
+    {
+        name: "signatureHelp-overloads",
+        source: "module sig_ovl;\n\nvoid f(int x) {}\nvoid f(int x, int y) {}\nvoid main() { f(1, 2); }\n",
+        script: (ref c) { c.signatureHelp(4, 19); },
+        expected: [`"label":"f(int x)"`, `"label":"f(int x, int y)"`, `"activeSignature":1`, `"activeParameter":1`],
+    },
+    // Method call through a struct instance
+    {
+        name: "signatureHelp-method",
+        source: "module sig_method;\n\nstruct S { int scale(int factor) { return factor; } }\nvoid main() { S s; s.scale(2); }\n",
+        script: (ref c) { c.signatureHelp(3, 27); },
+        expected: [`"label":"scale(int factor)"`, `"activeParameter":0`],
+    },
+    // Outside any call, no signatures are offered
+    {
+        name: "signatureHelp-nocall",
+        source: "module sig_none;\n\nvoid f() {}\n",
         script: (ref c) { c.signatureHelp(2, 0); },
-        expected: [`"label":"exampleFunc(`, `"activeSignature":0`, `"activeParameter":0`],
+        expected: [`"signatures":[]`],
+    },
+    // textDocument/documentSymbol returns a hierarchical symbol tree
+    {
+        name: "documentSymbol-tree",
+        source: "module docsym;\n\nstruct S { int field; void method() {} }\nint gvar;\nvoid gfunc() {}\nenum E { a, b }\n",
+        script: (ref c) { c.documentSymbol(); },
+        expected: [`"name":"S","kind":23`, `"name":"field","kind":8`, `"name":"method","kind":6`,
+                   `"name":"gvar","kind":13`, `"name":"gfunc","kind":12`, `"name":"E","kind":10`,
+                   `"name":"a","kind":22`, `"children":[`],
+    },
+    // Module-level `@safe:` / `private` wrap declarations in AttribDeclarations;
+    // documentSymbol looks through them
+    {
+        name: "documentSymbol-attrib",
+        source: "module docsym_attrib;\n@safe:\n\nprivate enum N = 3;\nvoid f() {}\n",
+        script: (ref c) { c.documentSymbol(); },
+        expected: [`"name":"N","kind":13`, `"name":"f","kind":12`],
+    },
+    // textDocument/references lists the declaration and every use in the file
+    {
+        name: "references-var",
+        source: "module refs_test;\n\nint x;\nvoid main() { x = 1; int y = x + x; }\n",
+        script: (ref c) { c.references(2, 4); },
+        expected: [`{"line":2,"character":4}`, `{"line":3,"character":14}`,
+                   `{"line":3,"character":29}`, `{"line":3,"character":33}`],
+    },
+    // references works from a use site and finds method calls by identity
+    {
+        name: "references-method",
+        source: "module refs_method;\n\nstruct S { void go() {} }\nvoid main() { S s; s.go(); s.go(); }\n",
+        script: (ref c) { c.references(3, 21); },
+        expected: [`{"line":2,"character":16}`, `{"line":3,"character":21}`, `{"line":3,"character":29}`],
     },
     // publishDiagnostics is pushed from didOpen; the error here should surface
     {
@@ -201,6 +255,16 @@ struct LspClient
     void signatureHelp(int line, int character)
     {
         request("textDocument/signatureHelp", positionParams(line, character));
+    }
+
+    void documentSymbol()
+    {
+        request("textDocument/documentSymbol", format(`{"textDocument":{"uri":"%s"}}`, uri));
+    }
+
+    void references(int line, int character)
+    {
+        request("textDocument/references", positionParams(line, character));
     }
 
     // Replace the document's content (textDocumentSync Full)

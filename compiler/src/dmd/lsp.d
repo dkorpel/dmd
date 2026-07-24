@@ -14,8 +14,10 @@ module dmd.lsp;
 import core.stdc.stdio;
 import core.vararg;
 import dmd.aggregate;
+import dmd.arraytypes;
 import dmd.astenums;
 import dmd.ast_node;
+import dmd.attrib;
 import dmd.common.outbuffer;
 import dmd.dclass;
 import dmd.declaration;
@@ -210,6 +212,15 @@ Dsymbol definitionTarget(ASTNode obj)
     return isDsymbol(obj);
 }
 
+/// Write an LSP Location JSON object for a name of `len` characters at `sl`.
+void writeLocationAt(ref OutBuffer buf, SourceLoc sl, int len)
+{
+    buf.writestring(`{"uri":"file://`);
+    buf.writeJsonString(sl.filename);
+    buf.printf(`","range":{"start":{"line":%d,"character":%d},"end":{"line":%d,"character":%d}}}`,
+        sl.line - 1, sl.column - 1, sl.line - 1, sl.column - 1 + len);
+}
+
 /// Write an LSP Location JSON object pointing at s's declaration.
 /// Returns: false (and writes nothing) when s has no usable location.
 bool writeLocation(ref OutBuffer buf, Dsymbol s)
@@ -218,10 +229,7 @@ bool writeLocation(ref OutBuffer buf, Dsymbol s)
     if (sl.filename.length == 0 || sl.line == 0)
         return false;
     const len = s.ident ? cast(int) s.ident.toString().length : 1;
-    buf.writestring(`{"uri":"file://`);
-    buf.writeJsonString(sl.filename);
-    buf.printf(`","range":{"start":{"line":%d,"character":%d},"end":{"line":%d,"character":%d}}}`,
-        sl.line - 1, sl.column - 1, sl.line - 1, sl.column - 1 + len);
+    writeLocationAt(buf, sl, len);
     return true;
 }
 
@@ -237,6 +245,7 @@ version (Posix)
     private __gshared bool lspFatalArmed;
     private __gshared ErrorSinkCompiler lspFatalSavedSink;
     private __gshared uint lspFatalSavedErrors;
+    private __gshared Module lspFatalModule;
 }
 
 /// Run the dmd pipeline (read → parse → semantic) on the document at `uri`.
@@ -244,12 +253,13 @@ version (Posix)
 /// `lsp.eSink.diagnostics` beforehand and for calling `deinitializeModule()`
 /// when done with the returned module.
 ///
-/// A compiler fatal() during analysis is caught and turned into a null return
-/// (diagnostics collected up to that point remain in `lsp.eSink`), so a single
-/// bad document cannot bring the server down.
+/// A compiler fatal() during analysis is caught (diagnostics collected up to
+/// that point remain in `lsp.eSink`), so a single bad document cannot bring
+/// the server down. When the fatal() fired after parsing, the partially
+/// analyzed module is returned so requests can still see its declarations.
 ///
-/// Returns: the post-semantic Module, or null on read/parse failure or a
-/// recovered fatal().
+/// Returns: the post-semantic Module, the partially analyzed Module on a
+/// recovered fatal(), or null on read/parse failure.
 Module analyzeModule(ref Lsp lsp, string uri)
 {
     version (Posix)
@@ -259,17 +269,21 @@ Module analyzeModule(ref Lsp lsp, string uri)
         // restore them itself.
         lspFatalSavedSink = global.errorSink;
         lspFatalSavedErrors = global.errors;
+        lspFatalModule = null;
         if (setjmp(lspFatalEnv) != 0)
         {
             // A fatal() fired during analysis and jumped us back here.
             lspFatalArmed = false;
             global.errorSink = lspFatalSavedSink;
             global.errors = lspFatalSavedErrors;
-            return null;
+            Module m = lspFatalModule;
+            lspFatalModule = null;
+            return m;
         }
         lspFatalArmed = true;
         Module m = analyzeModuleImpl(lsp, uri);
         lspFatalArmed = false;
+        lspFatalModule = null;
         return m;
     }
     else
@@ -311,6 +325,8 @@ private Module analyzeModuleImpl(ref Lsp lsp, string uri)
     m = m.parse();
     if (!m)
         return null;
+    version (Posix)
+        lspFatalModule = m;
     m.importedFrom = m;
     m.importAll(null);
 
@@ -407,11 +423,9 @@ struct CompletionContext
     const(char)[] baseIdent;  // identifier before the dot when member == true
 }
 
-/// Inspect the source text left of the cursor to see whether we're completing
-/// a member access (`ident.` possibly followed by a partial member name).
-CompletionContext completionContext(const(char)[] content, Position pos)
+/// Convert an LSP Position (0-based line/character) to a byte offset in `content`.
+size_t byteOffset(const(char)[] content, Position pos)
 {
-    // Convert (line, character), both 0-based, to a byte offset
     size_t off = 0;
     for (int line = 0; line < pos.line && off < content.length; off++)
     {
@@ -421,6 +435,31 @@ CompletionContext completionContext(const(char)[] content, Position pos)
     off += pos.character;
     if (off > content.length)
         off = content.length;
+    return off;
+}
+
+/// Convert a byte offset in `content` back to a 0-based LSP Position.
+Position offsetPosition(const(char)[] content, size_t off)
+{
+    Position pos;
+    foreach (i; 0 .. off)
+    {
+        if (i < content.length && content[i] == '\n')
+        {
+            pos.line++;
+            pos.character = 0;
+        }
+        else
+            pos.character++;
+    }
+    return pos;
+}
+
+/// Inspect the source text left of the cursor to see whether we're completing
+/// a member access (`ident.` possibly followed by a partial member name).
+CompletionContext completionContext(const(char)[] content, Position pos)
+{
+    size_t off = byteOffset(content, pos);
 
     // Skip back over the partially typed identifier, if any
     size_t i = off;
@@ -572,17 +611,311 @@ void writeSignature(ref OutBuffer buf, const(char)[] name, Parameter[] params_)
     buf.writestring(`]}`);
 }
 
-/// MVP: emit a hard-coded signature with a hard-coded Parameter[].
+/// The enclosing call found by scanning left of the cursor.
+struct CallContext
+{
+    bool found;            /// whether an unclosed call paren was found
+    size_t openParen;      /// byte offset of the unmatched `(`
+    int activeParameter;   /// top-level commas between it and the cursor
+}
+
+/// Scan the source text left of byte offset `off` for the innermost unclosed
+/// call paren, counting top-level commas along the way. A plain paren/bracket
+/// depth scan; string literals are not tokenized.
+CallContext findEnclosingCall(const(char)[] content, size_t off)
+{
+    int parens, brackets, commas;
+    for (size_t i = off; i > 0;)
+    {
+        const c = content[--i];
+        if (c == ')')
+            parens++;
+        else if (c == ']')
+            brackets++;
+        else if (c == '[' && brackets > 0)
+            brackets--;
+        else if (c == '(')
+        {
+            if (parens == 0)
+                return CallContext(true, i, commas);
+            parens--;
+        }
+        else if (c == ',' && parens == 0 && brackets == 0)
+            commas++;
+        else if ((c == ';' || c == '{' || c == '}') && parens == 0)
+            break;
+    }
+    return CallContext(false, 0, 0);
+}
+
+/// Handle textDocument/signatureHelp: resolve the callee of the call
+/// enclosing the cursor and emit one SignatureInformation per overload.
 void signatureHelp(ref Lsp lsp, Params params, ref OutBuffer buf)
 {
-    Type_init();
-    Parameter[] sigParams = [
-        new Parameter(Loc.initial, STC.none, Type.tint32,  Identifier.idPool("x"), null, null),
-        new Parameter(Loc.initial, STC.none, Type.tstring, Identifier.idPool("y"), null, null),
-    ];
+    lsp.eSink.diagnostics = null;
+    FuncDeclaration fd;
+    int activeParam;
+    if (auto content = params.textDocument.uri in lsp.openDocuments)
+    {
+        const call = findEnclosingCall(*content, byteOffset(*content, params.position));
+        size_t i = call.openParen;
+        while (i > 0 && ((*content)[i - 1] == ' ' || (*content)[i - 1] == '\t'))
+            i--;
+        if (call.found && i > 0 && isIdentChar((*content)[i - 1]))
+        {
+            activeParam = call.activeParameter;
+            while (i > 0 && isIdentChar((*content)[i - 1]))
+                i--;
+            const pos = offsetPosition(*content, i);
+            if (Module m = analyzeModule(lsp, params.textDocument.uri))
+            {
+                scope visitor = new LspVisitor(pos.line + 1, pos.character + 1);
+                visitor.visit(m);
+                if (auto target = definitionTarget(visitor.result))
+                    fd = target.isFuncDeclaration();
+            }
+            deinitializeModule();
+        }
+    }
+
+    FuncDeclaration[] overloads;
+    if (fd)
+    {
+        Dsymbol start = fd;
+        if (auto p = fd.parent ? fd.parent.isScopeDsymbol() : null)
+            if (p.symtab)
+                if (auto s = p.symtab.lookup(fd.ident))
+                    start = s;
+        for (Dsymbol s = start; s;)
+        {
+            auto f = s.isFuncDeclaration();
+            if (!f)
+                break;
+            overloads ~= f;
+            s = f.overnext;
+        }
+        if (overloads.length == 0)
+            overloads = [fd];
+    }
+
+    int activeSig = 0;
+    foreach (i, f; overloads)
+    {
+        auto tf = f.type ? f.type.isTypeFunction() : null;
+        if (tf && tf.parameterList.length > activeParam)
+        {
+            activeSig = cast(int) i;
+            break;
+        }
+    }
+
     buf.writestring(`{"signatures":[`);
-    writeSignature(buf, "exampleFunc", sigParams);
-    buf.writestring(`],"activeSignature":0,"activeParameter":0}`);
+    bool first = true;
+    foreach (f; overloads)
+    {
+        auto tf = f.type ? f.type.isTypeFunction() : null;
+        if (!tf)
+            continue;
+        Parameter[] ps;
+        foreach (i; 0 .. tf.parameterList.length)
+            ps ~= tf.parameterList[i];
+        if (!first)
+            buf.writestring(",");
+        first = false;
+        writeSignature(buf, f.ident.toString(), ps);
+    }
+    buf.printf(`],"activeSignature":%d,"activeParameter":%d}`, activeSig, activeParam);
+}
+
+/// LSP SymbolKind values for the kinds documentSymbol emits.
+private int documentSymbolKind(Dsymbol s)
+{
+    if (auto fd = s.isFuncDeclaration())
+        return fd.isThis() ? 6 : 12;       // Method : Function
+    if (s.isInterfaceDeclaration())
+        return 11;                         // Interface
+    if (s.isClassDeclaration())
+        return 5;                          // Class
+    if (s.isStructDeclaration())
+        return 23;                         // Struct
+    if (s.isEnumDeclaration())
+        return 10;                         // Enum
+    if (s.isEnumMember())
+        return 22;                         // EnumMember
+    if (auto vd = s.isVarDeclaration())
+        return vd.isField() ? 8 : 13;      // Field : Variable
+    return 13;                             // Variable (fallback)
+}
+
+/// Write one DocumentSymbol JSON object for `s`, recursing into aggregate and
+/// enum members as `children`.
+/// Returns: false (and writes nothing) for unnamed, generated, or locationless symbols.
+private bool writeDocumentSymbol(ref OutBuffer buf, Dsymbol s)
+{
+    if (!s.ident || s.ident.toString().startsWith("__"))
+        return false;
+    if (auto fd = s.isFuncDeclaration())
+        if (fd.isGenerated)
+            return false;
+    SourceLoc sl = SourceLoc(s.loc);
+    if (sl.filename.length == 0 || sl.line == 0)
+        return false;
+    const len = cast(int) s.ident.toString().length;
+    buf.writestring(`{"name":"`);
+    buf.writeJsonString(s.ident.toString());
+    buf.printf(`","kind":%d,`, documentSymbolKind(s));
+
+    int endLine = sl.line - 1;
+    int endCol = sl.column - 1 + len;
+    if (auto fd = s.isFuncDeclaration())
+    {
+        SourceLoc el = SourceLoc(fd.endloc);
+        if (el.line > 0)
+        {
+            endLine = el.line - 1;
+            endCol = el.column;
+        }
+    }
+    buf.printf(`"range":{"start":{"line":%d,"character":%d},"end":{"line":%d,"character":%d}},`,
+        sl.line - 1, sl.column - 1, endLine, endCol);
+    buf.printf(`"selectionRange":{"start":{"line":%d,"character":%d},"end":{"line":%d,"character":%d}}`,
+        sl.line - 1, sl.column - 1, sl.line - 1, sl.column - 1 + len);
+
+    Dsymbols* members = null;
+    if (auto ad = s.isAggregateDeclaration())
+        members = ad.members;
+    else if (auto ed = s.isEnumDeclaration())
+        members = ed.members;
+    if (members)
+    {
+        buf.writestring(`,"children":[`);
+        writeDocumentSymbols(buf, *members);
+        buf.writestring(`]`);
+    }
+    buf.writestring(`}`);
+    return true;
+}
+
+/// Write a comma-separated list of DocumentSymbols for declarations in `members`.
+private void writeDocumentSymbols(ref OutBuffer buf, ref Dsymbols members)
+{
+    bool first = true;
+    writeDocumentSymbols(buf, members, first);
+}
+
+private void writeDocumentSymbols(ref OutBuffer buf, ref Dsymbols members, ref bool first)
+{
+    foreach (s; members)
+    {
+        if (auto ad = s.isAttribDeclaration())
+        {
+            if (auto d = ad.include(null))
+                writeDocumentSymbols(buf, *d, first);
+            continue;
+        }
+        if (!s.isFuncDeclaration() && !s.isAggregateDeclaration()
+            && !s.isEnumDeclaration() && !s.isVarDeclaration())
+            continue;
+        const before = buf.length;
+        if (!first)
+            buf.writestring(",");
+        if (writeDocumentSymbol(buf, s))
+            first = false;
+        else
+            buf.setsize(before);
+    }
+}
+
+/// Handle textDocument/documentSymbol: write a hierarchical DocumentSymbol
+/// array for the module's declarations.
+void documentSymbols(ref Lsp lsp, Params params, ref OutBuffer buf)
+{
+    lsp.eSink.diagnostics = null;
+    Module m = analyzeModule(lsp, params.textDocument.uri);
+    buf.writestring(`[`);
+    if (m && m.members)
+        writeDocumentSymbols(buf, *m.members);
+    buf.writestring(`]`);
+    deinitializeModule();
+}
+
+/// Collects the location of every expression referencing `target`
+/// (by symbol identity, not by name).
+extern(C++) final class ReferenceVisitor : SemanticTimeTransitiveVisitor
+{
+    alias visit = typeof(super).visit;
+
+    Dsymbol target;
+    SourceLoc[] refs;
+
+    extern (D) this(Dsymbol target)
+    {
+        this.target = target;
+    }
+
+    extern (D) void add(Loc loc)
+    {
+        SourceLoc sl = SourceLoc(loc);
+        if (sl.line == 0)
+            return;
+        foreach (r; refs)
+            if (r.line == sl.line && r.column == sl.column)
+                return;
+        refs ~= sl;
+    }
+
+    override void visit(VarExp e)
+    {
+        if (e.var is target)
+            add(e.loc);
+    }
+
+    override void visit(DotVarExp e)
+    {
+        if (e.var is target)
+            add(e.identLoc);
+        super.visit(e);
+    }
+}
+
+/// Handle textDocument/references: the declaration of the symbol under the
+/// cursor plus all its uses. Single-file scope: only the analyzed module is
+/// searched, no cross-module search.
+void references(ref Lsp lsp, Params params, ref OutBuffer buf)
+{
+    lsp.eSink.diagnostics = null;
+    SourceLoc sl = toSourceLoc(params.textDocument.uri, params.position);
+    Module m = analyzeModule(lsp, params.textDocument.uri);
+    if (!m)
+    {
+        deinitializeModule();
+        buf.writestring(`[]`);
+        return;
+    }
+    scope cursor = new LspVisitor(sl.line, sl.column);
+    cursor.visit(m);
+    Dsymbol target = definitionTarget(cursor.result);
+    if (!target || !target.ident)
+    {
+        deinitializeModule();
+        buf.writestring(`[]`);
+        return;
+    }
+    scope finder = new ReferenceVisitor(target);
+    finder.add(target.loc);
+    finder.visit(m);
+    const len = cast(int) target.ident.toString().length;
+    buf.writestring(`[`);
+    bool first = true;
+    foreach (r; finder.refs)
+    {
+        if (!first)
+            buf.writestring(",");
+        first = false;
+        writeLocationAt(buf, r, len);
+    }
+    buf.writestring(`]`);
+    deinitializeModule();
 }
 
 /// Send a textDocument/publishDiagnostics notification with errors and
@@ -704,10 +1037,13 @@ void lspRespond(ref Lsp lsp, JsonRpc result)
     if (result.method == "initialize")
     {
         buf.writestring(`{"capabilities":{
+            "positionEncoding":"utf-8",
             "definitionProvider":true,
             "hoverProvider":true,
             "completionProvider":{"triggerCharacters":["."]},
             "signatureHelpProvider":{"triggerCharacters":["(",","]},
+            "documentSymbolProvider":true,
+            "referencesProvider":true,
             "textDocumentSync":1
             }}`);
     }
@@ -737,7 +1073,8 @@ void lspRespond(ref Lsp lsp, JsonRpc result)
                             hover.printf("%s\n\n", vd.comment);
                     }
                 }
-                hover.printf("**type**: %s\n", e.type.toChars);
+                if (e.type)
+                    hover.printf("**type**: %s\n", e.type.toChars);
             }
             else if (auto d = isDsymbol(obj))
             {
@@ -752,15 +1089,17 @@ void lspRespond(ref Lsp lsp, JsonRpc result)
                 }
                 if (auto fd = d.isFuncDeclaration())
                 {
-                    hover.printf("**type**: %s\n", fd.type.toChars);
+                    if (fd.type)
+                        hover.printf("**type**: %s\n", fd.type.toChars);
                 }
                 if (auto vd = d.isVarDeclaration())
                 {
-
-                    hover.printf("**type**: %s\n\n", vd.type.toChars);
+                    if (vd.type)
+                        hover.printf("**type**: %s\n\n", vd.type.toChars);
                     if (auto ei = vd._init ? vd._init.isExpInitializer() : null)
                     {
-                        hover.printf("**init**: %s\n", ei.exp.toChars);
+                        if (ei.exp)
+                            hover.printf("**init**: %s\n", ei.exp.toChars);
                     }
                 }
             }
@@ -787,7 +1126,11 @@ void lspRespond(ref Lsp lsp, JsonRpc result)
     }
     else if (result.method == "textDocument/documentSymbol")
     {
-        // list functions, types, variables in a file
+        documentSymbols(lsp, result.params, buf);
+    }
+    else if (result.method == "textDocument/references")
+    {
+        references(lsp, result.params, buf);
     }
     else if (result.method == "textDocument/didOpen")
     {
@@ -831,8 +1174,24 @@ void lspRespond(ref Lsp lsp, JsonRpc result)
 void writeJsonString(ref OutBuffer buf, const(char)[] str)
 {
     foreach (c; str)
-        writeCharLiteral(c, &buf.put);
-        //buf.writeCharLiteral(c);
+    {
+        switch (c)
+        {
+            case '"':  buf.writestring(`\"`); break;
+            case '\\': buf.writestring(`\\`); break;
+            case '\b': buf.writestring(`\b`); break;
+            case '\f': buf.writestring(`\f`); break;
+            case '\n': buf.writestring(`\n`); break;
+            case '\r': buf.writestring(`\r`); break;
+            case '\t': buf.writestring(`\t`); break;
+            default:
+                if (cast(ubyte) c < 0x20)
+                    buf.printf(`\u%04x`, cast(uint) cast(ubyte) c);
+                else
+                    buf.writeByte(cast(ubyte) c);
+                break;
+        }
+    }
 }
 
 /// Returns: whether you can access Token.intvalue from a token of `tok` kind
@@ -840,7 +1199,7 @@ bool hasIntValue(TOK tok)
 {
     switch (tok)
     {
-        case TOK.int32Literal, TOK.int64Literal, TOK.string_, TOK.true_, TOK.false_:
+        case TOK.int32Literal, TOK.int64Literal, TOK.true_, TOK.false_:
             return true;
         default:
             return false;
@@ -898,7 +1257,7 @@ JsonRpc jsonParse(ref JsonRpc result, const(char)[] text, ErrorSink eSink)
     // Parse primary expression, number or string
     void primary()
     {
-        if (!hasIntValue(lexer.front) && !lexer.front == TOK.string_)
+        if (!hasIntValue(lexer.front) && lexer.front != TOK.string_)
             eSink.error(lexer.scanloc, "Json value can't start with %s", Token.toChars(lexer.front));
         else
             setPrimary(result, keys, lexer.token);
@@ -1081,4 +1440,34 @@ unittest
     assert(didChange.method == "textDocument/didChange");
     assert(didChange.params.textDocument.uri == "file:///foo.d");
     assert(didChange.params.contentChanges.text == "module foo;\nint x = 42;\n");
+}
+
+unittest
+{
+    const src = "void main() { foo(1, bar(2, 3), 4); }";
+
+    auto outer = findEnclosingCall(src, 33);
+    assert(outer.found);
+    assert(outer.openParen == 17);
+    assert(outer.activeParameter == 2);
+
+    auto inner = findEnclosingCall(src, 29);
+    assert(inner.found);
+    assert(inner.openParen == 24);
+    assert(inner.activeParameter == 1);
+
+    auto none = findEnclosingCall(src, 12);
+    assert(!none.found);
+
+    const idx = "g(a[b,c], d";
+    auto call = findEnclosingCall(idx, idx.length);
+    assert(call.found);
+    assert(call.openParen == 1);
+    assert(call.activeParameter == 1);
+
+    const text = "abc\ndef\n";
+    assert(byteOffset(text, Position(1, 2)) == 6);
+    assert(offsetPosition(text, 6) == Position(1, 2));
+    assert(offsetPosition(text, 3) == Position(0, 3));
+    assert(offsetPosition(text, 4) == Position(1, 0));
 }
