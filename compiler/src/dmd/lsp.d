@@ -22,6 +22,7 @@ import dmd.common.outbuffer;
 import dmd.dcast : implicitConvTo;
 import dmd.dclass;
 import dmd.declaration;
+import dmd.denum;
 import dmd.dmodule;
 import dmd.dstruct;
 import dmd.dsymbol;
@@ -119,12 +120,15 @@ extern(C++) class LspVisitor : SemanticTimeTransitiveVisitor
 
     bool inLoc(Loc loc, Identifier ident)
     {
+        return inLocLen(loc, ident.toString().length);
+    }
+
+    bool inLocLen(Loc loc, size_t len)
+    {
         if (!loc.isValid)
             return false;
-        // fprintf(stderr, "[!] checking %s at %s\n", ident.toChars, loc.toChars);
-        // fprintf(stderr, "[!] line %d ?= %d, col = %d > %d\n", this.line, sl.line, this.column, sl.column);
         auto sl = SourceLoc(loc);
-        const endCol = sl.column + ident.toString().length;
+        const endCol = sl.column + len;
         return (this.line == sl.line && this.column >= sl.column && this.column <= endCol);
     }
 
@@ -139,7 +143,25 @@ extern(C++) class LspVisitor : SemanticTimeTransitiveVisitor
     {
         if (inLoc(d.loc, d.ident))
             this.result = d;
+        checkParameters(d);
         super.visit(d);
+    }
+
+    override void visit(CtorDeclaration d)
+    {
+        if (inLocLen(d.loc, "this".length))
+            this.result = d;
+        checkParameters(d);
+        super.visit(d);
+    }
+
+    final void checkParameters(FuncDeclaration d)
+    {
+        if (!d.parameters)
+            return;
+        foreach (v; *d.parameters)
+            if (v.ident && inLoc(v.loc, v.ident))
+                this.result = v;
     }
 
     override void visit(ClassDeclaration d)
@@ -147,6 +169,27 @@ extern(C++) class LspVisitor : SemanticTimeTransitiveVisitor
         if (inLoc(d.loc, d.ident))
             this.result = d;
         super.visit(d);
+    }
+
+    override void visit(InterfaceDeclaration d)
+    {
+        if (inLoc(d.loc, d.ident))
+            this.result = d;
+        super.visit(d);
+    }
+
+    override void visit(EnumDeclaration d)
+    {
+        if (d.ident && inLoc(d.loc, d.ident))
+            this.result = d;
+        super.visit(d);
+    }
+
+    override void visit(EnumMember em)
+    {
+        if (inLoc(em.loc, em.ident))
+            this.result = em;
+        super.visit(em);
     }
 
     override void visit(VarDeclaration d)
@@ -191,6 +234,14 @@ extern(C++) class LspVisitor : SemanticTimeTransitiveVisitor
             this.result = e;
         super.visit(e);
     }
+
+    override void visit(NewExp e)
+    {
+        if (auto s = typeSymbolOf(e.type))
+            if (s.ident && inLoc(e.typeLoc, s.ident))
+                this.result = e;
+        super.visit(e);
+    }
 }
 
 /// Returns: the declaration of a struct/class/interface/enum type (following
@@ -223,6 +274,8 @@ Dsymbol definitionTarget(ASTNode obj)
             return dve.var;
         if (auto sle = e.isStructLiteralExp())
             return sle.sd;
+        if (auto ne = e.isNewExp())
+            return ne.member ? ne.member : typeSymbolOf(ne.type);
         return null;
     }
     return isDsymbol(obj);
@@ -309,11 +362,31 @@ Module analyzeModule(ref Lsp lsp, string uri)
 }
 
 /// The actual analysis pipeline; see analyzeModule for the fatal() guard.
+/// Use of a constant declaration whose reference was folded out of the AST
+/// (enum member, manifest constant), recorded via the `onConstantFold` hook.
+struct FoldedRef
+{
+    Declaration d;
+    SourceLoc loc;
+}
+
+private __gshared FoldedRef[] foldedRefs;
+
+private void recordConstantFold(Declaration d, Loc loc)
+{
+    SourceLoc sl = SourceLoc(loc);
+    if (sl.line == 0)
+        return;
+    foldedRefs ~= FoldedRef(d, sl);
+}
+
 private Module analyzeModuleImpl(ref Lsp lsp, string uri)
 {
     Type_init();
     Module._init();
     Loc._init();
+    foldedRefs = null;
+    onConstantFold = &recordConstantFold;
 
     SourceLoc sl = toSourceLoc(uri, Position(0, 0));
     const(char)[] p = FileName.name(sl.filename); // strip path
@@ -384,7 +457,24 @@ ASTNode findCursorObject(ref Lsp lsp, Params params)
     scope visitor = new LspVisitor(sl.line, sl.column);
     visitor.visit(m);
     deinitializeModule();
-    return visitor.result;
+    if (visitor.result)
+        return visitor.result;
+    return foldedRefAt(sl.line, sl.column, sl.filename);
+}
+
+/// Find the declaration of a folded-away constant use covering the cursor,
+/// for spots where the referencing expression no longer exists in the AST.
+private Declaration foldedRefAt(int line, int column, const(char)[] filename)
+{
+    foreach (fr; foldedRefs)
+    {
+        if (fr.loc.line != line || fr.loc.filename != filename || !fr.d.ident)
+            continue;
+        const endCol = fr.loc.column + fr.d.ident.toString().length;
+        if (column >= fr.loc.column && column <= endCol)
+            return fr.d;
+    }
+    return null;
 }
 
 /// LSP CompletionItemKind values for the kinds we currently emit.
@@ -1052,35 +1142,81 @@ extern(C++) final class ReferenceVisitor : SemanticTimeTransitiveVisitor
 {
     alias visit = typeof(super).visit;
 
+    struct RefLoc
+    {
+        SourceLoc loc;
+        int len;
+    }
+
     Dsymbol target;
-    SourceLoc[] refs;
+    AggregateDeclaration targetAgg;
+    int targetLen;
+    RefLoc[] refs;
 
     extern (D) this(Dsymbol target)
     {
         this.target = target;
+        this.targetLen = cast(int) target.ident.toString().length;
+        if (auto ad = target.isAggregateDeclaration())
+            this.targetAgg = ad;
+        else if (auto ctor = target.isCtorDeclaration())
+            this.targetAgg = ctor.isMember();
     }
 
-    extern (D) void add(Loc loc)
+    extern (D) int aggLen()
     {
-        SourceLoc sl = SourceLoc(loc);
+        return cast(int) targetAgg.ident.toString().length;
+    }
+
+    extern (D) void add(Loc loc, int len)
+    {
+        addSourceLoc(SourceLoc(loc), len);
+    }
+
+    extern (D) void addSourceLoc(SourceLoc sl, int len)
+    {
         if (sl.line == 0)
             return;
         foreach (r; refs)
-            if (r.line == sl.line && r.column == sl.column)
+            if (r.loc.line == sl.line && r.loc.column == sl.column && r.loc.filename == sl.filename)
                 return;
-        refs ~= sl;
+        refs ~= RefLoc(sl, len);
     }
 
     override void visit(VarExp e)
     {
         if (e.var is target)
-            add(e.loc);
+            add(e.loc, targetLen);
     }
 
     override void visit(DotVarExp e)
     {
-        if (e.var is target)
-            add(e.identLoc);
+        if (e.var is target || (targetAgg && isCtorOf(e.var, targetAgg)))
+        {
+            // Struct constructor calls `S(...)` have identLoc at the type name
+            const len = e.var.isCtorDeclaration() ? aggLen() : targetLen;
+            add(e.identLoc, len);
+        }
+        super.visit(e);
+    }
+
+    extern (D) static bool isCtorOf(Declaration d, AggregateDeclaration ad)
+    {
+        auto ctor = d.isCtorDeclaration();
+        return ctor && ctor.isMember() is ad;
+    }
+
+    override void visit(StructLiteralExp e)
+    {
+        if (targetAgg && e.sd is targetAgg)
+            add(e.loc, aggLen());
+        super.visit(e);
+    }
+
+    override void visit(NewExp e)
+    {
+        if (targetAgg && (e.member ? isCtorOf(e.member, targetAgg) : typeSymbolOf(e.type) is targetAgg))
+            add(e.typeLoc.isValid ? e.typeLoc : e.loc, aggLen());
         super.visit(e);
     }
 }
@@ -1102,6 +1238,8 @@ void references(ref Lsp lsp, Params params, ref OutBuffer buf)
     scope cursor = new LspVisitor(sl.line, sl.column);
     cursor.visit(m);
     Dsymbol target = definitionTarget(cursor.result);
+    if (!target)
+        target = foldedRefAt(sl.line, sl.column, sl.filename);
     if (!target || !target.ident)
     {
         deinitializeModule();
@@ -1109,9 +1247,11 @@ void references(ref Lsp lsp, Params params, ref OutBuffer buf)
         return;
     }
     scope finder = new ReferenceVisitor(target);
-    finder.add(target.loc);
+    finder.add(target.loc, target.isCtorDeclaration() ? cast(int) "this".length : finder.targetLen);
     finder.visit(m);
-    const len = cast(int) target.ident.toString().length;
+    foreach (fr; foldedRefs)
+        if (fr.d is target)
+            finder.addSourceLoc(fr.loc, finder.targetLen);
     buf.writestring(`[`);
     bool first = true;
     foreach (r; finder.refs)
@@ -1119,7 +1259,7 @@ void references(ref Lsp lsp, Params params, ref OutBuffer buf)
         if (!first)
             buf.writestring(",");
         first = false;
-        writeLocationAt(buf, r, len);
+        writeLocationAt(buf, r.loc, r.len);
     }
     buf.writestring(`]`);
     deinitializeModule();

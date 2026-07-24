@@ -2855,6 +2855,8 @@ Lagain:
                 eSink.error(loc, "circular initialization of %s `%s`", v.kind(), v.toPrettyChars());
                 return ErrorExp.get();
             }
+            if (onConstantFold)
+                onConstantFold(v, loc);
             e = v.expandInitializer(loc);
             v.inuse++;
             e = e.expressionSemantic(sc);
@@ -6552,6 +6554,8 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
                         return setError();
                     }
                     v.checkDeprecated(exp.loc, sc);
+                    if (onConstantFold)
+                        onConstantFold(v, exp.loc);
                     auto e = v.expandInitializer(exp.loc);
                     ti.inuse++;
                     e = e.expressionSemantic(sc);
@@ -6699,6 +6703,14 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
 
         //for error messages if the argument in [] is not convertible to size_t
         const originalNewtype = exp.newtype;
+
+        if (!exp.typeLoc.isValid)
+        {
+            if (auto ti = exp.newtype.isTypeIdentifier())
+                exp.typeLoc = ti.loc;
+            else if (auto tin = exp.newtype.isTypeInstance())
+                exp.typeLoc = tin.loc;
+        }
 
         // https://issues.dlang.org/show_bug.cgi?id=11581
         // With the syntax `new T[edim]` or `thisexp.new T[edim]`,
@@ -8461,9 +8473,13 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
             if (!exp.f)
                 return setError();
             if (ethis)
-                exp.e1 = new DotVarExp(exp.loc, ethis, exp.f, false);
+            {
+                auto dve = new DotVarExp(exp.loc, ethis, exp.f, false);
+                dve.identLoc = exp.e1.loc;
+                exp.e1 = dve;
+            }
             else
-                exp.e1 = new VarExp(exp.loc, exp.f, false);
+                exp.e1 = new VarExp(exp.e1.loc, exp.f, false);
             goto Lagain;
         }
         else if (!t1)
@@ -8538,7 +8554,9 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
                     {
                         // Supply an implicit 'this', as in
                         //    this.ident
-                        exp.e1 = new DotVarExp(exp.loc, (new ThisExp(exp.loc)).expressionSemantic(sc), exp.f, false);
+                        auto dve = new DotVarExp(exp.loc, (new ThisExp(exp.loc)).expressionSemantic(sc), exp.f, false);
+                        dve.identLoc = exp.e1.loc;
+                        exp.e1 = dve;
                         goto Lagain;
                     }
                     else if (isNeedThisScope(sc, exp.f))
@@ -8679,7 +8697,9 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
                 {
                     // Supply an implicit 'this', as in
                     //    this.ident
-                    exp.e1 = new DotVarExp(exp.loc, (new ThisExp(exp.loc)).expressionSemantic(sc), ve.var);
+                    auto dve = new DotVarExp(exp.loc, (new ThisExp(exp.loc)).expressionSemantic(sc), ve.var);
+                    dve.identLoc = ve.loc;
+                    exp.e1 = dve;
                     // Note: we cannot use f directly, because further overload resolution
                     // through the supplied 'this' may cause different result.
                     goto Lagain;
@@ -16317,6 +16337,8 @@ Expression dotIdSemanticProp(DotIdExp exp, Scope* sc, bool gag)
                         eSink.error(exp.loc, "circular initialization of %s `%s`", v.kind(), v.toPrettyChars());
                         return ErrorExp.get();
                     }
+                    if (onConstantFold)
+                        onConstantFold(v, exp.identLoc.isValid ? exp.identLoc : exp.loc);
                     auto e = v.expandInitializer(exp.loc);
                     v.inuse++;
                     e = e.expressionSemantic(sc);
@@ -16540,6 +16562,9 @@ Expression dotIdSemanticProp(DotIdExp exp, Scope* sc, bool gag)
         {
             if (auto dve = e.isDotVarExp())
                 dve.identLoc = exp.identLoc;
+            if (auto ve = e.isVarExp())
+                if (exp.identLoc.isValid)
+                    ve.loc = exp.identLoc;
             e = e.expressionSemantic(sc);
         }
         return e;

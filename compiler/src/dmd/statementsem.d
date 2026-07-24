@@ -511,7 +511,7 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
          * perfectly good semantic information (which e.g. IDE tooling still
          * wants for the unaffected statements).
          */
-        if (!(sc.func && sc.func.fbody is cs))
+        if (!(sc.func && sc.func.fbody is cs) && !global.params.lsp)
         {
             foreach (s; cs.statements)
             {
@@ -1198,7 +1198,7 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
                 // Now declare the value
                 {
                     Parameter p = (*fs.parameters)[dim - 1];
-                    fs.value = new VarDeclaration(loc, p.type, p.ident, null);
+                    fs.value = new VarDeclaration(p.loc.isValid ? p.loc : loc, p.type, p.ident, null);
                     fs.value.storage_class |= STC.foreach_;
                     fs.value.storage_class |= p.storageClass & (STC.scope_ | STC.IOR | STC.TYPECTOR);
                     if (fs.value.isReference())
@@ -1312,13 +1312,13 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
                     if ((p.storageClass & STC.ref_) && p.type.equals(fs.key.type))
                     {
                         fs.key.range = null;
-                        auto v = new AliasDeclaration(loc, p.ident, fs.key);
+                        auto v = new AliasDeclaration(p.loc.isValid ? p.loc : loc, p.ident, fs.key);
                         fs._body = new CompoundStatement(loc, new ExpStatement(loc, v), fs._body);
                     }
                     else
                     {
                         auto ei = new ExpInitializer(loc, new IdentifierExp(loc, fs.key.ident));
-                        auto v = new VarDeclaration(loc, p.type, p.ident, ei);
+                        auto v = new VarDeclaration(p.loc.isValid ? p.loc : loc, p.type, p.ident, ei);
                         v.storage_class |= STC.foreach_ | (p.storageClass & STC.ref_);
                         fs._body = new CompoundStatement(loc, new ExpStatement(loc, v), fs._body);
                         if (fs.key.range && !p.type.isMutable())
@@ -1457,7 +1457,7 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
                 if (dim == 1)
                 {
                     auto p = (*fs.parameters)[0];
-                    auto ve = new VarDeclaration(loc, p.type, p.ident, new ExpInitializer(loc, einit));
+                    auto ve = new VarDeclaration(p.loc.isValid ? p.loc : loc, p.type, p.ident, new ExpInitializer(loc, einit));
                     ve.storage_class |= STC.foreach_;
                     ve.storage_class |= p.storageClass & (STC.scope_ | STC.IOR | STC.TYPECTOR);
 
@@ -1517,7 +1517,7 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
                             return retError();
                         }
 
-                        auto var = new VarDeclaration(loc, p.type, p.ident, new ExpInitializer(loc, exp));
+                        auto var = new VarDeclaration(p.loc.isValid ? p.loc : loc, p.type, p.ident, new ExpInitializer(loc, exp));
                         var.storage_class |= STC.ctfe | STC.ref_ | STC.foreach_;
                         makeargs = new CompoundStatement(loc, makeargs, new ExpStatement(loc, var));
                     }
@@ -4244,7 +4244,7 @@ private FuncExp foreachBodyToFunction(Scope* sc, ForeachStatement fs, TypeFuncti
             }
 
             Initializer initializer = new ExpInitializer(fs.loc, initExp);
-            auto v = new VarDeclaration(fs.loc, userType, p.ident, initializer);
+            auto v = new VarDeclaration(p.loc.isValid ? p.loc : fs.loc, userType, p.ident, initializer);
             v.storage_class |= STC.temp | (stc & STC.scope_);
             Statement s = new ExpStatement(fs.loc, v);
             fs._body = new CompoundStatement(fs.loc, s, fs._body);
@@ -4651,7 +4651,7 @@ public auto makeTupleForeach(Scope* sc, bool isStatic, bool isDecl, ForeachState
                 return returnEarly();
             }
             Initializer ie = new ExpInitializer(Loc.initial, new IntegerExp(k));
-            auto var = new VarDeclaration(loc, p.type, p.ident, ie);
+            auto var = new VarDeclaration(p.loc.isValid ? p.loc : loc, p.type, p.ident, ie);
             var.storage_class |= STC.foreach_ | STC.manifest;
             if (isStatic)
                 var.storage_class |= STC.local;
