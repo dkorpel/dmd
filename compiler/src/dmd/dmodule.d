@@ -621,7 +621,7 @@ extern (C++) final class Module : Package
                     cast(int)name.length, name.ptr, cast(int)pkgfile.length, pkgfile.ptr);
             }
         }
-        if (!global.gag)
+        if (!global.gag && !global.params.lsp)
         {
             /* Print path
              */
