@@ -6316,13 +6316,23 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
                      */
                     if (token.value != TOK.semicolon && peek(&token).value == TOK.semicolon)
                         error("found `%s` when expecting `;` following expression", token.toChars());
-                    else if (exp.op == EXP.error &&
-                        (token.value == TOK.rightCurly || token.value == TOK.endOfFile))
+                    else if (token.value == TOK.rightCurly || token.value == TOK.endOfFile)
                     {
-                        // A parse error was already reported for this expression and
-                        // the current token closes the enclosing scope; leave it in
+                        // The current token closes the enclosing scope; leave it in
                         // place so the rest of the file parses normally (e.g. an
                         // incomplete expression at the end of a block while editing).
+                        if (exp.op != EXP.error)
+                        {
+                            error("found `%s` when expecting `;` following expression", token.toChars());
+                            eSink.errorSupplemental(exp.loc, "expression: `%s`", exp.toChars());
+                        }
+                    }
+                    else if (exp.op == EXP.error)
+                    {
+                        // A parse error was already reported for this expression and
+                        // the offending token was left in place; let the statement
+                        // parser retry from it (e.g. an incomplete `e.` followed by
+                        // another statement while editing).
                     }
                     else
                     {
@@ -9880,6 +9890,11 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
 
         while (token.value != endtok && token.value != TOK.endOfFile)
         {
+            if (token.value == TOK.rightCurly || token.value == TOK.semicolon)
+            {
+                error("found `%s` when expecting `%s`", token.toChars(), Token.toChars(endtok));
+                return;
+            }
             if (peekNext() == TOK.colon)
             {
                 // Named argument `name: exp`

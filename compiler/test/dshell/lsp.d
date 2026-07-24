@@ -408,6 +408,57 @@ immutable Case[] cases = [
         script: (ref c) { c.references(2, 22); },
         expected: [`{"line":2,"character":22}`, `{"line":5,"character":48}`],
     },
+    // Completion on a function parameter's members
+    {
+        name: "completion-param",
+        source: "module comp_param;\n\nstruct P { int health; void jump() {} }\nvoid f(P p)\n{\n    p.jump();\n}\n",
+        script: (ref c) { c.completion(5, 6); },
+        expected: [`"label":"health"`, `"label":"jump"`],
+    },
+    // Completion on a dangling `p.` at the end of a block while editing
+    {
+        name: "completion-dangling-dot",
+        source: "module comp_dangle;\n\nstruct P { int health; void jump() {} }\nvoid f(P p)\n{\n    p.\n}\n",
+        script: (ref c) { c.completion(5, 6); },
+        expected: [`"label":"health"`, `"label":"jump"`],
+    },
+    // A dangling `p.` followed by more statements doesn't swallow them
+    {
+        name: "recovery-dangling-dot-next-stmt",
+        source: "module rec_dangle;\n\nstruct P { int health; void jump() {} }\nvoid f(P p)\n{\n    p.\n    int x = 5;\n    p.jump();\n}\n",
+        script: (ref c) { c.references(6, 8); c.definition(7, 6); },
+        expected: [`{"line":6,"character":8}`, `"line":2,"character":28`],
+    },
+    // An unreadable import doesn't abort analysis of the rest of the module
+    {
+        name: "recovery-bad-import",
+        source: "module rec_import;\n\nimport doesnotexist;\n\nstruct Item { int num; }\nvoid use()\n{\n    Item i;\n    i.num = 3;\n}\n",
+        script: (ref c) { c.definition(8, 7); },
+        expected: [`"line":4,"character":18`],
+    },
+    // An unclosed call paren doesn't swallow the following function, and
+    // signatureHelp still resolves the callee on both sides
+    {
+        name: "signaturehelp-unclosed-call",
+        source: "module sig_unclosed;\n\nvoid take(int count, string label) {}\nvoid caller()\n{\n    take(\n}\nvoid caller2()\n{\n    take(1, \"a\");\n}\n",
+        script: (ref c) { c.signatureHelp(5, 9); c.signatureHelp(9, 12); },
+        expected: [`take(int count, string label)`, `"activeParameter":1`],
+    },
+    // The callee of a call that fails overload resolution stays navigable
+    {
+        name: "definition-callee-bad-args",
+        source: "module def_badargs;\n\nvoid take(int count, string label) {}\nvoid caller()\n{\n    take(1);\n}\n",
+        script: (ref c) { c.definition(5, 5); },
+        expected: [`"line":2,"character":5`],
+    },
+    // Gagged speculative errors (foreach range rewrite attempts) don't leak
+    // into diagnostics or break foreach over ranges
+    {
+        name: "completion-range-foreach",
+        source: "module comp_range;\n\nstruct D { int id; void dig() {} }\nstruct R { D[] items; bool empty() { return true; } D front() { return items[0]; } void popFront() {} }\nR all() { return R(); }\nvoid f()\n{\n    foreach (o; all())\n    {\n        o.dig();\n    }\n}\n",
+        script: (ref c) { c.completion(9, 10); },
+        expected: [`"label":"id"`, `"label":"dig"`],
+    },
 ];
 
 // ----------------------------------------------------------------------------

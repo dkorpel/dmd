@@ -76,17 +76,33 @@ class ErrorSinkLsp : ErrorSinkCompiler
 {
     Diagnostic[] diagnostics;
 
+    // whether the last error was dropped as a duplicate, so its
+    // supplemental lines are dropped as well
+    private bool lastDuplicate;
+
     private void add(Loc loc, int severity, const(char)* format, va_list ap) nothrow
     {
         OutBuffer msg;
         msg.vprintf(format, ap);
         auto sl = SourceLoc(loc);
-        diagnostics ~= Diagnostic(sl.line, sl.column, severity, msg.extractSlice.idup);
+        auto message = msg.extractSlice.idup;
+        foreach (ref d; diagnostics)
+        {
+            const first = d.message.length > message.length && d.message[message.length] == '\n'
+                ? d.message[0 .. message.length] : d.message;
+            if (d.line == sl.line && d.column == sl.column && d.severity == severity && first == message)
+            {
+                lastDuplicate = true;
+                return;
+            }
+        }
+        lastDuplicate = false;
+        diagnostics ~= Diagnostic(sl.line, sl.column, severity, message);
     }
 
     private void appendToLast(const(char)* format, va_list ap) nothrow
     {
-        if (diagnostics.length == 0)
+        if (diagnostics.length == 0 || lastDuplicate)
             return;
         OutBuffer msg;
         msg.vprintf(format, ap);
@@ -95,12 +111,35 @@ class ErrorSinkLsp : ErrorSinkCompiler
 
     extern(C++) override:
 
-    // Increment global.errors like ErrorSinkCompiler does: semantic passes rely
-    // on it to know an error was already reported (e.g. ErrorStatement asserts it)
-    void verror(Loc loc, const(char)* format, va_list ap)             { global.errors++; add(loc, 1, format, ap); }
-    void vwarning(Loc loc, const(char)* format, va_list ap)           { add(loc, 2, format, ap); }
-    void verrorSupplemental(Loc loc, const(char)* format, va_list ap) { appendToLast(format, ap); }
-    void vwarningSupplemental(Loc loc, const(char)* format, va_list ap) { appendToLast(format, ap); }
+    // Increment global.errors/gaggedErrors like ErrorSinkCompiler does:
+    // semantic passes rely on the former to know an error was already reported
+    // (e.g. ErrorStatement asserts it), and speculative compilation
+    // (trySemantic) relies on the latter to detect that its gagged attempt
+    // failed. Gagged diagnostics must not reach the client: they come from
+    // rewrite attempts (e.g. `aggr` -> `aggr[]`) that the compiler discards.
+    void verror(Loc loc, const(char)* format, va_list ap)
+    {
+        global.errors++;
+        if (global.gag)
+            global.gaggedErrors++;
+        else
+            add(loc, 1, format, ap);
+    }
+    void vwarning(Loc loc, const(char)* format, va_list ap)
+    {
+        if (!global.gag)
+            add(loc, 2, format, ap);
+    }
+    void verrorSupplemental(Loc loc, const(char)* format, va_list ap)
+    {
+        if (!global.gag)
+            appendToLast(format, ap);
+    }
+    void vwarningSupplemental(Loc loc, const(char)* format, va_list ap)
+    {
+        if (!global.gag)
+            appendToLast(format, ap);
+    }
 }
 
 
@@ -654,6 +693,14 @@ extern(C++) final class VarFinder : SemanticTimeTransitiveVisitor
             this.result = d;
         super.visit(d);
     }
+
+    override void visit(FuncDeclaration d)
+    {
+        if (d.parameters)
+            foreach (p; *d.parameters)
+                visit(p);
+        super.visit(d);
+    }
 }
 
 /// Finds the innermost function whose body's line range contains `line`.
@@ -943,6 +990,51 @@ extern(C++) final class CallFinder : SemanticTimeTransitiveVisitor
     }
 }
 
+/// Resolve the callee identifier at `content[nameStart .. nameEnd]` by name
+/// lookup, for calls whose semantically resolved form did not survive in the
+/// AST (e.g. an unclosed call while editing that swallowed later statements).
+/// An identifier directly before a `.` scopes the lookup to that variable's
+/// aggregate type (or the type itself for `Type.member(`).
+private Dsymbol calleeByName(Module m, const(char)[] content, size_t nameStart, size_t nameEnd)
+{
+    if (nameStart >= nameEnd)
+        return null;
+    auto id = Identifier.idPool(content[nameStart .. nameEnd]);
+    Dsymbol found;
+    if (nameStart > 0 && content[nameStart - 1] == '.')
+    {
+        const bend = nameStart - 1;
+        size_t bstart = bend;
+        while (bstart > 0 && isIdentChar(content[bstart - 1]))
+            bstart--;
+        if (bstart == bend)
+            return null;
+        auto baseIdent = content[bstart .. bend];
+        Dsymbol typeSym;
+        scope vf = new VarFinder(baseIdent);
+        vf.visit(m);
+        if (vf.result)
+            typeSym = typeSymbolOf(vf.result.type);
+        if (!typeSym && m.members)
+            typeSym = findTypeSymbol(*m.members, baseIdent);
+        if (!typeSym)
+        {
+            if (auto s = m.search(Loc.initial, Identifier.idPool(baseIdent)))
+            {
+                s = s.toAlias();
+                if (s.isAggregateDeclaration() || s.isEnumDeclaration())
+                    typeSym = s;
+            }
+        }
+        if (!typeSym)
+            return null;
+        found = typeSym.search(Loc.initial, id);
+    }
+    else
+        found = m.search(Loc.initial, id);
+    return found ? found.toAlias() : null;
+}
+
 /// Handle textDocument/signatureHelp: resolve the callee of the call
 /// enclosing the cursor and emit one SignatureInformation per overload.
 /// For a UFCS call the receiver counts as the signature's first parameter,
@@ -963,6 +1055,7 @@ void signatureHelp(ref Lsp lsp, Params params, ref OutBuffer buf)
         if (call.found && i > 0 && isIdentChar((*content)[i - 1]))
         {
             activeParam = call.activeParameter;
+            const nameEnd = i;
             while (i > 0 && isIdentChar((*content)[i - 1]))
                 i--;
             const pos = offsetPosition(*content, i);
@@ -970,7 +1063,15 @@ void signatureHelp(ref Lsp lsp, Params params, ref OutBuffer buf)
             {
                 scope visitor = new LspVisitor(pos.line + 1, pos.character + 1);
                 visitor.visit(m);
-                if (auto target = definitionTarget(visitor.result))
+                Dsymbol target = definitionTarget(visitor.result);
+                if (!target)
+                {
+                    SourceLoc csl = toSourceLoc(params.textDocument.uri, pos);
+                    target = foldedRefAt(csl.line, csl.column, csl.filename);
+                }
+                if (!target)
+                    target = calleeByName(m, *content, i, nameEnd);
+                if (target)
                 {
                     fd = target.isFuncDeclaration();
                     if (!fd)

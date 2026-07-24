@@ -2389,8 +2389,9 @@ private void hookDtors(CondExp ce, Scope* sc)
 }
 
 
-/// In LSP mode, record a use of the callee of a call whose arguments have
-/// errors, since the resolved callee expression won't survive in the AST.
+/// In LSP mode, record a use of the callee of a call whose arguments or
+/// overload resolution have errors, since the resolved callee expression
+/// won't survive in the AST.
 private void lspRecordCallee(Expression e1)
 {
     if (!onConstantFold || !e1)
@@ -8287,7 +8288,10 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
             // Do overload resolution
             exp.f = resolveFuncCall(exp.loc, sc, s, tiargs, ue.e1.type, exp.argumentList, FuncResolveFlag.standard);
             if (!exp.f || exp.f.errors || exp.f.type.ty == Terror)
+            {
+                lspRecordCallee(exp.e1);
                 return setError();
+            }
 
             auto originalF = exp.f;
             bool isSuperCall = (ue.e1.op == EXP.super_);
@@ -8552,7 +8556,10 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
                 DotVarExp dve = cast(DotVarExp)exp.e1;
                 exp.f = resolveFuncCall(exp.loc, sc, dve.var, tiargs, dve.e1.type, exp.argumentList, FuncResolveFlag.overloadOnly);
                 if (!exp.f)
+                {
+                    lspRecordCallee(exp.e1);
                     return setError();
+                }
                 if (exp.f.needThis())
                 {
                     dve.var = exp.f;
@@ -8577,7 +8584,10 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
                 exp.f = resolveFuncCall(exp.loc, sc, s, tiargs, null, exp.argumentList,
                     exp.isUfcsRewrite ? FuncResolveFlag.ufcs : FuncResolveFlag.standard);
                 if (!exp.f || exp.f.errors)
+                {
+                    lspRecordCallee(exp.e1);
                     return setError();
+                }
                 if (exp.f.needThis())
                 {
                     if (hasThis(sc))
@@ -8627,7 +8637,10 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
             }
 
             if (callMatch(exp.f, tf, null, exp.argumentList, 0, &errorHelper, sc) == MATCH.nomatch)
+            {
+                lspRecordCallee(exp.e1);
                 return setError();
+            }
 
             // Purity and safety check should run after testing arguments matching
             if (exp.f)
@@ -8714,7 +8727,10 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
                     exp.f = null;
             }
             if (!exp.f || exp.f.errors)
+            {
+                lspRecordCallee(exp.e1);
                 return setError();
+            }
 
             if (exp.f.needThis())
             {
