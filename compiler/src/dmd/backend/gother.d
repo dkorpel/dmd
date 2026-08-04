@@ -509,6 +509,16 @@ private void chkrd(elem* n, Barray!(elem*) rdlist)
  *      e       constant elem that we should replace n with
  */
 
+/* An OPconst of type `real` holds the value in its native 80 bit form, which is
+ * not the memory image of the variable, so its bits cannot be reinterpreted as
+ * another type.
+ */
+private bool isTYreal(tym_t ty)
+{
+    const tyb = tybasic(ty);
+    return tyb == TYreal || tyb == TYireal || tyb == TYcreal;
+}
+
 @trusted
 private elem* chkprop(ref uint changes, elem* n, Barray!(elem*) rdlist)
 {
@@ -559,6 +569,7 @@ private elem* chkprop(ref uint changes, elem* n, Barray!(elem*) rdlist)
                 /* Everything must match or we must skip this variable  */
                 /* (in case of assigning to overlapping unions, etc.)   */
                 if (t.Voffset != noff ||
+                    isTYreal(t.Ety) != isTYreal(nty) ||
                     /* If sizes match, we are ok        */
                     size(t.Ety) != nsize &&
                         !(d.E2.Eoper == OPconst && size(t.Ety) > nsize && !tyfloating(d.E2.Ety)))
