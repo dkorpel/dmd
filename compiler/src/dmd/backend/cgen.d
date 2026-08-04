@@ -177,9 +177,11 @@ code* genc2(code* c,opcode_t op,uint ea,targ_size_t EV2)
  * Generate 'nop'
  */
 
+@trusted
 code* gennop(code* c)
 {
-    return gen1(c,NOP);
+    import dmd.backend.arm.instr : INSTR;
+    return gen1(c, cgstate.AArch64 ? INSTR.nop : NOP);
 }
 
 
