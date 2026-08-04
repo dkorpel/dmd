@@ -49,9 +49,9 @@ int main()
         }
     }
 
-    immutable scriptDir = __FILE_FULL_PATH__.dirName;
-    immutable testDir = scriptDir.buildPath("..", "runnable");
-    immutable drImport = scriptDir.buildPath("..", "..", "druntime", "import");
+    import tools.paths : projectRootDir;
+    immutable testDir = projectRootDir.buildPath("compiler", "test", "runnable");
+    immutable drImport = projectRootDir.buildPath("druntime", "import");
     immutable outDir = tempDir.buildPath("arm_cross_tests");
 
     if (!outDir.exists)
@@ -90,6 +90,15 @@ int main()
         "tuple_default_parameters",
     ])
         result |= runTest(outDir, testDir, drImport, testName);
+
+    foreach (testName; [
+        "structlit_rvalue",
+        "test21301",
+        "test21424",
+        "test21435",
+        "test_real_array_param",
+    ])
+        result |= runTest(outDir, testDir, drImport, testName, "-O");
     return result;
 }
 
@@ -108,18 +117,19 @@ int buildShim(string outDir, string drImport)
     ]);
 }
 
-int runTest(string outDir, string testDir, string drImport, string testName)
+int runTest(string outDir, string testDir, string drImport, string testName, string opt = null)
 {
-    immutable armO = buildPath(outDir, testName ~ ".o");
-    immutable armExe = buildPath(outDir, testName);
+    immutable suffix = opt ? "_O" : "";
+    immutable armO = buildPath(outDir, testName ~ suffix ~ ".o");
+    immutable armExe = buildPath(outDir, testName ~ suffix);
     immutable armSrc = buildPath(testDir, testName ~ ".d");
 
-    writefln("--- %s (AArch64) ---", testName);
+    writefln("--- %s %s (AArch64) ---", testName, opt);
 
     if (run([
             dmd, "-marm64", "-betterC", "-c", armSrc, "-I" ~ drImport,
             "-of=" ~ armO
-        ]) != 0)
+        ] ~ (opt ? [opt] : [])) != 0)
         return 1;
 
     if (run([
