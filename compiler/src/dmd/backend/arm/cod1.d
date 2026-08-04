@@ -1175,6 +1175,27 @@ void getlvalue(ref CGstate cg,ref CodeBuilder cdb,ref code pcs,elem* e,regm_t ke
         case FL.got:
         case FL.gotoff:
         L3:
+            /* AArch64 has no absolute addressing, so materialize the address
+             * of `s` with ADRP/ADD and use that as the base register
+             */
+            if ((fl == FL.data || fl == FL.udata || fl == FL.csdata || fl == FL.extern_) &&
+                !(s.ty() & mTYthread))
+            {
+                if (rm != RM.store)
+                    s.Sflags |= SFLread;
+                regm_t idxregs = INSTR.ALLREGS & ~keepmsk;
+                const reg_t r = allocreg(cdb, idxregs, TYnptr);
+                cdb.gencs1(INSTR.adr(1,0,r),0,fl,s);                    // ADRP r,s
+                cdb.gencs1(INSTR.addsub_imm(1,0,0,0,0,r,r),0,fl,s);     // ADD r,r,#:lo12:s
+                cdb.last.Iflags |= CF.add;
+                pcs.base = r;
+                pcs.IFL1 = FL.offset;
+                pcs.IEV1.Vsym = null;
+                pcs.IEV1.Voffset = e.Voffset;
+                if (!tyfloating(ty))
+                    pcs.Sextend = cast(ubyte)tyToExtend(ty);
+                break;
+            }
             pcs.base = BP;
         L2:
             if (rm != RM.store)                    // if not store only
