@@ -272,7 +272,7 @@ Lp:
             sh = 1;
         }
         assert(imm12 < 0x1000);  // should use movregconst() if this assert trips
-        uint ins = INSTR.addsub_imm(sz == 8,0,op,sh,postinc,ireg,ireg); // ADD/SUB ireg,ireg,imm12,shift
+        uint ins = INSTR.addsub_imm(1,0,op,sh,imm12,ireg,ireg); // ADD/SUB ireg,ireg,imm12,shift
         cdb.gen1(ins);
     }
     freenode(e1);
