@@ -208,7 +208,12 @@ void test2()
     // This test only tests undefined, architecture-dependant behavior.
     // E.g. the result of converting a float whose value doesn't fit into the integer
     // leads to an undefined result.
+    version (X86) enum x86 = true;
+    else version (X86_64) enum x86 = true;
+    else enum x86 = false;
+
     version (DigitalMars)
+    static if (x86)
     {
         float f = float.infinity;
         int i = cast(int) f;
