@@ -1449,10 +1449,9 @@ struct INSTR
     /* STR (immediate) Post-index
      * https://www.scs.stanford.edu/~zyedidia/arm64/str_imm_gen.html
      */
-    static uint str_imm_gen_post_index(uint is64, int simm, ubyte Rn, ubyte Rt)
+    static uint str_imm_gen_post_index(uint size, int simm, ubyte Rn, ubyte Rt)
     {
         // STR Rt,[Xn],#simm
-        uint size = 2 + is64;
         uint imm9 = simm & 0x1FF;
         return (size << 30) |
                (7    << 27) |
