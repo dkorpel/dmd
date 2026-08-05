@@ -1218,7 +1218,7 @@ void cod3_thunk(Symbol* sthunk,Symbol* sfunc,uint p,tym_t thisty,
         thunkty == TYnsfunc) // not totally sure about TYnsfunc
     {
         uint sh = 0;
-        reg_t r0 = 0;
+        reg_t r0 = (thunkty == TYnfunc && (sfunc.Sfunc.Fflags3 & F3hiddenPtr)) ? 1 : 0;
         cdb.gen1(INSTR.addsub_imm(1,op,0,sh,d,r0,r0)); // ADD/SUB r0,r0,d
     }
     else
