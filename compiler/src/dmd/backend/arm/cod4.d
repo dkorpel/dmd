@@ -2226,6 +2226,20 @@ void cdpopcnt(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
 }
 
 /*******************************************
+ * Generate code for OPc_r, OPc_i, the real and imaginary
+ * halves of a complex number, which live in a float register pair.
+ */
+@trusted
+void cdconvt(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t pretregs)
+{
+    regm_t retregs = INSTR.FLOATREGS;
+    codelem(cg,cdb,e.E1,retregs,false);
+    const reg = findreg(retregs & (e.Eoper == OPc_r ? INSTR.LSW : INSTR.MSW));
+    regm_t regm = mask(reg);
+    fixresult(cg,cdb,e,regm,pretregs);
+}
+
+/*******************************************
  * Generate code for OPpair, OPrpair.
  */
 @trusted

@@ -3791,7 +3791,11 @@ void fixresult_complex87(ref CGstate cg,ref CodeBuilder cdb,elem* e,regm_t retre
 @trusted
 void cdconvt87(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t pretregs)
 {
-    assert(!cg.AArch64);
+    if (cg.AArch64)
+    {
+        import dmd.backend.arm.cod4 : cdconvt;
+        return cdconvt(cg, cdb, e, pretregs);
+    }
     regm_t retregs = mST01;
     codelem(cg,cdb,e.E1, retregs, false);
     switch (e.Eoper)
