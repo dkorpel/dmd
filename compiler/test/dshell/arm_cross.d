@@ -22,8 +22,10 @@ sudo pacman -S qemu-user clang lld aarch64-linux-gnu-gcc
 */
 module arm_cross;
 
-import std.array : join;
-import std.file : exists, mkdirRecurse, remove, tempDir;
+import std.algorithm : canFind, filter, map;
+import std.array : replace;
+import std.array : array, join;
+import std.file : dirEntries, exists, mkdirRecurse, remove, SpanMode, tempDir;
 import std.file : fileWrite = write;
 import std.path;
 import std.process;
@@ -99,7 +101,102 @@ int main()
         "test_real_array_param",
     ])
         result |= runTest(outDir, testDir, drImport, testName, "-O");
+
+    immutable drSrc = projectRootDir.buildPath("druntime", "src");
+    immutable drLib = buildDruntime(outDir, drSrc);
+    if (drLib is null)
+        return 1;
+
+    foreach (testName; [
+        "aliasthis",
+        "bit",
+        "casting",
+        "class_opCmp",
+        "closure",
+        "declaration",
+        "evalorder",
+        "foreach",
+        "inner",
+        "interface",
+        "interface1",
+        "interpret",
+        "literal",
+        "mixin1",
+        "newaa",
+        "nogc",
+        "opover",
+        "s2ir",
+        "staticaa",
+        "staticarray",
+        "template3",
+        "test23",
+        "testconst",
+        "testtypeid",
+        "traits_getPointerBitmap",
+        "uniformctor",
+        "unique_typeinfo_names",
+    ])
+        result |= runDruntimeTest(outDir, testDir, drSrc, drLib, testName);
     return result;
+}
+
+/**
+Compile druntime for AArch64 into a static library, together with the assembly
+files that provide what DMD has no AArch64 inline assembler for yet.
+Returns: path to the library, or null on failure
+*/
+string buildDruntime(string outDir, string drSrc)
+{
+    static bool skip(string path)
+    {
+        foreach (part; ["core/sys/hurd/", "core/sys/wasi/", "rt/sections_wasm.d", "test_runner.d"])
+            if (path.replace("\\", "/").canFind(part))
+                return true;
+        return false;
+    }
+
+    auto sources = dirEntries(drSrc, "*.d", SpanMode.depth)
+        .map!(e => e.name)
+        .filter!(name => !skip(name))
+        .array;
+
+    immutable drLib = buildPath(outDir, "libdruntime-aarch64.a");
+    if (run([dmd, "-marm64", "-lib", "-I" ~ drSrc, "-of=" ~ drLib] ~ sources) != 0)
+        return null;
+
+    foreach (asmSrc; [
+        buildPath(drSrc, "core", "thread", "fiber", "switch_context_asm.S"),
+        buildPath(drSrc, "core", "internal", "atomic_aarch64.S"),
+        buildPath(drSrc, "core", "thread", "stack_aarch64.S"),
+    ])
+    {
+        immutable obj = buildPath(outDir, asmSrc.baseName.setExtension("o"));
+        if (run(["clang", "--target=aarch64-linux-gnu", "-c", asmSrc, "-o", obj]) != 0)
+            return null;
+        if (run(["ar", "r", drLib, obj]) != 0)
+            return null;
+    }
+    return drLib;
+}
+
+int runDruntimeTest(string outDir, string testDir, string drSrc, string drLib, string testName)
+{
+    immutable armO = buildPath(outDir, testName ~ "_dr.o");
+    immutable armExe = buildPath(outDir, testName ~ "_dr");
+    immutable armSrc = buildPath(testDir, testName ~ ".d");
+
+    writefln("--- %s (AArch64, druntime) ---", testName);
+
+    if (run([dmd, "-marm64", "-c", armSrc, "-I" ~ drSrc, "-of=" ~ armO]) != 0)
+        return 1;
+
+    if (run([
+        "clang", "--target=aarch64-linux-gnu", "--sysroot=/usr/aarch64-linux-gnu",
+        "-fuse-ld=lld", "-static", armO, drLib, "-lm", "-lpthread", "-ldl", "-o", armExe
+    ]) != 0)
+        return 1;
+
+    return run(["qemu-aarch64", armExe]);
 }
 
 int buildShim(string outDir, string drImport)
