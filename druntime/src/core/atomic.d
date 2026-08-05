@@ -615,6 +615,12 @@ else version (GNU)
     enum has64BitXCHG = GNU_Have_64Bit_Atomics;
     enum has128BitCAS = GNU_Have_LibAtomic;
 }
+else version (AArch64)
+{
+    enum has64BitXCHG = true;
+    enum has64BitCAS = true;
+    enum has128BitCAS = false;
+}
 else
 {
     enum has64BitXCHG = false;
