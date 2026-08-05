@@ -207,7 +207,7 @@ static if (1)
     void dwarf_addrel(int seg, targ_size_t offset, int targseg, targ_size_t val = 0)
     {
         if (config.objfmt == OBJ_ELF)
-            Obj.addrel(seg, offset, I64 ? R_X86_64_32 : R_386_32, cast(int)MAP_SEG2SYMIDX(targseg), val);
+            Obj.addrel(seg, offset, AArch64() ? R_AARCH64_ABS32 : (I64 ? R_X86_64_32 : R_386_32), cast(int)MAP_SEG2SYMIDX(targseg), val);
         else if (config.objfmt == OBJ_MACH)
             Obj.addrel(seg, offset, cast(Symbol*) null, targseg, REL.address, cast(int)val);
         else
@@ -217,7 +217,7 @@ static if (1)
     void dwarf_addrel64(int seg, targ_size_t offset, int targseg, targ_size_t val)
     {
         if (config.objfmt == OBJ_ELF)
-            Obj.addrel(seg, offset, R_X86_64_64, cast(int)MAP_SEG2SYMIDX(targseg), val);
+            Obj.addrel(seg, offset, AArch64() ? R_AARCH64_ABS64 : R_X86_64_64, cast(int)MAP_SEG2SYMIDX(targseg), val);
         else if (config.objfmt == OBJ_MACH)
             Obj.addrel(seg, offset, null, targseg, REL.address, cast(uint)val);
         else

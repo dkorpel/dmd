@@ -1245,8 +1245,8 @@ void cod3_thunk(Symbol* sthunk,Symbol* sfunc,uint p,tym_t thisty,
             cdb.append(c1);
         }
     }
-    cdb.gencs1(INSTR.bl(0),0,FL.func,sfunc); // BL sfunc // http://www.scs.stanford.edu/~zyedidia/arm64/bl.html
-    cdb.last().Iflags |= (CF.selfrel26 | CF.off);
+    cdb.gencs1(INSTR.b_uncond(0),0,FL.func,sfunc); // B sfunc // http://www.scs.stanford.edu/~zyedidia/arm64/b_uncond.html
+    cdb.last().Iflags |= (CF.selfrel | CF.selfrel26 | CF.off);
 
     thunkoffset = Offset(seg);
     code* c = cdb.finish();

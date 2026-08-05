@@ -13,6 +13,12 @@
  *          http://www.boost.org/LICENSE_1_0.txt)
  */
 
+#if defined(__APPLE__)
+#define CSYM(name) _##name
+#else
+#define CSYM(name) name
+#endif
+
 #if (__linux__ || __FreeBSD__ || __NetBSD__ || __OpenBSD__ || __DragonFly__ | __GNU__) && __ELF__
 /*
  * Mark the resulting object file as not requiring execution permissions on

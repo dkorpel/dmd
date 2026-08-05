@@ -1473,7 +1473,7 @@ void ElfObj_setModuleCtorDtor(Symbol* sfunc, bool isCtor)
                      : ElfObj_getsegment(".fini_array", null, SHT_FINI_ARRAY, SHF_ALLOC|SHF_WRITE, _tysize[TYnptr]);
     else
         seg = ElfObj_getsegment(isCtor ? ".ctors" : ".dtors", null, SHT_PROGBITS, SHF_ALLOC|SHF_WRITE, _tysize[TYnptr]);
-    const reltype_t reltype = I64 ? R_X86_64_64 : R_386_32;
+    const reltype_t reltype = elfobj.AArch64 ? R_AARCH64_ABS64 : (I64 ? R_X86_64_64 : R_386_32);
     const size_t sz = ElfObj_writerel(seg, cast(uint)SegData[seg].SDoffset, reltype, sfunc.Sxtrnnum, 0);
     SegData[seg].SDoffset += sz;
 }
@@ -2730,7 +2730,7 @@ size_t ElfObj_writerel(int targseg, size_t offset, reltype_t reltype,
     {
         // Elf64_Rela stores addend in Rela.r_addend field
         sz = relsize64(reltype);
-        if (!elfobj.AArch64 || reltype == R_AARCH64_ABS64) // TODO AArch64: extend to all fixups?
+        if (!elfobj.AArch64 || reltype == R_AARCH64_ABS64 || reltype == R_AARCH64_ABS32) // TODO AArch64: extend to all fixups?
         {
             //printf("writeaddrval() targseg: %d offset: %lld sz: %lld\n", targseg, offset, sz);
             writeaddrval(targseg, offset, 0, sz);
@@ -3237,32 +3237,17 @@ static if (0)
 
                 if (flags & CF.selfrel)
                 {               // only for function references within code segments
-                    if (!external &&            // local definition found
-                         s.Sseg == seg &&      // within same code segment
-                          (!(config.flags3 & CFG3pic) ||        // not position indp code
-                           s.Sclass == SC.static_)) // or is pic, but declared static
-                    {                   // Can use PC relative
-                        printf("\tdoing PC relative\n");
-                        val = (s.Soffset+val) - (offset+4);
-                    }
-                    else
-                    {
-                        //printf("\tadding relocation\n");
-                        if (s.Sclass == SC.global && config.flags3 & CFG3pie && tyfunc(s.ty()))
-                            relinfo = R_X86_64_PC32;
-                        else
-                            relinfo = R_AARCH64_CALL26;
-                            //relinfo = config.flags3 & CFG3pic ?  R_X86_64_PLT32 : R_X86_64_PC32;
-                        //val = -cast(targ_size_t)4;
-                    }
+                    relinfo = R_AARCH64_CALL26;
                 }
                 else
                 {       // code to code code to data, data to code, data to data refs
                     if (s.Sclass == SC.static_)
                     {                           // offset into .data or .bss seg
                         if (!isTLS && !(MAP_SEG2SEC(s.Sseg).sh_flags & SHF_MERGE))
+                        {
                             refseg = MAP_SEG2SYMIDX(s.Sseg);    // use segment symbol table entry
-                        //val += s.Soffset;
+                            val += s.Soffset;
+                        }
 
                         relinfo = flags & CF.add ? R_AARCH64_ADD_ABS_LO12_NC : R_AARCH64_ADR_PREL_PG_HI21;
                         if (refSize == 8)
@@ -3948,7 +3933,7 @@ private void obj_rtinit_aarch64()
         ElfObj_writerel(codseg, off+ 6*4, R_AARCH64_ADD_ABS_LO12_NC,  minfo_beg, 0);
         ElfObj_writerel(codseg, off+ 8*4, R_AARCH64_ADR_PREL_PG_HI21, dso_rec,   0);
         ElfObj_writerel(codseg, off+ 9*4, R_AARCH64_ADD_ABS_LO12_NC,  dso_rec,   0);
-        ElfObj_writerel(codseg, off+14*4, R_AARCH64_CALL26,           dso_rec,   0);
+        ElfObj_writerel(codseg, off+14*4, R_AARCH64_CALL26, ElfObj_external_def("_d_dso_registry"), 0);
         off = buf.length();
 
         Offset(codseg) = off;
@@ -3964,8 +3949,7 @@ private void obj_rtinit_aarch64()
             // add to section group
             SegData[groupseg].SDbuf.write32(MAP_SEG2SECIDX(cdseg));
             // relocation
-            const reltype2 = I64 ? R_X86_64_64 : R_386_32;
-            SegData[cdseg].SDoffset += ElfObj_writerel(cdseg, 0, reltype2, MAP_SEG2SYMIDX(codseg), 0);
+            SegData[cdseg].SDoffset += ElfObj_writerel(cdseg, 0, R_AARCH64_ABS64, MAP_SEG2SYMIDX(codseg), 0);
         }
         {
             const init_name = USE_INIT_ARRAY() ? ".init_array.d_dso_ctor" : ".ctors.d_dso_ctor";
@@ -3975,8 +3959,7 @@ private void obj_rtinit_aarch64()
             // add to section group
             SegData[groupseg].SDbuf.write32(MAP_SEG2SECIDX(cdseg));
             // relocation
-            const reltype2 = I64 ? R_X86_64_64 : R_386_32;
-            SegData[cdseg].SDoffset += ElfObj_writerel(cdseg, 0, reltype2, MAP_SEG2SYMIDX(codseg), 0);
+            SegData[cdseg].SDoffset += ElfObj_writerel(cdseg, 0, R_AARCH64_ABS64, MAP_SEG2SYMIDX(codseg), 0);
         }
     }
     // set group section infos
@@ -4061,6 +4044,12 @@ int elf_dwarf_reftoident(int seg, targ_size_t offset, Symbol* s, targ_size_t val
             s.Sdw_ref_idx = elf_addsym(namidx, val, 8, STT_OBJECT, STB_WEAK, MAP_SEG2SECIDX(dataDWref_seg), STV_HIDDEN);
         }
         ElfObj_writerel(seg, cast(uint)offset, I64 ? R_X86_64_PC32 : R_386_PC32, s.Sdw_ref_idx, 0);
+    }
+    else if (elfobj.AArch64)
+    {
+        if (!s.Sxtrnnum)
+            ElfObj_external(s);
+        ElfObj_writerel(seg, cast(uint)offset, R_AARCH64_ABS32, s.Sxtrnnum, val);
     }
     else
     {
