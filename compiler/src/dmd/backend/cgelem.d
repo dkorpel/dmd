@@ -3685,11 +3685,11 @@ elem* elstruct(elem* e, Goal goal)
                 }
                 else if (I64 && targ1 && targ2)
                 {
-                    if (tyfloating(tybasic(targ1.Tty)) &&
+                    if (cgstate.AArch64 && tyfloating(tybasic(targ1.Tty)) && tyfloating(tybasic(targ2.Tty)))
+                        tym = tysize(targ1.Tty) == 4 ? TYcfloat : TYcdouble;
+                    else if (tyfloating(tybasic(targ1.Tty)) &&
                         !cgstate.AArch64) // TODO AArch64
                         tym = TYcdouble;
-                    else if (0 && cgstate.AArch64)
-                        goto Ldefault;
                     else
                         tym = TYucent;
                     if ((0 == tyfloating(targ1.Tty)) ^ (0 == tyfloating(targ2.Tty)))

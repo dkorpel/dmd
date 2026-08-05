@@ -2043,11 +2043,7 @@ void cdfunc(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t pretregs)
             if (preg2 != NOREG || tybasic(ep.Ety) == TYcfloat)
             {
                 assert(ep.Eoper != OPstrthis);
-                if (tybasic(ep.Ety) == TYcfloat)
-                {
-                    assert(0);
-                }
-                else if (tyrelax(ep.Ety) == TYcent)
+                if (tyrelax(ep.Ety) == TYcent)
                 {
                     lreg = mask(preg ) & INSTR.LSW ? cast(reg_t)preg  : 0;
                     mreg = mask(preg2) & INSTR.MSW ? cast(reg_t)preg2 : 1;
@@ -2105,12 +2101,10 @@ void cdfunc(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t pretregs)
                     ty1 = ty2 = TYllong;
                 else if (tybasic(ty1) == TYcdouble)
                     ty1 = ty2 = TYdouble;
+                else if (tybasic(ty1) == TYcfloat)
+                    ty1 = ty2 = TYfloat;
 
-                if (tybasic(ep.Ety) == TYcfloat)
-                {
-                    assert(0);
-                }
-                else foreach (v; 0 .. 2)
+                foreach (v; 0 .. 2)
                 {
                     if (v ^ (preg != mreg))
                         genmovreg(cdb, preg, lreg, ty1);
@@ -2466,10 +2460,9 @@ static if (0)
 
     /* Special handling for functions which return complex float in XMM0 or RAX. */
 
-    if (config.exe != EX_WIN64 // broken
+    if (0 && config.exe != EX_WIN64 // AArch64 returns complex float in v0,v1 already
         && pretregs && tybasic(e.Ety) == TYcfloat)
     {
-        assert(0);     // TODO AArch64
         static if (0)
         {
         assert(reg2 == NOREG);
@@ -2811,7 +2804,7 @@ void loaddata(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t outretreg
         else if (isPair)
         {
             reg = findreg(forregs & INSTR.MSW);
-            loadea(cg, cdb, e, cs, 0x8B, reg, REGSIZE, forregs, 0); // MOV reg,data+2
+            loadea(cg, cdb, e, cs, 0x8B, reg, sz / 2, forregs, 0);  // MOV reg,data+2
             reg = findreg(forregs & INSTR.LSW);
             loadea(cg, cdb, e, cs, 0x8B, reg, 0, forregs, 0);       // MOV reg,data
         }

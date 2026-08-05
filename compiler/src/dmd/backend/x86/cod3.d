@@ -4611,6 +4611,12 @@ void prolog_loadparams(ref CGstate cg, ref CodeBuilder cdb, tym_t tyf, bool push
         {
             //printf("i: %d t: %s offset: %d\n", i, tym_str(t.Tty), cast(int)offset);
             uint sz = cast(uint)type_size(t);
+            /* AArch64 homes each floating point parameter at its own size,
+             * not at REGSIZE, so a { float, float } does not overlap the next parameter
+             */
+            const int strideAdjust = (AArch64 && tyfloating(t.Tty))
+                ? (tycomplex(t.Tty) ? sz / 2 : sz) - REGSIZE
+                : 0;
             static type* type_arrayBase(type* ta)
             {
                 while (tybasic(ta.Tty) == TYarray)
@@ -4639,13 +4645,6 @@ void prolog_loadparams(ref CGstate cg, ref CodeBuilder cdb, tym_t tyf, bool push
                             INSTR.szToSizeOpcStr(sz, size, opc);
                             imm /= sz;
                             cdb.gen1(INSTR.str_imm_fpsimd(size,opc,imm,29,preg)); // https://www.scs.stanford.edu/~zyedidia/arm64/str_imm_fpsimd.html
-                            if (tycomplex(t.Tty))
-                            {
-                                /* want to add sz, not REGSIZE, for Spreg2
-                                 * so account for adding REGSIZE at end of loop
-                                 */
-                                offset += sz - REGSIZE;
-                            }
                         }
                         else
                             // STR preg,bp,#offset
@@ -4710,7 +4709,7 @@ void prolog_loadparams(ref CGstate cg, ref CodeBuilder cdb, tym_t tyf, bool push
                 break;
             if (t2)
                 t = t2;
-            offset += REGSIZE;
+            offset += REGSIZE + strideAdjust;
         }
     }
 
