@@ -2776,7 +2776,25 @@ static if (0)
 
     reltype_t relinfo;
     IDXSYM targetsymidx = STI_RODAT;
-    if (I64)
+    if (elfobj.AArch64)
+    {
+        if (flags & CF.offset64)
+        {
+            relinfo = R_AARCH64_ABS64;
+            if (flags & CF.switch_) targetsymidx = targetdatum;
+        }
+        else if (flags & CF.switch_)
+        {
+            relinfo = R_AARCH64_PREL32;
+            targetsymidx = MAP_SEG2SYMIDX(targetdatum);
+        }
+        else
+        {
+            relinfo = R_AARCH64_ABS32;
+            targetsymidx = MAP_SEG2SYMIDX(targetdatum);
+        }
+    }
+    else if (I64)
     {
 
         if (flags & CF.offset64)
