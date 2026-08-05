@@ -547,10 +547,11 @@ void cdnot(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     }
     else
     {
+        const bool isPair = isRegisterPair(true, tybasic(e1.Ety), 0);
         const posregs = cg.allregs;
         regm_t retregs1 = posregs;
         codelem(cg,cdb,e.E1,retregs1,false);
-        const R1 = findreg(retregs1);       // source register
+        const R1 = findreg(isPair ? retregs1 & INSTR.LSW : retregs1);   // source register
 
         regm_t retregs = pretregs & cg.allregs;
         if (retregs == 0)                   // if no return regs speced
@@ -559,7 +560,14 @@ void cdnot(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         const tym = tybasic(e.Ety);
         reg_t Rd = allocreg(cdb, retregs, tym); // destination register
 
-        cdb.gen1(INSTR.cmp_imm(tysize(e.E1.Ety) == 8,0,0,R1));  // CMP R1,#0
+        if (isPair)
+        {
+            const Rmsw = findreg(retregs1 & INSTR.MSW);
+            cdb.gen1(INSTR.orr_shifted_register(1,0,Rmsw,0,R1,Rd));  // ORR Rd,R1,Rmsw
+            cdb.gen1(INSTR.cmp_imm(1,0,0,Rd));                       // CMP Rd,#0
+        }
+        else
+            cdb.gen1(INSTR.cmp_imm(sz == 8,0,0,R1));  // CMP R1,#0
         COND cond = op == OPnot ? COND.ne : COND.eq;
         sz = tysize(e.Ety);
         cdb.gen1(INSTR.cset(sz == 8,cond,Rd));    // CSET Rd,EQ

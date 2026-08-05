@@ -1386,6 +1386,19 @@ void tstresult(ref CGstate cg, ref CodeBuilder cdb, regm_t regm, tym_t tym, bool
             cdb.gen1(INSTR.fcmp_float(ftype,0,reg));    // FCMP Vn,#0.0
         }
     }
+    else if (isRegisterPair(true, tym, 0))
+    {
+        const R0 = findreg(regm & INSTR.LSW);
+        const R1 = findreg(regm & INSTR.MSW);
+        gentstreg(cdb,R0,1);                        // CMP R0,#0
+        code_orflag(cdb.last(),CF.psw);
+        code* cnop = gen1(null, INSTR.nop);
+        genBranch(cdb, COND.ne, FL.code, cast(block*)cnop); // B.ne cnop
+        gentstreg(cdb,R1,1);                        // CMP R1,#0
+        code_orflag(cdb.last(),CF.psw);
+        cdb.append(cnop);                           // cnop:
+        return;
+    }
     else
         gentstreg(cdb,reg,sz == 8);                 // CMP reg,#0
     code_orflag(cdb.last(),CF.psw);
