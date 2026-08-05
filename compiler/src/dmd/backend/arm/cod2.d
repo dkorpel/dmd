@@ -559,12 +559,10 @@ void cdnot(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         const tym = tybasic(e.Ety);
         reg_t Rd = allocreg(cdb, retregs, tym); // destination register
 
-        sz = tysize(e.Ety);
-        uint sf = sz == 8;
-
-        cdb.gen1(INSTR.cmp_imm(sf,0,0,R1));  // CMP R1,#0
+        cdb.gen1(INSTR.cmp_imm(tysize(e.E1.Ety) == 8,0,0,R1));  // CMP R1,#0
         COND cond = op == OPnot ? COND.ne : COND.eq;
-        cdb.gen1(INSTR.cset(sf,cond,Rd));    // CSET Rd,EQ
+        sz = tysize(e.Ety);
+        cdb.gen1(INSTR.cset(sz == 8,cond,Rd));    // CSET Rd,EQ
 
         uint N,immr,imms;
         assert(encodeNImmrImms(0xFF,N,immr,imms));

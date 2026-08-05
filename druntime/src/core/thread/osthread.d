@@ -737,6 +737,12 @@ version (Windows)
 }
 
 
+version (DigitalMars) version (AArch64)
+{
+    extern(C) void* _d_getStackTop() pure nothrow @nogc;
+    extern(C) void _d_saveCalleeRegisters(void** buf) pure nothrow @nogc;
+}
+
 // Calls the given delegate, passing the current thread's stack pointer to it.
 package extern(D) void callWithStackShell(scope callWithStackShellDg fn) nothrow
 in (fn)
@@ -909,20 +915,13 @@ in (fn)
         // 5.1.1.  Include x29 fp because it optionally can be a callee
         // saved reg
         size_t[11] regs = void;
-        // store the registers in pairs
-        asm pure nothrow @nogc
+        version (DigitalMars)
         {
-        /*
-            stp x19, x20, regs[0];
-            stp x21, x22, regs[2];
-            stp x23, x24, regs[4];
-            stp x25, x26, regs[6];
-            stp x27, x28, regs[8];
-            str x29, regs[10];
-            mov [sp], sp;
-         */
+            _d_saveCalleeRegisters(cast(void**)regs.ptr);
+            sp = cast(void*)&regs[0];
         }
-        assert(0, "implement AArch64 inline assembler for callWithStackShell()"); // TODO AArch64
+        else
+            assert(0, "implement AArch64 inline assembler for callWithStackShell()");
     }
     else
     {
@@ -976,9 +975,11 @@ private extern(D) void* getStackTop() nothrow @nogc
     else version (D_InlineAsm_X86_64)
         asm pure nothrow @nogc { naked; mov RAX, RSP; ret; }
     else version (AArch64)
-        //asm pure nothrow @nogc { naked; mov x0, SP; ret; }    // TODO AArch64
     {
-        return null;
+        version (DigitalMars)
+            return _d_getStackTop();
+        else
+            return null;
     }
     else version (GNU)
         return __builtin_frame_address(0);

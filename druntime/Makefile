@@ -391,7 +391,7 @@ $(abspath ../generated/$(OS)/$(BUILD)/$(MODEL)/dmd$(DOTEXE)): ../generated/$(OS)
 
 OBJS:=$(ROOT)/errno_c$(DOTOBJ)
 ifneq (windows,$(OS))
-    OBJS+=$(ROOT)/threadasm$(DOTOBJ) $(ROOT)/atomicasm$(DOTOBJ) $(ROOT)/valgrind$(DOTOBJ)
+    OBJS+=$(ROOT)/threadasm$(DOTOBJ) $(ROOT)/atomicasm$(DOTOBJ) $(ROOT)/stackasm$(DOTOBJ) $(ROOT)/valgrind$(DOTOBJ)
 endif
 
 $(ROOT)/%$(DOTOBJ) : src/rt/%.c $(DMD)
@@ -407,6 +407,10 @@ $(ROOT)/threadasm$(DOTOBJ) : src/core/thread/fiber/switch_context_asm.S
 	$(CC) -c $(CFLAGS) $< -o$@
 
 $(ROOT)/atomicasm$(DOTOBJ) : src/core/internal/atomic_aarch64.S
+	@mkdir -p $(dir $@)
+	$(CC) -c $(CFLAGS) $< -o$@
+
+$(ROOT)/stackasm$(DOTOBJ) : src/core/thread/stack_aarch64.S
 	@mkdir -p $(dir $@)
 	$(CC) -c $(CFLAGS) $< -o$@
 
