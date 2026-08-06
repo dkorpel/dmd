@@ -72,6 +72,78 @@ regm_t idxregm(const ref code cs)
 }
 
 /*****************************
+ * Load `e` into the register pair `retregs`, the real part in the LSW register
+ * and the imaginary part in the MSW register.
+ * Operands that are not complex get a zero for the half they do not supply.
+ */
+@trusted
+private void loadComplexPair(ref CGstate cg, ref CodeBuilder cdb, elem* e, regm_t retregs, regm_t keepmsk)
+{
+    const tym = tybasic(e.Ety);
+    if (tycomplex(tym))
+    {
+        regm_t regs = retregs;
+        scodelem(cg, cdb, e, regs, keepmsk, false);
+        return;
+    }
+
+    const reg_t Rre = findreg(retregs & INSTR.LSW);
+    const reg_t Rim = findreg(retregs & INSTR.MSW);
+    const bool imaginary = tyimaginary(tym) != 0;
+
+    regm_t regs = mask(imaginary ? Rim : Rre);
+    scodelem(cg, cdb, e, regs, keepmsk, false);
+
+    const sz = _tysize[tym];
+    cdb.gen1(INSTR.fmov_float_gen(sz == 8, INSTR.szToFtype(sz), 0, 7, 31, imaginary ? Rre : Rim));
+}
+
+/*****************************
+ * Handle OPadd, OPmin, OPmul and OPdiv when the result is a complex type.
+ * Non-complex operands are widened to complex, so every combination of
+ * real, imaginary and complex operands goes through the same code.
+ */
+@trusted
+void cdcomplex(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t pretregs)
+{
+    const ty = tybasic(e.Ety);
+    const sz = _tysize[ty] / 2;
+    assert(sz == 4 || sz == 8);         // TODO AArch64 TYcreal
+
+    regm_t retregs1 = mask(32) | mask(33);
+    loadComplexPair(cg, cdb, e.E1, retregs1, 0);
+    regm_t retregs2 = mask(34) | mask(35);
+    loadComplexPair(cg, cdb, e.E2, retregs2, retregs1);
+
+    if (e.Eoper == OPmul || e.Eoper == OPdiv)
+    {
+        const clib = e.Eoper == OPmul
+            ? (sz == 4 ? CLIB_A.mulsc3 : CLIB_A.muldc3)
+            : (sz == 4 ? CLIB_A.divsc3 : CLIB_A.divdc3);
+        callclib(cg, cdb, e, clib, pretregs, 0);
+        return;
+    }
+
+    const ftype = INSTR.szToFtype(sz);
+    const reg_t Rn = findreg(retregs1 & INSTR.LSW);
+    const reg_t Rn0 = findreg(retregs1 & INSTR.MSW);
+    const reg_t Rm = findreg(retregs2 & INSTR.LSW);
+    const reg_t Rm0 = findreg(retregs2 & INSTR.MSW);
+
+    if (e.Eoper == OPadd)
+    {
+        cdb.gen1(INSTR.fadd_float(ftype,Rm,Rn,Rn));
+        cdb.gen1(INSTR.fadd_float(ftype,Rm0,Rn0,Rn0));
+    }
+    else
+    {
+        cdb.gen1(INSTR.fsub_float(ftype,Rm,Rn,Rn));
+        cdb.gen1(INSTR.fsub_float(ftype,Rm0,Rn0,Rn0));
+    }
+    fixresult(cg,cdb,e,retregs1,pretregs);
+}
+
+/*****************************
  * Handle operators which are more or less orthogonal
  * OPadd, OPmin, OPand, OPor, OPxor
  */
@@ -96,6 +168,12 @@ void cdorth(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     const ty1 = tybasic(e1.Ety);
     const ty2 = tybasic(e2.Ety);
     const sz = _tysize[ty];
+
+    if (tycomplex(ty))
+    {
+        cdcomplex(cg, cdb, e, pretregs);
+        return;
+    }
 
     regm_t posregs = tyfloating(ty1) ? INSTR.FLOATREGS : cg.allregs;
 
@@ -304,18 +382,9 @@ void cdmul(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
 
     if (tyfloating(ty1))
     {
-        if (tycomplex(ty1))
+        if (tycomplex(ty))
         {
-            regm_t retregs1 = mask(32) | mask(33);
-            codelem(cg, cdb, e1, retregs1, false);
-            regm_t retregs2 = mask(34) | mask(35);
-            scodelem(cg, cdb, e2, retregs2, retregs1, false);
-            if (ty1 == TYcfloat)
-                callclib(cg,cdb,e,CLIB_A.mulsc3,pretregs,0);
-            else if (ty1 == TYcdouble)
-                callclib(cg,cdb,e,CLIB_A.muldc3,pretregs,0);
-            else
-                assert(0);
+            cdcomplex(cg, cdb, e, pretregs);
             return;
         }
         cdorth(cg, cdb, e, pretregs);
@@ -374,18 +443,9 @@ void cddiv(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
 
     if (tyfloating(ty1))
     {
-        if (tycomplex(ty1))
+        if (tycomplex(ty))
         {
-            regm_t retregs1 = mask(32) | mask(33);
-            codelem(cg, cdb, e1, retregs1, false);
-            regm_t retregs2 = mask(34) | mask(35);
-            scodelem(cg, cdb, e2, retregs2, retregs1, false);
-            if (ty1 == TYcfloat)
-                callclib(cg,cdb,e,CLIB_A.divsc3,pretregs,0);
-            else if (ty1 == TYcdouble)
-                callclib(cg,cdb,e,CLIB_A.divdc3,pretregs,0);
-            else
-                assert(0);
+            cdcomplex(cg, cdb, e, pretregs);
             return;
         }
         cdorth(cg, cdb, e, pretregs);
