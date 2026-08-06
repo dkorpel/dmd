@@ -34,6 +34,7 @@
 module dmd.backend.wasm.obj;
 
 import dmd.backend.cc;
+import dmd.backend.symbol;
 import dmd.backend.cdef;
 import dmd.backend.code;
 import dmd.backend.debugprint;

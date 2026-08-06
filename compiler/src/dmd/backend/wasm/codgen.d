@@ -51,7 +51,7 @@ import dmd.backend.el;
 import dmd.backend.oper;
 import dmd.backend.ty;
 import dmd.backend.type;
-import dmd.backend.symbol : symbol_generate;
+import dmd.backend.symbol;
 import dmd.backend.rtlsym : getRtlsym, RTLSYM;
 import dmd.backend.wasm.enums;
 import dmd.backend.wasm.simd;
