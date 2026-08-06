@@ -2209,36 +2209,50 @@ private void funccall(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint numpara
             cg.needframe = true;
             cg.setSPtoFPonEpilog = true;
 
-            Symbol* schkstk = MachObj_getChkstkSym();   // ___chkstk_darwin
-            FL fl = schkstk.Sfl;
-
-            enum reg_t R9 = 9;                  // argument to __chkstk_darwin
-            regm_t maskR9 = mask(R9);
-            codelem(cg,cdbe,e.E2,maskR9,0);            // R9 = e2
-
-            cdbe.gen1(INSTR.add_addsub_imm(1,0,0xF,R9,R9)); // ADD R9,R9,#0xF
-
+            reg_t r;                                // amount to allocate
             uint N,immr,imms;
-            assert(encodeNImmrImms(0xFFFF_FFFF_FFFF_FFF0,N,immr,imms));
-            cdbe.gen1(INSTR.log_imm(1,0,N,immr,imms,R9,R9));    // AND R9,R9,#0xFFFF_FFFF_FFFF_FFF0
+            if (config.exe & EX_OSX64)
+            {
+                Symbol* schkstk = MachObj_getChkstkSym();   // ___chkstk_darwin
+                FL fl = schkstk.Sfl;
 
-            //cg.Alloca.size = REGSIZE;
+                enum reg_t R9 = 9;                  // argument to __chkstk_darwin
+                regm_t maskR9 = mask(R9);
+                codelem(cg,cdbe,e.E2,maskR9,0);            // R9 = e2
 
-            enum regm_t DESREGS = mask(R9) | mask(10) | mask(11);       // registers destroyed by ___chkstk_darwin
-            getregs(cdbe, DESREGS);
+                cdbe.gen1(INSTR.add_addsub_imm(1,0,0xF,R9,R9)); // ADD R9,R9,#0xF
 
-            regm_t regm = INSTR.ALLREGS & ~DESREGS;
-            reg_t r = allocreg(cdbe, regm, TYnptr); // r becomes amount to allocate
-            genmovreg(cdbe,r,R9,TYMAX);             // MOV r,R9  since r is preserved by ___chkstk_darwin
+                assert(encodeNImmrImms(0xFFFF_FFFF_FFFF_FFF0,N,immr,imms));
+                cdbe.gen1(INSTR.log_imm(1,0,N,immr,imms,R9,R9));    // AND R9,R9,#0xFFFF_FFFF_FFFF_FFF0
 
-            enum reg_t R16 = 16;                    // scratch register
+                enum regm_t DESREGS = mask(R9) | mask(10) | mask(11);       // registers destroyed by ___chkstk_darwin
+                getregs(cdbe, DESREGS);
 
-            uint ins = INSTR.adr(1,0,R16);          // ADRP R16,0x0 GOT_LOAD_PAGE21
-            cdbe.gencs1(ins,0,fl,schkstk);
-            ins = INSTR.ldr_imm_gen(1,R16,R16,0);   // LDR  R16,[R16] GOT_LOAD_PAGEOFF12
-            cdbe.gencs1(ins,0,fl,schkstk);
-            cdbe.last.Iflags |= CF.add;
-            cdbe.gen1(INSTR.blr(R16));              // BLR R16
+                regm_t regm = INSTR.ALLREGS & ~DESREGS;
+                r = allocreg(cdbe, regm, TYnptr);
+                genmovreg(cdbe,r,R9,TYMAX);             // MOV r,R9  since r is preserved by ___chkstk_darwin
+
+                enum reg_t R16 = 16;                    // scratch register
+
+                uint ins = INSTR.adr(1,0,R16);          // ADRP R16,0x0 GOT_LOAD_PAGE21
+                cdbe.gencs1(ins,0,fl,schkstk);
+                ins = INSTR.ldr_imm_gen(1,R16,R16,0);   // LDR  R16,[R16] GOT_LOAD_PAGEOFF12
+                cdbe.gencs1(ins,0,fl,schkstk);
+                cdbe.last.Iflags |= CF.add;
+                cdbe.gen1(INSTR.blr(R16));              // BLR R16
+            }
+            else
+            {
+                regm_t sizeregs = INSTR.ALLREGS;
+                codelem(cg,cdbe,e.E2,sizeregs,0);
+                r = findreg(sizeregs);
+                getregs(cdbe, mask(r));
+
+                cdbe.gen1(INSTR.add_addsub_imm(1,0,0xF,r,r));   // ADD r,r,#0xF
+
+                assert(encodeNImmrImms(0xFFFF_FFFF_FFFF_FFF0,N,immr,imms));
+                cdbe.gen1(INSTR.log_imm(1,0,N,immr,imms,r,r));  // AND r,r,#0xFFFF_FFFF_FFFF_FFF0
+            }
 
             retregs = INSTR.ALLREGS & pretregs;
             if (!retregs)
