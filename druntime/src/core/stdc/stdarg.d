@@ -307,6 +307,11 @@ version (LDC)
 else version (DigitalMars)
 {
     version (SysV_x64)
+        version = IndirectVaList;
+    else version (AAPCS64)
+        version = IndirectVaList;
+
+    version (IndirectVaList)
     {
         void va_copy(out va_list dest, va_list src, void* storage = alloca(__va_list_tag.sizeof))
         {
