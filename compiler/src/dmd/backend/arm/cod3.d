@@ -1459,7 +1459,11 @@ void genmovreg(ref CodeBuilder cdb, reg_t to, reg_t from, tym_t ty = TYMAX)
         {
             // integer
             const uint sf = ty == TYMAX || _tysize[ty] == 8;
-            cdb.gen1(INSTR.mov_register(sf, from, to));    // MOV gp,gp https://www.scs.stanford.edu/~zyedidia/arm64/mov_orr_log_shift.html
+            if (to == INSTR.SP || from == INSTR.SP)
+                // MOV to/from SP is ADD Rd,Rn,#0, as register 31 means ZR in MOV
+                cdb.gen1(INSTR.addsub_imm(sf,0,0,0,0,from,to));
+            else
+                cdb.gen1(INSTR.mov_register(sf, from, to));    // MOV gp,gp https://www.scs.stanford.edu/~zyedidia/arm64/mov_orr_log_shift.html
 
         }
         else // one or both are floating point registers
