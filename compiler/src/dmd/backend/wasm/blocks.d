@@ -23,7 +23,7 @@
  *      compare chain).
  *
  * Exceptions (EH_WASM) add `try_table` frames: `structureTryRegions` reorders
- * blocks so each `BC._try` header is immediately followed by the blocks it
+ * blocks so each `BC.try_` header is immediately followed by the blocks it
  * guards and then its landing-pad group (blockopt (-O) and the inliner scatter
  * them); the catch clause lands on the block just past the try body.
  *
@@ -116,7 +116,7 @@ private bool emitBlockReturn(ref WasmCG cg, block* b, bool hasReturn)
     {
         return cg.emitReturnVoid(b, hasReturn);
     }
-    else if (b.bc == BC.exit || b.bc == BC._ret)
+    else if (b.bc == BC.exit || b.bc == BC.finRet)
     {
         if (b.Belem)
             cg.genElemDiscard(b.Belem);
@@ -163,7 +163,7 @@ nothrow:
 
     static bool isPad(const block* b)
     {
-        return b.bc == BC.jcatch || b.bc == BC._finally || b.bc == BC._lpad;
+        return b.bc == BC.jcatch || b.bc == BC.finally_ || b.bc == BC.lpad;
     }
 
     static block* levelNode(block* b, block* owner)
@@ -198,19 +198,19 @@ nothrow:
                 dfs(ln);
             }
 
-            if (node.bc == BC._try && node.Bsucc.length > 1)
+            if (node.bc == BC.try_ && node.Bsucc.length > 1)
             {
                 foreach (m; blocks)
                     if (m !is node && levelNode(m, node) !is null)
                         foreach (s; m.Bsucc)
                             visitSucc(s);
                 block* h = node.Bsucc[1];
-                if (h && (h.bc == BC.jcatch || h.bc == BC._finally))
+                if (h && (h.bc == BC.jcatch || h.bc == BC.finally_))
                 {
                     foreach (s; h.Bsucc)
                         visitSucc(s);
-                    if (h.bc == BC._finally && h.Bsucc.length
-                        && h.Bsucc[0].bc == BC._lpad)
+                    if (h.bc == BC.finally_ && h.Bsucc.length
+                        && h.Bsucc[0].bc == BC.lpad)
                         foreach (s; h.Bsucc[0].Bsucc)
                             visitSucc(s);
                 }
@@ -237,17 +237,17 @@ nothrow:
             return;
         placed[b.Bdfoidx] = true;
         result ~= b;
-        if (b.bc != BC._try || b.Bsucc.length < 2)
+        if (b.bc != BC.try_ || b.Bsucc.length < 2)
             return;
         layoutLevel(b, b.Bsucc[0]);
         block* h = b.Bsucc[1];
         if (h && !placed[h.Bdfoidx]
-            && (h.bc == BC.jcatch || h.bc == BC._finally))
+            && (h.bc == BC.jcatch || h.bc == BC.finally_))
         {
             placed[h.Bdfoidx] = true;
             result ~= h;
-            block* lp = h.bc == BC._finally && h.Bsucc.length ? h.Bsucc[0] : null;
-            if (lp && lp.bc == BC._lpad && !placed[lp.Bdfoidx])
+            block* lp = h.bc == BC.finally_ && h.Bsucc.length ? h.Bsucc[0] : null;
+            if (lp && lp.bc == BC.lpad && !placed[lp.Bdfoidx])
             {
                 placed[lp.Bdfoidx] = true;
                 result ~= lp;
@@ -269,7 +269,7 @@ private bool isTableBranch(BC bc)
 
 private bool isLandingFlow(BC bc)
 {
-    return bc == BC._finally || bc == BC._lpad || bc == BC.jcatch;
+    return bc == BC.finally_ || bc == BC.lpad || bc == BC.jcatch;
 }
 
 private struct TryReg
@@ -320,7 +320,7 @@ private void computeLoopHeaders(block*[] blocks, BlkInfo[] info)
     }
 }
 
-// Phase 2: pair each BC._try with its landing pad. `tryBroken` is set if a
+// Phase 2: pair each BC.try_ with its landing pad. `tryBroken` is set if a
 // region has no landing pad, runs backwards, or partially overlaps another try
 // region or a loop region (none of which can be expressed as nested frames).
 private TryReg[] computeTryRegions(block*[] blocks, const BlkInfo[] info, out bool tryBroken)
@@ -330,7 +330,7 @@ private TryReg[] computeTryRegions(block*[] blocks, const BlkInfo[] info, out bo
     foreach (int i; 0 .. N)
     {
         block* b = blocks[i];
-        if (b.bc != BC._try)
+        if (b.bc != BC.try_)
             continue;
         int land = int.max;
         bool isCatch;
@@ -340,8 +340,8 @@ private TryReg[] computeTryRegions(block*[] blocks, const BlkInfo[] info, out bo
             land = blockIdx(h);
             isCatch = true;
         }
-        else if (h && h.bc == BC._finally && h.Bsucc.length
-            && h.Bsucc[0].bc == BC._lpad)
+        else if (h && h.bc == BC.finally_ && h.Bsucc.length
+            && h.Bsucc[0].bc == BC.lpad)
         {
             land = blockIdx(h.Bsucc[0]);
         }
@@ -414,7 +414,7 @@ private BFrame[] computeFrames(block*[] blocks, const BlkInfo[] info,
         }
         else if (isLandingFlow(b.bc))
         {
-            const int t = blockIdx(succ(b, b.bc == BC._finally ? 1 : 0));
+            const int t = blockIdx(succ(b, b.bc == BC.finally_ ? 1 : 0));
             if (t != int.max && t > i + 1)
                 needFrame(i, t);
         }
@@ -485,7 +485,7 @@ private bool isStructurable(block*[] blocks, const BlkInfo[] info,
     foreach (int i; 0 .. N)
     {
         block* b = blocks[i];
-        if (b.bc == BC._finally)
+        if (b.bc == BC.finally_)
         {
             const int t = blockIdx(succ(b, 1));
             if (t != i + 1 && !branchOK(i, t))
@@ -517,7 +517,7 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         return;
 
     foreach (b; blocks)
-        if (b.bc == BC._try)
+        if (b.bc == BC.try_)
         {
             blocks = layoutTryRegions(blocks);
             break;
@@ -767,7 +767,7 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
     {
         if (b.Belem)
             cg.genElemDiscard(b.Belem);
-        const int t = blockIdx(succ(b, b.bc == BC._finally ? 1 : 0));
+        const int t = blockIdx(succ(b, b.bc == BC.finally_ ? 1 : 0));
         if (t != int.max && t != bi + 1)
             branchToBlock(t, false);
     }
@@ -842,17 +842,17 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
             emitCondBranch(b, bi);
             break;
 
-        case BC.goto_, BC._finally, BC._lpad, BC.jcatch:
+        case BC.goto_, BC.finally_, BC.lpad, BC.jcatch:
             emitGoto(b, bi);
             break;
 
-        case BC.none, BC.asm_, BC.try_, BC.catch_, BC.jump,
-             BC._try, BC._filter, BC._except:
+        case BC.none, BC.asm_, BC.cpptry, BC.catch_, BC.jump,
+             BC.try_, BC.filter, BC.except:
             if (b.Belem)
                 cg.genElemDiscard(b.Belem);
             break;
 
-        case BC.ret, BC.retexp, BC.exit, BC._ret:
+        case BC.ret, BC.retexp, BC.exit, BC.finRet:
             assert(0, "handled by emitBlockReturn above");
         }
     }
@@ -959,15 +959,15 @@ private void genBlocksDispatch(ref WasmCG cg, block*[] blocks, bool hasReturn)
             gotoBlock(defaultIdx, 0);
             break;
 
-        case BC.goto_, BC._finally:
+        case BC.goto_, BC.finally_:
             if (b.Belem)
                 cg.genElemDiscard(b.Belem);
-            if (block* target = succ(b, b.bc == BC._finally ? 1 : 0))
+            if (block* target = succ(b, b.bc == BC.finally_ ? 1 : 0))
                 gotoBlock(blockIdx(target), 0);
             break;
 
-        case BC.none, BC.asm_, BC.try_, BC.catch_, BC.jump,
-             BC._try, BC._filter, BC._except, BC.jcatch, BC._lpad:
+        case BC.none, BC.asm_, BC.cpptry, BC.catch_, BC.jump,
+             BC.try_, BC.filter, BC.except, BC.jcatch, BC.lpad:
             if (b.Belem)
                 cg.genElemDiscard(b.Belem);
             if (i + 1 < blocks.length)
@@ -976,7 +976,7 @@ private void genBlocksDispatch(ref WasmCG cg, block*[] blocks, bool hasReturn)
 
         case BC.ret:
         case BC.retexp:
-        case BC.exit, BC._ret:
+        case BC.exit, BC.finRet:
             assert(0, "handled by emitBlockReturn above");
         }
     }

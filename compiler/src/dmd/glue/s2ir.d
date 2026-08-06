@@ -883,12 +883,12 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
         if (config.ehmethod == EHmethod.EH_WASM)
         {
             /* Lower to a wasm try_table frame (built by the wasm block
-             * structurer from the BC._try/BC.jcatch pair) with one landing pad
+             * structurer from the BC.try_/BC.jcatch pair) with one landing pad
              * that receives the caught Throwable pointer in jcatchvar,
              * followed by explicit type-dispatch blocks:
              *
-             *  BC.goto_    [BC._try]
-             *  BC._try     [body] [BC.jcatch]
+             *  BC.goto_    [BC.try_]
+             *  BC.try_     [body] [BC.jcatch]
              *  body
              *  BC.goto_    [breakblock]        (normal completion skips handlers)
              *  BC.jcatch                       (landing pad: jcatchvar := caught ptr)
@@ -910,7 +910,7 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
             tryblock.jcatchvar = symbol_genauto(type_fake(mTYvolatile | TYnptr));
 
             blx.tryblock = tryblock;
-            block_goto(blx, BC._try, null);
+            block_goto(blx, BC.try_, null);
             if (s._body)
                 Statement_toIR(s._body, irs, &mystate);
             blx.tryblock = tryblock.Btry;
@@ -1374,9 +1374,9 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
              *  breakblock
              *
              * For EH_WASM the block structurer wraps the try body in a
-             * try_table whose catch_all_ref lands at BC._lpad with the
+             * try_table whose catch_all_ref lands at BC.lpad with the
              * in-flight exnref saved in a local keyed by the flag symbol;
-             * BC._ret re-raises it via OPrethrow while the flag is still 0.
+             * BC.finRet re-raises it via OPrethrow while the flag is still 0.
              */
             if (s.bodyFallsThru)
             {
