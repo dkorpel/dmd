@@ -1324,7 +1324,7 @@ private bool genCall(ref WasmCG cg, elem* e)
         if (fty && fty.Tnext && returnByPtr(fty.Tnext))
             ctx.skipCount++;
         if (calleeSym && calleeSym.Sfunc &&
-            (calleeSym.Sfunc.Fflags3 & (Fmember | Fnested)))
+            (calleeSym.Sfunc.Fflags & (Fmember | Fnested)))
             ctx.skipCount++;
         else if (!calleeSym && e.numParams)
             ctx.skipCount += e.numParams - 1;
