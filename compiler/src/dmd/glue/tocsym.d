@@ -510,9 +510,9 @@ Symbol* toSymbol(Dsymbol s)
             if (target.isWasm)
             {
                 if (fd.isNested())
-                    f.Fflags3 |= Fnested;
+                    f.Fflags |= Fnested;
                 else if (fd.needThis())
-                    f.Fflags3 |= Fmember;
+                    f.Fflags |= Fmember;
             }
 
             if (fd.isSafe())

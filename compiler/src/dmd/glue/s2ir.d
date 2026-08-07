@@ -1419,7 +1419,7 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
 
             landingPad.Belem = el_bin(OPeq, TYvoid, el_var(sflag), el_long(TYint, 0)); // __flag = 0;
 
-            if (config.ehmethod == EHmethod.EH_WASM && !(blx.funcsym.Sfunc.Fflags3 & Feh_none))
+            if (config.ehmethod == EHmethod.EH_WASM && !(blx.funcsym.Sfunc.Fflags & Feh_none))
             {
                 // (!__flag && rethrow) — re-raise the in-flight exnref
                 elem* er = el_calloc();

@@ -410,7 +410,7 @@ public WasmFuncType buildFuncType(type* t, Symbol* sfunc, uint hiddenLeadingPtrs
 
     foreach (_; 0 .. hiddenLeadingPtrs)
         ft.params ~= WASM_I32;
-    if (sfunc && sfunc.Sfunc && (sfunc.Sfunc.Fflags3 & (Fmember | Fnested)))
+    if (sfunc && sfunc.Sfunc && (sfunc.Sfunc.Fflags & (Fmember | Fnested)))
         ft.params ~= WASM_I32;
 
     if (dstyleVariadic(t))
