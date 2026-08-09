@@ -283,8 +283,13 @@ private int runWasmLINK(bool verbose, ref Param params, ErrorSink eSink)
 {
     // Explicitly empty `-defaultlib=` opts out of libdruntime-wasm.a and its
     // `_start`: the program brings its own runtime. Undefined runtime hooks
-    // become host imports via --allow-undefined, like betterC.
-    const bool customRuntime = !params.betterC && finalDefaultlibname() is null;
+    // become host imports via --allow-undefined, like betterC. Combined with
+    // -betterC it opts out of the auto-linked libraries entirely, for a program
+    // that supplies its own `_start` and does not want libc either.
+    // finalDefaultlibname() is always null under betterC, so read driverParams.
+    const(char)[] defaultlib = driverParams.symdebug ? driverParams.debuglibname : driverParams.defaultlibname;
+    const bool customRuntime = !params.betterC && defaultlib is null;
+    const bool noAutoLibs = params.betterC && defaultlib is null;
     const bool hasDruntime = !params.betterC && !customRuntime;
 
     Strings argv;
@@ -357,8 +362,13 @@ private int runWasmLINK(bool verbose, ref Param params, ErrorSink eSink)
     // non-empty -defaultlib= (e.g. native libphobos2.so from dmd.conf) is still
     // replaced with libdruntime-wasm.a; only the empty form opts out. libc.a is
     // linked in both modes since betterC routinely calls printf/puts/memcmp.
-    argv.push(hasDruntime ? "-l:libdruntime-wasm.a" : "-l:crt1_betterc.wasm");
-    argv.push("-l:libc.a");
+    // The betterC shim is an archive, not an object, so a program defining its
+    // own `_start` links instead of colliding with it.
+    if (!noAutoLibs)
+    {
+        argv.push(hasDruntime ? "-l:libdruntime-wasm.a" : "-l:libcrt1_betterc.a");
+        argv.push("-l:libc.a");
+    }
 
     foreach (p; params.dllfiles)
         argv.push(p);
