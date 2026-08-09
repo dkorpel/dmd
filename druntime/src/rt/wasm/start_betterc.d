@@ -1,8 +1,9 @@
 /**
  * WASI entry-point shim for `-betterC` WebAssembly programs.
  *
- * It is built as a standalone `.wasm` object (NOT part of libdruntime-wasm.a)
- * and linked by `dmd.link` only in betterC mode.
+ * It is built as a standalone archive, libcrt1_betterc.a (NOT part of
+ * libdruntime-wasm.a), and linked by `dmd.link` only in betterC mode. Being an
+ * archive, it is skipped for a program that defines its own `_start`.
  *
  * Copyright: Copyright (C) 1999-2026 by The D Language Foundation, All Rights Reserved
  * License:   $(LINK2 https://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)

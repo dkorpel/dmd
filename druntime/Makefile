@@ -472,8 +472,11 @@ wasm_obj = $(WASM_ROOT)/drt_$(subst /,_,$(basename $(patsubst src/%,%,$(1)))).o
 WASM_DRT_OBJS := $(foreach s,$(WASM_DRT_SRCS),$(call wasm_obj,$(s)))
 
 # Standalone _start shim for betterC programs (NOT part of libdruntime-wasm.a,
-# which betterC does not link).  dmd.link adds this object in betterC mode.
-WASM_BETTERC_CRT := $(WASM_ROOT)/crt1_betterc.wasm
+# which betterC does not link).  dmd.link adds it in betterC mode.  It is an
+# archive rather than a bare object so that a program defining its own `_start`
+# simply leaves the member unpulled instead of colliding with it.
+WASM_BETTERC_CRT := $(WASM_ROOT)/libcrt1_betterc.a
+WASM_BETTERC_OBJ := $(WASM_ROOT)/crt1_betterc.o
 
 # wasi-libc: the C library the wasm druntime and betterC link against for
 # printf/puts/memcmp/malloc-backing/... . dmd.link adds `-l:libc.a` from
@@ -499,9 +502,13 @@ $(WASM_ROOT)/rt_%.o : $(WASM_RT_DIR)/%.d $(DMD)
 	@mkdir -p $(dir $@)
 	$(WASM_DMD) $(WASM_FLAGS) -of$@ $<
 
-$(WASM_BETTERC_CRT) : $(WASM_RT_DIR)/start_betterc.d $(DMD)
+$(WASM_BETTERC_OBJ) : $(WASM_RT_DIR)/start_betterc.d $(DMD)
 	@mkdir -p $(dir $@)
 	$(WASM_DMD) $(WASM_FLAGS) -of$@ $<
+
+$(WASM_BETTERC_CRT) : $(WASM_BETTERC_OBJ)
+	rm -f $@
+	$(WASM_DMD) -lib -mwasm32 -os=wasm -conf= -of$@ $<
 
 # One pattern-free rule per real druntime source (sources live in different
 # directories, so a static pattern rule can't map them).
