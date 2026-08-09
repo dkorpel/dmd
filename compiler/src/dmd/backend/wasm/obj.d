@@ -170,6 +170,12 @@ struct WasmDataSeg
     Symbol* sym;
     const(char)[] name;
     uint alignLog2 = 2;
+    uint reserved;
+}
+
+private void checkSegFull(ref const WasmDataSeg ds)
+{
+    assert(ds.data.length() == ds.reserved, "wasm data segment not written to its reserved size");
 }
 
 /// Append a new data segment of `size` bytes at the next `align_`-aligned
@@ -191,8 +197,11 @@ private uint pushDataSeg(uint size, uint align_, Symbol* sym, const(char)[] name
         log2++;
     }
     ds.alignLog2 = log2;
+    ds.reserved = size;
+    if (wmod.dataSegs.length)
+        checkSegFull(wmod.dataSegs[$ - 1]);
     wmod.dataSegs ~= ds;
-    wmod.activeSegIdx = cast(int)(wmod.dataSegs.length - 1);
+    wmod.segOpen = true;
     wmod.dataHeap = base + size;
     return base;
 }
@@ -244,13 +253,18 @@ struct WasmModule
     WasmFunc[] funcs;
     uint numImports;
     WasmDataSeg[] dataSegs;
-    int activeSegIdx = -1;
+
+    bool segOpen;
 
     @property WasmDataSeg* activeSeg() nothrow return
     {
-        if (activeSegIdx < 0 || activeSegIdx >= cast(int) dataSegs.length)
-            return null;
-        return &dataSegs[activeSegIdx];
+        return segOpen && dataSegs.length ? &dataSegs[$ - 1] : null;
+    }
+
+    @property uint activeSegIdx() const nothrow
+    {
+        assert(segOpen && dataSegs.length);
+        return cast(uint)(dataSegs.length - 1);
     }
 
     uint dataHeap = 4; // next free byte offset in linear memory; starts at 4 to reserve address 0 as null
@@ -1180,6 +1194,9 @@ void WasmObj_term2(const(char)[] objfilename, ref WasmModule wmod, ref OutBuffer
         }
     }
 
+    foreach (ref const WasmDataSeg ds; wmod.dataSegs)
+        checkSegFull(ds);
+
     uint sectionIdx = 0;
     sectionIdx += emitTypeSection(out_, wmod);
     sectionIdx += emitImportSection(out_, wmod);
@@ -1290,12 +1307,12 @@ void WasmObj_moduleinfo(Symbol* scc)
 
     pushDataSeg(4, 4, null, "minfo");
 
-    const uint segIdx = cast(uint) wmod.activeSegIdx;
+    const uint segIdx = wmod.activeSegIdx;
     uint zero = 0;
     wmod.dataSegs[segIdx].data.write(&zero, 4);
     wmod.dataRelocations ~= WasmModule.DataReloc(segIdx, 0, R_WASM.MEMORY_ADDR_I32, scc, 0);
 
-    wmod.activeSegIdx = -1;
+    wmod.segOpen = false;
 }
 
 int WasmObj_comdat(Symbol* s)
@@ -1467,7 +1484,7 @@ int WasmObj_common_block(Symbol* s, targ_size_t size, targ_size_t count)
         wmod.activeSeg.data.writeByte(0);
     s.Soffset = base;
     s.Sseg = WASM_DATA;
-    wmod.activeSegIdx = -1;
+    wmod.segOpen = false;
     return WASM_DATA;
 }
 
@@ -1478,6 +1495,23 @@ int WasmObj_common_block(Symbol* s, int flag, targ_size_t size, targ_size_t coun
 
 void WasmObj_lidata(int seg, targ_size_t offset, targ_size_t count)
 {
+    /* Zero runs inside an initializer are part of the object being emitted, but CDATA also
+     * receives inter-literal alignment padding (see alignOffset in dout.d), and on wasm each
+     * literal is its own segment carrying its own alignment, so that padding has no segment to
+     * land in. Appending it to the finished segment makes that symbol's data longer than the
+     * size pushDataSeg reserved: its address range overlaps the segment that follows, and
+     * reftodatseg then resolves a pointer to that following segment against the wrong symbol
+     * with a bogus addend, leaving the real literal unreferenced for --gc-sections to delete.
+     * A finished segment is exactly full, so padding is the write that would overflow it.
+     */
+    if (seg == CDATA && wmod.activeSeg)
+    {
+        const seg_ = wmod.activeSeg;
+        const uint written = cast(uint) seg_.data.length();
+        const uint room = written >= seg_.reserved ? 0 : seg_.reserved - written;
+        if (count > room)
+            count = room;
+    }
     WasmObj_write_zeros(null, count);
 }
 
@@ -1532,7 +1566,7 @@ void WasmObj_reftodatseg(int seg, targ_size_t offset, targ_size_t val, uint targ
             ds.sym = symbol_name(buf[0 .. n], SC.static_, tstypes[TYint]);
             ds.sym.Sfl = FL.data;
         }
-        const uint segIdx = cast(uint) wmod.activeSegIdx;
+        const uint segIdx = wmod.activeSegIdx;
         const uint dataOff = cast(uint) wmod.activeSeg.data.length();
         uint zero = 0;
         wmod.activeSeg.data.write(&zero, 4);
@@ -1551,7 +1585,7 @@ int WasmObj_reftoident(int seg, targ_size_t offset, Symbol* s, targ_size_t val, 
     auto active = wmod.activeSeg;
     if (!active)
         return 4;
-    const uint segIdx = cast(uint) wmod.activeSegIdx;
+    const uint segIdx = wmod.activeSegIdx;
     if (s && s.Stype && tyfunc(tybasic(s.Stype.Tty)))
     {
         uint dataOff = cast(uint) active.data.length;
@@ -1704,8 +1738,8 @@ Symbol* WasmObj_sym_cdata(tym_t ty, const(void)[] data)
     uint off = allocRoData(cast(char*) data.ptr, cast(int) data.length, align_);
     Symbol* s = symboldata(off, ty);
     s.Sseg = 1;
-    if (wmod.activeSegIdx >= 0 && wmod.activeSegIdx < cast(int) wmod.dataSegs.length)
-        wmod.dataSegs[wmod.activeSegIdx].sym = s;
+    if (auto active = wmod.activeSeg)
+        active.sym = s;
     return s;
 }
 
