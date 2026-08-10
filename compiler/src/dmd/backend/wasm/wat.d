@@ -42,18 +42,9 @@ private string textName(string m)
 
 private string[256] buildOpNames()
 {
-    string[256] names;
-    static foreach (m; __traits(allMembers, dmd.backend.wasm.enums))
-    {{
-        static if (m.length > 3 && m[0 .. 3] == "OP_" && m != "OP_FC_PREFIX" && m != "OP_FD_PREFIX")
-        {
-            static if (is(typeof(__traits(getMember, dmd.backend.wasm.enums, m)) : ubyte))
-            {
-                enum ubyte v = __traits(getMember, dmd.backend.wasm.enums, m);
-                names[v] = textName(m[3 .. $]);
-            }
-        }
-    }}
+    string[256] names = buildSubNames!OP();
+    names[OP.FC_PREFIX] = null;
+    names[OP.FD_PREFIX] = null;
     return names;
 }
 
@@ -91,13 +82,13 @@ private struct Reader
 {
     const(ubyte)[] code;
     const(WasmReloc)[] relocs;
-    uint pos;
+    size_t pos;
 
 nothrow:
 
     bool empty() const => pos >= code.length;
 
-    ubyte byte_()
+    ubyte pop()
     {
         return pos < code.length ? code[pos++] : 0;
     }
@@ -133,7 +124,7 @@ private void printIndex(ref Reader r, ref OutBuffer buf)
 
 private void printBlockType(ref Reader r, ref OutBuffer buf)
 {
-    const ubyte b = r.byte_();
+    const ubyte b = r.pop();
     if (b == WASM_VOID_BLOCK)
         return;
     if (b >= 0x69)
@@ -149,16 +140,16 @@ private uint naturalAlign(ubyte op)
 {
     switch (op)
     {
-        case OP_I32_LOAD8_S, OP_I32_LOAD8_U, OP_I64_LOAD8_S, OP_I64_LOAD8_U,
-             OP_I32_STORE8, OP_I64_STORE8:
+        case OP.I32_LOAD8_S, OP.I32_LOAD8_U, OP.I64_LOAD8_S, OP.I64_LOAD8_U,
+             OP.I32_STORE8, OP.I64_STORE8:
             return 0;
-        case OP_I32_LOAD16_S, OP_I32_LOAD16_U, OP_I64_LOAD16_S, OP_I64_LOAD16_U,
-             OP_I32_STORE16, OP_I64_STORE16:
+        case OP.I32_LOAD16_S, OP.I32_LOAD16_U, OP.I64_LOAD16_S, OP.I64_LOAD16_U,
+             OP.I32_STORE16, OP.I64_STORE16:
             return 1;
-        case OP_I32_LOAD, OP_F32_LOAD, OP_I64_LOAD32_S, OP_I64_LOAD32_U,
-             OP_I32_STORE, OP_F32_STORE, OP_I64_STORE32:
+        case OP.I32_LOAD, OP.F32_LOAD, OP.I64_LOAD32_S, OP.I64_LOAD32_U,
+             OP.I32_STORE, OP.F32_STORE, OP.I64_STORE32:
             return 2;
-        case OP_I64_LOAD, OP_F64_LOAD, OP_I64_STORE, OP_F64_STORE:
+        case OP.I64_LOAD, OP.F64_LOAD, OP.I64_STORE, OP.F64_STORE:
             return 3;
         default:
             return 4;
@@ -180,7 +171,7 @@ private void printCatches(ref Reader r, ref OutBuffer buf)
     const ulong n = r.uleb();
     foreach (i; 0 .. n)
     {
-        const ubyte kind = r.byte_();
+        const ubyte kind = r.pop();
         switch (kind)
         {
             case WASM_CATCH.CATCH:         buf.writestring(" catch");         break;
@@ -212,7 +203,7 @@ private void printSimd(ref Reader r, ref OutBuffer buf)
         case WASM_SIMD.V128_CONST:
             buf.writestring(" i8x16");
             foreach (i; 0 .. 16)
-                buf.printf(" 0x%02x", r.byte_());
+                buf.printf(" 0x%02x", r.pop());
             break;
         default:
             break;
@@ -280,9 +271,9 @@ void wasmDisassemble(ref WasmFuncBody fb, ref OutBuffer buf)
     while (!r.empty)
     {
         const uint off = r.pos;
-        const ubyte op = r.byte_();
+        const ubyte op = r.pop();
 
-        if (op == OP_END || op == OP_ELSE)
+        if (op == OP.END || op == OP.ELSE)
             --depth;
 
         buf.printf("%04x:", off);
@@ -292,11 +283,11 @@ void wasmDisassemble(ref WasmFuncBody fb, ref OutBuffer buf)
 
         switch (op)
         {
-            case OP_FD_PREFIX:
+            case OP.FD_PREFIX:
                 printSimd(r, buf);
                 break;
 
-            case OP_FC_PREFIX:
+            case OP.FC_PREFIX:
                 printPrefixedFC(r, buf);
                 break;
 
@@ -310,33 +301,33 @@ void wasmDisassemble(ref WasmFuncBody fb, ref OutBuffer buf)
 
                 switch (op)
                 {
-                    case OP_BLOCK, OP_LOOP, OP_IF:
+                    case OP.BLOCK, OP.LOOP, OP.IF:
                         printBlockType(r, buf);
                         break;
 
-                    case OP_TRY_TABLE:
+                    case OP.TRY_TABLE:
                         printBlockType(r, buf);
                         printCatches(r, buf);
                         break;
 
-                    case OP_BR, OP_BR_IF, OP_LOCAL_GET, OP_LOCAL_SET, OP_LOCAL_TEE,
-                         OP_GLOBAL_GET, OP_GLOBAL_SET, OP_MEMORY_SIZE, OP_MEMORY_GROW,
-                         OP_RETURN_CALL:
+                    case OP.BR, OP.BR_IF, OP.LOCAL_GET, OP.LOCAL_SET, OP.LOCAL_TEE,
+                         OP.GLOBAL_GET, OP.GLOBAL_SET, OP.MEMORY_SIZE, OP.MEMORY_GROW,
+                         OP.RETURN_CALL:
                         buf.printf(" %llu", r.uleb());
                         break;
 
-                    case OP_CALL, OP_THROW:
+                    case OP.CALL, OP.THROW:
                         printIndex(r, buf);
                         break;
 
-                    case OP_CALL_INDIRECT, OP_RETURN_CALL_INDIRECT:
+                    case OP.CALL_INDIRECT, OP.RETURN_CALL_INDIRECT:
                         buf.writestring(" (type");
                         printIndex(r, buf);
                         buf.writestring(")");
                         printIndex(r, buf);
                         break;
 
-                    case OP_BR_TABLE:
+                    case OP.BR_TABLE:
                     {
                         const ulong n = r.uleb();
                         foreach (i; 0 .. n + 1)
@@ -344,37 +335,37 @@ void wasmDisassemble(ref WasmFuncBody fb, ref OutBuffer buf)
                         break;
                     }
 
-                    case OP_I32_CONST:
+                    case OP.I32_CONST:
                         if (r.relocHere())
                             printIndex(r, buf);
                         else
                             buf.printf(" %lld", r.sleb());
                         break;
 
-                    case OP_I64_CONST:
+                    case OP.I64_CONST:
                         buf.printf(" %lld", r.sleb());
                         break;
 
-                    case OP_F32_CONST:
+                    case OP.F32_CONST:
                     {
                         float f;
                         foreach (i; 0 .. 4)
-                            (cast(ubyte*) &f)[i] = r.byte_();
+                            (cast(ubyte*) &f)[i] = r.pop();
                         buf.printf(" %g", cast(double) f);
                         break;
                     }
 
-                    case OP_F64_CONST:
+                    case OP.F64_CONST:
                     {
                         double d;
                         foreach (i; 0 .. 8)
-                            (cast(ubyte*) &d)[i] = r.byte_();
+                            (cast(ubyte*) &d)[i] = r.pop();
                         buf.printf(" %g", d);
                         break;
                     }
 
                     default:
-                        if (op >= OP_I32_LOAD && op <= OP_I64_STORE32)
+                        if (op >= OP.I32_LOAD && op <= OP.I64_STORE32)
                             printMemArg(r, buf, naturalAlign(op));
                         break;
                 }
@@ -383,7 +374,7 @@ void wasmDisassemble(ref WasmFuncBody fb, ref OutBuffer buf)
         }
         buf.writestring("\n");
 
-        if (op == OP_BLOCK || op == OP_LOOP || op == OP_IF || op == OP_ELSE || op == OP_TRY_TABLE)
+        if (op == OP.BLOCK || op == OP.LOOP || op == OP.IF || op == OP.ELSE || op == OP.TRY_TABLE)
             ++depth;
     }
     buf.writestring(")\n");

@@ -11,8 +11,8 @@
  *      with A.index <= B.index is a back edge, making A a loop header (its region
  *      becomes a `loop`); overlapping loop regions from irreducible flow are
  *      widened so they nest.
- *   2. Every forward branch target gets a `block` frame: OP_BLOCK opens before
- *      the span reaching it and OP_END closes just before the target, so a `br`
+ *   2. Every forward branch target gets a `block` frame: OP.BLOCK opens before
+ *      the span reaching it and OP.END closes just before the target, so a `br`
  *      to that frame lands on the target. All frames are collected up front and
  *      widened until laminar (frames must nest LIFO), because several targets can
  *      be pending at once (an if-chain) in an order lazy per-branch opening can't
@@ -79,16 +79,16 @@ private bool emitReturnExp(ref WasmCG cg, block* b, bool hasReturn)
             const tym_t bty = tybasic(b.Belem.Ety);
             WASM_TYPE retTy = wasmType(bty);
             uint retTmp = cg.allocTemp(retTy);
-            cg.emit(OP_LOCAL_SET, Uleb(retTmp));
+            cg.emit(OP.LOCAL_SET, Uleb(retTmp));
             cg.emitShadowEpilogue();
-            cg.emit(OP_LOCAL_GET, Uleb(retTmp));
+            cg.emit(OP.LOCAL_GET, Uleb(retTmp));
         }
         else
         {
             cg.emitShadowEpilogue();
         }
     }
-    cg.emit(OP_RETURN);
+    cg.emit(OP.RETURN);
     cg.reachable = false;
     return true;
 }
@@ -100,8 +100,8 @@ private bool emitReturnVoid(ref WasmCG cg, block* b, bool hasReturn)
     if (cg.framePublished)
         cg.emitShadowEpilogue();
     if (hasReturn)
-        cg.emit(OP_UNREACHABLE);
-    cg.emit(OP_RETURN);
+        cg.emit(OP.UNREACHABLE);
+    cg.emit(OP.RETURN);
     cg.reachable = false;
     return true;
 }
@@ -120,7 +120,7 @@ private bool emitBlockReturn(ref WasmCG cg, block* b, bool hasReturn)
     {
         if (b.Belem)
             cg.genElemDiscard(b.Belem);
-        cg.emit(OP_UNREACHABLE);
+        cg.emit(OP.UNREACHABLE);
         cg.reachable = false;
         return true;
     }
@@ -129,11 +129,11 @@ private bool emitBlockReturn(ref WasmCG cg, block* b, bool hasReturn)
 
 private void emitCaseEq(ref WasmCG cg, WASM_TYPE condType, uint condLocal, long cv)
 {
-    cg.emit(OP_LOCAL_GET, Uleb(condLocal));
+    cg.emit(OP.LOCAL_GET, Uleb(condLocal));
     if (condType == WASM_I64)
-        cg.emit(OP_I64_CONST, Sleb(cv), OP_I64_EQ);
+        cg.emit(OP.I64_CONST, Sleb(cv), OP.I64_EQ);
     else
-        cg.emit(OP_I32_CONST, Sleb(cast(int) cv), OP_I32_EQ);
+        cg.emit(OP.I32_CONST, Sleb(cast(int) cv), OP.I32_EQ);
 }
 
 private block*[] layoutTryRegions(block*[] blocks)
@@ -584,7 +584,7 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
     void openBlock(int closeAfter)
     {
         stack ~= Frame(FrameKind.block, closeAfter, -1, cg.reachable);
-        cg.emit(OP_BLOCK, WASM_VOID_BLOCK);
+        cg.emit(OP.BLOCK, WASM_VOID_BLOCK);
     }
 
     void openTryFrames(int ti)
@@ -592,9 +592,9 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         const int end = tryRegs[ti].end;
         const bool isCatch = tryRegs[ti].isCatch;
         stack ~= Frame(FrameKind.catchLand, end, -1, cg.reachable, ti);
-        cg.emit(OP_BLOCK, isCatch ? WASM_I32 : WASM_TYPE.EXNREF);
+        cg.emit(OP.BLOCK, isCatch ? WASM_I32 : WASM_TYPE.EXNREF);
         stack ~= Frame(FrameKind.tryTable, end, -1, cg.reachable, ti);
-        cg.emit(OP_TRY_TABLE, WASM_VOID_BLOCK, Uleb(1));
+        cg.emit(OP.TRY_TABLE, WASM_VOID_BLOCK, Uleb(1));
         if (isCatch)
         {
             cg.noteTagUse();
@@ -608,11 +608,11 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
     void closeTop()
     {
         const Frame f = stack[$ - 1];
-        cg.emit(OP_END);
+        cg.emit(OP.END);
         stack = stack[0 .. $ - 1];
         if (f.kind == FrameKind.tryTable)
         {
-            cg.emit(OP_UNREACHABLE);
+            cg.emit(OP.UNREACHABLE);
             cg.reachable = false;
             return;
         }
@@ -621,7 +621,7 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
             if (tryRegs[f.tryIdx].isCatch)
                 cg.emitCaughtStore(tryRegs[f.tryIdx].tryBlock.jcatchvar);
             else
-                cg.emit(OP_LOCAL_SET,
+                cg.emit(OP.LOCAL_SET,
                     Uleb(cg.exnLocalFor(tryRegs[f.tryIdx].tryBlock.Bsucc[1].flag)));
             cg.reachable = true;
         }
@@ -655,7 +655,7 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
 
     void branchToBlock(int t, bool conditional)
     {
-        cg.emit(conditional ? OP_BR_IF : OP_BR, Uleb(destDepth(t)));
+        cg.emit(conditional ? OP.BR_IF : OP.BR, Uleb(destDepth(t)));
         if (!conditional)
             cg.reachable = false;
     }
@@ -670,7 +670,7 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
 
         if (b.Bswitch.length == 0)
         {
-            cg.emit(OP_DROP);
+            cg.emit(OP.DROP);
             if (defaultIdx != bi + 1)
                 branchToBlock(defaultIdx, false);
             return;
@@ -697,7 +697,7 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         if (!useBrTable)
         {
             const uint condLocal = cg.allocTemp(condType);
-            cg.emit(OP_LOCAL_SET, Uleb(condLocal));
+            cg.emit(OP.LOCAL_SET, Uleb(condLocal));
             foreach (size_t ci, long cv; b.Bswitch)
             {
                 cg.emitCaseEq(condType, condLocal, cv);
@@ -709,10 +709,10 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         }
 
         if (vmin != 0)
-            cg.emit(OP_I32_CONST, Sleb(cast(int)-vmin), OP_I32_ADD);
+            cg.emit(OP.I32_CONST, Sleb(cast(int)-vmin), OP.I32_ADD);
 
         const size_t tableLen = cast(size_t)(span + 1);
-        cg.emit(OP_BR_TABLE, Uleb(cast(uint) tableLen));
+        cg.emit(OP.BR_TABLE, Uleb(cast(uint) tableLen));
         foreach (long v; vmin .. vmax + 1)
         {
             int destIdx = defaultIdx;
@@ -736,12 +736,12 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         if (b.Belem)
             cg.genElem(b.Belem);
         else
-            cg.emit(OP_I32_CONST, Sleb(0));
+            cg.emit(OP.I32_CONST, Sleb(0));
 
         if (takenIdx == nottakenIdx)
         {
             cg.emitCondToI32(b.Belem);
-            cg.emit(OP_DROP);
+            cg.emit(OP.DROP);
             if (takenIdx != bi + 1)
                 branchToBlock(takenIdx, false);
         }
@@ -783,7 +783,7 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         void openLoop(int loopEnd)
         {
             stack ~= Frame(FrameKind.loop, loopEnd, bi, cg.reachable);
-            cg.emit(OP_LOOP, WASM_VOID_BLOCK);
+            cg.emit(OP.LOOP, WASM_VOID_BLOCK);
         }
 
         int tryIdx = -1;
@@ -898,27 +898,27 @@ void dispatched(bool jumpIn, int i) {
 private void genBlocksDispatch(ref WasmCG cg, block*[] blocks, bool hasReturn)
 {
     const uint sel = cg.allocTemp(WASM_I32);
-    cg.emit(OP_I32_CONST, Sleb(0), OP_LOCAL_SET, Uleb(sel));
+    cg.emit(OP.I32_CONST, Sleb(0), OP.LOCAL_SET, Uleb(sel));
 
-    cg.emit(OP_LOOP, WASM_VOID_BLOCK);
+    cg.emit(OP.LOOP, WASM_VOID_BLOCK);
     foreach (i; 0 .. blocks.length)
-        cg.emit(OP_BLOCK, WASM_VOID_BLOCK);
-    cg.emit(OP_LOCAL_GET, Uleb(sel), OP_BR_TABLE, Uleb(cast(uint) blocks.length));
+        cg.emit(OP.BLOCK, WASM_VOID_BLOCK);
+    cg.emit(OP.LOCAL_GET, Uleb(sel), OP.BR_TABLE, Uleb(cast(uint) blocks.length));
     foreach (i; 0 .. blocks.length)
         cg.emit(Uleb(cast(uint) i));
     cg.emit(Uleb(0));
 
     foreach (i; 0 .. blocks.length)
     {
-        cg.emit(OP_END);
+        cg.emit(OP.END);
         block* b = blocks[i];
 
         const uint loopDepth = cast(uint)(blocks.length - 1 - i);
 
         void gotoBlock(size_t t, uint extraDepth)
         {
-            cg.emit(OP_I32_CONST, Sleb(t), OP_LOCAL_SET, Uleb(sel),
-                OP_BR, Uleb(loopDepth + extraDepth));
+            cg.emit(OP.I32_CONST, Sleb(t), OP.LOCAL_SET, Uleb(sel),
+                OP.BR, Uleb(loopDepth + extraDepth));
         }
 
         if (cg.emitBlockReturn(b, hasReturn))
@@ -927,14 +927,14 @@ private void genBlocksDispatch(ref WasmCG cg, block*[] blocks, bool hasReturn)
         final switch (b.bc)
         {
         case BC.iftrue, BC.ifthen:
-            cg.emit(OP_I32_CONST, Sleb(blockIdx(succ(b, 0))),
-                OP_I32_CONST, Sleb(blockIdx(succ(b, 1))));
+            cg.emit(OP.I32_CONST, Sleb(blockIdx(succ(b, 0))),
+                OP.I32_CONST, Sleb(blockIdx(succ(b, 1))));
             if (b.Belem)
                 cg.genElem(b.Belem);
             else
-                cg.emit(OP_I32_CONST, Sleb(0));
+                cg.emit(OP.I32_CONST, Sleb(0));
             cg.emitCondToI32(b.Belem);
-            cg.emit(OP_SELECT, OP_LOCAL_SET, Uleb(sel), OP_BR, Uleb(loopDepth));
+            cg.emit(OP.SELECT, OP.LOCAL_SET, Uleb(sel), OP.BR, Uleb(loopDepth));
             break;
 
         case BC.jmptab, BC.switch_:
@@ -942,19 +942,19 @@ private void genBlocksDispatch(ref WasmCG cg, block*[] blocks, bool hasReturn)
             cg.genElem(b.Belem);
             if (b.Bswitch.length == 0)
             {
-                cg.emit(OP_DROP);
+                cg.emit(OP.DROP);
                 gotoBlock(defaultIdx, 0);
                 continue;
             }
             const condType = b.Belem.wasmType;
             const uint condLocal = cg.allocTemp(condType);
-            cg.emit(OP_LOCAL_SET, Uleb(condLocal));
+            cg.emit(OP.LOCAL_SET, Uleb(condLocal));
             foreach (size_t ci, long cv; b.Bswitch)
             {
                 cg.emitCaseEq(condType, condLocal, cv);
-                cg.emit(OP_IF, WASM_VOID_BLOCK);
+                cg.emit(OP.IF, WASM_VOID_BLOCK);
                 gotoBlock(blockIdx(b.Bsucc[cast(int)(ci + 1)]), 1);
-                cg.emit(OP_END);
+                cg.emit(OP.END);
             }
             gotoBlock(defaultIdx, 0);
             break;
@@ -981,6 +981,6 @@ private void genBlocksDispatch(ref WasmCG cg, block*[] blocks, bool hasReturn)
         }
     }
 
-    cg.emit(OP_END, OP_UNREACHABLE);
+    cg.emit(OP.END, OP.UNREACHABLE);
     cg.reachable = false;
 }
