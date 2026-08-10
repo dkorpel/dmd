@@ -283,7 +283,7 @@ private int runWasmLINK(bool verbose, ref Param params, ErrorSink eSink)
 {
     // Explicitly empty `-defaultlib=` opts out of the default library and its
     // `_start`: the program brings its own runtime. Undefined runtime hooks
-    // become host imports via --allow-undefined, like betterC. Combined with
+    // become host imports via --import-undefined, like betterC. Combined with
     // -betterC it opts out of the auto-linked libraries entirely, for a program
     // that supplies its own `_start` and does not want libc either.
     // finalDefaultlibname() is always null under betterC, so read driverParams.
@@ -315,7 +315,8 @@ private int runWasmLINK(bool verbose, ref Param params, ErrorSink eSink)
 
     if (hasDruntime)
         argv.push("--export=_start"); // WASI entry from the default library
-    argv.push("--allow-undefined");   // unresolved WASI imports
+    // libc.a needs __heap_end / __wasm_first_page_end, defined by LLD 21+
+    argv.push("--import-undefined");   // undefined data is an error, not address 0
     argv.push("--gc-sections");
 
     // Default shadow stack of 1 MiB (wasm-ld defaults to 64 KiB), unless the
