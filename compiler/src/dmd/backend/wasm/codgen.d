@@ -1691,7 +1691,7 @@ bool genElem(ref WasmCG cg, elem* e)
                 cg.genElem(e.E2, wasmType(e));
             else
                 cg.emit(OP_LOCAL_GET, Uleb(rTmp));
-            cg.emitBinop(opeqtoop(op), e.Ety);
+            cg.emitBinop(opeqtoop(op), e.Ety, e.E1.Ety, e.E2.Ety);
             cg.maskSmallInt(e.E1.Ety);
             uint vTmp;
             if (needValue)
@@ -1727,7 +1727,7 @@ bool genElem(ref WasmCG cg, elem* e)
             if (op == OPshr)
                 cg.zeroExtendForLogicalShift(e.Ety);
             cg.genElem(e.E2, rty);
-            cg.emitBinop(op, e.Ety);
+            cg.emitBinop(op, e.Ety, e.E1.Ety, e.E2.Ety);
             switch (op)
             {
             case OPadd, OPmin, OPmul, OPshl, OPshr:
@@ -2495,7 +2495,7 @@ private ubyte pickByKind(tym_t ty, ubyte f32, ubyte f64, ubyte i64, ubyte i32)
     }
 }
 
-private void emitBinop(ref WasmCG cg, int op, tym_t ty)
+private void emitBinop(ref WasmCG cg, int op, tym_t ty, tym_t ty1 = TYint, tym_t ty2 = TYint)
 {
     if (tyvector(ty))
     {
@@ -2508,10 +2508,10 @@ private void emitBinop(ref WasmCG cg, int op, tym_t ty)
         cg.emit(OP_CALL, callReloc(cg.funcIndex(fn), fn));
         return;
     }
-    static ubyte binOp(int op, tym_t ty)
+    static ubyte binOp(int op, tym_t ty, tym_t ty1, tym_t ty2)
     {
         alias U = OP_UNREACHABLE;
-        const bool isUns = tyuns(ty) != 0;
+        const bool isUns = tyuns(ty) != 0 || tyuns(ty1) != 0 || tyuns(ty2) != 0;
         switch (op)
         {
         case OPadd: return pickByKind(ty, OP_F32_ADD, OP_F64_ADD, OP_I64_ADD, OP_I32_ADD);
@@ -2538,7 +2538,7 @@ private void emitBinop(ref WasmCG cg, int op, tym_t ty)
         }
     }
 
-    cg.emit(binOp(op, ty));
+    cg.emit(binOp(op, ty, ty1, ty2));
 }
 
 private void emitRelop(ref WasmCG cg, int op, tym_t ty)
