@@ -388,7 +388,8 @@ bool returnByPtr(type* t)
     {
     case TYstruct:
     case TYarray:
-        return true;
+        // alias Empty = void[0]; Empty f();
+        return type_size(t) != 0;
     default:
         return false;
     }
@@ -457,7 +458,7 @@ public WasmFuncType buildFuncType(type* t, Symbol* sfunc, uint hiddenLeadingPtrs
     if (variadic(t))
         ft.params ~= WASM_I32;
 
-    if (!hiddenPtr && ret && typeHasValue(ret.Tty))
+    if (!hiddenPtr && ret && typeHasValue(ret.Tty) && type_size(ret) != 0)
         ft.results ~= wasmType(ret.Tty);
 
     return ft;
