@@ -190,16 +190,30 @@ void dmdwasm_run(const(char)* src, size_t len, int optimize)
         try
             runImpl(src, len, optimize);
         catch (Throwable t)
-        {
-            import dmd.errors : error;
-            import dmd.location : Loc;
-            error(Loc.initial, "internal compiler error: %.*s (%.*s:%llu)",
-                cast(int) t.msg.length, t.msg.ptr,
-                cast(int) t.file.length, t.file.ptr, cast(ulong) t.line);
-            if (global.errors == 0)
-                global.errors = 1;
-        }
+            reportICE(t);
     }
+}
+
+/// Report a Throwable that escaped the frontend as a diagnostic. Before
+/// `global._init()` has run there is no error sink yet (an out-of-memory in the
+/// very first allocation gets here), so fall back to stderr instead of calling
+/// through a null class reference.
+private void reportICE(Throwable t)
+{
+    import dmd.errors : error;
+    import dmd.location : Loc;
+    import core.stdc.stdio : fprintf, stderr;
+
+    if (global.errorSink is null)
+        fprintf(stderr, "internal compiler error: %.*s (%.*s:%llu)\n",
+            cast(int) t.msg.length, t.msg.ptr,
+            cast(int) t.file.length, t.file.ptr, cast(ulong) t.line);
+    else
+        error(Loc.initial, "internal compiler error: %.*s (%.*s:%llu)",
+            cast(int) t.msg.length, t.msg.ptr,
+            cast(int) t.file.length, t.file.ptr, cast(ulong) t.line);
+    if (global.errors == 0)
+        global.errors = 1;
 }
 
 private void runImpl(const(char)* src, size_t len, int optimize)
@@ -320,14 +334,7 @@ void dmdwasm_wat(const(char)* src, size_t len)
     try
         watImpl(src, len);
     catch (Throwable t)
-    {
-        import dmd.errors : error;
-        error(Loc.initial, "internal compiler error: %.*s (%.*s:%llu)",
-            cast(int) t.msg.length, t.msg.ptr,
-            cast(int) t.file.length, t.file.ptr, cast(ulong) t.line);
-        if (global.errors == 0)
-            global.errors = 1;
-    }
+        reportICE(t);
 }
 
 private void watImpl(const(char)* src, size_t len)
@@ -393,14 +400,7 @@ uint dmdwasm_build(const(char)* src, size_t len, uint dataBase, uint stackSize)
     try
         buildImpl(src, len, dataBase, stackSize);
     catch (Throwable t)
-    {
-        import dmd.errors : error;
-        error(Loc.initial, "internal compiler error: %.*s (%.*s:%llu)",
-            cast(int) t.msg.length, t.msg.ptr,
-            cast(int) t.file.length, t.file.ptr, cast(ulong) t.line);
-        if (global.errors == 0)
-            global.errors = 1;
-    }
+        reportICE(t);
     return global.errors;
 }
 
