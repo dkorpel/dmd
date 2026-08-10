@@ -70,7 +70,22 @@ variable). This is best-effort: if `wasm-opt` is not installed the step is
 skipped and the ordinary linker output is kept.
 
 
+Phobos is linked by default, just like on the native targets. Building it
+mirrors the native library: `make -C phobos wasm` produces `libphobos2-wasm.a`
+(which, like `libphobos2.a`, also contains druntime) in
+`phobos/generated/wasm/release/wasm32`, and `dmd.conf` points `-mwasm32` at it.
+As usual, `-defaultlib=` selects a different library, and an empty
+`-defaultlib=` opts out of the runtime entirely.
+
+```D
+import std.stdio;
+
+void main()
+{
+    writeln("hello from ", "wasm");
+}
+```
+
 Limitations:
-- No Phobos
 - No deprecated complex number types like `cfloat` and `ifloat`
 - `real` is 64-bit, not 128-bit

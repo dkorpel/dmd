@@ -401,7 +401,7 @@ void setDefaultLibraries(const ref Target target, ref const(char)[] defaultlibna
         }
         else if (target.os == Target.OS.WASM)
         {
-            defaultlibname = "libdruntime-wasm.a";
+            defaultlibname = "libphobos2-wasm.a";
         }
         else
         {
