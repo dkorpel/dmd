@@ -126,6 +126,10 @@ enum RTLSYM
     RNDTOL,
     LDEXPF,
     LDEXP,
+    LOG2F,
+    LOG2,
+    LOG1PF,
+    LOG1P,
 
     CXA_ATEXIT,
 
@@ -268,6 +272,10 @@ Symbol* getRtlsym(RTLSYM i) @trusted
         case RTLSYM.RNDTOL:                 symbolz(ps,FL.func,FREGSAVED,"llrint",  0, t); break;
         case RTLSYM.LDEXPF:                 symbolz(ps,FL.func,FREGSAVED,"ldexpf", 0, t); break;
         case RTLSYM.LDEXP:                  symbolz(ps,FL.func,FREGSAVED,"ldexp",  0, t); break;
+        case RTLSYM.LOG2F:                  symbolz(ps,FL.func,FREGSAVED,"log2f",  0, t); break;
+        case RTLSYM.LOG2:                   symbolz(ps,FL.func,FREGSAVED,"log2",   0, t); break;
+        case RTLSYM.LOG1PF:                 symbolz(ps,FL.func,FREGSAVED,"log1pf", 0, t); break;
+        case RTLSYM.LOG1P:                  symbolz(ps,FL.func,FREGSAVED,"log1p",  0, t); break;
 
         case RTLSYM.CXA_ATEXIT:             symbolz(ps,FL.func,FREGSAVED,"__cxa_atexit", 0, t); break;
         case RTLSYM.EHWASMMATCH:            symbolz(ps,FL.func,FREGSAVED,"_d_eh_wasm_match", 0, t); break;
@@ -378,6 +386,10 @@ private type* wasmRtlsymType(RTLSYM i)
         case RTLSYM.RNDTOL:                 return fn([tdouble], tstypes[TYllong]);
         case RTLSYM.LDEXPF:                 return fn([tfloat, tint], tfloat);
         case RTLSYM.LDEXP:                  return fn([tdouble, tint], tdouble);
+        case RTLSYM.LOG2F:                  return fn([tfloat], tfloat);
+        case RTLSYM.LOG2:                   return fn([tdouble], tdouble);
+        case RTLSYM.LOG1PF:                 return fn([tfloat], tfloat);
+        case RTLSYM.LOG1P:                  return fn([tdouble], tdouble);
 
         case RTLSYM.CXA_ATEXIT:             return fn([voidPtr(), voidPtr(), voidPtr()], tint);
         case RTLSYM.EHWASMMATCH:            return fn([voidPtr(), voidPtr()], tstypes[TYbool]);
