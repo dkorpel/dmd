@@ -47,7 +47,7 @@ uint slebSize(long v) nothrow
     return n;
 }
 
-ulong readuLEB128(const(ubyte)[] code, ref uint pos) nothrow @safe
+ulong readuLEB128(const(ubyte)[] code, ref size_t pos) nothrow @safe
 {
     ulong v;
     uint shift;
@@ -62,7 +62,7 @@ ulong readuLEB128(const(ubyte)[] code, ref uint pos) nothrow @safe
     return v;
 }
 
-long readsLEB128(const(ubyte)[] code, ref uint pos) nothrow @safe
+long readsLEB128(const(ubyte)[] code, ref size_t pos) nothrow @safe
 {
     long v;
     uint shift;
