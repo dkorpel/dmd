@@ -22,11 +22,23 @@ private extern(C) int __main_void() nothrow;
 export void _start() nothrow
 {
     __wasm_call_ctors();
+    initCwd();
     int rc = __main_void();
     __wasm_call_dtors();
     proc_exit(rc);
     while (true) {}
 }
+
+// WASI has no working directory of its own; a host that preopens one passes
+// its path as $PWD, so relative paths resolve like they do natively.
+private void initCwd() @nogc nothrow
+{
+    import core.stdc.stdlib : getenv;
+    if (auto pwd = getenv("PWD"))
+        chdir(pwd);
+}
+
+private extern(C) int chdir(const(char)* path) @nogc nothrow;
 
 import core.attribute : wasmImportModule;
 
