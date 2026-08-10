@@ -490,6 +490,10 @@ WASM_BETTERC_OBJ := $(WASM_ROOT)/crt1_betterc.o
 # download and copy a locally-built libc.a instead (e.g. from a wasi-libc
 # checkout).
 WASM_LIBC            := $(WASM_ROOT)/libc.a
+# Same sysroot, second archive: wasi-libc's malloc-backed mmap/munmap emulation.
+# Not linked by default; a program opts in with -version=WASI_EMULATED_MMAN and
+# -L-l:libwasi-emulated-mman.a (core.sys.posix.sys.mman only declares mmap then).
+WASM_LIBC_MMAN       := $(WASM_ROOT)/libwasi-emulated-mman.a
 WASI_SDK_VERSION     ?= 33
 WASI_SYSROOT_SHA256  ?= 063bc1b56582b9923e08ac9b89e58789618d851763f01530b3ff20b9e5df0ca3
 # GitHub percent-encodes the '+' in the asset name as %2B in the download URL.
@@ -539,8 +543,16 @@ else
 	test -s $@ || { echo "wasm32-wasip1/libc.a not found in $(WASI_SYSROOT_TARBALL)"; rm -f $@; exit 1; }
 endif
 
+$(WASM_LIBC_MMAN): $(WASM_LIBC)
+ifneq ($(WASI_LIBC_LOCAL),)
+	cp $(dir $(WASI_LIBC_LOCAL))libwasi-emulated-mman.a $@
+else
+	tar -xzOf $(WASI_SYSROOT_TARBALL) --wildcards --no-anchored '*/wasm32-wasip1/libwasi-emulated-mman.a' > $@
+	test -s $@ || { echo "wasm32-wasip1/libwasi-emulated-mman.a not found in $(WASI_SYSROOT_TARBALL)"; rm -f $@; exit 1; }
+endif
+
 .PHONY: wasm
-wasm: copy $(WASM_LIB) $(WASM_BETTERC_CRT) $(WASM_LIBC)
+wasm: copy $(WASM_LIB) $(WASM_BETTERC_CRT) $(WASM_LIBC) $(WASM_LIBC_MMAN)
 
 UT_SRCS:=$(SRCS)
 UT_MODULES:=$(patsubst src/%.d,$(ROOT)/unittest/%,$(UT_SRCS))

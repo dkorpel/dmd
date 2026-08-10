@@ -37,6 +37,7 @@ function writeIovs(fd, iovsPtr, iovsLen, nwrittenPtr) {
 const wasi = {
     fd_write: (fd, iovs, iovsLen, nwritten) => writeIovs(fd, iovs, iovsLen, nwritten),
     fd_read: () => WASI_EBADF,
+    fd_pread: () => WASI_EBADF,
     fd_close: () => WASI_ESUCCESS,
     fd_seek: () => WASI_EBADF,
     fd_fdstat_get: () => WASI_EBADF,
@@ -46,6 +47,7 @@ const wasi = {
     fd_prestat_dir_name: () => WASI_EBADF,
     fd_readdir: () => WASI_EBADF,
     path_open: () => WASI_EBADF,
+    path_readlink: () => WASI_EBADF,
     path_filestat_get: () => WASI_EBADF,
     path_filestat_set_times: () => WASI_EBADF,
     path_create_directory: () => WASI_EBADF,
@@ -59,12 +61,45 @@ const wasi = {
         view.setUint32(sizePtr, 0, true);
         return WASI_ESUCCESS;
     },
-    clock_time_get: (id, prec, timePtr) => {
-        dv().setBigUint64(timePtr, BigInt(Date.now()) * 1000000n, true);
+    args_get: () => WASI_ESUCCESS,
+    args_sizes_get: (countPtr, sizePtr) => {
+        const view = dv();
+        view.setUint32(countPtr, 0, true);
+        view.setUint32(sizePtr, 0, true);
         return WASI_ESUCCESS;
     },
+    clock_time_get: (id, prec, timePtr) => {
+        // id 0 is the realtime clock; everything else (monotonic, cpu-time) is
+        // served from performance.now(), which is what druntime's MonoTime wants.
+        const ns = id === 0
+            ? BigInt(Date.now()) * 1000000n
+            : BigInt(Math.round(performance.now() * 1e6));
+        dv().setBigUint64(timePtr, ns, true);
+        return WASI_ESUCCESS;
+    },
+    // core.time refuses to start without a monotonic clock frequency, so this
+    // has to succeed: report 1 microsecond, performance.now()'s clamped floor.
+    clock_res_get: (id, resPtr) => {
+        dv().setBigUint64(resPtr, 1000n, true);
+        return WASI_ESUCCESS;
+    },
+    random_get: (ptr, len) => {
+        crypto.getRandomValues(new Uint8Array(memory.buffer, ptr, len));
+        return WASI_ESUCCESS;
+    },
+    poll_oneoff: () => WASI_EBADF,
+    sched_yield: () => WASI_ESUCCESS,
     proc_exit: (code) => { throw new Error("proc_exit(" + code + ")"); },
 };
+
+// dmd.wasm is built against wasi-libc, which imports more of the WASI surface
+// than an in-memory compile ever calls. Anything not implemented above becomes a
+// stub returning EBADF, so adding a druntime module that pulls in a new syscall
+// can't turn into an instantiation LinkError.
+const wasiImports = new Proxy(wasi, {
+    get: (target, name) => (name in target ? target[name] : () => WASI_EBADF),
+    has: () => true,
+});
 
 let exports = null;
 let wasmModule = null;     // compiled WebAssembly.Module, instantiated fresh per compile
@@ -95,12 +130,17 @@ export async function loadDmd(url = "dmd.wasm") {
 // previous instance's memory is reclaimed by the JS GC once it's unreferenced.
 function newInstance() {
     const instance = new WebAssembly.Instance(wasmModule, {
-        wasi_snapshot_preview1: wasi,
+        wasi_snapshot_preview1: wasiImports,
         env: {},
     });
     exports = instance.exports;
     memory = exports.memory;
-    if (exports.__wasm_call_ctors) exports.__wasm_call_ctors();
+    // dmdwasm_init runs the C global ctors and then druntime's rt_init (GC,
+    // TypeInfo, D module ctors). The frontend needs all of it: it allocates with
+    // the GC and its `shared static this` blocks build the keyword and
+    // import-hint tables.
+    if (exports.dmdwasm_init() == 0)
+        throw new Error("dmd.wasm runtime initialization failed");
 }
 
 // Run the frontend+backend once on `source` in a fresh instance. `optimize`

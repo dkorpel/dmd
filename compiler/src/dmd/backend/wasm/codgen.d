@@ -1810,7 +1810,14 @@ bool genElem(ref WasmCG cg, elem* e)
     case OPnue:
         cg.genElem(e.E1);
         cg.genElem(e.E2, e.E1.wasmType);
-        cg.emitRelop(op, e.E1.Ety);
+        // An integral comparison is unsigned when *either* side is, matching
+        // cod3.conditionCode's `tyuns(tym) || tyuns(e.E2.Ety)`. cgelem's
+        // `x==c1 || x==c2 || ...` range fold relies on it: it rewrites the chain
+        // as `(x - min) <= max - min` with only the constant retyped unsigned.
+        tym_t cmpty = e.E1.Ety;
+        if (tyintegral(cmpty) && tyuns(e.E2.Ety))
+            cmpty = touns(cmpty);
+        cg.emitRelop(op, cmpty);
         return true;
 
     case OPneg:

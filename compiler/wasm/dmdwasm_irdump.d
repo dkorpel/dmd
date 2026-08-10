@@ -14,7 +14,8 @@
 module dmdwasm_irdump;
 
 import dmd.common.outbuffer : OutBuffer;
-import dmd.backend.cc : block, Symbol, BC;
+import dmd.backend.cc : block, BC;
+import dmd.backend.symbol : Symbol;
 import dmd.backend.el : elem;
 import dmd.backend.oper;
 import dmd.backend.ty;

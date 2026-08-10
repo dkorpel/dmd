@@ -921,6 +921,11 @@ enum Edef =
         OPnegass,
         OPbtc,OPbtr,OPbts,
         OPvecsto,OPcmpxchg,
+        // Writes through its `va_list` operand. x86 rewrites it into an explicit
+        // assignment (cgelem.elva_start) before the data-flow passes run, but WASM
+        // lowers it in its own code generator, so it reaches them intact and has to
+        // be visible as a definition or the `va_list` keeps its pre-va_start value.
+        OPva_start,
     ];
 
 enum Eae =

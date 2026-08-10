@@ -91,7 +91,14 @@ c_long  fpathconf(int, int) @trusted;
 char*   getcwd(char*, size_t);
 //int     getentropy(void*, size_t);
 
-version (CRuntime_WASI) {}
+version (CRuntime_WASI)
+{
+    // WASI has no users or groups; report root so callers that only stamp the
+    // ids into a record (ar headers, ...) keep compiling and working.
+    extern(D) gid_t getegid()() @trusted => 0;
+    extern(D) uid_t geteuid()() @trusted => 0;
+    extern(D) gid_t getgid()() @trusted => 0;
+}
 else
 {
     gid_t   getegid() @trusted;
@@ -123,7 +130,8 @@ version (CRuntime_WASI)
 //int     getresgid(gid_t*, gid_t*, gid_t*);
 //int     getresuid(uid_t*, uid_t*, uid_t*);
 
-version (CRuntime_WASI) {}
+version (CRuntime_WASI)
+    extern(D) uid_t getuid()() @trusted => 0;
 else
     uid_t   getuid() @trusted;
 

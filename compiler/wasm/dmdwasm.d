@@ -10,7 +10,8 @@ module dmdwasm;
 import dmd.globals : global;
 import dmd.location : Loc;
 import dmd.common.outbuffer : OutBuffer;
-import dmd.backend.cc : block, Symbol;
+import dmd.backend.cc : block;
+import dmd.backend.symbol : Symbol;
 
 import dmdwasm_lexdump : dumpTokens;
 import dmdwasm_irdump : dumpFunctionIR;
@@ -88,8 +89,11 @@ private void initFrontend()
     import dmd.target : target, defaultTargetOS, addDefaultVersionIdentifiers;
     import dmd.typesem : Type_init;
     import dmd.root.ctfloat : CTFloat;
-    import dmd.tokens : initTokens;
-    import dmd.imphint : initImportHints;
+    version (MinimalRuntime)
+    {
+        import dmd.tokens : initTokens;
+        import dmd.imphint : initImportHints;
+    }
     import dmd.console : createConsole;
     import core.stdc.stdio : stderr;
 
@@ -116,12 +120,15 @@ private void initFrontend()
         useNullCheck   = CHECKENABLE.off;
     }
 
-    // D `shared static this` module ctors don't run without _d_run_main; invoke the
-    // essential ones directly. initTokens initializes the identifier string table and
-    // registers keywords (must precede Id.initialize); initImportHints sets up the
-    // undefined-identifier hint table.
-    initTokens();
-    initImportHints();
+    version (MinimalRuntime)
+    {
+        // The minimal-runtime (ldc2) build has no _d_run_main, so `shared static this`
+        // module ctors never run; invoke the essential ones directly. initTokens
+        // initializes the identifier string table and registers keywords (must precede
+        // Id.initialize); initImportHints sets up the undefined-identifier hint table.
+        initTokens();
+        initImportHints();
+    }
 
     target.os = defaultTargetOS();
     target.isX86_64 = true;
@@ -130,8 +137,8 @@ private void initFrontend()
 
     // target._init() copies the *host* `real_t` properties into RealProperties.
     // On x86_64 hosts that's the 80-bit x87 extended type, matching the target.
-    // But this frontend runs on wasm, whose `real` is 128-bit (mant_dig 113), so
-    // `real.mant_dig` would report 113 and float Phobos (std.math) would fail its
+    // But this frontend runs on wasm, whose `real` is no wider than `double`, so
+    // `real.mant_dig` would report 53 and float Phobos (std.math) would fail its
     // `mant_dig == 64` static asserts. We compile *for* x86_64, so override the
     // properties with the real x87 80-bit values.
     with (target.RealProperties)
@@ -161,6 +168,30 @@ private void initFrontend()
 /// `optimize` runs the backend `-O` global optimizer; the web app compiles the
 /// same source twice (optimize off then on) to fill the two disassembly panes.
 void dmdwasm_run(const(char)* src, size_t len, int optimize)
+{
+    version (MinimalRuntime)
+        runImpl(src, len, optimize);
+    else
+    {
+        // With a real runtime, a Throwable escaping the frontend would unwind
+        // straight out of the wasm export and leave the host with an opaque trap.
+        // Report it as a diagnostic instead, so the page shows what happened.
+        try
+            runImpl(src, len, optimize);
+        catch (Throwable t)
+        {
+            import dmd.errors : error;
+            import dmd.location : Loc;
+            error(Loc.initial, "internal compiler error: %.*s (%.*s:%llu)",
+                cast(int) t.msg.length, t.msg.ptr,
+                cast(int) t.file.length, t.file.ptr, cast(ulong) t.line);
+            if (global.errors == 0)
+                global.errors = 1;
+        }
+    }
+}
+
+private void runImpl(const(char)* src, size_t len, int optimize)
 {
     import dmd.dmodule : Module;
     import dmd.identifier : Identifier;
@@ -294,10 +325,36 @@ int dmdwasm_selftest()
 
 private extern(C) void __wasm_call_ctors();
 
-void _start()
+/// Bring the instance up before any other export is called: `__wasm_call_ctors`
+/// runs the C-level global ctors (data relocations), then the full-runtime build
+/// hands off to `rt_init` for GC setup, TypeInfo registration and D module ctors.
+/// The minimal-runtime (ldc2) build has neither, so the ctor call is all there is.
+int dmdwasm_init()
 {
-    __wasm_call_ctors();   // run C/global ctors (data relocs etc.) before any work
-    dmdwasm_selftest();
+    __wasm_call_ctors();
+    version (MinimalRuntime)
+        return 1;
+    else
+    {
+        import core.runtime : rt_init;
+        return rt_init();
+    }
+}
+
+version (MinimalRuntime)
+{
+    void _start()
+    {
+        dmdwasm_init();
+        dmdwasm_selftest();
+    }
+}
+else
+{
+    // The full runtime's `_start` (rt.wasm.start) calls `main` and then proc_exit,
+    // which would tear the instance down; the host calls `dmdwasm_init` plus the
+    // individual entry points instead, so `main` only has to exist for linking.
+    int main(int, char**) => 0;
 }
 
 // Fuzz entry point: read a whole D source from stdin, run the frontend+backend on
@@ -309,7 +366,7 @@ void dmdwasm_run_stdin()
     import core.stdc.stdio : fread, stdin, stdout, printf, fflush;
     import core.stdc.stdlib : malloc, realloc;
 
-    __wasm_call_ctors();
+    dmdwasm_init();
 
     size_t cap = 1 << 16, len = 0;
     char* buf = cast(char*) malloc(cap);

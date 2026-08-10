@@ -151,6 +151,22 @@ else version (Windows)
     alias cpp_longlong = long;
     alias cpp_ulonglong = ulong;
 }
+else version (WASI)
+{
+    // wasm32-wasi: 32-bit long, like the ILP32 Posix branch below. Reached only
+    // by compilers that don't predefine `Posix` for wasm32-wasi (ldc2); dmd does.
+    enum __c_long  : int;
+    enum __c_ulong : uint;
+
+    alias c_long = int;
+    alias c_ulong = uint;
+
+    alias cpp_long = __c_long;
+    alias cpp_ulong = __c_ulong;
+
+    alias cpp_longlong = long;
+    alias cpp_ulonglong = ulong;
+}
 else version (Posix)
 {
   static if ( (void*).sizeof > int.sizeof )

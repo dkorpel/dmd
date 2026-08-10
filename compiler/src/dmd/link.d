@@ -221,7 +221,23 @@ private void runWasmOpt(const(char)[] wasmfile, bool verbose, ErrorSink eSink)
 
     Strings argv;
     argv.push(wasmopt ? wasmopt : "wasm-opt");
-    argv.push("-O");
+    // $WASM_OPT_FLAGS overrides the optimization level, e.g. `-Oz` to build for
+    // size. Split on spaces; empty entries are skipped.
+    if (const flags = getenv("WASM_OPT_FLAGS"))
+    {
+        const(char)[] rest = flags[0 .. strlen(flags)];
+        while (rest.length)
+        {
+            size_t i = 0;
+            while (i < rest.length && rest[i] != ' ')
+                ++i;
+            if (i)
+                argv.push(rest[0 .. i].xarraydup.ptr);
+            rest = rest[i + (i < rest.length) .. $];
+        }
+    }
+    else
+        argv.push("-O");
     argv.push(file);
     argv.push("-o");
     argv.push(file);

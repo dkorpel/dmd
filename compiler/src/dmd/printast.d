@@ -186,9 +186,8 @@ void printAST(Statement s, ref OutBuffer buf, int indent = 0, string prefix = nu
     if (auto cs = s.isCompoundStatement())
     {
         head();
-        if (cs.statements)
-            foreach (st; (*cs.statements)[])
-                printAST(st, buf, indent + 2);
+        foreach (st; cs.statements[])
+            printAST(st, buf, indent + 2);
     }
     else if (auto es = s.isExpStatement())
     {

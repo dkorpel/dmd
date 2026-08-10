@@ -175,7 +175,7 @@ else version (CRuntime_WASI)
     {
         ino_t   d_ino;
         ubyte   d_type;
-        char[0] d_name;
+        char[1] d_name = 0;
     }
 }
 else

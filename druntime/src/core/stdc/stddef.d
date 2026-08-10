@@ -34,3 +34,10 @@ else version (Posix)
     ///
     alias wchar_t = dchar;
 }
+else version (WASI)
+{
+    // wasi-libc's wchar_t is a 32-bit int, like the Posix one. Reached only by
+    // compilers that don't predefine `Posix` for wasm32-wasi (ldc2); dmd does.
+    ///
+    alias wchar_t = dchar;
+}

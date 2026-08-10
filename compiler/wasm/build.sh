@@ -1,15 +1,20 @@
 #!/bin/sh
 # Build the DMD frontend to WebAssembly
 # Run from the dmd repo root: ./compiler/wasm/build.sh
+#
+#   BACKEND=dmd  (default) host compiler is dmd's own wasm backend, linking the
+#                real druntime + Phobos wasm archive.
+#   BACKEND=ldc  legacy path: ldc2/ldmd2 with the minimal freestanding runtime in
+#                rthooks.d and the core.* shims in shim/. Kept working, not default.
 set -e
 
 DMD_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$DMD_ROOT"
 
-WASI_LIBC="${WASI_LIBC:-/home/dennis/repos1/wasi-libc/sysroot/lib/wasm32-wasi/libc.a}"
-RTLIB="$DMD_ROOT/compiler/wasm/lib/libcompiler-rt-wasm.a"
+BACKEND="${BACKEND:-dmd}"
 DRT="$DMD_ROOT/druntime/src"
 PHOBOS_ROOT="${PHOBOS_ROOT:-/home/dennis/repos/phobos}"
+OUT="$DMD_ROOT/compiler/wasm/dmd.wasm"
 
 # --- Generate the embedded standard-library source table -----------------------
 # Bake every regular druntime + phobos .d source (including the real object.d)
@@ -20,7 +25,7 @@ emit_root() {
   # $1 = absolute root dir; remaining args = subdirs (relative to root) to scan.
   _root="$1"; shift
   ( cd "$_root" && find "$@" -name '*.d' | sed 's|^\./||' | sort | while IFS= read -r f; do
-      printf '    EF("%s", import("%s")),\n' "$f" "$f"
+      printf '    EF("%s", cast(immutable(ubyte)[])(import("%s") ~ "\\0")),\n' "$f" "$f"
     done )
 }
 {
@@ -33,23 +38,76 @@ emit_root() {
   emit_root "$DRT" .            # druntime: core/, rt/, gc/, object.d, ...
   emit_root "$PHOBOS_ROOT" std etc  # phobos import roots
   echo "];"
-  echo "void registerDruntime() { foreach (ref f; files) global.fileManager.add(FileName(f.name), f.data); }"
+  # Each blob carries a trailing NUL the lexer needs as a sentinel, but the
+  # registered length excludes it so the source itself ends where the file does.
+  echo "void registerDruntime() { foreach (ref f; files) global.fileManager.add(FileName(f.name), f.data[0 .. \$ - 1]); }"
 } > "$EMBED"
 
-ldmd2 -mtriple=wasm32-unknown-unknown-wasi -defaultlib= \
-  -L-allow-undefined -L"$WASI_LIBC" -L"$RTLIB" -L--no-entry \
-  -L--export=dmdwasm_run -L--export=dmdwasm_ast_ptr -L--export=dmdwasm_ast_len \
-  -L--export=dmdwasm_parse_ptr -L--export=dmdwasm_parse_len \
-  -L--export=dmdwasm_sema_ptr -L--export=dmdwasm_sema_len \
-  -L--export=dmdwasm_lex_ptr -L--export=dmdwasm_lex_len \
-  -L--export=dmdwasm_ir_ptr -L--export=dmdwasm_ir_len \
-  -L--export=dmdwasm_iropt_ptr -L--export=dmdwasm_iropt_len \
-  -L--export=dmdwasm_errors -L--export=dmdwasm_input_buffer -L--export=dmdwasm_selftest -L--export=dmdwasm_run_stdin -L--export=__wasm_call_ctors \
-  -Oz \
-  -J. -Jcompiler/src/dmd/res -Jcompiler/wasm -J"$DRT" -J"$PHOBOS_ROOT" \
-  -i -Icompiler/wasm/shim -Icompiler/src -I"$DRT" -i=core -i=rt -i=dmd \
-  compiler/wasm/dmdwasm.d compiler/wasm/dmdwasm_lexdump.d compiler/wasm/dmdwasm_irdump.d compiler/wasm/rthooks.d compiler/wasm/druntime_embed.d \
-  -of=compiler/wasm/dmd.wasm "$@"
+# Binaryen shrinks the module substantially and is what makes the download
+# reasonable; -Oz also drops the name section, so set WASM_OPT_FLAGS=-O2 (or
+# WASM_OPT=true to skip it) when you need readable wasmtime backtraces.
+run_wasm_opt() {
+  if command -v "${WASM_OPT:-wasm-opt}" >/dev/null 2>&1; then
+    "${WASM_OPT:-wasm-opt}" ${WASM_OPT_FLAGS:--Oz} "$OUT" -o "$OUT"
+  else
+    echo "wasm-opt not found; shipping the unoptimized module" >&2
+  fi
+}
+
+SRC="compiler/wasm/dmdwasm.d compiler/wasm/dmdwasm_lexdump.d compiler/wasm/dmdwasm_irdump.d compiler/wasm/druntime_embed.d"
+
+# Symbols JS reaches into. __wasm_call_ctors and dmdwasm_init bring the instance
+# up; the rest are the compile entry point and the output-buffer accessors.
+EXPORTS="--export=__wasm_call_ctors --export=dmdwasm_init \
+  --export=dmdwasm_run --export=dmdwasm_input_buffer --export=dmdwasm_errors \
+  --export=dmdwasm_ast_ptr --export=dmdwasm_ast_len \
+  --export=dmdwasm_parse_ptr --export=dmdwasm_parse_len \
+  --export=dmdwasm_sema_ptr --export=dmdwasm_sema_len \
+  --export=dmdwasm_lex_ptr --export=dmdwasm_lex_len \
+  --export=dmdwasm_ir_ptr --export=dmdwasm_ir_len \
+  --export=dmdwasm_iropt_ptr --export=dmdwasm_iropt_len \
+  --export=dmdwasm_selftest --export=dmdwasm_run_stdin"
+
+case "$BACKEND" in
+dmd)
+  DMD="${DMD:-$DMD_ROOT/generated/linux/release/64/dmd}"
+  # WASI has no mmap; wasi-libc ships a malloc-backed emulation that
+  # dmd.common.file's FileMapping links against (dead code in the browser, but it
+  # has to resolve).
+  #
+  # DMD_OPT is empty by default: dmd's own -O global optimizer still miscompiles
+  # part of the frontend for wasm (dsymbolsem.aliasAssignInPlace; a snippet using
+  # std.algorithm's `map` then dies in semantic3). wasm-opt below does the
+  # optimization that actually matters for a browser download.
+  "$DMD" -mwasm32 ${DMD_OPT-} -version=WASI_EMULATED_MMAN \
+    -i=dmd -i=druntime_embed \
+    -Icompiler/src \
+    -J. -Jcompiler/src/dmd/res -Jcompiler/wasm -J"$DRT" -J"$PHOBOS_ROOT" \
+    -L-l:libwasi-emulated-mman.a \
+    $(for e in $EXPORTS; do printf -- '-L%s ' "$e"; done) \
+    -od=compiler/wasm/obj -of="$OUT" \
+    $SRC "$@"
+  run_wasm_opt
+  ;;
+ldc)
+  WASI_LIBC="${WASI_LIBC:-/home/dennis/repos1/wasi-libc/sysroot/lib/wasm32-wasi/libc.a}"
+  RTLIB="$DMD_ROOT/compiler/wasm/lib/libcompiler-rt-wasm.a"
+  ldmd2 -mtriple=wasm32-unknown-unknown-wasi -defaultlib= -version=MinimalRuntime \
+    -L-allow-undefined -L"$WASI_LIBC" -L"$RTLIB" -L--no-entry \
+    $(for e in $EXPORTS; do printf -- '-L%s ' "$e"; done) \
+    -Oz \
+    -J. -Jcompiler/src/dmd/res -Jcompiler/wasm -J"$DRT" -J"$PHOBOS_ROOT" \
+    -i -Icompiler/wasm/shim -Icompiler/src -I"$DRT" -i=core -i=rt -i=dmd \
+    compiler/wasm/rthooks.d $SRC \
+    -of="$OUT" "$@"
+  run_wasm_opt
+  ;;
+*)
+  echo "unknown BACKEND=$BACKEND (expected 'dmd' or 'ldc')" >&2
+  exit 1
+  ;;
+esac
 
 # Publish the built module to the web harness so `web/` is self-contained.
-cp compiler/wasm/dmd.wasm compiler/wasm/web/dmd.wasm
+cp "$OUT" compiler/wasm/web/dmd.wasm
+ls -la compiler/wasm/web/dmd.wasm
