@@ -135,6 +135,7 @@ struct EnvData
     string cxxcompiler;          /// `CXX`: host C++ compiler
     string model;                /// `MODEL`: target model (`32` or `64`)
     string required_args;        /// `REQUIRED_ARGS`: flags added to the tests `REQUIRED_ARGS` parameter
+    string execBinaryWrapper;    /// `EXEC_BINARY_WRAPPER`: prepended to run command (e.g. `wasmtime run`)
     string cxxCompatFlags;       /// Additional flags passed to $(compiler) when `EXTRA_CPP_SOURCES` is present
     string[] picFlag;            /// Compiler flag for PIC (if requested from environment)
     bool dobjc;                  /// `D_OBJC`: run Objective-C tests
@@ -142,6 +143,10 @@ struct EnvData
     bool autoUpdate;             /// `AUTO_UPDATE`: update `(TEST|RUN)_OUTPUT` on missmatch
     bool printRuntime;           /// `PRINT_RUNTIME`: Print time spent on a single test
     bool tryDisabled;            /// `TRY_DISABLED`:Silently try disabled tests (ignore failure and report success)
+
+    /// Returns the `-mXX` model flag for this target, or `""` for WASM
+    /// (which uses `-mwasm32 -os=wasm` from REQUIRED_ARGS instead).
+    string modelFlag() const { return os == "wasm" ? "" : "-m" ~ model; }
 }
 
 /++
@@ -175,8 +180,9 @@ immutable(EnvData) processEnvironment()
     envData.ccompiler      = environment.get("CC");
     envData.cxxcompiler    = environment.get("CXX");
     envData.model          = envGetRequired("MODEL");
-    envData.required_args  = environment.get("REQUIRED_ARGS");
-    envData.dobjc          = environment.get("D_OBJC") == "1";
+    envData.required_args      = environment.get("REQUIRED_ARGS");
+    envData.execBinaryWrapper  = environment.get("EXEC_BINARY_WRAPPER");
+    envData.dobjc              = environment.get("D_OBJC") == "1";
     envData.coverage_build = environment.get("DMD_TEST_COVERAGE") == "1";
     envData.autoUpdate     = environment.get("AUTO_UPDATE", "") == "1";
     envData.printRuntime   = environment.get("PRINT_RUNTIME", "") == "1";
@@ -975,10 +981,20 @@ void tryRemove(in char[] filename)
  * Throws:
  *   Exception if `command` returns another exit code than 0/1 (depending on expectPass)
  */
-string execute(ref File f, string command, const ubyte expectedRc)
+string execute(ref File f, string command, const ubyte expectedRc,
+               Duration timeout = Duration.zero)
 {
     f.writeln(command);
-    const result = std.process.executeShell(command);
+    // Prefix the command with `timeout N` when a deadline is given so that
+    // a hung compiler (e.g. infinite loop in WASM codegen) is killed.
+    string actualCommand = command;
+    if (timeout != Duration.zero)
+    {
+        import std.conv : to;
+        const secs = timeout.total!"seconds";
+        actualCommand = "timeout " ~ secs.to!string ~ " " ~ command;
+    }
+    const result = std.process.executeShell(actualCommand);
     f.write(result.output);
 
     if (result.status < 0)
@@ -991,6 +1007,26 @@ string execute(ref File f, string command, const ubyte expectedRc)
     }
 
     return result.output;
+}
+
+/**
+ * Run `wasm-validate` on a produced WASM module/object and throw on failure.
+ * Silently no-ops if the file is missing (e.g. earlier compile step failed
+ * in a way that left no artifact) or if `wasm-validate` is not installed.
+ */
+void validateWasmArtifact(ref File f, string path)
+{
+    if (!std.file.exists(path))
+        return;
+    const cmd = "wasm-validate --enable-exceptions " ~ quoteSpaces(path);
+    f.writeln(cmd);
+    const result = std.process.executeShell(cmd);
+    f.write(result.output);
+    // 127 == command not found; skip silently so hosts without wabt still work.
+    if (result.status == 127)
+        return;
+    enforce(result.status == 0,
+        "wasm-validate failed for " ~ path ~ ":\n" ~ result.output);
 }
 
 /// add quotes around the whole string if it contains spaces that are not in quotes
@@ -1764,6 +1800,11 @@ int tryMain(string[] args)
     // Runs the test with a specific combination of arguments
     Result testCombination(bool autoCompileImports, string argSet, size_t permuteIndex, string permutedArgs)
     {
+        import std.datetime : seconds;
+        // WASM codegen can loop infinitely on pathological input (e.g. sparse
+        // 64-bit switch ranges); cap each compilation at 60 s to prevent hangs.
+        const compileTimeout = envData.os == "wasm" ? 60.seconds : Duration.zero;
+
         string test_app_dmd = test_app_dmd_base ~ to!string(permuteIndex) ~ envData.exe;
         string command; // copy of the last executed command so that it can be re-invoked on failures
         try
@@ -1786,7 +1827,7 @@ int tryMain(string[] args)
                 string objfile = output_dir ~ envData.sep ~ test_name ~ "_" ~ to!string(permuteIndex) ~ envData.obj;
                 toCleanup ~= objfile;
 
-                command = format("%s -conf= -m%s -I%s %s %s -od%s -of%s %s %s%s %s", envData.dmd, envData.model, input_dir,
+                command = format("%s -conf= %s -I%s %s %s -od%s -of%s %s %s%s %s", envData.dmd, envData.modelFlag, input_dir,
                         testArgs.requiredArgs, permutedArgs, output_dir,
                         (testArgs.mode == TestMode.RUN || testArgs.link ? test_app_dmd : objfile),
                         argSet,
@@ -1795,7 +1836,7 @@ int tryMain(string[] args)
                         (autoCompileImports ? "-i" : join(testArgs.compiledImports, " ")));
 
                 try
-                    compile_output = execute(fThisRun, command, testArgs.mode == TestMode.FAIL_COMPILE);
+                    compile_output = execute(fThisRun, command, testArgs.mode == TestMode.FAIL_COMPILE, compileTimeout);
                 catch (Exception e)
                 {
                     writeln(""); // We're at "... runnable/xxxx.d (args)"
@@ -1810,15 +1851,15 @@ int tryMain(string[] args)
                     string newo = output_dir ~ envData.sep ~ filename.baseName().setExtension(envData.obj);
                     toCleanup ~= newo;
 
-                    command = format("%s -conf= -m%s -I%s %s %s -od%s -c %s %s", envData.dmd, envData.model, input_dir,
+                    command = format("%s -conf= %s -I%s %s %s -od%s -c %s %s", envData.dmd, envData.modelFlag, input_dir,
                         testArgs.requiredArgs, permutedArgs, output_dir, argSet, filename);
-                    compile_output ~= execute(fThisRun, command, testArgs.mode == TestMode.FAIL_COMPILE);
+                    compile_output ~= execute(fThisRun, command, testArgs.mode == TestMode.FAIL_COMPILE, compileTimeout);
                 }
 
                 if (testArgs.mode == TestMode.RUN || testArgs.link)
                 {
                     // link .o's into an executable
-                    command = format("%s -conf= -m%s%s%s %s %s -od%s -of%s %s", envData.dmd, envData.model,
+                    command = format("%s -conf= %s%s%s %s %s -od%s -of%s %s", envData.dmd, envData.modelFlag,
                         autoCompileImports ? " -i" : "",
                         autoCompileImports ? "extraSourceIncludePaths" : "",
                         envData.required_args, testArgs.requiredArgsForLink, output_dir, test_app_dmd, join(toCleanup, " "));
@@ -1885,6 +1926,31 @@ int tryMain(string[] args)
                 throw new CompareException(testArgs.compileOutput, compile_output, diff);
             }
 
+            // Structurally validate every WASM artifact produced. Runs for
+            // compilable, link, and runnable; `wasmtime run` already validates
+            // the final module at instantiation, but compilable tests would
+            // otherwise pass on malformed bytecode.
+            if (envData.os == "wasm" && testArgs.mode != TestMode.FAIL_COMPILE)
+            {
+                string[] artifacts;
+                if (!testArgs.compileSeparately)
+                {
+                    if (testArgs.mode == TestMode.RUN || testArgs.link)
+                        artifacts ~= test_app_dmd;
+                    else
+                        artifacts ~= output_dir ~ envData.sep ~ test_name ~ "_" ~ to!string(permuteIndex) ~ envData.obj;
+                }
+                else
+                {
+                    foreach (filename; testArgs.sources ~ (autoCompileImports ? null : testArgs.compiledImports))
+                        artifacts ~= output_dir ~ envData.sep ~ filename.baseName().setExtension(envData.obj);
+                    if (testArgs.mode == TestMode.RUN || testArgs.link)
+                        artifacts ~= test_app_dmd;
+                }
+                foreach (art; artifacts)
+                    validateWasmArtifact(fThisRun, art);
+            }
+
             if (testArgs.mode == TestMode.RUN)
             {
                 toCleanup ~= test_app_dmd;
@@ -1896,7 +1962,9 @@ int tryMain(string[] args)
 
                 if (testArgs.gdbScript is null)
                 {
-                    command = test_app_dmd;
+                    command = envData.execBinaryWrapper.length
+                              ? envData.execBinaryWrapper ~ " " ~ test_app_dmd
+                              : test_app_dmd;
                     if (testArgs.executeArgs) command ~= " " ~ testArgs.executeArgs;
 
                     string output = execute(fThisRun, command, testArgs.runReturn)
@@ -2348,7 +2416,7 @@ static this()
     // compile the test
     //
     {
-        const compile = [envData.dmd, "-conf=", "-m"~envData.model] ~
+        const compile = [envData.dmd, "-conf="] ~ (envData.modelFlag.length ? [envData.modelFlag] : []) ~
             envData.picFlag ~ [
             "-od" ~ testOutDir,
             "-of" ~ testScriptExe,

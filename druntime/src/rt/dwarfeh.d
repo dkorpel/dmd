@@ -11,7 +11,11 @@
 
 module rt.dwarfeh;
 
-version (Posix):
+version (WebAssembly) {}
+else version (Posix)
+    version = DwarfEH;
+
+version (DwarfEH):
 
 // debug = EH_personality;
 

@@ -18,7 +18,10 @@ module rt.deh_win64_posix;
 
 version (Win64)
     version = Win64_Posix;
-version (Posix)
+else version (WebAssembly)
+{
+}
+else version (Posix)
     version = Win64_Posix;
 
 version (Win64_Posix):

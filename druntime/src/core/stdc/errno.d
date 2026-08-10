@@ -23,6 +23,9 @@ else version (TVOS)
 else version (WatchOS)
     version = Darwin;
 
+version (WASI)          version = WASI_Compat;
+version (CRuntime_WASI) version = WASI_Compat;
+
 version (ARM)     version = ARM_Any;
 version (AArch64) version = ARM_Any;
 version (HPPA)    version = HPPA_Any;
@@ -159,6 +162,17 @@ else version (Haiku)
     {
         ref int _errnop();
         alias errno = _errnop;
+    }
+}
+else version (WASI_Compat)
+{
+    // wasi-libc exposes errno as a plain global; rt/wasm provides a
+    // __errno_location() accessor over it so the rest of druntime can treat
+    // errno uniformly as a ref-returning function (as on glibc/musl).
+    extern (C)
+    {
+        ref int __errno_location();
+        alias errno = __errno_location;
     }
 }
 else

@@ -1667,7 +1667,7 @@ void test100()
     {
         real r = value;
         ulong d = cast(ulong)r;
-        printf("ulong: %llu => real: %Lg => ulong: %llu\n", value, r, d);
+        printf("ulong: %llu => real: %g => ulong: %llu\n", value, cast(double) r, d); // %g: wasm real is 64-bit
         assert(d == value);
     }
 
@@ -4005,7 +4005,7 @@ float parse(ref string p)
     exp = 2;
 
     ldval = msdec;
-    printf("ldval = %Lg\n", ldval);
+    printf("ldval = %g\n", cast(double) ldval); // %g: wasm real is 64-bit
     if (ldval)
     {
         uint u = 0;

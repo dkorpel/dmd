@@ -898,6 +898,20 @@ version (linux)
     }
 }
 
+version (WebAssembly)
+{
+    import core.stdc.time;
+
+    double dtime()
+    {
+     double q;
+
+     q = cast(double)time(null);
+
+     return q;
+    }
+}
+
 version (OSX)   // supplied by Anders F Bjorklund
 {
     import core.sys.posix.sys.time;
