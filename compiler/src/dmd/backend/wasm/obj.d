@@ -1192,6 +1192,14 @@ void WasmObj_term2(const(char)[] objfilename, ref WasmModule wmod, ref OutBuffer
             if (!fb.sym)
                 continue;
             wasm_codgen2(cast(Symbol*) fb.sym, fb);
+            if (config.vasm)
+            {
+                import core.stdc.stdio : printf;
+                import dmd.backend.wasm.wat : wasmDisassemble;
+                OutBuffer disasmBuf;
+                wasmDisassemble(fb, disasmBuf);
+                printf("%.*s", cast(int) disasmBuf.length, disasmBuf.peekChars());
+            }
         }
     }
 
