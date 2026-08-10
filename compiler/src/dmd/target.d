@@ -1186,7 +1186,7 @@ extern (C++) struct Target
         Type tn = tf.next;
         if (auto te = tn.isTypeEnum())
         {
-            if (te.sym.isSpecial())
+            if (te.sym.isSpecial() && !isWasm)
             {
                 // Special enums with target-specific return style
                 if (te.sym.ident == Id.__c_complex_float)

@@ -6949,7 +6949,7 @@ elem* toElemStructLit(StructLiteralExp sle, ref IRState irs, EXP op, Symbol* sym
         if (TypeEnum te = sle.stype.isTypeEnum())
         {
             // Reinterpret the struct literal as a complex type.
-            if (te.sym.isSpecial() &&
+            if (te.sym.isSpecial() && !target.isWasm &&
                 (te.sym.ident == Id.__c_complex_float ||
                  te.sym.ident == Id.__c_complex_double ||
                  te.sym.ident == Id.__c_complex_real))
