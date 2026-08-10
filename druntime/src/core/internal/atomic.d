@@ -251,7 +251,8 @@ else // X86 and X86_64
 
         version (WebAssembly)
         {
-            *dest = value;
+            import core.internal.traits : Unqual;
+            *cast(Unqual!T*) dest = cast(Unqual!T) value;
             return;
         }
         else static if (T.sizeof == size_t.sizeof * 2)
@@ -432,7 +433,13 @@ else // X86 and X86_64
         static assert (succ >= fail, "The first MemoryOrder argument for atomicCompareExchangeStrong() cannot be weaker than the second argument");
         bool success;
 
-        static if (T.sizeof == size_t.sizeof * 2)
+        version (WebAssembly)
+        {
+            if (*dest is *compare) { *dest = value; success = true; }
+            else *compare = *dest;
+            return success;
+        }
+        else static if (T.sizeof == size_t.sizeof * 2)
         {
             // some values simply cannot be loa'd here, so we'll use an intermediary pointer that we can move instead
             T* valuePointer = &value;
@@ -537,7 +544,7 @@ else // X86 and X86_64
 
         version (WebAssembly)
         {
-            if (*dest == compare) { *dest = value; success = true; }
+            if (*dest is compare) { *dest = value; success = true; }
             return success;
         }
         else static if (T.sizeof == size_t.sizeof * 2)
