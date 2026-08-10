@@ -66,7 +66,33 @@ EXPORTS="--export=__wasm_call_ctors --export=dmdwasm_init \
   --export=dmdwasm_lex_ptr --export=dmdwasm_lex_len \
   --export=dmdwasm_ir_ptr --export=dmdwasm_ir_len \
   --export=dmdwasm_iropt_ptr --export=dmdwasm_iropt_len \
-  --export=dmdwasm_selftest --export=dmdwasm_run_stdin"
+  --export=dmdwasm_selftest --export=dmdwasm_run_stdin \
+  --export=dmdwasm_build --export=dmdwasm_wasm_ptr --export=dmdwasm_wasm_len"
+
+# The Run button compiles a snippet to a second wasm module that shares this
+# module's linear memory and calls its libc, so every libc function a
+# whole-program druntime build imports has to be exported here. malloc/free also
+# reserve the region the snippet's data and shadow stack live in.
+LIBC_EXPORTS="malloc free calloc realloc memcpy memmove memset memcmp \
+  printf fprintf snprintf sscanf fwrite fflush fgetwc fputwc write \
+  strlen strerror strtod isspace isdigit toupper qsort abort exit getenv chdir \
+  dlsym sysconf nanosleep sched_yield clock_getres clock_gettime __errno_location \
+  pthread_self pthread_detach pthread_join pthread_create pthread_setcancelstate \
+  pthread_attr_init pthread_attr_setstacksize pthread_attr_destroy \
+  pthread_mutex_init pthread_mutex_destroy pthread_mutex_lock \
+  pthread_mutex_unlock pthread_mutex_trylock \
+  pthread_mutexattr_init pthread_mutexattr_settype pthread_mutexattr_destroy \
+  _pthread_cleanup_push _pthread_cleanup_pop \
+  fclose freopen fdopen feof ferror clearerr fsync fseeko ftello rewind setvbuf \
+  fcntl fileno fwide fputc fputs putchar ungetc fgetc fgets getdelim fopen fread \
+  strerror_r strcmp strncmp strcpy strncpy strchr strstr strtol strtoul strtof \
+  memchr vsnprintf puts atoi \
+  cbrt fmod modf remainder remquo nearbyint round llround lround trunc floor ceil \
+  log log2 log10 log1p exp exp2 expm1 pow sqrt ldexp ldexpf frexp rint rintf \
+  llrint lrint cos cosf sin sinf tan tanf acos asin atan atan2 cosh sinh tanh \
+  fabs fmin fmax hypot"
+
+for f in $LIBC_EXPORTS; do EXPORTS="$EXPORTS --export-if-defined=$f"; done
 
 case "$BACKEND" in
 dmd)

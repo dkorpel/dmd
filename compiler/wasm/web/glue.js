@@ -203,3 +203,69 @@ export function compile(source) {
         : "";
     return result;
 }
+
+// Compile `source` to a complete WebAssembly module and run it in this page.
+//
+// dmd.wasm links the program itself (`-mwasm-selflink`): the frontend compiles
+// the snippet plus every druntime/Phobos module it imports into one object, and
+// the wasm backend resolves the relocations instead of handing them to wasm-ld.
+// The result is instantiated against dmd.wasm's own memory and libc, so the
+// snippet's `printf`/`malloc` are the ones already in this instance and its
+// pointers stay dereferenceable on both sides.
+const RUN_REGION = 8 << 20;    // linear-memory slice holding the program's data + shadow stack
+const RUN_STACK = 1 << 20;
+
+export function run(source) {
+    newInstance();
+    stdoutText = "";
+    stderrText = "";
+    const bytes = te.encode(source);
+    const ptr = exports.dmdwasm_input_buffer(bytes.length + 1);
+    new Uint8Array(memory.buffer, ptr, bytes.length).set(bytes);
+    new Uint8Array(memory.buffer, ptr + bytes.length, 1)[0] = 0;
+
+    let errors = 0;
+    try {
+        const region = exports.malloc(RUN_REGION);
+        errors = exports.dmdwasm_build(ptr, bytes.length, region, RUN_STACK);
+    } catch (e) {
+        return { output: stdoutText, errors: 1, diagnostics: stderrText + "\ndmd.wasm trapped: " + e.message };
+    }
+    if (errors)
+        return { output: "", errors, diagnostics: stderrText };
+
+    const wasmPtr = exports.dmdwasm_wasm_ptr();
+    const wasmLen = exports.dmdwasm_wasm_len();
+    const bin = new Uint8Array(memory.buffer, wasmPtr, wasmLen).slice();
+
+    // The program imports its libc from this instance. Anything dmd.wasm doesn't
+    // export (dlsym, say — only reachable from backtrace code that never runs
+    // here) becomes a stub returning 0 rather than an instantiation LinkError.
+    const env = Object.create(null);
+    for (const [name, value] of Object.entries(exports))
+        if (typeof value === "function") env[name] = value;
+    env.memory = memory;
+    const envImports = new Proxy(env, {
+        get: (target, name) => (name in target ? target[name] : () => 0),
+        has: () => true,
+    });
+
+    stdoutText = "";
+    stderrText = "";
+    let exitCode = 0;
+    try {
+        const instance = new WebAssembly.Instance(new WebAssembly.Module(bin), {
+            env: envImports,
+            wasi_snapshot_preview1: wasiImports,
+        });
+        instance.exports._start();
+    } catch (e) {
+        const m = /^proc_exit\((-?\d+)\)$/.exec(e.message || "");
+        if (m)
+            exitCode = Number(m[1]);
+        else
+            return { output: stdoutText, errors: 1, exitCode: 1,
+                     diagnostics: stderrText + "\nprogram trapped: " + e.message };
+    }
+    return { output: stdoutText, errors: 0, exitCode, diagnostics: stderrText };
+}

@@ -6,9 +6,10 @@
 // Protocol (main thread -> worker):
 //   { type: "load", url }      -> loads/compiles dmd.wasm, replies "loaded"/"loadError"
 //   { type: "compile", src }   -> compiles `src`, replies "result"
+//   { type: "run", src }       -> compiles and runs `src`, replies "runResult"
 // Replies carry only structured-cloneable data (plain strings/objects).
 
-import { loadDmd, compile, dmdLastModified } from "./glue.js";
+import { loadDmd, compile, run, dmdLastModified } from "./glue.js";
 
 self.onmessage = async (e) => {
     const msg = e.data;
@@ -36,5 +37,15 @@ self.onmessage = async (e) => {
             };
         }
         self.postMessage({ type: "result", result });
+        return;
+    }
+    if (msg.type === "run") {
+        let result;
+        try {
+            result = run(msg.src);
+        } catch (err) {
+            result = { output: "", errors: 1, diagnostics: "dmd.wasm worker error: " + String((err && err.message) || err) };
+        }
+        self.postMessage({ type: "runResult", result });
     }
 };

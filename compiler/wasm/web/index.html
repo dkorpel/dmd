@@ -184,6 +184,10 @@
         <option value="" selected disabled hidden>Load an example…</option>
       </select>
     </div>
+    <div class="group">
+      <button id="runBtn" class="chip" type="button"
+              title="Compile the program to WebAssembly and run it in this page (Ctrl/⌘+Shift+Enter)">▶ Run</button>
+    </div>
   </div>
   <!-- Pane toggles: rendered as tabs that drop to the header's bottom edge so
        they sit flush against the pane row below (no maroon strip between). -->
@@ -240,6 +244,10 @@ int add(int a, int b)
   <div class="pane" data-pane="asm" data-stage="codegen" data-title="Disassembly (-O)" data-tip="The generated x86-64 assembly, with the -O optimizer">
     <h2 title="x86-64 disassembly generated with the -O global optimizer.">x86-64 disassembly — after -O</h2>
     <pre id="asm"></pre>
+  </div>
+  <div class="pane" data-pane="run" data-stage="diag" data-title="Program output" data-tip="Standard output of the compiled program, run in this page" hidden>
+    <h2 title="dmd links the program into a complete WebAssembly module in the browser and runs it here; this is what it wrote to stdout/stderr.">Program output</h2>
+    <pre id="run"></pre>
   </div>
   <div class="pane" data-pane="diag" data-stage="diag" data-title="Diagnostics" data-tip="Compiler errors and other console output">
     <h2>Diagnostics</h2>
@@ -851,35 +859,50 @@ function render({ lex, parse, sema, ast, ir, irOpt, asm, asmUnopt, errors, diagn
 // calls just flag pendingRun; when the worker finishes we re-kick it with the
 // latest source, coalescing a burst of edits into a single trailing compile. The
 // spinner stays up from the first request until the worker goes idle.
-const worker = new Worker("./worker.js", { type: "module" });
+let worker = null;
 let lastRunMs = 0;
 let compileT0 = 0;
 let workerBusy = false;
 let pendingRun = false;
 let dmdLM = null;            // dmd.wasm Last-Modified, as a Date (or null)
 let loadResolve = null, loadReject = null;
+// A running program is arbitrary user code and can loop forever; the worker is
+// killed and replaced if it doesn't report back in time (see execProgram).
+let execWatchdog = 0;
+const EXEC_TIMEOUT_MS = 60000;
 
-worker.onmessage = (e) => {
-    const msg = e.data;
-    switch (msg.type) {
-        case "loaded":
-            if (msg.lastModified) { const d = new Date(msg.lastModified); if (!isNaN(d)) dmdLM = d; }
-            loadResolve && loadResolve();
-            break;
-        case "loadError":
-            loadReject && loadReject(new Error(msg.message));
-            break;
-        case "result":
-            lastRunMs = performance.now() - compileT0;
-            render(msg.result);
-            $("status").textContent = `${lastRunMs.toFixed(1)} ms`;
-            workerBusy = false;
-            if (pendingRun) startCompile();           // newer edits arrived mid-compile
-            else $("spinner").hidden = true;
-            break;
-    }
-};
-worker.onerror = (e) => { $("status").textContent = "worker error: " + e.message; console.error(e); };
+function makeWorker() {
+    const w = new Worker("./worker.js", { type: "module" });
+    w.onmessage = (e) => {
+        const msg = e.data;
+        switch (msg.type) {
+            case "loaded":
+                if (msg.lastModified) { const d = new Date(msg.lastModified); if (!isNaN(d)) dmdLM = d; }
+                loadResolve && loadResolve();
+                break;
+            case "loadError":
+                loadReject && loadReject(new Error(msg.message));
+                break;
+            case "result":
+                lastRunMs = performance.now() - compileT0;
+                render(msg.result);
+                $("status").textContent = `${lastRunMs.toFixed(1)} ms`;
+                workerBusy = false;
+                if (pendingRun) startCompile();           // newer edits arrived mid-compile
+                else $("spinner").hidden = true;
+                break;
+            case "runResult":
+                clearTimeout(execWatchdog);
+                workerBusy = false;
+                $("spinner").hidden = true;
+                renderRun(msg.result, performance.now() - compileT0);
+                break;
+        }
+    };
+    w.onerror = (e) => { $("status").textContent = "worker error: " + e.message; console.error(e); };
+    return w;
+}
+worker = makeWorker();
 
 function startCompile() {
     workerBusy = true;
@@ -893,6 +916,43 @@ function run() {
     $("status").textContent = "compiling…";
     if (workerBusy) { pendingRun = true; return; }   // coalesce until current compile returns
     startCompile();
+}
+
+// Compile the program to a complete wasm module and run it, streaming whatever
+// it writes to stdout/stderr into the program-output pane.
+function execProgram() {
+    if (workerBusy) return;
+    setHidden("run", false);
+    applyAutoLayout();
+    saveState();
+    workerBusy = true;
+    compileT0 = performance.now();
+    $("spinner").hidden = false;
+    $("status").textContent = "running…";
+    $("run").textContent = "";
+    worker.postMessage({ type: "run", src: getSrc() });
+    // The program may never return (or may trap the instance beyond recovery):
+    // replace the worker wholesale rather than leaving the page stuck.
+    execWatchdog = setTimeout(() => {
+        worker.terminate();
+        worker = makeWorker();
+        workerBusy = false;
+        $("spinner").hidden = true;
+        $("status").textContent = "run timed out";
+        $("run").textContent = "(program did not finish within " + (EXEC_TIMEOUT_MS / 1000) + " s — stopped)";
+        loadDmdWorker("dmd.wasm").catch(() => {});
+    }, EXEC_TIMEOUT_MS);
+}
+
+function renderRun({ output, errors, exitCode, diagnostics }, ms) {
+    const parts = [];
+    if (output) parts.push(output);
+    if (errors) parts.push("(compilation failed — see diagnostics)");
+    else if (exitCode) parts.push("(exited with status " + exitCode + ")");
+    $("run").innerHTML = ansiToHtml(parts.join("\n") || "(no output)");
+    if (diagnostics)
+        $("diag").innerHTML = ansiToHtml(diagnostics);
+    $("status").textContent = `${ms.toFixed(1)} ms`;
 }
 
 function loadDmdWorker(url) {
@@ -910,7 +970,9 @@ function loadDmdWorker(url) {
         // Ctrl+Enter (or ⌘+Enter on macOS) forces an immediate recompile.
         document.addEventListener("keydown", (e) => {
             if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); runNow(); }
+            if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "Enter") { e.preventDefault(); execProgram(); }
         });
+        $("runBtn").addEventListener("click", execProgram);
         // Auto-recompile shortly after the user stops typing (or pastes). The
         // 500 ms debounce keeps fast keystrokes from thrashing the compiler.
         const runNow = () => { clearTimeout(runTimer); run(); };

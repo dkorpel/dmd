@@ -78,7 +78,9 @@ size_t       dmdwasm_iropt_len() => buffers.irOpt[].length;
 uint         dmdwasm_errors()  => global.errors;
 
 /// Initialize global DMD state (subset of frontend.initDMD, Phobos-free).
-private void initFrontend()
+/// `wasmTarget` compiles for wasm32 (the Run button) instead of x86_64 (the
+/// disassembly panes).
+private void initFrontend(bool wasmTarget = false)
 {
     import dmd.cond : VersionCondition;
     import dmd.dmodule : Module;
@@ -86,7 +88,7 @@ private void initFrontend()
     import dmd.id : Id;
     import dmd.mtype : Type;
     import dmd.objc : Objc;
-    import dmd.target : target, defaultTargetOS, addDefaultVersionIdentifiers;
+    import dmd.target : target, Target, defaultTargetOS, addDefaultVersionIdentifiers;
     import dmd.typesem : Type_init;
     import dmd.root.ctfloat : CTFloat;
     version (MinimalRuntime)
@@ -130,9 +132,17 @@ private void initFrontend()
         initImportHints();
     }
 
-    target.os = defaultTargetOS();
-    target.isX86_64 = true;
-    target.isX86 = false;
+    if (wasmTarget)
+    {
+        target.os = Target.OS.WASM;
+        target.setArch(wasm: true);
+    }
+    else
+    {
+        target.os = defaultTargetOS();
+        target.isX86_64 = true;
+        target.isX86 = false;
+    }
     target._init(global.params);
 
     // target._init() copies the *host* `real_t` properties into RealProperties.
@@ -141,6 +151,7 @@ private void initFrontend()
     // `real.mant_dig` would report 53 and float Phobos (std.math) would fail its
     // `mant_dig == 64` static asserts. We compile *for* x86_64, so override the
     // properties with the real x87 80-bit values.
+    if (!wasmTarget)
     with (target.RealProperties)
     {
         mant_dig   = 64;
@@ -302,6 +313,153 @@ private void runImpl(const(char)* src, size_t len, int optimize)
         import core.stdc.stdio : fflush, stdout;
         fflush(stdout);
     }
+}
+
+private extern __gshared int _CLOCK_MONOTONIC;
+
+/// The self-linked module produced by the last `dmdwasm_build`.
+private __gshared OutBuffer wasmOut;
+
+const(char)* dmdwasm_wasm_ptr() => cast(const(char)*) wasmOut[].ptr;
+size_t       dmdwasm_wasm_len() => wasmOut[].length;
+
+/// Compile `src` to a complete WebAssembly module the host can instantiate
+/// beside this one: whole-program (druntime included), self-linked, with its
+/// data placed at `dataBase` and `stackSize` bytes of shadow stack above it, so
+/// it runs in this instance's linear memory and calls this instance's libc.
+/// Returns: 0 on success, the error count otherwise.
+uint dmdwasm_build(const(char)* src, size_t len, uint dataBase, uint stackSize)
+{
+    try
+        buildImpl(src, len, dataBase, stackSize);
+    catch (Throwable t)
+    {
+        import dmd.errors : error;
+        error(Loc.initial, "internal compiler error: %.*s (%.*s:%llu)",
+            cast(int) t.msg.length, t.msg.ptr,
+            cast(int) t.file.length, t.file.ptr, cast(ulong) t.line);
+        if (global.errors == 0)
+            global.errors = 1;
+    }
+    return global.errors;
+}
+
+/// Modules a whole-program build cannot reach from the snippet: the runtime
+/// entry point, the hook implementations the compiler emits calls to, and the
+/// GC. Imported by a generated root module so `-i` pulls them in.
+private static immutable string[] runtimeRoots = [
+    "rt.dmain2", "rt.lifetime", "rt.ehalloc", "rt.invariant_", "rt.monitor_",
+    "core.internal.newaa", "core.internal.cast_", "rt.arraycat", "rt.sections_wasm", "rt.util.typeinfo",
+    "rt.critical_", "rt.wasm.eh", "rt.wasm.start", "rt.wasm.extra",
+    "rt.wasm.selflink", "core.exception", "core.runtime",
+    "core.internal.gc.proxy", "core.internal.gc.impl.conservative.gc",
+    "core.internal.gc.impl.manual.gc", "core.internal.gc.impl.proto.gc",
+];
+
+private void buildImpl(const(char)* src, size_t len, uint dataBase, uint stackSize)
+{
+    import dmd.dmodule : Module;
+    import dmd.identifier : Identifier;
+    import dmd.root.filename : FileName;
+    import dmd.dsymbolsem : dsymbolSemantic, importAll, runDeferredSemantic, runDeferredSemantic2, runDeferredSemantic3;
+    import dmd.semantic2 : semantic2;
+    import dmd.semantic3 : semantic3;
+    import dmd.astcodegen : ASTCodegen;
+    import dmd.compiler : includeImports, includeModulePatterns, compiledImports;
+    import dmd.dmdparams : driverParams;
+    import dmd.dmsc : backend_init, backend_term;
+    import dmd.errors : fatalErrorHandler;
+    import dmd.glue : generateCodeToBuffer, ObjcGlue_initialize;
+    import dmd.target : target;
+    import dmd.backend.wasm.selflink : wasmSelfLink, wasmSelfLinkDataBase,
+        wasmSelfLinkImportMemory, wasmSelfLinkStackSize, wasmSelfLinkDataSymbols,
+        wasmSelfLinkUnresolved;
+    import druntime_embed : registerDruntime;
+
+    wasmOut.reset();
+    initFrontend(wasmTarget: true);
+    registerDruntime();
+    fatalErrorHandler = () => true;
+
+    includeImports = true;
+    foreach (pattern; ["core", "rt", "object", "gc", "std", "etc"])
+        includeModulePatterns.push(pattern.ptr);
+
+    Module[] modules;
+    modules ~= parseSource("input.d", "input", (cast(ubyte*) src)[0 .. len]);
+
+    OutBuffer rootsSrc;
+    rootsSrc.writestring("module __runtime_roots;\n");
+    foreach (r; runtimeRoots)
+    {
+        rootsSrc.writestring("import ");
+        rootsSrc.writestring(r);
+        rootsSrc.writestring(";\n");
+    }
+    modules ~= parseSource("__runtime_roots.d", "__runtime_roots", cast(ubyte[]) rootsSrc[]);
+
+    if (global.errors)
+        return;
+
+    foreach (m; modules)
+        m.importAll(null);
+    foreach (m; modules)
+        m.dsymbolSemantic(null);
+    runDeferredSemantic();
+    foreach (m; modules)
+        m.semantic2(null);
+    runDeferredSemantic2();
+    foreach (m; modules)
+        m.semantic3(null);
+    for (size_t i = 0; i < compiledImports.length; i++)
+    {
+        compiledImports[i].semantic3(null);
+        modules ~= compiledImports[i];
+    }
+    runDeferredSemantic3();
+    if (global.errors)
+        return;
+
+    wasmSelfLink = true;
+    wasmSelfLinkImportMemory = true;
+    // The snippet calls this instance's libc, so its `stdout`/`stderr` must be
+    // this instance's FILE pointers rather than its own zeroed copies.
+    {
+        import core.stdc.stdio : stdin, stdout, stderr;
+        wasmSelfLinkDataSymbols["stdin"] = cast(uint) &stdin;
+        wasmSelfLinkDataSymbols["stdout"] = cast(uint) &stdout;
+        wasmSelfLinkDataSymbols["stderr"] = cast(uint) &stderr;
+        wasmSelfLinkDataSymbols["_CLOCK_MONOTONIC"] = cast(uint) &_CLOCK_MONOTONIC;
+    }
+    wasmSelfLinkUnresolved = null;
+    wasmSelfLinkDataBase = dataBase;
+    wasmSelfLinkStackSize = stackSize;
+    driverParams.optimize = false;
+    backend_init(global.params, driverParams, target);
+    ObjcGlue_initialize();
+    generateCodeToBuffer(modules, wasmOut);
+    backend_term();
+
+    foreach (name; wasmSelfLinkUnresolved)
+    {
+        import dmd.errors : error;
+        error(Loc.initial, "undefined symbol `%.*s`", cast(int) name.length, name.ptr);
+    }
+}
+
+private extern(D) auto parseSource(string filename, string modname, ubyte[] text)
+{
+    import dmd.dmodule : Module;
+    import dmd.identifier : Identifier;
+    import dmd.root.filename : FileName;
+    import dmd.astcodegen : ASTCodegen;
+
+    auto fb = text ~ cast(ubyte) '\0';
+    global.fileManager.add(FileName(filename), fb);
+    auto m = new Module(filename, Identifier.idPool(modname), 0, 0);
+    m.src = fb;
+    m.importedFrom = m;
+    return m.parseModule!ASTCodegen();
 }
 
 // Self-test: compile an embedded snippet and print the AST dump to stdout.

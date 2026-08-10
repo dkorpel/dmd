@@ -207,6 +207,32 @@ public void generateCodeAndWrite(Module[] modules, const(char)*[] libmodules,
 }
 
 /**
+ * Generate backend code for `modules` into `objbuf` instead of a file.
+ *
+ * Used by hosts without a filesystem (the WebAssembly build) that link the
+ * result themselves: one object holding every module, as `-oneobj` would
+ * produce, left in memory.
+ */
+public void generateCodeToBuffer(Module[] modules, ref OutBuffer objbuf)
+{
+    Module firstm;
+    foreach (m; modules)
+    {
+        if (m.filetype == FileType.dhdr)
+            continue;
+        if (!firstm)
+        {
+            firstm = m;
+            obj_start(objbuf, m.srcfile.toChars());
+        }
+        genObjFile(m, false, false);
+    }
+    if (!global.errors && firstm)
+        objmod.term(firstm.objfile.toString());
+    objmod = null;
+}
+
+/**
  * Generate backend code for a single module without writing an object file.
  *
  * Used by freestanding hosts (e.g. the WebAssembly build) that only want the
