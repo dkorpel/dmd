@@ -282,6 +282,51 @@ private void runWasmOpt(const(char)[] wasmfile, bool verbose, ErrorSink eSink)
 }
 
 /***********************************
+ * Finish a `-mwasm-selflink` build: the object file already is a complete
+ * module, so there is nothing to link. Move it to the output name and hand it
+ * to wasm-opt if `-O` asked for optimized output.
+ *
+ * Params:
+ *   verbose = print the wasm-opt command before executing
+ *   params  = compiler parameters (objfiles, exefile, ...)
+ *   eSink   = sink for error messages
+ * Returns: 0 on success, non-zero on failure
+ */
+private int finishWasmSelfLink(bool verbose, ref Param params, ErrorSink eSink)
+{
+    if (params.objfiles.length != 1)
+    {
+        eSink.error(Loc.initial, "`-mwasm-selflink` produces one module, but %d object files were given; compile the program as a whole with `-i`",
+            cast(int) params.objfiles.length);
+        return STATUS_FAILED;
+    }
+    {
+        import dmd.backend.wasm.selflink : wasmSelfLinkUnresolved;
+        foreach (name; wasmSelfLinkUnresolved)
+            eSink.error(Loc.initial, "undefined symbol `%.*s`", cast(int) name.length, name.ptr);
+        if (wasmSelfLinkUnresolved.length)
+            return STATUS_FAILED;
+    }
+    const(char)[] obj = params.objfiles[0].toDString;
+    if (!params.exefile)
+        params.exefile = FileName.forceExt(FileName.name(obj), "wasm");
+    if (!ensurePathToNameExists(Loc.initial, params.exefile))
+        return STATUS_FAILED;
+    if (FileName.equals(obj, params.exefile))
+        return 0;
+    OutBuffer buf;
+    if (File.read(obj, buf) || !File.update(params.exefile, buf.peekSlice()))
+    {
+        eSink.error(Loc.initial, "cannot write `%.*s`", cast(int) params.exefile.length, params.exefile.ptr);
+        return STATUS_FAILED;
+    }
+    File.remove(obj.xarraydup.ptr);
+    if (driverParams.optimize)
+        runWasmOpt(params.exefile, verbose, eSink);
+    return 0;
+}
+
+/***********************************
  * Link WebAssembly object files with wasm-ld.
  *
  * wasm-ld is a real linker (not a compiler driver), so link switches are passed
@@ -297,6 +342,10 @@ private void runWasmOpt(const(char)[] wasmfile, bool verbose, ErrorSink eSink)
  */
 private int runWasmLINK(bool verbose, ref Param params, ErrorSink eSink)
 {
+    import dmd.backend.wasm.selflink : wasmSelfLink;
+    if (wasmSelfLink)
+        return finishWasmSelfLink(verbose, params, eSink);
+
     // Explicitly empty `-defaultlib=` opts out of the default library and its
     // `_start`: the program brings its own runtime. Undefined runtime hooks
     // become host imports via --allow-undefined, like betterC. Combined with

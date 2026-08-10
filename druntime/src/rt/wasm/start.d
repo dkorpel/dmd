@@ -25,6 +25,7 @@ export void _start() nothrow
     initCwd();
     int rc = __main_void();
     __wasm_call_dtors();
+    fflush(null);
     proc_exit(rc);
     while (true) {}
 }

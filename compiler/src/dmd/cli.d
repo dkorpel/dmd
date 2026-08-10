@@ -664,6 +664,14 @@ dmd -cov -unittest myprog.d
             `Compile a WebAssembly 32 bit module. Use together with $(SWLINK -os=wasm).
             Defines the $(D WebAssembly), $(D WASM32), $(D WASI), $(D WASIp1), and $(D CRuntime_WASI) version identifiers.`,
         ),
+        Option("mwasm-selflink",
+            "emit a complete WebAssembly module instead of a relocatable object",
+            `Lay out linear memory, the shadow stack, the indirect function table
+            and the element segment in the compiler and resolve every relocation
+            in place, producing a module that can be instantiated directly.
+            The program must be compiled as a whole (see $(SWLINK -i)); any symbol
+            it does not define stays an import for the host to supply.`,
+        ),
         Option("main",
             "add default main() if not present already (e.g. for unittesting)",
             `Add a default $(D main()) function when compiling. This is useful when

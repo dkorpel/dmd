@@ -1015,6 +1015,11 @@ bool parseCommandLine(const ref Strings arguments, const size_t argc, out Param 
             target.setArch(wasm: true);
             target.os = Target.OS.WASM;
         }
+        else if (arg == "-mwasm-selflink") // https://dlang.org/dmd.html#switch-mwasm-selflink
+        {
+            import dmd.backend.wasm.selflink : wasmSelfLink;
+            wasmSelfLink = true;
+        }
         else if (arg == "-mwasm64")
         {
             target.setArch(wasm: true, x86_64: true);
@@ -2025,6 +2030,57 @@ Params:
 Returns:
   true on error
 */
+/**
+ * Add the druntime modules a `-mwasm-selflink` build cannot discover by itself.
+ *
+ * Self-linking has no archive to pull members from, so every symbol the program
+ * uses has to be compiled with it. `-i` follows imports, but the compiler also
+ * emits direct references to runtime hooks (`_d_run_main`, `_d_newclass`,
+ * `_d_throwc`, the monitor and GC entry points) that no module imports, so the
+ * modules defining them are added as roots here.
+ *
+ * Params:
+ *   files = source file list to append to
+ */
+void addWasmSelfLinkRuntimeRoots(ref Strings files)
+{
+    static immutable string[] roots = [
+        "object.d",
+        "rt/dmain2.d",
+        "rt/lifetime.d",
+        "rt/ehalloc.d",
+        "rt/invariant_.d",
+        "rt/monitor_.d",
+        "core/internal/newaa.d",
+        "core/internal/cast_.d",
+        "rt/arraycat.d",
+        "rt/sections_wasm.d",
+        "rt/util/typeinfo.d",
+        "rt/critical_.d",
+        "rt/wasm/eh.d",
+        "rt/wasm/start.d",
+        "rt/wasm/extra.d",
+        "rt/wasm/selflink.d",
+        "core/exception.d",
+        "core/runtime.d",
+        "core/internal/gc/proxy.d",
+        "core/internal/gc/impl/conservative/gc.d",
+        "core/internal/gc/impl/manual/gc.d",
+        "core/internal/gc/impl/proto/gc.d",
+    ];
+    foreach (r; roots)
+    {
+        foreach (ref ip; global.path[])
+        {
+            if (const(char)[] found = FileName.searchPath(ip.path, r, false))
+            {
+                files.push(found.xarraydup.ptr);
+                break;
+            }
+        }
+    }
+}
+
 bool createModules(ref Strings files, ref Strings libmodules, ref Param params, const ref Target target,
     ErrorSink eSink, out Modules modules)
 {

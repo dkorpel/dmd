@@ -474,6 +474,12 @@ private int tryMain(const(char)[][] argv, out Param params)
         initializeTimeTrace(params.timeTraceGranularityUs, toCString(argv[0]).ptr);
     }
 
+    {
+        import dmd.backend.wasm.selflink : wasmSelfLink;
+        if (wasmSelfLink && !params.betterC)
+            addWasmSelfLinkRuntimeRoots(files);
+    }
+
     // Create Modules
     Modules modules;
     if (createModules(files, libmodules, params, target, eSink, modules))

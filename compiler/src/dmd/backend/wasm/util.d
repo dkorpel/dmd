@@ -46,3 +46,28 @@ uint slebSize(long v) nothrow
     }
     return n;
 }
+
+/// Overwrite a little-endian 32-bit value in place.
+void patchLE32(ubyte[] buf, uint off, uint v) nothrow @safe
+{
+    if (off + 4 > buf.length)
+        return;
+    buf[off + 0] = cast(ubyte)(v);
+    buf[off + 1] = cast(ubyte)(v >> 8);
+    buf[off + 2] = cast(ubyte)(v >> 16);
+    buf[off + 3] = cast(ubyte)(v >> 24);
+}
+
+/// Overwrite a 5-byte padded LEB128 operand in place. Values below 2^28 encode
+/// identically as signed and unsigned here, which covers every index and
+/// address a self-linked module produces.
+void patchLEB5(ubyte[] buf, uint off, uint v) nothrow @safe
+{
+    if (off + 5 > buf.length)
+        return;
+    foreach (b; 0 .. 5)
+    {
+        buf[off + b] = cast(ubyte)((v & 0x7f) | (b < 4 ? 0x80 : 0));
+        v >>= 7;
+    }
+}

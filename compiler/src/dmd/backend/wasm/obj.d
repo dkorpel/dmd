@@ -44,6 +44,7 @@ import dmd.backend.ty;
 import dmd.backend.type;
 import dmd.backend.wasm.codgen;
 import dmd.backend.wasm.enums;
+import dmd.backend.wasm.selflink;
 import dmd.backend.wasm.util : ulebSize, slebSize, writeuLEB128_5;
 import dmd.common.outbuffer;
 
@@ -286,6 +287,14 @@ struct WasmModule
 
     uint tagTypeIdx = uint.max;
 
+    /// Final-link layout, computed by `selfLink` when `wasmSelfLink` is set.
+    uint dataEnd;
+    uint stackHigh;
+    uint heapBase;
+    uint memPages;
+    uint minfoStart;
+    uint minfoStop;
+
     OutBuffer scratch;
 
     WasmSymIndex symIndex;
@@ -475,7 +484,7 @@ private void writeCustomSection(ref OutBuffer out_, const(char)[] name, OutBuffe
 }
 
 
-private void writeSection(ref OutBuffer out_, WASM_SECTION id, OutBuffer* payload)
+void writeSection(ref OutBuffer out_, WASM_SECTION id, OutBuffer* payload)
 {
     out_.writeByte(cast(ubyte) id);
     out_.writeuLEB128(cast(uint) payload.length());
@@ -516,12 +525,23 @@ private bool emitImportSection(ref OutBuffer out_, ref WasmModule wmod)
 {
     OutBuffer* s = &wmod.scratch;
     s.reset();
-    const count = wmod.numImports + 3;
+    const count = wmod.numImports + (wasmSelfLink ? (wasmSelfLinkImportMemory ? 1 : 0) : 3);
     s.writeuLEB128(count);
     foreach (ref const WasmFunc f; wmod.funcs[0 .. wmod.numImports])
     {
         appendImportHead(*s, f.importModule, f.importName ? f.importName : funcName(f), WASM_EXPORT.FUNC);
         s.writeuLEB128(f.typeIdx);
+    }
+    if (wasmSelfLink)
+    {
+        if (wasmSelfLinkImportMemory)
+        {
+            appendImportHead(*s, "env", "memory", WASM_EXPORT.MEM);
+            s.writeByte(WASM_LIMITS.NO_MAX);
+            s.writeuLEB128(wmod.memPages);
+        }
+        writeSection(out_, WASM_SECTION.import_, s);
+        return true;
     }
     appendImportHead(*s, "env", "__linear_memory", WASM_EXPORT.MEM);
     s.writeByte(WASM_LIMITS.NO_MAX);
@@ -564,6 +584,8 @@ private bool emitExportSection(ref OutBuffer out_, ref WasmModule wmod)
     foreach (ref const WasmFunc f; wmod.funcs)
         if (f.exported)
             ++count;
+    if (wasmSelfLink)
+        count += wasmSelfLinkImportMemory ? 1 : 2;
     if (!count)
         return false;
     s.writeuLEB128(count);
@@ -574,6 +596,18 @@ private bool emitExportSection(ref OutBuffer out_, ref WasmModule wmod)
         appendName(*s, f.exportName.length ? f.exportName : funcName(f));
         s.writeByte(WASM_EXPORT.FUNC);
         s.writeuLEB128(cast(uint) i);
+    }
+    if (wasmSelfLink)
+    {
+        if (!wasmSelfLinkImportMemory)
+        {
+            appendName(*s, "memory");
+            s.writeByte(WASM_EXPORT.MEM);
+            s.writeuLEB128(0);
+        }
+        appendName(*s, "__indirect_function_table");
+        s.writeByte(WASM_EXPORT.TABLE);
+        s.writeuLEB128(0);
     }
     writeSection(out_, WASM_SECTION.export_, s);
     return true;
@@ -602,8 +636,15 @@ private bool emitCodeSection(ref OutBuffer out_, ref WasmModule wmod)
             {
                 if (r.type != R_WASM.FUNCTION_INDEX_LEB || !r.sym)
                     continue;
-                uint idx = funcIdxBySym(wmod, r.sym);
-                if (idx == uint.max || r.offset + 5 > codeBytes.length)
+                uint idx = wasmSelfLink ? funcIdxBySymOrName(wmod, r.sym)
+                                        : funcIdxBySym(wmod, r.sym);
+                if (idx == uint.max)
+                {
+                    if (wasmSelfLink)
+                        noteUnresolved(r.sym);
+                    continue;
+                }
+                if (r.offset + 5 > codeBytes.length)
                     continue;
                 uint v = idx;
                 foreach (b; 0 .. 5)
@@ -612,6 +653,8 @@ private bool emitCodeSection(ref OutBuffer out_, ref WasmModule wmod)
                     v >>= 7;
                 }
             }
+            if (wasmSelfLink)
+                patchSelfLinkCodeRelocs(wmod, *fb, codeBytes);
         }
 
         OutBuffer locBuf;
@@ -1106,6 +1149,8 @@ Obj WasmObj_init(OutBuffer* objbuf, const(char)* filename, const(char)* csegname
 {
     wmod = new WasmModule();
     wmod.objbuf = objbuf;
+    if (wasmSelfLink && wasmSelfLinkDataBase)
+        wmod.dataHeap = wasmSelfLinkDataBase;
     wasmFuncBodies = null;
 
     SegData.reset();
@@ -1197,6 +1242,24 @@ void WasmObj_term2(const(char)[] objfilename, ref WasmModule wmod, ref OutBuffer
 
     foreach (ref const WasmDataSeg ds; wmod.dataSegs)
         checkSegFull(ds);
+
+    if (wasmSelfLink)
+    {
+        selfLink(wmod);
+        emitTypeSection(out_, wmod);
+        emitImportSection(out_, wmod);
+        emitFunctionSection(out_, wmod);
+        emitTableSection(out_, wmod);
+        if (!wasmSelfLinkImportMemory)
+            emitMemorySection(out_, wmod);
+        emitTagSection(out_, wmod);
+        emitGlobalSection(out_, wmod);
+        emitExportSection(out_, wmod);
+        emitElemSection(out_, wmod);
+        emitCodeSection(out_, wmod);
+        emitDataSection(out_, wmod);
+        return;
+    }
 
     uint sectionIdx = 0;
     sectionIdx += emitTypeSection(out_, wmod);
@@ -2022,7 +2085,7 @@ uint funcIdxBySym(ref WasmModule wmod, const(Symbol)* sym)
     return uint.max;
 }
 
-uint funcIdxBySymOrName(ref WasmModule wmod, const(Symbol)* sym)
+public uint funcIdxBySymOrName(ref WasmModule wmod, const(Symbol)* sym)
 {
     if (!sym)
         return uint.max;
