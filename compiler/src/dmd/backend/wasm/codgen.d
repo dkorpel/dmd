@@ -1883,6 +1883,34 @@ bool genElem(ref WasmCG cg, elem* e)
     case OPrndtol:
         return libmCall(RTLSYM.RNDTOLF, RTLSYM.RNDTOL);
 
+    case OPyl2x:
+    case OPyl2xp1:
+    {
+        const isF32 = e.E1.wasmType == WASM_F32;
+        Symbol* fn = op == OPyl2x
+            ? getRtlsym(isF32 ? RTLSYM.LOG2F : RTLSYM.LOG2)
+            : getRtlsym(isF32 ? RTLSYM.LOG1PF : RTLSYM.LOG1P);
+        cg.genElem(e.E1);
+        cg.emit(OP_CALL, callReloc(cg.funcIndex(fn), fn));
+        if (op == OPyl2xp1)
+        {
+            enum log2e = 1.4426950408889634074;
+            if (isF32)
+            {
+                cg.emit(OP_F32_CONST, cast(float) log2e);
+                cg.emit(OP_F32_MUL);
+            }
+            else
+            {
+                cg.emit(OP_F64_CONST, cast(double) log2e);
+                cg.emit(OP_F64_MUL);
+            }
+        }
+        cg.genElem(e.E2);
+        cg.emit(isF32 ? OP_F32_MUL : OP_F64_MUL);
+        return true;
+    }
+
     case OPscale:
     {
         const resTy = e.wasmType;
