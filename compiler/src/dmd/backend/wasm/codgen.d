@@ -47,6 +47,7 @@ import core.stdc.stdio : printf;
 
 import dmd.backend.cc;
 import dmd.backend.cdef;
+import dmd.backend.cg : vasmSourceLines, VasmLine;
 import dmd.backend.el;
 import dmd.backend.oper;
 import dmd.backend.ty;
@@ -287,6 +288,9 @@ struct WasmCG
     /// body, keyed by the try's flag symbol (s2ir visitTryFinally EH_WASM).
     uint[Symbol*] exnLocals;
 
+    VasmLine[] lines;
+    uint elemDepth;
+
 nothrow:
 
     /// Returns: function type index for `x`
@@ -296,6 +300,19 @@ nothrow:
     /// Record that this module references the exception tag (forwards to obj so
     /// the tag section/import is emitted). Routed through WasmCG for the seam.
     void noteTagUse() => wmod_noteTagUse();
+
+    void recordSourceLine(uint linnum)
+    {
+        const uint off = cast(uint) code.length;
+        if (lines.length && lines[$ - 1].offset == off)
+        {
+            lines[$ - 1].linnum = linnum;
+            return;
+        }
+        if (lines.length && lines[$ - 1].linnum == linnum)
+            return;
+        lines ~= VasmLine(off, linnum);
+    }
 
     /// Allocate an anonymous temp local of the given WASM type
     ///
@@ -1455,7 +1472,22 @@ bool genElem(ref WasmCG cg, elem* e)
 {
     if (!e)
         return false;
+    if (!vasmSourceLines)
+        return cg.genElemBody(e);
 
+    if (!cg.elemDepth && e.Esrcpos.Slinnum)
+        cg.recordSourceLine(e.Esrcpos.Slinnum);
+    if (e.Eoper == OPcomma)
+        return cg.genElemBody(e);
+
+    ++cg.elemDepth;
+    const result = cg.genElemBody(e);
+    --cg.elemDepth;
+    return result;
+}
+
+private bool genElemBody(ref WasmCG cg, elem* e)
+{
     const op = e.Eoper;
     const discard = cg.discardResult;
     cg.discardResult = false;
@@ -2872,6 +2904,7 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
             cg.emit(OP.UNREACHABLE);
     }
 
+    fb.lines = cg.lines;
     fb.locals = cg.locals;
     fb.numParams = cg.numParams;
     fb.relocs = cg.relocs;

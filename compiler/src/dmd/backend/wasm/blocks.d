@@ -34,6 +34,7 @@
 module dmd.backend.wasm.blocks;
 
 import dmd.backend.cc;
+import dmd.backend.cg : vasmSourceLines;
 import dmd.backend.cdef;
 import dmd.backend.el;
 import dmd.backend.oper;
@@ -829,6 +830,9 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         else
             openFramesAt(bi, -1, int.max);
 
+        if (vasmSourceLines && b.Bsrcpos.Slinnum)
+            cg.recordSourceLine(b.Bsrcpos.Slinnum);
+
         if (cg.emitBlockReturn(b, hasReturn))
             continue;
 
@@ -920,6 +924,9 @@ private void genBlocksDispatch(ref WasmCG cg, block*[] blocks, bool hasReturn)
             cg.emit(OP.I32_CONST, Sleb(t), OP.LOCAL_SET, Uleb(sel),
                 OP.BR, Uleb(loopDepth + extraDepth));
         }
+
+        if (vasmSourceLines && b.Bsrcpos.Slinnum)
+            cg.recordSourceLine(b.Bsrcpos.Slinnum);
 
         if (cg.emitBlockReturn(b, hasReturn))
             continue;

@@ -36,6 +36,7 @@ module dmd.backend.wasm.obj;
 import dmd.backend.cc;
 import dmd.backend.symbol;
 import dmd.backend.cdef;
+import dmd.backend.cg : VasmLine;
 import dmd.backend.code;
 import dmd.backend.debugprint;
 import dmd.backend.el;
@@ -124,6 +125,8 @@ struct WasmFuncBody
 
     WasmReloc[] relocs;
     uint codePayloadStart;
+
+    VasmLine[] lines;
 }
 
 __gshared WasmFuncBody[] wasmFuncBodies;

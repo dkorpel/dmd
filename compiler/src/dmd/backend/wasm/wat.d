@@ -9,6 +9,7 @@
 module dmd.backend.wasm.wat;
 
 import dmd.backend.cc;
+import dmd.backend.cg : vasmSourceLines;
 import dmd.backend.symbol;
 import dmd.backend.wasm.codgen : localWasmType;
 import dmd.backend.wasm.enums;
@@ -265,12 +266,32 @@ void wasmDisassemble(ref WasmFuncBody fb, ref OutBuffer buf)
     foreach (Symbol* l; fb.locals[fb.numParams .. $])
         buf.printf("  (local %s)\n", typeName(localWasmType(l)));
 
+    if (vasmSourceLines)
+        buf.writestring("; line 0\n");
+
     auto r = Reader(fb.code.peekSlice(), fb.relocs, 0);
     int depth = 1;
+
+    size_t li = 0;
+    uint lastLine = 0;
+    void emitLineMarker(uint off)
+    {
+        while (li < fb.lines.length && fb.lines[li].offset <= off)
+        {
+            const ln = fb.lines[li].linnum;
+            ++li;
+            if (ln && ln != lastLine)
+            {
+                buf.printf("; line %u\n", ln);
+                lastLine = ln;
+            }
+        }
+    }
 
     while (!r.empty)
     {
         const uint off = cast(uint) r.pos;
+        emitLineMarker(off);
         const ubyte op = r.pop();
 
         if (op == OP.END || op == OP.ELSE)
