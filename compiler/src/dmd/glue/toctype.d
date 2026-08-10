@@ -34,6 +34,7 @@ import dmd.expressionsem : toInteger;
 import dmd.id;
 import dmd.mtype;
 import dmd.typesem;
+import dmd.target;
 
 package(dmd.glue):
 
@@ -258,9 +259,10 @@ type* Type_toCtype(Type t)
                 t.ctype = Type_toCtype(Type.tvoid);
             }
             else if (sym.ident == Id.__c_long ||
-                     sym.ident == Id.__c_complex_float ||
-                     sym.ident == Id.__c_complex_double ||
-                     sym.ident == Id.__c_complex_real)
+                     (!target.isWasm &&
+                      (sym.ident == Id.__c_complex_float ||
+                       sym.ident == Id.__c_complex_double ||
+                       sym.ident == Id.__c_complex_real)))
             {
                 t.ctype = type_fake(totym(t));
                 (cast(type*)t.ctype).Tcount++;
