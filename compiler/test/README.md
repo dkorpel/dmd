@@ -169,6 +169,8 @@ need to be started.
                         cannot run on wasm carry a `DISABLED: wasm` directive;
                         `.sh` (dshell) tests are skipped automatically. Use
                         this target while developing the WASM backend.
+                        Requires the wasm libraries: `make -C ../../phobos wasm`
+                        (which builds the wasm druntime as a dependency).
 
     clean:              remove all temporary or result files from previous runs
 

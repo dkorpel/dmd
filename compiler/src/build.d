@@ -309,7 +309,7 @@ DFLAGS=-I%@P%/../../../../druntime/import -I%@P%/../../../../../phobos -L-L%@P%/
 DFLAGS=-I%@P%/../../../../druntime/import -I%@P%/../../../../../phobos -L-L%@P%/../../../../../phobos/generated/{OS}/{BUILD}/64{exportDynamic} -fPIC
 
 [Environmentwasm32]
-DFLAGS=-I%@P%/../../../../druntime/import -L-L%@P%/../../../wasm/release/wasm32
+DFLAGS=-I%@P%/../../../../druntime/import -I%@P%/../../../../../phobos -L-L%@P%/../../../wasm/release/wasm32 -L-L%@P%/../../../../../phobos/generated/wasm/release/wasm32
 `;
     }
 

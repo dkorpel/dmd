@@ -145,11 +145,12 @@ Options:
         // Each test runs under wasmtime with up to 2 GiB of linear memory, so
         // cap parallelism to avoid exhausting host RAM on many-core machines.
         jobs = min(jobs, 4);
-        // The WASM druntime archive is linked into every test but is not a test
-        // source, so timestamp-based caching wouldn't otherwise re-run tests
-        // after the archive is rebuilt. Track it as an extra dependency.
-        extraDependency = scriptDir.buildPath("..", "..", "generated", "wasm",
-            "release", "wasm32", "libdruntime-wasm.a");
+        // The WASM phobos archive (which also contains druntime) is linked into
+        // every test but is not a test source, so timestamp-based caching
+        // wouldn't otherwise re-run tests after the archive is rebuilt. Track it
+        // as an extra dependency.
+        extraDependency = scriptDir.buildPath("..", "..", "..", "phobos", "generated", "wasm",
+            "release", "wasm32", "libphobos2-wasm.a");
     }
 
     // allow overwrites from the environment
@@ -649,12 +650,14 @@ string[string] getEnvironment()
         env["PIC_FLAG"] = "";
         env.setDefault("ARGS", "");
         // REQUIRED_ARGS: inject WASM target flags; honour extra user args.
-        // The wasm archive search dir goes here rather than in DFLAGS because a
+        // The wasm archive search dirs go here rather than in DFLAGS because a
         // test may override DFLAGS (e.g. runnable/minimal.d), and wasm-ld always
-        // needs to find libdruntime-wasm.a / libc.a / the betterC crt shim.
+        // needs to find libphobos2-wasm.a / libc.a / the betterC crt shim.
         auto wasmLibPath = testPath(`../../generated/wasm/release/wasm32`);
+        auto phobosPath = environment.get("PHOBOS_PATH", testPath(`../../../phobos`));
+        auto phobosLibPath = "%s/generated/wasm/release/wasm32".format(phobosPath);
         const extra = environment.get("REQUIRED_ARGS", "");
-        env["REQUIRED_ARGS"] = "-mwasm32 -os=wasm -L-L%s".format(wasmLibPath)
+        env["REQUIRED_ARGS"] = "-mwasm32 -os=wasm -L-L%s -L-L%s".format(wasmLibPath, phobosLibPath)
             ~ (extra.length ? " " ~ extra : "");
         // --dir=/ preopens the host filesystem so absolute paths resolve
         // (RESULTS_DIR in EXECUTE_ARGS). WASI has no working directory, so
@@ -669,7 +672,7 @@ string[string] getEnvironment()
         // -conf= strips dmd.conf, so the import path a normal dmd.conf supplies
         // via -I%@P%/... is provided here instead.
         auto druntimePath = environment.get("DRUNTIME_PATH", testPath(`../../druntime`));
-        env["DFLAGS"] = "-I%s/import".format(druntimePath);
+        env["DFLAGS"] = "-I%s/import -I%s".format(druntimePath, phobosPath);
         return env;
     }
 

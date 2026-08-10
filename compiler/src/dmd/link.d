@@ -281,7 +281,7 @@ private void runWasmOpt(const(char)[] wasmfile, bool verbose, ErrorSink eSink)
  */
 private int runWasmLINK(bool verbose, ref Param params, ErrorSink eSink)
 {
-    // Explicitly empty `-defaultlib=` opts out of libdruntime-wasm.a and its
+    // Explicitly empty `-defaultlib=` opts out of the default library and its
     // `_start`: the program brings its own runtime. Undefined runtime hooks
     // become host imports via --allow-undefined, like betterC. Combined with
     // -betterC it opts out of the auto-linked libraries entirely, for a program
@@ -314,7 +314,7 @@ private int runWasmLINK(bool verbose, ref Param params, ErrorSink eSink)
         return STATUS_FAILED;
 
     if (hasDruntime)
-        argv.push("--export=_start"); // WASI entry from libdruntime-wasm.a
+        argv.push("--export=_start"); // WASI entry from the default library
     argv.push("--allow-undefined");   // unresolved WASI imports
     argv.push("--gc-sections");
 
@@ -358,15 +358,17 @@ private int runWasmLINK(bool verbose, ref Param params, ErrorSink eSink)
         pushFlag(argv, "-l", p[0 .. strlen(p)]);
     }
 
-    // Auto-link druntime (or the betterC WASI `_start` shim) plus libc. A
-    // non-empty -defaultlib= (e.g. native libphobos2.so from dmd.conf) is still
-    // replaced with libdruntime-wasm.a; only the empty form opts out. libc.a is
-    // linked in both modes since betterC routinely calls printf/puts/memcmp.
-    // The betterC shim is an archive, not an object, so a program defining its
-    // own `_start` links instead of colliding with it.
+    // Auto-link the default library (libphobos2-wasm.a, which like the native
+    // libphobos2.a also contains druntime), or the betterC WASI `_start` shim,
+    // plus libc. libc.a is linked in both modes since betterC routinely calls
+    // printf/puts/memcmp. The betterC shim is an archive, not an object, so a
+    // program defining its own `_start` links instead of colliding with it.
     if (!noAutoLibs)
     {
-        argv.push(hasDruntime ? "-l:libdruntime-wasm.a" : "-l:libcrt1_betterc.a");
+        if (hasDruntime)
+            pushFlag(argv, FileName.equalsExt(defaultlib, "a") ? "-l:" : "-l", defaultlib);
+        else
+            argv.push("-l:libcrt1_betterc.a");
         argv.push("-l:libc.a");
     }
 
