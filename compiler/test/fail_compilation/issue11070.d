@@ -15,4 +15,3 @@ void test() {
     }
     x = 1;
 }
-// DISABLED: wasm

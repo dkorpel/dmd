@@ -1,7 +1,7 @@
 /*
 PERMUTE_ARGS:
 REQUIRED_ARGS: -release -O -g -inline
-DISABLED: freebsd openbsd dragonflybsd wasm
+DISABLED: freebsd openbsd dragonflybsd
 
 Deprecation caused by https://issues.dlang.org/show_bug.cgi?id=20645
 */
@@ -885,6 +885,20 @@ version (Windows)
 }
 
 version (linux)
+{
+    import core.stdc.time;
+
+    double dtime()
+    {
+     double q;
+
+     q = cast(double)time(null);
+
+     return q;
+    }
+}
+
+version (WebAssembly)
 {
     import core.stdc.time;
 

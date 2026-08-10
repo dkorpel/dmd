@@ -1,5 +1,4 @@
 // COMPILABLE_MATH_TEST
-// DISABLED: wasm
 // https://issues.dlang.org/show_bug.cgi?id=15019
 // dmd -m32 -c all.d
 
