@@ -686,8 +686,8 @@ private bool emitCodeSection(ref OutBuffer out_, ref WasmModule wmod)
         if (fb && fb.code.length())
             s.write(fb.code.peekSlice());
         else
-            s.writeByte(OP_UNREACHABLE);
-        s.writeByte(OP_END);
+            s.writeByte(OP.UNREACHABLE);
+        s.writeByte(OP.END);
 
         payloadOffset += bodySizeBytes + bodySize;
     }
@@ -722,9 +722,9 @@ private bool emitDataSection(ref OutBuffer out_, ref WasmModule wmod)
     foreach (ref WasmDataSeg ds; wmod.dataSegs)
     {
         s.writeByte(0x00);
-        s.writeByte(OP_I32_CONST);
+        s.writeByte(OP.I32_CONST);
         s.writesLEB128(cast(int) ds.offset);
-        s.writeByte(OP_END);
+        s.writeByte(OP.END);
         s.writeuLEB128(cast(uint) ds.data.length());
         s.write(ds.data.peekSlice());
     }
@@ -1237,6 +1237,14 @@ void WasmObj_term2(const(char)[] objfilename, ref WasmModule wmod, ref OutBuffer
             if (!fb.sym)
                 continue;
             wasm_codgen2(cast(Symbol*) fb.sym, fb);
+            if (config.vasm)
+            {
+                import core.stdc.stdio : printf;
+                import dmd.backend.wasm.wat : wasmDisassemble;
+                OutBuffer disasmBuf;
+                wasmDisassemble(fb, disasmBuf);
+                printf("%.*s", cast(int) disasmBuf.length, disasmBuf.peekChars());
+            }
         }
     }
 
@@ -1869,17 +1877,17 @@ void WasmObj_thunk(Symbol* sthunk, Symbol* sfunc, uint p, tym_t thisty, int d, i
 
     foreach (uint pi; 0 .. cast(uint) ft.params.length)
     {
-        fb.code.writeByte(OP_LOCAL_GET);
+        fb.code.writeByte(OP.LOCAL_GET);
         fb.code.writeuLEB128(pi);
         if (pi == thisParamIndex && d != 0)
         {
-            fb.code.writeByte(OP_I32_CONST);
+            fb.code.writeByte(OP.I32_CONST);
             fb.code.writesLEB128(d);
-            fb.code.writeByte(OP_I32_ADD);
+            fb.code.writeByte(OP.I32_ADD);
         }
     }
 
-    fb.code.writeByte(OP_CALL);
+    fb.code.writeByte(OP.CALL);
     fb.relocs ~= WasmReloc(cast(uint) fb.code.length,
         R_WASM.FUNCTION_INDEX_LEB, 0, 0, sfunc);
     (*fb.code).writeuLEB128_5(0u);

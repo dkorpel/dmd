@@ -71,3 +71,36 @@ void patchLEB5(ubyte[] buf, uint off, uint v) nothrow @safe
         v >>= 7;
     }
 }
+
+ulong readuLEB128(const(ubyte)[] code, ref size_t pos) nothrow @safe
+{
+    ulong v;
+    uint shift;
+    while (pos < code.length)
+    {
+        const ubyte b = code[pos++];
+        v |= cast(ulong)(b & 0x7F) << shift;
+        shift += 7;
+        if (!(b & 0x80))
+            break;
+    }
+    return v;
+}
+
+long readsLEB128(const(ubyte)[] code, ref size_t pos) nothrow @safe
+{
+    long v;
+    uint shift;
+    ubyte b;
+    while (pos < code.length)
+    {
+        b = code[pos++];
+        v |= cast(long)(b & 0x7F) << shift;
+        shift += 7;
+        if (!(b & 0x80))
+            break;
+    }
+    if (shift < 64 && (b & 0x40))
+        v |= -(1L << shift);
+    return v;
+}

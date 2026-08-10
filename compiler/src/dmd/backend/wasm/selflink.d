@@ -256,9 +256,9 @@ bool emitGlobalSection(ref OutBuffer out_, ref WasmModule wmod)
     s.writeuLEB128(1);
     s.writeByte(WASM_I32);
     s.writeByte(WASM_MUT.VAR);
-    s.writeByte(OP_I32_CONST);
+    s.writeByte(OP.I32_CONST);
     s.writesLEB128(cast(int) wmod.stackHigh);
-    s.writeByte(OP_END);
+    s.writeByte(OP.END);
     writeSection(out_, WASM_SECTION.global, s);
     return true;
 }
@@ -273,9 +273,9 @@ bool emitElemSection(ref OutBuffer out_, ref WasmModule wmod)
     s.reset();
     s.writeuLEB128(1);
     s.writeuLEB128(0);
-    s.writeByte(OP_I32_CONST);
+    s.writeByte(OP.I32_CONST);
     s.writesLEB128(1);
-    s.writeByte(OP_END);
+    s.writeByte(OP.END);
     s.writeuLEB128(cast(uint) wmod.funcs.length);
     foreach (uint i; 0 .. cast(uint) wmod.funcs.length)
         s.writeuLEB128(i);
