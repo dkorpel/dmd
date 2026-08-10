@@ -67,7 +67,8 @@ EXPORTS="--export=__wasm_call_ctors --export=dmdwasm_init \
   --export=dmdwasm_ir_ptr --export=dmdwasm_ir_len \
   --export=dmdwasm_iropt_ptr --export=dmdwasm_iropt_len \
   --export=dmdwasm_selftest --export=dmdwasm_run_stdin \
-  --export=dmdwasm_build --export=dmdwasm_wasm_ptr --export=dmdwasm_wasm_len"
+  --export=dmdwasm_build --export=dmdwasm_wasm_ptr --export=dmdwasm_wasm_len \
+  --export=dmdwasm_wat"
 
 # The Run button compiles a snippet to a second wasm module that shares this
 # module's linear memory and calls its libc, so every libc function a

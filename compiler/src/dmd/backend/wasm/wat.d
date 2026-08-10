@@ -244,6 +244,8 @@ private void printPrefixedFC(ref Reader r, ref OutBuffer buf)
 void wasmDisassemble(ref WasmFuncBody fb, ref OutBuffer buf)
 {
     Symbol* sym = cast(Symbol*) fb.sym;
+    if (vasmSourceLines)
+        buf.writestring("; line 0\n");
     buf.printf("(func $%.*s", cast(int) sym.identifier.length, sym.identifier.ptr);
 
     const ft = wmod_funcTypeForSym(sym);
@@ -265,9 +267,6 @@ void wasmDisassemble(ref WasmFuncBody fb, ref OutBuffer buf)
 
     foreach (Symbol* l; fb.locals[fb.numParams .. $])
         buf.printf("  (local %s)\n", typeName(localWasmType(l)));
-
-    if (vasmSourceLines)
-        buf.writestring("; line 0\n");
 
     auto r = Reader(fb.code.peekSlice(), fb.relocs, 0);
     int depth = 1;

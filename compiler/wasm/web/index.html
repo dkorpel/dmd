@@ -245,6 +245,10 @@ int add(int a, int b)
     <h2 title="x86-64 disassembly generated with the -O global optimizer.">x86-64 disassembly — after -O</h2>
     <pre id="asm"></pre>
   </div>
+  <div class="pane" data-pane="wat" data-stage="codegen" data-title="WebAssembly" data-tip="The generated WebAssembly, in text format (WAT)">
+    <h2 title="WebAssembly text produced by dmd's own wasm backend for the same snippet, unoptimized. Only the snippet's functions; anything it calls in druntime stays an import.">WebAssembly text (WAT)</h2>
+    <pre id="wat"></pre>
+  </div>
   <div class="pane" data-pane="run" data-stage="diag" data-title="Program output" data-tip="Standard output of the compiled program, run in this page" hidden>
     <h2 title="dmd links the program into a complete WebAssembly module in the browser and runs it here; this is what it wrote to stdout/stderr.">Program output</h2>
     <pre id="run"></pre>
@@ -407,9 +411,20 @@ const makeChip = (p) => {
         }
         saveState();
         applyAutoLayout();
+        fillWatIfShown();
     });
     return chip;
 };
+
+// The WAT pane costs an extra wasm-target compile pass, so it is only filled
+// when it is on screen; showing an empty one asks for a fresh compile.
+function watWanted() {
+    const el = cols.querySelector('.pane[data-pane="wat"]');
+    return !!el && !el.hidden;
+}
+function fillWatIfShown() {
+    if (watWanted() && !$("wat").textContent) run();
+}
 for (const [stage] of STAGES) {
     if (stage === "source") continue;   // the editor is always visible — no toggle
     for (const p of paneEls().filter((p) => p.dataset.stage === stage))
@@ -839,7 +854,7 @@ cols.addEventListener("mouseleave", () => { hoverLine = null; applyHighlight(); 
 // ---- Compile + render -----------------------------------------------------
 
 // Render one result object produced by the worker's compile(). Pure DOM work.
-function render({ lex, parse, sema, ast, ir, irOpt, asm, asmUnopt, errors, diagnostics }) {
+function render({ lex, parse, sema, ast, ir, irOpt, asm, asmUnopt, wat, errors, diagnostics }) {
     renderLined("lex", lex, /*positional*/ true);
     renderLined("parse", parse);
     renderLined("sema", sema);
@@ -848,6 +863,7 @@ function render({ lex, parse, sema, ast, ir, irOpt, asm, asmUnopt, errors, diagn
     renderLined("iropt", irOpt, false, "(no code generated)");
     renderLined("asmun", asmWithLineMarks(asmUnopt || ""), false, "(no code generated)");
     renderLined("asm", asmWithLineMarks(asm), false, "(no code generated)");
+    renderLined("wat", asmWithLineMarks(wat || ""), false, "(no code generated)");
     $("diag").innerHTML = diagnostics ? ansiToHtml(diagnostics) : "(no errors/deprecations or other output)";
     // Mirror the diagnostics inline in the editor (gutter + underline + tooltip).
     editor.dispatch(setDiagnostics(editor.state, parseDiagnostics(diagnostics, editor.state.doc)));
@@ -908,7 +924,7 @@ function startCompile() {
     workerBusy = true;
     pendingRun = false;
     compileT0 = performance.now();
-    worker.postMessage({ type: "compile", src: getSrc() });
+    worker.postMessage({ type: "compile", src: getSrc(), wat: watWanted() });
 }
 
 function run() {

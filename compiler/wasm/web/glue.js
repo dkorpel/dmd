@@ -190,17 +190,37 @@ function runOnce(source, optimize) {
     return { lex, parse, sema, ast, ir, irOpt, asm: stdoutText, errors: exports.dmdwasm_errors(), diagnostics: stderrText };
 }
 
+// Compile `source` for the wasm target in a fresh instance, returning the WAT
+// disassembly its codegen prints to stdout. Separate pass from runOnce: the
+// backend targets one architecture per instance, and the panes want both.
+function watOnce(source) {
+    newInstance();
+    stdoutText = "";
+    stderrText = "";
+    const bytes = te.encode(source);
+    const ptr = exports.dmdwasm_input_buffer(bytes.length + 1);
+    new Uint8Array(memory.buffer, ptr, bytes.length).set(bytes);
+    new Uint8Array(memory.buffer, ptr + bytes.length, 1)[0] = 0;
+    try {
+        exports.dmdwasm_wat(ptr, bytes.length);
+    } catch (e) {
+        return "";
+    }
+    return exports.dmdwasm_errors() ? "" : stdoutText;
+}
+
 // Compile `source`, returning all panes plus both disassemblies:
 // `asm` is the optimized (-O) x86 disassembly, `asmUnopt` the unoptimized one.
 // The backend can only emit one of them per codegen, so we run two fresh
 // instances (a second pass is cheap relative to a single keystroke debounce and
 // the fresh-instance model already isolates the global state between runs).
-export function compile(source) {
+export function compile(source, { wat = false } = {}) {
     const result = runOnce(source, /*optimize*/ true);
     // Only worth a second pass once the source actually generated code.
     result.asmUnopt = result.errors === 0
         ? runOnce(source, /*optimize*/ false).asm
         : "";
+    result.wat = wat && result.errors === 0 ? watOnce(source) : "";
     return result;
 }
 

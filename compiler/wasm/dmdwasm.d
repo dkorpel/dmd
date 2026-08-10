@@ -315,6 +315,66 @@ private void runImpl(const(char)* src, size_t len, int optimize)
     }
 }
 
+void dmdwasm_wat(const(char)* src, size_t len)
+{
+    try
+        watImpl(src, len);
+    catch (Throwable t)
+    {
+        import dmd.errors : error;
+        error(Loc.initial, "internal compiler error: %.*s (%.*s:%llu)",
+            cast(int) t.msg.length, t.msg.ptr,
+            cast(int) t.file.length, t.file.ptr, cast(ulong) t.line);
+        if (global.errors == 0)
+            global.errors = 1;
+    }
+}
+
+private void watImpl(const(char)* src, size_t len)
+{
+    import dmd.dmodule : Module;
+    import dmd.dsymbolsem : dsymbolSemantic, importAll, runDeferredSemantic;
+    import dmd.semantic2 : semantic2;
+    import dmd.semantic3 : semantic3;
+    import dmd.dmdparams : driverParams;
+    import dmd.dmsc : backend_init, backend_term;
+    import dmd.errors : fatalErrorHandler;
+    import dmd.glue : generateCodeToBuffer, ObjcGlue_initialize;
+    import dmd.target : target;
+    import dmd.backend.cg : vasmSourceLines;
+    import druntime_embed : registerDruntime;
+
+    initFrontend(wasmTarget: true);
+    registerDruntime();
+    fatalErrorHandler = () => true;
+
+    Module m = parseSource("input.d", "input", (cast(ubyte*) src)[0 .. len]);
+    if (global.errors)
+        return;
+
+    m.importAll(null);
+    m.dsymbolSemantic(null);
+    runDeferredSemantic();
+    m.semantic2(null);
+    m.semantic3(null);
+    if (global.errors)
+        return;
+
+    driverParams.vasm = true;
+    vasmSourceLines = true;
+    driverParams.optimize = false;
+    backend_init(global.params, driverParams, target);
+    ObjcGlue_initialize();
+
+    OutBuffer objbuf;
+    generateCodeToBuffer([m], objbuf);
+    backend_term();
+    objbuf.destroy();
+
+    import core.stdc.stdio : fflush, stdout;
+    fflush(stdout);
+}
+
 private extern __gshared int _CLOCK_MONOTONIC;
 
 /// The self-linked module produced by the last `dmdwasm_build`.

@@ -5,7 +5,8 @@
 //
 // Protocol (main thread -> worker):
 //   { type: "load", url }      -> loads/compiles dmd.wasm, replies "loaded"/"loadError"
-//   { type: "compile", src }   -> compiles `src`, replies "result"
+//   { type: "compile", src, wat } -> compiles `src`, replies "result"
+//                              (`wat` also compiles it for the wasm target)
 //   { type: "run", src }       -> compiles and runs `src`, replies "runResult"
 // Replies carry only structured-cloneable data (plain strings/objects).
 
@@ -26,12 +27,12 @@ self.onmessage = async (e) => {
     if (msg.type === "compile") {
         let result;
         try {
-            result = compile(msg.src);
+            result = compile(msg.src, { wat: !!msg.wat });
         } catch (err) {
             // compile() already catches wasm traps; this guards anything else so a
             // bad run reports an error instead of killing the worker.
             result = {
-                lex: "", parse: "", sema: "", ast: "", ir: "", irOpt: "", asm: "", asmUnopt: "",
+                lex: "", parse: "", sema: "", ast: "", ir: "", irOpt: "", asm: "", asmUnopt: "", wat: "",
                 errors: 1,
                 diagnostics: "dmd.wasm worker error: " + String((err && err.message) || err),
             };
