@@ -76,4 +76,3 @@ void main()
     assert(4194304 ^^ x1 == 4194304);
 }
 
-// DISABLED: wasm

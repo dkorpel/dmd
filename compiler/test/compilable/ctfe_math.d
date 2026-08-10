@@ -1,5 +1,4 @@
 // COMPILABLE_MATH_TEST
-// DISABLED: wasm
 // Test CTFE builtins for std.math functions.
 
 import std.math;

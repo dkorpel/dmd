@@ -298,4 +298,3 @@ void main()
     test19075();
 }
 
-// DISABLED: wasm
