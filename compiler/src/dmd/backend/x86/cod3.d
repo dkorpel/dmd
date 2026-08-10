@@ -34,7 +34,7 @@ import dmd.backend.code;
 import dmd.backend.arm.cod3;
 import dmd.backend.arm.instr;
 import dmd.backend.x86.code_x86;
-import dmd.backend.x86.cgcod : VasmLine, vasmLines, vasmSourceLines;
+import dmd.backend.cg : VasmLine, vasmLines, vasmSourceLines;
 import dmd.backend.codebuilder;
 import dmd.backend.dvec;
 import dmd.backend.melf;

@@ -25,7 +25,7 @@ import dmd.backend.ty;
 import dmd.backend.type;
 
 import dmd.backend.dwarfdbginf;
-import dmd.backend.x86.cgcod : vasmSourceLines;
+import dmd.backend.cg : vasmSourceLines;
 
 nothrow:
 @safe:

@@ -289,7 +289,7 @@ private void runImpl(const(char)* src, size_t len, int optimize)
         driverParams.vasm = true;
         // Annotate the disassembly with "; line N" markers so the web app can sync
         // source<->asm highlighting. Opt-in: plain native -vasm stays unmarked.
-        import dmd.backend.x86.cgcod : vasmSourceLines;
+        import dmd.backend.cg : vasmSourceLines;
         vasmSourceLines = true;
         driverParams.optimize = optimize != 0;   // -O drives both the optimized IR pane and the optimized disassembly
         backend_init(global.params, driverParams, target);

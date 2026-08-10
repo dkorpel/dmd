@@ -13,6 +13,7 @@
 
 module dmd.backend.cg;
 
+import dmd.backend.barray;
 import dmd.backend.cdef;
 import dmd.backend.cc;
 import dmd.backend.code;
@@ -159,5 +160,20 @@ private enum flinsymtab_init =
     }
     return flinsymtab;
 } ();
-
 }
+
+/********************************
+ * -vasm source-line annotations: maps a byte offset within the disassembly
+ * buffer of the function being emitted to the source line of the statement that
+ * starts there. Populated by the target backends (x86: the PSOP.linnum nodes in
+ * codout(), wasm: the per-block positions in wasm_codgen2), consumed by the
+ * disassembly printers. Offsets are monotonically increasing.
+ */
+struct VasmLine { uint offset; uint linnum; }
+__gshared Barray!VasmLine vasmLines;
+
+/// Opt-in flag for the "; line N" annotations above. Off by default so plain
+/// `-vasm` output is unchanged; the WebAssembly explorer sets it to drive its
+/// source<->asm highlight sync. Gates the linnum collection, the
+/// addlinenumbers force (backconfig) and the marker printing.
+__gshared bool vasmSourceLines = false;

@@ -21,6 +21,7 @@ import core.stdc.string;
 
 import dmd.backend.backconfig : debugc, debugr, debugw;
 import dmd.backend.blockopt : bo;
+import dmd.backend.cg : VasmLine, vasmLines;
 import dmd.backend.cc;
 import dmd.backend.cdef;
 import dmd.backend.code;
@@ -3331,21 +3332,6 @@ void andregcon(const ref con_t pregconsave)
     cg.regcon.cse.mops &= cg.regcon.cse.mval;
 }
 
-
-/********************************
- * -vasm source-line annotations: maps a byte offset within `disasmBuf` (the
- * per-function disassembly buffer) to the source line of the statement that
- * starts there. Populated from the PSOP.linnum nodes in codout(), consumed by
- * disassemble() below. Offsets are monotonically increasing.
- */
-struct VasmLine { uint offset; uint linnum; }
-__gshared Barray!VasmLine vasmLines;
-
-/// Opt-in flag for the "; line N" annotations above. Off by default so plain
-/// `-vasm` output is unchanged; the WebAssembly explorer sets it to drive its
-/// source<->asm highlight sync. Gates the linnum collection (cod3.codout), the
-/// addlinenumbers force (backconfig) and the marker printing (disassemble).
-__gshared bool vasmSourceLines = false;
 
 /**********************************************
  * Disassemble the code instruction bytes
