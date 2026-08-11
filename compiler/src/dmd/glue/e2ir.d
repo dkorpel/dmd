@@ -122,9 +122,6 @@ bool ISX64REF(Declaration var)
         }
         else if ((target.os & Target.OS.Posix) || target.isWasm)
         {
-            // WASM shares the Posix rule: non-POD structs pass by invisible
-            // reference so a destructive move ctor can write back through the
-            // parameter. passTypeByRef is AArch64-only, hence a no-op on WASM.
             return !(var.storage_class & STC.lazy_) && var.type.isTypeStruct() && !var.type.isTypeStruct().sym.isPOD() ||
                 passTypeByRef(target, var.type);
         }
@@ -1452,15 +1449,7 @@ elem* toElem(Expression e, ref IRState irs)
                 // Call _d_newitemT()
                 ex = toElem(ne.lowering, irs);
             else
-            {
-                import dmd.target : target;
-                if (target.isWasm)
-                {
-                    irs.eSink.error(ne.loc, "`new` is not supported for the WebAssembly target (no `_d_newitemT` hook in druntime)");
-                    return el_long(TYnptr, 0);
-                }
                 assert(0, "This case should have been rewritten to `_d_newitemT` in the semantic phase");
-            }
 
             ectype = null;
 
@@ -1538,15 +1527,7 @@ elem* toElem(Expression e, ref IRState irs)
                 // Call _d_newitemT()
                 e = toElem(ne.lowering, irs);
             else
-            {
-                import dmd.target : target;
-                if (target.isWasm)
-                {
-                    irs.eSink.error(ne.loc, "`new` is not supported for the WebAssembly target (no `_d_newitemT` hook in druntime)");
-                    return el_long(TYnptr, 0);
-                }
                 assert(0, "This case should have been rewritten to `_d_newitemT` in the semantic phase");
-            }
 
             if (ne.arguments && ne.arguments.length == 1)
             {
@@ -4313,12 +4294,7 @@ elem* toElem(Expression e, ref IRState irs)
  */
 elem* toElemRVO(Expression e, elem* ehidden, ref IRState irs)
 {
-    // WASM: slices, delegates and (under betterC class restrictions) class
-    // references can also reach here, because they're returned via a hidden
-    // pointer (see backend/wasm/obj.d returnByPtr). For these non-aggregate
-    // types the destination must still be threaded through as ehidden so the
-    // callee writes directly into it (NRVO); otherwise the call allocates a
-    // discarded temp and the result is never copied to the destination.
+    // int[] f(); void g() { int[] a = f(); } // wasm returns slices by hidden pointer
     import dmd.target : target;
     const wasmNonAgg = target.isWasm &&
         e.type.toBasetype().ty != Tstruct && e.type.toBasetype().ty != Tsarray;
@@ -4399,8 +4375,6 @@ elem* toElemRVO(Expression e, elem* ehidden, ref IRState irs)
         case EXP.call:          return doCallRVO(e.isCallExp());
         case EXP.structLiteral: return doStructLiteralRVO(e.isStructLiteralExp());
         default:
-            // WASM: a slice/delegate/class returned by hidden pointer whose RHS
-            // is not a call/comma/cond — store the value into *ehidden directly.
             assert(wasmNonAgg);
             elem* ev = toElem(e, irs);
             elem* ed = el_copytree(ehidden);
@@ -4440,12 +4414,7 @@ elem* Dsymbol_toElem(Dsymbol s, ref IRState irs)
         else
         {
             Symbol* sp = toSymbol(s);
-            // The wasm EH_NONE lowering inlines finally bodies at each early
-            // exit (see s2ir's wasmEmitFinallies), so a declaration inside a
-            // finally can be lowered more than once; the copies share the
-            // frame slot, which each initializes before use.
-            if (!target.isWasm || sp.Ssymnum == SYMIDX.max)
-                symbol_add(sp);
+            symbol_add(sp);
             //printf("\tadding symbol '%s'\n", sp.Sident);
             if (vd._init)
             {
@@ -5935,10 +5904,6 @@ elem* callfunc(Loc loc,
             }
             if (op == OPscale && !target.isWasm)
             {
-                // x87 fscale needs both operands in FP registers, so widen the
-                // integer exponent to real. The wasm backend instead calls C
-                // ldexp(real n, int exp) and identifies the operands by type, so
-                // it must keep the exponent integral — skip this rewrite there.
                 elem* et = e.E1;
                 e.E1 = el_una(OPs32_d, TYdouble, e.E2);
                 e.E1 = el_una(OPd_ld, TYreal, e.E1);
@@ -6037,9 +6002,7 @@ elem* callfunc(Loc loc,
     }
     else
     {
-        // For an indirect call there's no callee Symbol to carry the
-        // function type into the backend, so stash is here
-        // for function pointers, delegates, and virtual/interface dispatch
+        // void f(void function(int) fp) { fp(1); } // no callee Symbol to carry the type
         if (ec && ec.Eoper != OPvar)
             ec.ET = Type_toCtype(tf);
         // `OPcallns` used to be passed here for certain pure functions,
@@ -6060,12 +6023,7 @@ elem* callfunc(Loc loc,
                 assert(length < ubyte.max); // 254 should be enough for anybody
                 e.numParams = cast(ubyte)(tf.parameterList.length + 1); // +1 means variadic
             }
-            // The wasm backend can't see whether an indirect variadic call
-            // carries a hidden context-pointer argument (delegate context /
-            // static link); tell it via numParams = 1 + that count.
-            // ---
             // void foo2(void delegate(int, ...) dg) { dg(20, 3.14); }
-            // ---
             if (target.isWasm)
                 e.numParams = cast(ubyte)(1 + ((ethis2 !is null || ethis !is null) ? 1 : 0));
         }
@@ -6498,9 +6456,7 @@ Lagain:
 
         case Tstruct:
         {
-            // The argtypes register classification can turn a plain struct
-            // into a complex type (e.g. 4 ints -> Tcomplex64), which the wasm
-            // backend cannot pass by value; use the size-based helpers.
+            // struct S { int a, b, c, d; } // argtypes turns this into Tcomplex64
             if (target.isX86 || target.isWasm)
                 goto default;
 

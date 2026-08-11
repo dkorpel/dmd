@@ -1026,7 +1026,7 @@ void writefunc2(Symbol* sfunc, ref GlobalOptimizer go, ref BlockOpt bo)
     int csegsave = CSEGSAVE_DEFAULT;
 
     // WASM uses a separate code generator; skip the x86-specific code path.
-    // Run AFTER blockopt() so switch→jmptab/ifthen conversion has occurred.
+    // Run after blockopt() so jmptab/ifthen conversion has occurred.
     if (config.objfmt == OBJ_WASM)
     {
         objmod.func_start(sfunc);

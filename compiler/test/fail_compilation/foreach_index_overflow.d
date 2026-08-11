@@ -26,4 +26,3 @@ void main()
     foreach (byte i, x; data[0..0x81]) {} // error
     foreach (byte i, x; data[0..0x80]) {} // OK
 }
-// DISABLED: wasm

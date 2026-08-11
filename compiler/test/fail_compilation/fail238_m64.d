@@ -34,4 +34,3 @@ void main()
     int q = 3;
     pragma(msg, M!(q));
 }
-// DISABLED: wasm

@@ -207,8 +207,6 @@ extern (C) void* __alloca(int nbytes)
   }
   else version (WebAssembly)
   {
-        // The wasm backend lowers `alloca()` calls directly to a shadow-stack
-        // bump, so this magic helper is never referenced.
         assert(0, "__alloca is not used on WebAssembly");
   }
   else

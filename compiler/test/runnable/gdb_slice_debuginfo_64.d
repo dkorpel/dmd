@@ -9,5 +9,3 @@ GDB_MATCH: \$1 = 8
 */
 
 int[] x;
-
-// DISABLED: wasm

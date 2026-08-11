@@ -104,8 +104,6 @@ public void generateCodeAndWrite(Module[] modules, const(char)*[] libmodules,
     if (writeLibrary)
     {
         library = Library.factory(target.objectFormat(), target.lib_ext, eSink);
-        if (!library)
-            return;
 
         /* Determine actual file name of library to write to by combining
          * objdir, libname, the first object file name, and lib_ext

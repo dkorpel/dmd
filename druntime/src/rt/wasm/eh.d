@@ -39,12 +39,6 @@ noreturn _d_throwc(Throwable o) @trusted
     throwException(cast(void*) o);
 }
 
-/// ditto
-noreturn _d_throwdwarf(Throwable o) @trusted
-{
-    _d_throwc(o);
-}
-
 /**
  * Test whether the caught object `o` matches a catch clause of type `ci`.
  * On a match the object is unpinned from the in-flight root stack.

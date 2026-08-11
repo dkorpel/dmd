@@ -265,12 +265,26 @@ void wasmDisassemble(ref WasmFuncBody fb, ref OutBuffer buf)
     foreach (Symbol* l; fb.locals[fb.numParams .. $])
         buf.printf("  (local %s)\n", typeName(localWasmType(l)));
 
-    auto r = Reader(fb.code.peekSlice(), fb.relocs, 0);
+    wasmDisassembleCode(fb.code.peekSlice(), fb.relocs, buf);
+}
+
+/**
+ * Append `code` as WebAssembly text, one instruction per line prefixed with its
+ * offset, followed by the closing paren of the enclosing `(func`.
+ *
+ * Params:
+ *      code = instruction bytes
+ *      relocs = relocations into `code`, printed in place of the placeholder bytes
+ *      buf = buffer to append the text to
+ */
+void wasmDisassembleCode(const(ubyte)[] code, const(WasmReloc)[] relocs, ref OutBuffer buf)
+{
+    auto r = Reader(code, relocs, 0);
     int depth = 1;
 
     while (!r.empty)
     {
-        const uint off = r.pos;
+        const uint off = cast(uint) r.pos;
         const ubyte op = r.pop();
 
         if (op == OP.END || op == OP.ELSE)
@@ -378,4 +392,45 @@ void wasmDisassemble(ref WasmFuncBody fb, ref OutBuffer buf)
             ++depth;
     }
     buf.writestring(")\n");
+}
+
+unittest
+{
+    static string disasm(const(ubyte)[] code)
+    {
+        OutBuffer buf;
+        wasmDisassembleCode(code, null, buf);
+        return buf[].idup;
+    }
+
+    assert(disasm([OP.LOCAL_GET, 2, OP.I32_CONST, 0x7f, OP.I32_ADD, OP.RETURN, OP.END]) ==
+"0000:  local.get 2
+0002:  i32.const -1
+0004:  i32.add
+0005:  return
+0006:end
+)
+");
+
+    assert(disasm([OP.BLOCK, WASM_VOID_BLOCK, OP.LOOP, WASM_VOID_BLOCK,
+                   OP.BR_TABLE, 2, 0, 1, 3, OP.END, OP.END]) ==
+"0000:  block
+0002:    loop
+0004:      br_table 0 1 3
+0009:    end
+000a:  end
+)
+");
+
+    assert(disasm([OP.I32_LOAD, 2, 8, OP.I64_STORE, 3, 0,
+                   OP.F64_CONST, 0, 0, 0, 0, 0, 0, 0xf0, 0x3f]) ==
+"0000:  i32.load offset=8
+0003:  i64.store
+0006:  f64.const 1
+)
+");
+
+    // opcodes past 0x7f are LEB128 encoded
+    assert(disasm([OP.FD_PREFIX, 0xAE, 0x01]) == "0000:  i32x4.add\n)\n");
+    assert(disasm([OP.FC_PREFIX, WASM_FC.I32_TRUNC_SAT_F64_S]) == "0000:  i32.trunc_sat_f64_s\n)\n");
 }

@@ -2,8 +2,7 @@
  * This module declares intrinsics for WebAssembly instructions.
  *
  * Calls to these functions are recognized by the compiler when targeting
- * WebAssembly and lowered to the corresponding instruction; they have no
- * implementation, so on other targets calls to them fail to link.
+ * WebAssembly and lowered to the corresponding instruction.
  *
  * Copyright: Copyright © 2026, The D Language Foundation
  * License:   $(LINK2 http://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)

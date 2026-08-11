@@ -37,8 +37,6 @@ private:
 
 void initSections() nothrow @nogc
 {
-    // The wasm backend emits each ModuleInfo* into a data segment named
-    // "minfo"; wasm-ld brackets the concatenated array with these symbols.
     auto mbeg = cast(immutable ModuleInfo**)&__start_minfo;
     auto mend = cast(immutable ModuleInfo**)&__stop_minfo;
     _sections.moduleGroup = ModuleGroup(mbeg[0 .. mend - mbeg]);

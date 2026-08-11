@@ -144,8 +144,8 @@ struct EnvData
     bool printRuntime;           /// `PRINT_RUNTIME`: Print time spent on a single test
     bool tryDisabled;            /// `TRY_DISABLED`:Silently try disabled tests (ignore failure and report success)
 
-    /// Returns the `-mXX` model flag for this target, or `""` for WASM
-    /// (which uses `-mwasm32 -os=wasm` from REQUIRED_ARGS instead).
+    /// Returns the `-mXX` model flag, or `""` for wasm (which passes
+    /// `-mwasm32 -os=wasm` through REQUIRED_ARGS instead)
     string modelFlag() const { return os == "wasm" ? "" : "-m" ~ model; }
 }
 
@@ -800,6 +800,10 @@ bool gatherTestParameters(ref TestArgs testArgs, string input_dir, string input_
             testArgs.disabledReason = "because target doesn't support -m64";
     }
 
+    // wasm is neither -m32 nor -m64, so a test requiring either can't target it
+    if (envData.os == "wasm" && ["-m32", "-m64", "-m32mscoff"].any!(f => testArgs.requiredArgs.canFind(f)))
+        testArgs.disabledReason = "on wasm (test requires an x86 model switch)";
+
     if (!testArgs.isDisabled)
         testArgs.disabledReason = getDisabledReason(split(disabledPlatformsStr), envData);
 
@@ -985,8 +989,6 @@ string execute(ref File f, string command, const ubyte expectedRc,
                Duration timeout = Duration.zero)
 {
     f.writeln(command);
-    // Prefix the command with `timeout N` when a deadline is given so that
-    // a hung compiler (e.g. infinite loop in WASM codegen) is killed.
     string actualCommand = command;
     if (timeout != Duration.zero)
     {
@@ -1011,8 +1013,7 @@ string execute(ref File f, string command, const ubyte expectedRc,
 
 /**
  * Run `wasm-validate` on a produced WASM module/object and throw on failure.
- * Silently no-ops if the file is missing (e.g. earlier compile step failed
- * in a way that left no artifact) or if `wasm-validate` is not installed.
+ * No-ops if the file is missing or `wasm-validate` is not installed.
  */
 void validateWasmArtifact(ref File f, string path)
 {
@@ -1801,8 +1802,6 @@ int tryMain(string[] args)
     Result testCombination(bool autoCompileImports, string argSet, size_t permuteIndex, string permutedArgs)
     {
         import std.datetime : seconds;
-        // WASM codegen can loop infinitely on pathological input (e.g. sparse
-        // 64-bit switch ranges); cap each compilation at 60 s to prevent hangs.
         const compileTimeout = envData.os == "wasm" ? 60.seconds : Duration.zero;
 
         string test_app_dmd = test_app_dmd_base ~ to!string(permuteIndex) ~ envData.exe;
@@ -1926,10 +1925,8 @@ int tryMain(string[] args)
                 throw new CompareException(testArgs.compileOutput, compile_output, diff);
             }
 
-            // Structurally validate every WASM artifact produced. Runs for
-            // compilable, link, and runnable; `wasmtime run` already validates
-            // the final module at instantiation, but compilable tests would
-            // otherwise pass on malformed bytecode.
+            // `wasmtime run` validates the final module, but a compilable test
+            // would otherwise pass on malformed bytecode
             if (envData.os == "wasm" && testArgs.mode != TestMode.FAIL_COMPILE)
             {
                 string[] artifacts;

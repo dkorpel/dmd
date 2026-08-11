@@ -926,29 +926,10 @@ in (fn)
     }
     else version (WebAssembly)
     {
-        version (DigitalMars)
-        {
-            // Wasm has no register file to flush: the backend already spills
-            // every value live across a call into the linear-memory shadow
-            // stack, so &local (an address-taken local, forced onto that
-            // stack) is the current stack top and everything live sits above.
-            ubyte local = void;
-            sp = &local;
-        }
-        else version (LDC)
-        {
-            // Wasm is special in that this isn't really possible
-            // to dump "registers" (Wasm locals & value stack) onto
-            // the linear-memory "C" stack easily.
-            //
-            // Spilling has to be done somehow else.
-            import ldc.intrinsics;
-
-            static if (LLVM_major >= 22) sp = llvm_stackaddress();
-            else sp = llvm_stacksave();
-        }
-        else
-            static assert(false, "Unsupported WebAssembly compiler.");
+        // an address taken local is spilled to the shadow stack, and every
+        // value live across a call sits above it
+        ubyte local = void;
+        sp = &local;
     }
     else
     {
@@ -1010,20 +991,9 @@ private extern(D) void* getStackTop() nothrow @nogc
         return __builtin_frame_address(0);
     else version (WebAssembly)
     {
-        version (DigitalMars)
-        {
-            // &local is forced onto the shadow stack: the lowest live address.
-            ubyte local = void;
-            void* sp = &local;
-            return sp;
-        }
-        else version (LDC)
-        {
-            import ldc.intrinsics : llvm_stackaddress;
-            return llvm_stackaddress();
-        }
-        else
-            static assert(false, "Unsupported WebAssembly compiler.");
+        ubyte local = void;
+        void* sp = &local;
+        return sp;
     }
     else
         static assert(false, "Architecture not supported.");
@@ -1106,20 +1076,14 @@ private extern(D) void* getStackBottom() nothrow @nogc
     }
     else version (WebAssembly)
     {
-        version (DigitalMars)
-        {
-            // wasm-ld lays the shadow stack out as [.., __stack_high); it grows
-            // down, so __stack_high's address is the bottom (highest address).
-            return &__stack_high;
-        }
-        else
-            static assert(false, "Platform not supported.");
+        // the shadow stack is [.., __stack_high) and grows down
+        return &__stack_high;
     }
     else
         static assert(false, "Platform not supported.");
 }
 
-version (WebAssembly) version (DigitalMars)
+version (WebAssembly)
 {
     private extern(C) extern __gshared ubyte __stack_high;
 }

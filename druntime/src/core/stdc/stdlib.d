@@ -147,9 +147,7 @@ version (CRuntime_Microsoft)
 }
 else version (CRuntime_WASI)
 {
-    // D `real` is double on wasm32, but wasi-libc's strtold returns a
-    // 128-bit long double through a hidden pointer — the signatures clash
-    // at link time. strtod is exactly equivalent for a double-sized real.
+    // wasi-libc's strtold has a 128 bit long double ABI, incompatible with a 64 bit `real`
     extern (D) real strtold(scope inout(char)* nptr, inout(char)** endptr)
     {
         return strtod(nptr, endptr);

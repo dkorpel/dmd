@@ -452,8 +452,7 @@ extern (C++) struct Target
     FPTypeProperties!real_t RealProperties;     ///
 
     // Copy `real` properties from a narrower type, for targets where the host's
-    // real_t is wider than the target's `real`. All FPTypeProperties fields are
-    // real_t/long regardless of the template argument, so the layouts match.
+    // real_t is wider than the target's `real`.
     extern (D) private static void copyFPProperties(Dst, Src)(ref Dst dst, ref const Src src)
     {
         foreach (i, ref field; dst.tupleof)
@@ -543,8 +542,6 @@ extern (C++) struct Target
             realalignsize = 8;
         }
 
-        // On WASM where `real` is no wider than `double`, use those type properties
-        // (mant_dig, epsilon, nan, ...) rather than the host compiler's real_t.
         if (realsize - realpad <= 4)
             copyFPProperties(RealProperties, FloatProperties);
         else if (realsize - realpad <= 8)
@@ -584,8 +581,8 @@ extern (C++) struct Target
         }
         else if (os == Target.OS.WASM)
         {
-            // Could all be .wasm, but distinct extensions prevent clashing with
-            // separate compilation (clang/wasm-ld convention)
+            // Could be all .wasm, but distinct extensions avoid name clashes
+            // under separate compilation (cland/wasm-ld convention)
             obj_ext = "o";
             lib_ext = "a";
             dll_ext = "wasm";
@@ -768,20 +765,12 @@ extern (C++) struct Target
         {
             switch (type.ty)
             {
-            case TY.Tvoid:
-            case TY.Tint8:
-            case TY.Tuns8:
-            case TY.Tint16:
-            case TY.Tuns16:
-            case TY.Tint32:
-            case TY.Tuns32:
-            case TY.Tfloat32:
-            case TY.Tint64:
-            case TY.Tuns64:
-            case TY.Tfloat64:
-                break;
-            default:
-                return 2; // wrong base type
+                case TY.Tvoid, TY.Tint8, TY.Tuns8, TY.Tint16, TY.Tuns16:
+                case TY.Tint32, TY.Tuns32, TY.Tint64, TY.Tuns64:
+                case TY.Tfloat32, TY.Tfloat64:
+                    break;
+                default:
+                    return 2; // wrong base type
             }
             // wasm SIMD is 128-bit only
             return sz == 16 ? 0 : 3;
@@ -872,7 +861,6 @@ extern (C++) struct Target
 
         if (isWasm)
         {
-            // wasm SIMD is 128-bit only; support does not depend on a CPU level.
             const isByte = elemty == TY.Tint8 || elemty == TY.Tuns8;
             switch (op)
             {

@@ -29,8 +29,8 @@ export void _start() nothrow
     while (true) {}
 }
 
-// WASI has no working directory of its own; a host that preopens one passes
-// its path as $PWD, so relative paths resolve like they do natively.
+// WASI has no working directory of its own, a host that preopens one passes
+// its path as $PWD
 private void initCwd() @nogc nothrow
 {
     import core.stdc.stdlib : getenv;

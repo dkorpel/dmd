@@ -4,6 +4,9 @@ static assert(__LINE__ == 3); // fails as __LINE__ is 2
 
 import core.stdc.math : signbit;
 
+version (X86)    version = FloatToIntIndefinite;
+version (X86_64) version = FloatToIntIndefinite;
+
 
 /************************************/
 
@@ -209,15 +212,12 @@ void test2()
     // E.g. the result of converting a float whose value doesn't fit into the integer
     // leads to an undefined result.
     version (DigitalMars)
+    version (FloatToIntIndefinite)
     {
-        // wasm uses saturating float->int truncation (0x7FFFFFFF)
-        version (WebAssembly) {} else
-        {
-            float f = float.infinity;
-            int i = cast(int) f;
-            assert(i == cast(int)float.max);
-            assert(i == 0x80000000);
-        }
+        float f = float.infinity;
+        int i = cast(int) f;
+        assert(i == cast(int)float.max);
+        assert(i == 0x80000000);
     }
 }
 

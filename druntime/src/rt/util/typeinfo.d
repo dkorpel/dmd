@@ -7,6 +7,9 @@
  * Source: $(DRUNTIMESRC rt/util/_typeinfo.d)
  */
 module rt.util.typeinfo;
+
+version (WebAssembly) {} else version = Have_complex; // the wasm backend has no complex type codegen
+
 import rt.util.utility : d_cfloat, d_cdouble, d_creal, isComplex;
 static import core.internal.hash;
 
@@ -452,9 +455,8 @@ deprecated class TypeInfo_j : TypeInfoGeneric!real
 }
 
 // All complex floating-point types.
-// The wasm backend has no complex-type codegen, so skip them there.
 
-version (WebAssembly) {} else
+version (Have_complex)
 {
 
 // cfloat @@@DEPRECATED_2.105@@@
@@ -589,7 +591,7 @@ deprecated class TypeInfo_Aj : TypeInfoArrayGeneric!real
 
 // Arrays of all complex floating-point types.
 
-version (WebAssembly) {} else
+version (Have_complex)
 {
 
 // cfloat @@@DEPRECATED_2.105@@@

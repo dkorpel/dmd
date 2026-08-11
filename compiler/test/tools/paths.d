@@ -9,7 +9,6 @@ version (Posix)
 else version (Windows)
     enum exeExtension = ".exe";
 
-// Host OS name (compile-time constant).
 version (Windows)
     enum hostOs = "windows";
 else version (OSX)
@@ -33,8 +32,7 @@ else version (Hurd)
 else
     static assert(0, "Unrecognized or unsupported OS.");
 
-/// Target OS: reads the `OS` environment variable so cross-target invocations
-/// such as `OS=wasm ./run.d runnable` work without recompiling the runner.
+/// Target OS, e.g. `OS=wasm ./run.d runnable`
 string os()
 {
     static string cached;
@@ -54,8 +52,7 @@ string build()
     return environment.get("BUILD", "release");
 }
 
-/// The DMD binary is always built for the host OS, even when tests target a
-/// cross-compile OS such as `wasm`.
+/// The DMD binary is always built for the host OS, even when cross compiling
 string dmdOs()
 {
     return os == "wasm" ? hostOs : os;
@@ -77,7 +74,6 @@ string dmdModel()
 
 string model()
 {
-    // WASM is always 32-bit; don't probe for a 64-bit DMD binary.
     const defaultModel = os == "wasm" ? "32" : dmdModel;
     return environment.get("MODEL", defaultModel);
 }
