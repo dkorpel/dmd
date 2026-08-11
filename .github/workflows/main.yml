@@ -340,6 +340,14 @@ jobs:
           curl https://wasmtime.dev/install.sh -sSf | bash -s -- --version v46.0.1
           echo "$HOME/.wasmtime/bin" >> $GITHUB_PATH
 
+      # The test suite validates every generated module with wasm-validate, and
+      # errors out when it is missing. Distro packages predate `try_table`, so
+      # install an upstream release.
+      - name: Install wabt
+        run: |
+          curl -fsSL https://github.com/WebAssembly/wabt/releases/download/1.0.41/wabt-1.0.41-linux-x64.tar.gz | tar -xz -C "$HOME"
+          echo "$HOME/wabt-1.0.41/bin" >> $GITHUB_PATH
+
       # Cache the pinned wasi-sdk sysroot tarball the `wasm` target downloads for
       # libc.a. Keep the key's version in sync with WASI_SDK_VERSION in
       # druntime/Makefile.

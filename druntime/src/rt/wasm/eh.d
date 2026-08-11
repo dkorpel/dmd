@@ -7,6 +7,9 @@
  * Catch dispatch calls `_d_eh_wasm_match` per catch clause; a match unpins
  * the object and enters the handler.
  *
+ * Because a match unpins, a still-pinned exception means one is being unwound,
+ * which is what `_d_throwc` uses to chain collateral exceptions.
+ *
  * Copyright: Copyright (C) 1999-2026 by The D Language Foundation, All Rights Reserved
  * License:   $(LINK2 https://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
  */
@@ -30,6 +33,14 @@ noreturn _d_throwc(Throwable o) @trusted
 {
     if (o !is null)
     {
+        // Collateral exception: `o` is thrown while unwinding an earlier one,
+        // i.e. from a `finally` body. Only the innermost pending exception is
+        // tracked, so chains deeper than one level are not reconstructed.
+        if (inFlightDepth > 0 && inFlight[inFlightDepth - 1] !is null)
+        {
+            o = Throwable.chainTogether(inFlight[--inFlightDepth], o);
+            inFlight[inFlightDepth] = null;
+        }
         if (inFlightDepth < inFlight.length)
             inFlight[inFlightDepth++] = o;
         const rc = o.refcount();
