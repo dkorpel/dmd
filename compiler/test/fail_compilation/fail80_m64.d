@@ -29,4 +29,3 @@ class Test
         images["redo"]          = ResourceManager.getImage("redo.gif");
     }
 }
-// DISABLED: wasm

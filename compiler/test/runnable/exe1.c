@@ -1,3 +1,5 @@
+// a K&R `float` parameter isn't promoted to double on wasm, mismatching the prototype
+// DISABLED: wasm
 /*_ exe1.c   Mon Nov 20 1989   Modified by: Walter Bright */
 /* Copyright (c) 1985-1995 by Symantec                  */
 /* All Rights Reserved                                  */
@@ -2074,5 +2076,3 @@ int main()
         printf("SUCCESS\n");
         return 0;
 }
-
-// DISABLED: wasm

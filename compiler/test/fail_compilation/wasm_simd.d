@@ -9,9 +9,7 @@ fail_compilation/wasm_simd.d(106): Error: incompatible types for `(x) * (y)`: bo
 ---
 */
 
-// WebAssembly SIMD is 128-bit only and, like x86, has no integer lane division,
-// remainder, generic shift, or `i8x16` multiply.
-// https://github.com/dlang/dmd/pull/00000
+// SIMD128 has no integer lane division, remainder, generic shift or i8x16 multiply
 
 import core.simd;
 

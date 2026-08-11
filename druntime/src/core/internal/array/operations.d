@@ -12,8 +12,8 @@ import core.internal.traits : Filter, staticMap, Unqual;
 version (GNU) version = GNU_OR_LDC;
 version (LDC) version = GNU_OR_LDC;
 
-version (X86)    version = X86_64_Or_X86;
-version (X86_64) version = X86_64_Or_X86;
+version (X86)    version = Have_xmm;
+version (X86_64) version = Have_xmm;
 
 /**
  * Perform array (vector) operations and store the result in `res`.  Operand
@@ -93,14 +93,12 @@ version (D_SIMD)
         alias vec = __vector(T[N]);
     }
 
-    // `__simd_sto`/`__simd` are x86 XMM instruction intrinsics; other D_SIMD
-    // targets (e.g. WebAssembly) use a plain unaligned vector load/store.
     void store(T, size_t N)(T* p, const scope __vector(T[N]) val)
     {
         pragma(inline, true);
         alias vec = __vector(T[N]);
 
-        version (X86_64_Or_X86)
+        version (Have_xmm)
         {
             static if (is(T == float))
                 cast(void) __simd_sto(XMM.STOUPS, *cast(vec*) p, val);
@@ -120,7 +118,7 @@ version (D_SIMD)
         pragma(inline, true);
         alias vec = __vector(T[N]);
 
-        version (X86_64_Or_X86)
+        version (Have_xmm)
         {
             static if (is(T == float))
                 return cast(typeof(return)) __simd(XMM.LODUPS, *cast(const vec*) p);
@@ -261,7 +259,7 @@ else version (D_SIMD)
 }
 else
 {
-    // No SIMD available (e.g. DMD without D_SIMD): use scalar loop.
+    // no SIMD available, use a scalar loop
     enum vectorizeable(E : E[], Args...) = false;
 }
 

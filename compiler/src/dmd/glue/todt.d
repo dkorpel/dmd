@@ -351,10 +351,7 @@ void Expression_toDt(Expression e, ref DtBuilder dtb)
                 const sz = target.realsize - target.realpad;
                 if (sz <= 8)
                 {
-                    // The target's `real` is narrower than the host 80-bit
-                    // long double (e.g. WASM, where real is 64-bit). Copying
-                    // the low `sz` bytes of the x87 representation would store
-                    // the mantissa, not a valid float — narrow numerically.
+                    // narrow numerically, the low bytes of an x87 real are the mantissa
                     if (sz == 4)
                     {
                         auto fvalue = cast(float)e.value;

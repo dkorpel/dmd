@@ -33,33 +33,8 @@ shared static this ()
     enum DefaultLog = "trace.log";
     enum DefaultDef = "trace.def";
 
-    version (WASI)
-    {
-        // WASI has no working directory: a relative path resolves against the
-        // preopened "/", so absolutize the defaults with the host working
-        // directory passed in the PWD environment variable (if any).
-        import core.stdc.stdlib : getenv, malloc;
-        static char[] absolutize(string name)
-        {
-            auto pwd = getenv("PWD");
-            if (!pwd)
-                return strdup(name.ptr)[0 .. name.length + 1];
-            const plen = strlen(pwd);
-            auto p = cast(char*) malloc(plen + 1 + name.length + 1);
-            p[0 .. plen] = pwd[0 .. plen];
-            p[plen] = '/';
-            p[plen + 1 .. plen + 1 + name.length] = name[];
-            p[plen + 1 + name.length] = 0;
-            return p[0 .. plen + 1 + name.length + 1];
-        }
-        trace_logfilename = absolutize(DefaultLog);
-        trace_deffilename = absolutize(DefaultDef);
-    }
-    else
-    {
-        trace_logfilename = strdup(DefaultLog.ptr)[0 .. DefaultLog.length + 1];
-        trace_deffilename = strdup(DefaultDef.ptr)[0 .. DefaultDef.length + 1];
-    }
+    trace_logfilename = strdup(DefaultLog.ptr)[0 .. DefaultLog.length + 1];
+    trace_deffilename = strdup(DefaultDef.ptr)[0 .. DefaultDef.length + 1];
 }
 
 /**
@@ -924,7 +899,7 @@ else version (WASI)
     @wasmImportModule("wasi_snapshot_preview1")
     private extern (C) int clock_time_get(uint clockId, ulong precision, ulong* timestamp) @nogc nothrow;
 
-    // WASI clockid 1 is the monotonic clock, in nanoseconds.
+    // clockid 1 is the monotonic clock, in nanoseconds
     extern (D) void QueryPerformanceCounter(timer_t* ctr)
     {
         ulong t;

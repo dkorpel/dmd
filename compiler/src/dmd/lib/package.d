@@ -312,7 +312,7 @@ class Library
             case Target.ObjectFormat.elf:   lib = LibElf_factory();     break;
             case Target.ObjectFormat.macho: lib = LibMach_factory();    break;
             case Target.ObjectFormat.coff:  lib = LibMSCoff_factory();  break;
-            case Target.ObjectFormat.wasm: lib = LibWasm_factory(); break;
+            case Target.ObjectFormat.wasm:  lib = LibWasm_factory();    break;
         }
         lib.lib_ext = lib_ext;
         lib.eSink = eSink;

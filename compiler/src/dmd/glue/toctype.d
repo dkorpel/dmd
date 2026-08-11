@@ -152,8 +152,7 @@ type* Type_toCtype(Type t)
         if (t.isRef && tret && tret.Tty != TYvoid && tret.Tty != TYnoreturn) // skip ref for `ref void` or `ref noreturn`
             tret = type_allocn(TYnref, tret);
         type* tf = type_function(totym(t), types, t.parameterList.varargs == VarArg.variadic, tret);
-        // Mark extern(D) `...` variadics so the WASM backend can tell them apart
-        // from C-style `...` (which has no hidden _arguments TypeInfo param).
+        // void f(...) // extern(D), unlike C, has a hidden _arguments parameter
         if (t.parameterList.varargs == VarArg.variadic && t.linkage == LINK.d)
             tf.Tflags |= TF.dstylevararg;
         return tf;

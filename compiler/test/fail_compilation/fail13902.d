@@ -360,4 +360,3 @@ int* escape()
     int st;
     return match(st);
 }
-// DISABLED: wasm

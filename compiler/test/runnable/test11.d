@@ -4,8 +4,7 @@
 extern(C) int printf(const char*, ...);
 extern(C) size_t strlen(const char*);
 
-// wasm (and other targets where `real` is 64-bit) has no extended `long
-// double`; its C `%Lg` vararg layout is wider than `real`, so print via %g.
+// C's `long double` is wider than `real` when `real` is 64-bit
 static if (real.sizeof > double.sizeof)
     enum Lg = "z = %Lg\n";
 else

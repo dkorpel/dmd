@@ -4922,10 +4922,8 @@ else
     }
     else version (CRuntime_WASI)
     {
-        // On the WebAssembly target `real` is 64-bit (== double). wasi-libc's
-        // `*l` symbols use a 128-bit long-double ABI, so binding them directly
-        // as extern(C) would mismatch and corrupt. Instead forward each to the
-        // `double` counterpart.
+        // wasi-libc's `*l` symbols have a 128 bit long double ABI, incompatible
+        // with a 64 bit `real`, so forward to the `double` versions instead
         extern(D) real acosl()(real x)   { return acos(cast(double) x); }
         extern(D) real asinl()(real x)   { return asin(cast(double) x); }
         extern(D) pure real atanl()(real x)   { return atan(cast(double) x); }

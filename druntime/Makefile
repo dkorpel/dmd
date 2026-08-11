@@ -431,64 +431,45 @@ $(DRUNTIME): $(OBJS) $(SRCS) $(DMD)
 lib: $(DRUNTIME)
 
 ################### WASM cross-target #########################
-# Cross-compile a minimal WASM druntime archive.  Independent of the host
-# build (OS/MODEL/BUILD) — wasm32-unknown-unknown is a single fixed target.
-# Output layout mirrors $(ROOT_OF_THEM_ALL)/<os>/<build>/<model>/ for the
-# native build, with os=wasm, build=release, model=wasm32.
-#
-# Objects use the .o extension (the wasm target's obj_ext) so `dmd -lib`
-# accepts them when assembling the archive.
+# Cross-compile the druntime archive for wasm32-wasip1, independent of the
+# host build (OS/MODEL/BUILD).
 
 WASM_DMD    ?= $(DMD)
 WASM_ROOT   := $(ROOT_OF_THEM_ALL)/wasm/release/wasm32
 WASM_LIB    := $(WASM_ROOT)/libdruntime-wasm.a
 WASM_RT_DIR := src/rt/wasm
-WASM_MODULES := start errors
+WASM_MODULES := start
 WASM_OBJS   := $(addprefix $(WASM_ROOT)/rt_,$(addsuffix .o,$(WASM_MODULES)))
 WASM_FLAGS  := -c -mwasm32 -os=wasm -betterC -conf= -Isrc -Iimport -w -de
 
-# The wasm druntime is built from the same shared source list as the native
-# build ($(SRCS)) rather than a hand-curated subset: OS-specific modules
-# (core.sys.*, rt.deh_*, rt.sections_* ...) self-gate to empty on wasm via
-# their existing `version` guards, and the handful of modules that are
-# genuinely incompatible are gated out with `version (WebAssembly)` in their
-# own sources (rt.alloca, rt.deh, rt.llmath).  Two modules can't be
-# version-guarded cleanly and is filtered out here:
-#   core/stdc/complex.d          - defines functions taking native complex
-#                                  types, which the wasm backend cannot emit
-# rt.monitor_/rt.critical_ compile as-is via their existing WASI no-op arms.
-# Three wasm-only modules are not part of $(SRCS) and are appended explicitly.
+# Built from the shared $(SRCS): OS-specific modules self-gate to empty on
+# wasm through their existing `version` guards.  Filtered out here are the
+# modules for other targets' complex types and exception handling.
 WASM_DRT_EXCLUDE := \
-	src/core/stdc/complex.d
+	src/core/stdc/complex.d \
+	src/rt/dwarfeh.d \
+	src/rt/deh_win64_posix.d
 WASM_DRT_SRCS := $(filter-out $(WASM_DRT_EXCLUDE),$(SRCS)) \
 	src/rt/sections_wasm.d \
 	src/rt/wasm/extra.d \
 	src/rt/wasm/eh.d
 WASM_DRT_FLAGS := -c -mwasm32 -os=wasm -conf= -Isrc -Iimport -w -de
-# Map a source path to a unique object name (several sources share a basename,
-# e.g. impl/{proto,manual,conservative}/gc.d and thread/package.d): strip the
-# leading src/, drop the extension, and turn path separators into underscores.
+# Map a source path to a unique object name: several sources share a basename,
+# e.g. impl/{proto,manual,conservative}/gc.d and thread/package.d
 wasm_obj = $(WASM_ROOT)/drt_$(subst /,_,$(basename $(patsubst src/%,%,$(1)))).o
 WASM_DRT_OBJS := $(foreach s,$(WASM_DRT_SRCS),$(call wasm_obj,$(s)))
 
-# Standalone _start shim for betterC programs (NOT part of libdruntime-wasm.a,
-# which betterC does not link).  dmd.link adds it in betterC mode.  It is an
-# archive rather than a bare object so that a program defining its own `_start`
-# simply leaves the member unpulled instead of colliding with it.
+# wasi-libc's `_start` for betterC programs, added by dmd.link in betterC mode.
+# An archive rather than an object, so a program defining its own `_start`
+# leaves the member unpulled instead of colliding with it.
 WASM_BETTERC_CRT := $(WASM_ROOT)/libcrt1_betterc.a
-WASM_BETTERC_OBJ := $(WASM_ROOT)/crt1_betterc.o
+WASM_BETTERC_OBJ := $(WASM_ROOT)/crt1-command.o
 
-# wasi-libc: the C library the wasm druntime and betterC link against for
-# printf/puts/memcmp/malloc-backing/... . dmd.link adds `-l:libc.a` from
-# $(WASM_ROOT).  Rather than vendoring a binary blob or building wasi-libc from
-# source, fetch the prebuilt libc.a from a pinned, checksummed wasi-sdk sysroot
-# release (github.com/WebAssembly/wasi-sdk), matching the wasm32-wasip1 ABI the
-# druntime targets (@wasmImportModule("wasi_snapshot_preview1")).
-#
-# Keep WASI_SDK_VERSION in sync with the actions/cache key in
-# .github/workflows/main.yml.  Set WASI_LIBC_LOCAL to a path to skip the
-# download and copy a locally-built libc.a instead (e.g. from a wasi-libc
-# checkout).
+# wasi-libc, fetched as a pinned and checksummed prebuilt libc.a from a
+# wasi-sdk sysroot release (github.com/WebAssembly/wasi-sdk).  Keep
+# WASI_SDK_VERSION in sync with the actions/cache key in
+# .github/workflows/main.yml.  Set WASI_LIBC_LOCAL to a path to use a
+# locally built libc.a instead.
 WASM_LIBC            := $(WASM_ROOT)/libc.a
 # Same sysroot, second archive: wasi-libc's malloc-backed mmap/munmap emulation.
 # Not linked by default; a program opts in with -version=WASI_EMULATED_MMAN and
@@ -503,10 +484,6 @@ WASI_LIBC_LOCAL      ?=
 SHA256SUM            ?= sha256sum
 
 $(WASM_ROOT)/rt_%.o : $(WASM_RT_DIR)/%.d $(DMD)
-	@mkdir -p $(dir $@)
-	$(WASM_DMD) $(WASM_FLAGS) -of$@ $<
-
-$(WASM_BETTERC_OBJ) : $(WASM_RT_DIR)/start_betterc.d $(DMD)
 	@mkdir -p $(dir $@)
 	$(WASM_DMD) $(WASM_FLAGS) -of$@ $<
 
@@ -531,16 +508,16 @@ $(WASM_LIB): $(WASM_OBJS) $(WASM_DRT_OBJS)
 	rm -f $@
 	$(WASM_DMD) -lib -mwasm32 -os=wasm -conf= -of$@ $(WASM_OBJS) $(WASM_DRT_OBJS)
 
-$(WASM_LIBC):
+$(WASM_LIBC) $(WASM_BETTERC_OBJ): $(WASM_ROOT)/% :
 	@mkdir -p $(WASM_ROOT)
 ifneq ($(WASI_LIBC_LOCAL),)
-	cp $(WASI_LIBC_LOCAL) $@
+	cp $(dir $(WASI_LIBC_LOCAL))$* $@
 else
 	@mkdir -p $(dir $(WASI_SYSROOT_TARBALL))
 	test -f $(WASI_SYSROOT_TARBALL) || curl -fSL -o $(WASI_SYSROOT_TARBALL) '$(WASI_SYSROOT_URL)'
 	echo '$(WASI_SYSROOT_SHA256)  $(WASI_SYSROOT_TARBALL)' | $(SHA256SUM) -c -
-	tar -xzOf $(WASI_SYSROOT_TARBALL) --wildcards --no-anchored '*/wasm32-wasip1/libc.a' > $@
-	test -s $@ || { echo "wasm32-wasip1/libc.a not found in $(WASI_SYSROOT_TARBALL)"; rm -f $@; exit 1; }
+	tar -xzOf $(WASI_SYSROOT_TARBALL) --wildcards --no-anchored '*/wasm32-wasip1/$*' > $@
+	test -s $@ || { echo "wasm32-wasip1/$* not found in $(WASI_SYSROOT_TARBALL)"; rm -f $@; exit 1; }
 endif
 
 $(WASM_LIBC_MMAN): $(WASM_LIBC)

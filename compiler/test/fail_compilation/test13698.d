@@ -15,4 +15,3 @@ void main() {
         ubyte b = 0;
         a = __simd(XMM.SHUFPS, a, b);
 }
-// DISABLED: wasm

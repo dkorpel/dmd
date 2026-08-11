@@ -21,8 +21,6 @@ const scriptDir = __FILE_FULL_PATH__.dirName.buildNormalizedPath;
 immutable testDirs = ["runnable", "runnable_cxx", "dshell", "compilable", "fail_compilation"];
 shared bool verbose; // output verbose logging
 shared bool force; // always run all tests (ignores timestamp checking)
-shared string extraDependency; // extra file (e.g. the WASM druntime archive) whose
-                               // mtime invalidates cached results when it is newer
 shared string hostDMD; // path to host DMD binary (used for building the tools)
 shared string unitTestRunnerCommand;
 
@@ -132,25 +130,12 @@ Options:
         environment["ARGS"] = "";
     }
 
-    // WASM regression target: compile+run compilable/runnable tests as
-    // WebAssembly, no permutations (fast). Tests that can't run on wasm carry
-    // a `DISABLED: wasm` directive; `.sh` tests are skipped by the runner.
-    bool wasmTarget = false;
+    // ./run.d wasm  # compile+run the compilable and runnable tests as WebAssembly
     if (args == ["wasm"])
     {
-        wasmTarget = true;
         environment["OS"] = "wasm";
         environment["ARGS"] = "";
         args = ["compilable", "runnable"];
-        // Each test runs under wasmtime with up to 2 GiB of linear memory, so
-        // cap parallelism to avoid exhausting host RAM on many-core machines.
-        jobs = min(jobs, 4);
-        // The WASM phobos archive (which also contains druntime) is linked into
-        // every test but is not a test source, so timestamp-based caching
-        // wouldn't otherwise re-run tests after the archive is rebuilt. Track it
-        // as an extra dependency.
-        extraDependency = scriptDir.buildPath("..", "..", "..", "phobos", "generated", "wasm",
-            "release", "wasm32", "libphobos2-wasm.a");
     }
 
     // allow overwrites from the environment
@@ -217,47 +202,20 @@ Options:
     if (targets.length > 0)
     {
         shared string[] failedTargets;
-        Tally[string] tallies; // keyed by category (e.g. "runnable"); guarded by `tallyMutex`
-        Object tallyMutex = new Object;
         foreach (target; parallel(targets, 1))
         {
-            // dshell-style `.sh` tests drive the native toolchain (linking,
-            // running executables, host utilities) and cannot run on the wasm
-            // target, so skip them wholesale instead of listing each one.
-            if (wasmTarget && target.filename.endsWith(".sh"))
-            {
-                log("skipping shell test on wasm: %s", target.filename);
-                synchronized (tallyMutex)
-                    tallies.require(target.normalizedTestName.findSplit("/")[0]).bump(Outcome.ignored);
-                continue;
-            }
             log("run: %-(%s %)", target.args);
             int status = spawnProcess(target.args, env, Config.none, scriptDir).wait;
-            const string name = target.filename
-                        ? target.normalizedTestName
-                        : "`unit` tests: " ~ (cast(string)unitTestRunnerCommand) ~ " " ~ join(target.args, " ");
-            Outcome outcome;
             if (status != 0)
             {
+                const string name = target.filename
+                            ? target.normalizedTestName
+                            : "`unit` tests: " ~ (cast(string)unitTestRunnerCommand) ~ " " ~ join(target.args, " ");
+
                 writeln(">>> TARGET FAILED: ", name);
                 synchronized failedTargets ~= name;
-                outcome = Outcome.failed;
             }
-            synchronized (tallyMutex)
-                tallies.require(name.findSplit("/")[0]).bump(outcome);
         }
-        size_t totPassed, totFailed, totIgnored;
-        writeln("Results by category:");
-        foreach (cat; tallies.keys.dup.sort)
-        {
-            const t = tallies[cat];
-            writefln("  %-20s %d passed, %d failed, %d ignored",
-                cat, t.passed, t.failed, t.ignored);
-            totPassed += t.passed; totFailed += t.failed; totIgnored += t.ignored;
-        }
-        writefln("  %-20s %d passed, %d failed, %d ignored (total %d)",
-            "TOTAL", totPassed, totFailed, totIgnored,
-            totPassed + totFailed + totIgnored);
         if (failedTargets.length > 0)
         {
             // print overview of failed targets (for CIs)
@@ -268,22 +226,6 @@ Options:
     }
 
     return 0;
-}
-
-enum Outcome { passed, failed, ignored } // note: `passed` is the default (0)
-
-struct Tally
-{
-    size_t passed, failed, ignored;
-    void bump(Outcome o)
-    {
-        final switch (o)
-        {
-            case Outcome.passed:  passed++;  break;
-            case Outcome.failed:  failed++;  break;
-            case Outcome.ignored: ignored++; break;
-        }
-    }
 }
 
 /// Verify that the compiler has been built.
@@ -368,8 +310,7 @@ void ensureToolsExists(const string[string] env, const TestTool[] tools ...)
         if (tool.linksWithTests)
         {
             // This will compile the dshell library thus needs the actual
-            // DMD compiler under test.  Use the DMD's native model, not
-            // the target test model (which may be "wasm" with no -mXX flag).
+            // DMD compiler under test, built for the host model
             buildCommand = [
                 env["DMD"],
                 "-conf=",
@@ -377,28 +318,17 @@ void ensureToolsExists(const string[string] env, const TestTool[] tools ...)
                 "-of" ~ targetBin,
                 "-c",
                 sourceFile
-            ] ~ getPicFlags(env);
+            ] ~ getHostPicFlags();
             overrideEnv = env.dup;
-            // When targeting WASM, env["DFLAGS"] only has druntime (no Phobos).
-            // dshell_prebuilt imports std.meta so it needs Phobos; build it
-            // with native import paths regardless of the cross-compile target.
-            if (os == "wasm")
-            {
-                auto druntimePath = environment.get("DRUNTIME_PATH", testPath(`../../druntime`));
-                auto phobosPath    = environment.get("PHOBOS_PATH",   testPath(`../../../phobos`));
-                overrideEnv["DFLAGS"] = "-I%s/import -I%s".format(druntimePath, phobosPath);
-            }
         }
         else
         {
-            // Host tools (d_do_test, etc.) are always built for the host
-            // platform, not the test target (which might be WASM).
             buildCommand = [
                 hostDMD,
                 "-m"~dmdModel,
                 "-of"~targetBin,
                 sourceFile
-            ] ~ getPicFlags(env) ~ tool.extraArgs;
+            ] ~ getHostPicFlags() ~ tool.extraArgs;
         }
 
         writefln("Executing: %-(%s %)", buildCommand);
@@ -475,7 +405,9 @@ Target[] predefinedTargets(string[] targets)
 {
     static findFiles(string dir)
     {
-        return testPath(dir).dirEntries("*{.d,.c,.i,.sh}", SpanMode.shallow).map!(e => e.name);
+        // `.sh` tests drive the native toolchain, they can't run cross-compiled
+        const pattern = os == "wasm" ? "*{.d,.c,.i}" : "*{.d,.c,.i,.sh}";
+        return testPath(dir).dirEntries(pattern, SpanMode.shallow).map!(e => e.name);
     }
 
     static Target createUnitTestTarget()
@@ -568,9 +500,6 @@ Target[] filterTargets(Target[] targets, const string[string] env)
 
     Target[] targetsThatNeedUpdating;
     const dmdLastModified = env["DMD"].timeLastModified.ifThrown(SysTime.init);
-    const extraDepModified = extraDependency.length
-        ? extraDependency.timeLastModified.ifThrown(SysTime.init)
-        : SysTime.init;
     foreach (t; targets)
     {
         immutable testName = t.normalizedTestName;
@@ -579,8 +508,7 @@ Target[] filterTargets(Target[] targets, const string[string] env)
         auto testSourcePath = testPath(testName);
         auto sourceLastModified = testSourcePath.timeLastModified.ifThrown(SysTime.init);
         if (!force && resultRunTime > sourceLastModified &&
-                resultRunTime > dmdLastModified &&
-                resultRunTime > extraDepModified)
+                resultRunTime > dmdLastModified)
             log("%s is already up-to-date", testName);
         else
             targetsThatNeedUpdating ~= t;
@@ -640,7 +568,6 @@ string[string] getEnvironment()
 
     const generatedSuffix = "generated/%s/%s/%s".format(os, build, model);
 
-    // WebAssembly target: override flags and runner regardless of host platform.
     if (os == "wasm")
     {
         env["OBJ"]  = ".o";
@@ -649,28 +576,19 @@ string[string] getEnvironment()
         env["EXE"]  = ".wasm";
         env["PIC_FLAG"] = "";
         env.setDefault("ARGS", "");
-        // REQUIRED_ARGS: inject WASM target flags; honour extra user args.
-        // The wasm archive search dirs go here rather than in DFLAGS because a
-        // test may override DFLAGS (e.g. runnable/minimal.d), and wasm-ld always
-        // needs to find libphobos2-wasm.a / libc.a / the betterC crt shim.
+        // The archive search dirs go in REQUIRED_ARGS rather than DFLAGS because
+        // a test may override DFLAGS (e.g. runnable/minimal.d)
         auto wasmLibPath = testPath(`../../generated/wasm/release/wasm32`);
         auto phobosPath = environment.get("PHOBOS_PATH", testPath(`../../../phobos`));
         auto phobosLibPath = "%s/generated/wasm/release/wasm32".format(phobosPath);
         const extra = environment.get("REQUIRED_ARGS", "");
         env["REQUIRED_ARGS"] = "-mwasm32 -os=wasm -L-L%s -L-L%s".format(wasmLibPath, phobosLibPath)
             ~ (extra.length ? " " ~ extra : "");
-        // --dir=/ preopens the host filesystem so absolute paths resolve
-        // (RESULTS_DIR in EXECUTE_ARGS). WASI has no working directory, so
-        // relative guest paths resolve against "/"; PWD lets the coverage
-        // runtime absolutize relative source paths (rt.wasm.cover).
-        // max-memory-size caps linear memory at 2 GiB so a runaway allocating
-        // test fails with ALLOCFAIL instead of exhausting host RAM. `timeout`
-        // kills a hung/pathologically-slow test after 10s (exit 124 => failure)
-        // so the suite makes progress instead of stalling indefinitely.
+        // --dir=/ preopens the host filesystem so absolute paths resolve,
+        // $PWD gives the guest a working directory
         env.setDefault("EXEC_BINARY_WRAPPER",
-            "timeout -k 1 10 wasmtime run -W exceptions=y -W max-memory-size=2147483648 --dir=/ --env PWD=" ~ std.file.getcwd());
-        // -conf= strips dmd.conf, so the import path a normal dmd.conf supplies
-        // via -I%@P%/... is provided here instead.
+            "wasmtime run -W exceptions=y --dir=/ --env PWD=" ~ std.file.getcwd());
+        // tests run with -conf=, so supply the import paths dmd.conf would
         auto druntimePath = environment.get("DRUNTIME_PATH", testPath(`../../druntime`));
         env["DFLAGS"] = "-I%s/import -I%s".format(druntimePath, phobosPath);
         return env;
@@ -741,6 +659,16 @@ string objName(string name)
         return name ~ ".obj";
     else
         return name ~ ".o";
+}
+
+/// Return the pic flags for building host tools, which are native even when
+/// the tests target another OS
+string[] getHostPicFlags()
+{
+    version (Windows)
+        return null;
+    else
+        return environment.get("PIC", "") == "0" ? null : ["-fPIC"];
 }
 
 /// Return the correct pic flags as an array of strings

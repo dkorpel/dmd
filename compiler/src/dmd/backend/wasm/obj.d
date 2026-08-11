@@ -298,6 +298,9 @@ struct WasmModule
     uint minfoStart;
     uint minfoStop;
 
+    /// pragma(crt_constructor) functions, emitted as WASM_INIT_FUNCS
+    Symbol*[] initFuncs;
+
     OutBuffer scratch;
 
     WasmSymIndex symIndex;
@@ -742,6 +745,7 @@ private bool emitLinkingSection(ref OutBuffer out_, ref WasmModule wmod)
 
     OutBuffer symtab;
     uint symCount = 0;
+    uint[] initFuncSyms;
     Symbol*[] datasymsForLinking = buildDataSymtabOrder(wmod);
 
     foreach (size_t i, ref const WasmFunc f; wmod.funcs)
@@ -776,6 +780,10 @@ private bool emitLinkingSection(ref OutBuffer out_, ref WasmModule wmod)
         symtab.writeuLEB128(cast(uint) i);
         if (!isImport)
             appendName(symtab, name);
+
+        foreach (Symbol* ctor; wmod.initFuncs)
+            if (ctor is f.sym)
+                initFuncSyms ~= symCount - 1;
     }
 
     foreach (Symbol* sym; datasymsForLinking)
@@ -856,6 +864,21 @@ private bool emitLinkingSection(ref OutBuffer out_, ref WasmModule wmod)
     body_.writeuLEB128(cast(uint)(ulebSize(symCount) + symtab.length()));
     body_.writeuLEB128(symCount);
     body_.write(symtab.peekSlice());
+
+    if (initFuncSyms.length)
+    {
+        OutBuffer initFuncs;
+        initFuncs.writeuLEB128(cast(uint) initFuncSyms.length);
+        foreach (symIdx; initFuncSyms)
+        {
+            initFuncs.writeuLEB128(65535); // priority, as clang emits for a plain constructor
+            initFuncs.writeuLEB128(symIdx);
+        }
+
+        body_.writeByte(WASM_LINKING.INIT_FUNCS);
+        body_.writeuLEB128(cast(uint) initFuncs.length());
+        body_.write(initFuncs.peekSlice());
+    }
 
     writeCustomSection(out_, "linking", &body_);
     return true;
@@ -1365,6 +1388,8 @@ void WasmObj_staticdtor(Symbol* s)
 
 void WasmObj_setModuleCtorDtor(Symbol* s, bool isCtor)
 {
+    assert(isCtor); // TargetC.crtDestructorsSupported is false for wasm
+    wmod.initFuncs ~= s;
 }
 
 void WasmObj_ehtables(Symbol* sfunc, uint size, Symbol* ehsym)

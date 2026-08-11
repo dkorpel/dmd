@@ -835,18 +835,6 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
         BlockState* blx = irs.blx;
 
         incUsage(irs, s.loc);
-        if (target.isWasm && config.ehmethod == EHmethod.EH_NONE)
-        {
-            // No exception runtime; evaluate expression for side effects, then halt.
-            block_appendexp(blx.curblock, toElemDtor(s.exp, irs));
-            elem* eh = el_calloc();
-            eh.Ety = TYnoreturn;
-            eh.Eoper = OPhalt;
-            elem_setLoc(eh, s.loc);
-            block_appendexp(blx.curblock, eh);
-            block_next(blx, BC.exit, null);
-            return;
-        }
         elem* e = toElemDtor(s.exp, irs);
         const rtlthrow = config.ehmethod == EHmethod.EH_DWARF ? RTLSYM.THROWDWARF : RTLSYM.THROWC;
         e = el_bin(OPcall, TYvoid, el_var(getRtlsym(rtlthrow)),e);
@@ -866,16 +854,6 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
     void visitTryCatch(TryCatchStatement s)
     {
         BlockState* blx = irs.blx;
-
-        if (target.isWasm && config.ehmethod == EHmethod.EH_NONE)
-        {
-            // No exception runtime. Emit just the try body; catch blocks are
-            // unreachable (throw generates halt). Skip all EH block machinery.
-            StmtState mystate = StmtState(stmtstate, s);
-            if (s._body)
-                Statement_toIR(s._body, irs, &mystate);
-            return;
-        }
 
         if (blx.funcsym.Sfunc.Fflags & Feh_none) printf("visit %s\n", blx.funcsym.Sident.ptr);
         if (blx.funcsym.Sfunc.Fflags & Feh_none) assert(0);
@@ -1421,7 +1399,6 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
 
             if (config.ehmethod == EHmethod.EH_WASM && !(blx.funcsym.Sfunc.Fflags & Feh_none))
             {
-                // (!__flag && rethrow) — re-raise the in-flight exnref
                 elem* er = el_calloc();
                 er.Eoper = OPrethrow;
                 er.Ety = TYvoid;

@@ -64,10 +64,7 @@ else version (WebAssembly)
 else
     static assert(0, "unimplemented");
 
-import rt.minfo;
-// rt.deh only supplies FuncTable for the ehTables check below; the WASM
-// SectionGroup has no ehTables member, so skip rt.deh's unsupported-arch gate.
-version (WebAssembly) {} else import rt.deh;
+import rt.deh, rt.minfo;
 
 template isSectionGroup(T)
 {

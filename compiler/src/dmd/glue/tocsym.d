@@ -259,8 +259,8 @@ Symbol* toSymbol(Dsymbol s)
                     t = type_fake(TYnptr);
                 else if (target.isWasm)
                 {
-                    // `lazy T` parameters mangle as `T delegate()`; WASM needs
-                    // the precise delegate type for the emitted function signature.
+                    // `lazy T` parameters mangle as `T delegate()` but WASM validator
+                    // requires precise delegate type
                     type* tret = Type_toCtype(vd.type);
                     type* tf = type_function(TYnfunc, null, false, tret);
                     t = type_delegate(tf);
@@ -502,11 +502,8 @@ Symbol* toSymbol(Dsymbol s)
             if (fd.isMember2() && fd.isStatic())
                 f.Fflags |= Fstatic;
 
-            // The WASM backend derives a function's exact type signature (and
-            // thus its implicit leading 'this'/static-link parameter) from these
-            // flags. toObjFile sets them only when a body is emitted, so external
-            // member/nested declarations would otherwise get a wrong import type.
-            // Set them here so imports match how callers push arguments.
+            // WASM validator requires correct type. toObjFile sets them only when a body is emitted,
+            // so external member/nested declarations would miss the hidden this pointer
             if (target.isWasm)
             {
                 if (fd.isNested())
@@ -981,15 +978,13 @@ Classsym* fake_classsym(Identifier id)
  * If `fd` carries the `core.attribute` UDA named `udaId` (one of
  * `@wasmImportModule`, `@wasmImportName` or `@wasmExportName`), pass its string
  * argument to `register` alongside `fd`'s mangled name.
- * Called only when targeting WebAssembly.
  */
 private void registerWasmUdaName(FuncDeclaration fd, const(char)[] mangledName,
     Identifier udaId, void function(const(char)[], const(char)[]) nothrow register)
 {
     import dmd.attrib : foreachUdaNoSemantic, isCoreUda;
 
-    // Several UDAs on one declaration (or one alias expanding to an AliasSeq of
-    // them) arrive as a nested tuple rather than as separate elements.
+    // @wasmImportModule("env") @wasmImportName("f") extern(C) void f();
     int visit(Expression e)
     {
         if (auto te = e.isTupleExp())

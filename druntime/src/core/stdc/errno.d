@@ -166,9 +166,7 @@ else version (Haiku)
 }
 else version (WASI_Compat)
 {
-    // wasi-libc exposes errno as a plain global; rt/wasm provides a
-    // __errno_location() accessor over it so the rest of druntime can treat
-    // errno uniformly as a ref-returning function (as on glibc/musl).
+    // wasi-libc exposes errno as a plain global, rt.wasm.extra wraps it
     extern (C)
     {
         ref int __errno_location();

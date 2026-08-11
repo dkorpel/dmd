@@ -6,6 +6,23 @@
  */
 module rt.wasm.extra;
 
+private extern (C) noreturn _wasm_trap(int code) @nogc nothrow;
+
+/// The libc assert handler, the D `assert` throws an AssertError instead
+extern (C) noreturn __assert(const(char)* file, int line, const(char)* msg) @nogc nothrow
+{
+    import core.stdc.stdio : fprintf, stderr;
+    fprintf(stderr, "%s(%d): Assertion `%s` failed\n", file, line, msg);
+    _wasm_trap(1);
+}
+
+/// wasi-libc exposes errno as a plain global, druntime expects an accessor
+private extern (C) extern __gshared int errno;
+extern (C) ref int __errno_location() @nogc nothrow
+{
+    return errno;
+}
+
 private extern (C) void* gc_calloc(size_t sz, uint ba = 0, const scope TypeInfo ti = null) @nogc nothrow;
 
 // Only for &alloca, the wasm backend lowers direct alloca() calls to a dynamic
