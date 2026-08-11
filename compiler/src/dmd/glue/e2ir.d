@@ -4300,8 +4300,6 @@ elem* toElemRVO(Expression e, elem* ehidden, ref IRState irs)
         e.type.toBasetype().ty != Tstruct && e.type.toBasetype().ty != Tsarray;
     if (wasmNonAgg && !ehidden)
         return toElem(e, irs);
-    assert(wasmNonAgg ||
-        e.type.toBasetype().ty == Tstruct || e.type.toBasetype().ty == Tsarray);
 
     elem* doCommaRVO(CommaExp ce)
     {
@@ -6002,9 +6000,11 @@ elem* callfunc(Loc loc,
     }
     else
     {
-        // void f(void function(int) fp) { fp(1); } // no callee Symbol to carry the type
+        // Ensure the variable carries the function type when there's no Symbol, e.g.:
+        // void f(void function(int) fp) { fp(1); }
         if (ec && ec.Eoper != OPvar)
             ec.ET = Type_toCtype(tf);
+
         // `OPcallns` used to be passed here for certain pure functions,
         // but optimizations based on pure have to be retought, see:
         // https://issues.dlang.org/show_bug.cgi?id=22277
@@ -6023,6 +6023,8 @@ elem* callfunc(Loc loc,
                 assert(length < ubyte.max); // 254 should be enough for anybody
                 e.numParams = cast(ubyte)(tf.parameterList.length + 1); // +1 means variadic
             }
+
+            // The wasm backend needs to know the exact number of hidden parameters for e.g.:
             // void foo2(void delegate(int, ...) dg) { dg(20, 3.14); }
             if (target.isWasm)
                 e.numParams = cast(ubyte)(1 + ((ethis2 !is null || ethis !is null) ? 1 : 0));

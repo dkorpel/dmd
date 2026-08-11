@@ -442,7 +442,6 @@ private struct MemOps
 {
     OP loadOp;
     OP storeOp;
-    ubyte alignLog2;
 }
 
 private MemOps memOpsFor(tym_t ty) @safe
@@ -450,21 +449,21 @@ private MemOps memOpsFor(tym_t ty) @safe
     switch (tybasic(ty))
     {
     case TYllong, TYullong:
-        return MemOps(OP.I64_LOAD, OP.I64_STORE, 3);
+        return MemOps(OP.I64_LOAD, OP.I64_STORE);
     case TYfloat, TYifloat:
-        return MemOps(OP.F32_LOAD, OP.F32_STORE, 2);
+        return MemOps(OP.F32_LOAD, OP.F32_STORE);
     case TYdouble, TYdouble_alias, TYreal, TYireal:
-        return MemOps(OP.F64_LOAD, OP.F64_STORE, 3);
+        return MemOps(OP.F64_LOAD, OP.F64_STORE);
     case TYschar:
-        return MemOps(OP.I32_LOAD8_S, OP.I32_STORE8, 0);
+        return MemOps(OP.I32_LOAD8_S, OP.I32_STORE8);
     case TYchar, TYuchar, TYbool:
-        return MemOps(OP.I32_LOAD8_U, OP.I32_STORE8, 0);
+        return MemOps(OP.I32_LOAD8_U, OP.I32_STORE8);
     case TYshort:
-        return MemOps(OP.I32_LOAD16_S, OP.I32_STORE16, 1);
+        return MemOps(OP.I32_LOAD16_S, OP.I32_STORE16);
     case TYwchar_t, TYushort:
-        return MemOps(OP.I32_LOAD16_U, OP.I32_STORE16, 1);
+        return MemOps(OP.I32_LOAD16_U, OP.I32_STORE16);
     default:
-        return MemOps(OP.I32_LOAD, OP.I32_STORE, 2);
+        return MemOps(OP.I32_LOAD, OP.I32_STORE);
     }
 }
 
@@ -491,7 +490,7 @@ private void emitLoad(ref WasmCG cg, tym_t ty, uint offset = 0)
         return cg.emit(OP.FD_PREFIX, Uleb(WASM_SIMD.V128_LOAD), Uleb(4), Uleb(offset));
 
     const m = memOpsFor(ty);
-    cg.emit(m.loadOp, Uleb(m.alignLog2), Uleb(offset));
+    cg.emit(m.loadOp, Uleb(naturalAlign(m.loadOp)), Uleb(offset));
 }
 
 private void emitStore(ref WasmCG cg, tym_t ty, uint offset = 0)
@@ -500,7 +499,7 @@ private void emitStore(ref WasmCG cg, tym_t ty, uint offset = 0)
         return cg.emit(OP.FD_PREFIX, Uleb(WASM_SIMD.V128_STORE), Uleb(4), Uleb(offset));
 
     const m = memOpsFor(ty);
-    cg.emit(m.storeOp, Uleb(m.alignLog2), Uleb(offset));
+    cg.emit(m.storeOp, Uleb(naturalAlign(m.storeOp)), Uleb(offset));
 }
 
 /// Store the caught exception payload (i32 on the value stack) into the

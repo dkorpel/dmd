@@ -113,7 +113,6 @@ elem* el_var(Symbol* s)
     }
     else if (config.exe & EX_WASM)
     {
-        // WASM: single-threaded, TLS mapped to regular data — no indirection needed
         return e;
     }
     else if (config.exe & EX_posix)

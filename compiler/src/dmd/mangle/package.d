@@ -731,10 +731,9 @@ public:
 
         if (fd.isCMain() && target.isWasm)
         {
-            // wasi-libc's crt dispatches to the entry by arity: an app that
-            // declares parameters provides `__main_argc_argv`, otherwise
-            // `__main_void`.  `rt.wasm.start` calls the wasi-libc entry, which
-            // bridges the two.
+            // x86 is loose so the runtime calling a function `void main()` as `main(argc, argv)`
+            // is allowed (the arguments are ignored). wasm has strict type validation of every,
+            // call instruction, so different signatures need to be distinguished
             buf.writestring(fd.parameters && fd.parameters.length ? "__main_argc_argv" : "__main_void");
             return;
         }

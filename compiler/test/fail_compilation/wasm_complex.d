@@ -14,10 +14,6 @@ fail_compilation/wasm_complex.d(111): Error: complex type `cdouble` is not suppo
 ---
 */
 
-// Complex types are unsupported by the wasm backend; they must fail with a
-// diagnostic rather than a codegen ICE.
-// https://github.com/dlang/dmd/issues/00000
-
 #line 100
 
 void f()

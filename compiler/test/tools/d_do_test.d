@@ -1012,20 +1012,33 @@ string execute(ref File f, string command, const ubyte expectedRc,
 }
 
 /**
- * Run `wasm-validate` on a produced WASM module/object and throw on failure.
- * No-ops if the file is missing or `wasm-validate` is not installed.
+ * Returns: whether a dmd command line results in an object file, i.e. it neither
+ * suppresses object output with `-o-` nor exits after printing a help listing.
+ */
+bool producesObject(string command)
+{
+    foreach (arg; command.splitter(' '))
+    {
+        if (arg == "-o-" || arg == "-h" || arg == "--help" ||
+            arg.endsWith("=?") || arg.endsWith("=h"))
+            return false;
+    }
+    return true;
+}
+
+/**
+ * Run `wasm-validate` on a produced WASM module/object and throw on failure,
+ * on a missing file, or when `wasm-validate` is not installed.
  */
 void validateWasmArtifact(ref File f, string path)
 {
-    if (!std.file.exists(path))
-        return;
+    enforce(std.file.exists(path), "missing WASM artifact to validate: " ~ path);
     const cmd = "wasm-validate --enable-exceptions " ~ quoteSpaces(path);
     f.writeln(cmd);
     const result = std.process.executeShell(cmd);
     f.write(result.output);
-    // 127 == command not found; skip silently so hosts without wabt still work.
-    if (result.status == 127)
-        return;
+    enforce(result.status != 127,
+        "wasm-validate not found, install wabt to run the WASM test suite");
     enforce(result.status == 0,
         "wasm-validate failed for " ~ path ~ ":\n" ~ result.output);
 }
@@ -1801,9 +1814,6 @@ int tryMain(string[] args)
     // Runs the test with a specific combination of arguments
     Result testCombination(bool autoCompileImports, string argSet, size_t permuteIndex, string permutedArgs)
     {
-        import std.datetime : seconds;
-        const compileTimeout = envData.os == "wasm" ? 60.seconds : Duration.zero;
-
         string test_app_dmd = test_app_dmd_base ~ to!string(permuteIndex) ~ envData.exe;
         string command; // copy of the last executed command so that it can be re-invoked on failures
         try
@@ -1835,7 +1845,7 @@ int tryMain(string[] args)
                         (autoCompileImports ? "-i" : join(testArgs.compiledImports, " ")));
 
                 try
-                    compile_output = execute(fThisRun, command, testArgs.mode == TestMode.FAIL_COMPILE, compileTimeout);
+                    compile_output = execute(fThisRun, command, testArgs.mode == TestMode.FAIL_COMPILE);
                 catch (Exception e)
                 {
                     writeln(""); // We're at "... runnable/xxxx.d (args)"
@@ -1852,7 +1862,7 @@ int tryMain(string[] args)
 
                     command = format("%s -conf= %s -I%s %s %s -od%s -c %s %s", envData.dmd, envData.modelFlag, input_dir,
                         testArgs.requiredArgs, permutedArgs, output_dir, argSet, filename);
-                    compile_output ~= execute(fThisRun, command, testArgs.mode == TestMode.FAIL_COMPILE, compileTimeout);
+                    compile_output ~= execute(fThisRun, command, testArgs.mode == TestMode.FAIL_COMPILE);
                 }
 
                 if (testArgs.mode == TestMode.RUN || testArgs.link)
@@ -1927,7 +1937,8 @@ int tryMain(string[] args)
 
             // `wasmtime run` validates the final module, but a compilable test
             // would otherwise pass on malformed bytecode
-            if (envData.os == "wasm" && testArgs.mode != TestMode.FAIL_COMPILE)
+            if (envData.os == "wasm" && testArgs.mode != TestMode.FAIL_COMPILE
+                && producesObject(command))
             {
                 string[] artifacts;
                 if (!testArgs.compileSeparately)

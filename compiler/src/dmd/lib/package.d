@@ -262,15 +262,14 @@ void writeArLibToBuffer(ref OutBuffer libbuf,
  * write the archive with its "/" symbol table.
  *
  * Shared by the ELF and WASM libraries, which differ only in the per-format
- * `scan` function that extracts symbols from a member; they parameterize this
- * helper on it and share the collect-then-write flow.
+ * `scan` function that extracts symbols from a member.
  *
  * Params:
  *  scan       = per-format object scanner (scanElfObjModule / scanWasmObjModule)
  *  libbuf     = buffer receiving the archive bytes
  *  objmodules = members; scannable ones (`scan` flag) feed the dictionary
  *  objsymbols = dictionary being built
- *  tab        = name → symbol table backing the dictionary
+ *  tab        = name to symbol table backing the dictionary
  *  eSink      = sink for multiple-definition errors
  *  filename   = archive filename for error messages
  */

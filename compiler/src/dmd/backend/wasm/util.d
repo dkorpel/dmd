@@ -72,6 +72,13 @@ void patchLEB5(ubyte[] buf, uint off, uint v) nothrow @safe
     }
 }
 
+/**
+ * Read an unsigned LEB128 value from `code` at `pos`, advancing `pos` past it.
+ * Params:
+ *      code = bytes to read from
+ *      pos = read position, updated to just after the encoded value
+ * Returns: the decoded value, 0 when `pos` is at the end of `code`
+ */
 ulong readuLEB128(const(ubyte)[] code, ref size_t pos) nothrow @safe
 {
     ulong v;
@@ -87,6 +94,13 @@ ulong readuLEB128(const(ubyte)[] code, ref size_t pos) nothrow @safe
     return v;
 }
 
+/**
+ * Read a signed LEB128 value from `code` at `pos`, advancing `pos` past it.
+ * Params:
+ *      code = bytes to read from
+ *      pos = read position, updated to just after the encoded value
+ * Returns: the sign extended value, 0 when `pos` is at the end of `code`
+ */
 long readsLEB128(const(ubyte)[] code, ref size_t pos) nothrow @safe
 {
     long v;

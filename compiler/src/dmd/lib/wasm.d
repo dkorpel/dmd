@@ -69,7 +69,7 @@ final class LibWasm : Library
 
         if (buffer.length >= 8 && memcmp(buffer.ptr, "!<arch>\n".ptr, 8) == 0)
         {
-            extractArchive(buffer, module_name);
+            extractArchive(buffer);
             return;
         }
 
@@ -105,7 +105,19 @@ final class LibWasm : Library
 
 private:
 
-    void extractArchive(const(ubyte)[] buf, const(char)[] archiveName)
+    /***************************************
+     * Add every object member of a GNU/SVR4 `ar` archive to this library.
+     *
+     * Members are added individually so that a library built from other
+     * libraries (e.g. `-lib` with an archive input) contains their objects
+     * rather than a nested archive. The symbol table members (`/`, `__.SYMDEF`)
+     * are skipped, the long name table (`//`) is used to resolve `/offset`
+     * member names.
+     *
+     * Params:
+     *      buf = archive file contents, starting with the `!<arch>\n` magic
+     */
+    void extractArchive(const(ubyte)[] buf)
     {
         uint offset = 8;
         const(char)[] nametab;

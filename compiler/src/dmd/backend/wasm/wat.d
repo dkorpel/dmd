@@ -25,7 +25,8 @@ private immutable string[] namespaces =
     "i8x16", "i16x8", "i32x4", "i64x2", "f32x4", "f64x2",
 ];
 
-private string textName(string m)
+// Convert enum name like I32_CONST to i32.const (kindy hacky, separate table would probably be better)
+private string enumToWat(string m)
 {
     string s;
     foreach (c; m)
@@ -41,14 +42,6 @@ private string textName(string m)
     return s;
 }
 
-private string[256] buildOpNames()
-{
-    string[256] names = buildSubNames!OP();
-    names[OP.FC_PREFIX] = null;
-    names[OP.FD_PREFIX] = null;
-    return names;
-}
-
 private string[256] buildSubNames(E)()
 {
     string[256] names;
@@ -56,12 +49,18 @@ private string[256] buildSubNames(E)()
     {{
         enum uint v = __traits(getMember, E, m);
         static if (v < 256)
-            names[v] = textName(m);
+            names[v] = enumToWat(m);
     }}
     return names;
 }
 
-private immutable opNames = buildOpNames();
+private immutable opNames = () {
+    string[256] names = buildSubNames!OP();
+    names[OP.FC_PREFIX] = null;
+    names[OP.FD_PREFIX] = null;
+    return names;
+} ();
+
 private immutable simdNames = buildSubNames!WASM_SIMD();
 private immutable fcNames = buildSubNames!WASM_FC();
 
@@ -134,26 +133,6 @@ private void printBlockType(ref Reader r, ref OutBuffer buf)
     {
         --r.pos;
         buf.printf(" (type %lld)", r.sleb());
-    }
-}
-
-private uint naturalAlign(ubyte op)
-{
-    switch (op)
-    {
-        case OP.I32_LOAD8_S, OP.I32_LOAD8_U, OP.I64_LOAD8_S, OP.I64_LOAD8_U,
-             OP.I32_STORE8, OP.I64_STORE8:
-            return 0;
-        case OP.I32_LOAD16_S, OP.I32_LOAD16_U, OP.I64_LOAD16_S, OP.I64_LOAD16_U,
-             OP.I32_STORE16, OP.I64_STORE16:
-            return 1;
-        case OP.I32_LOAD, OP.F32_LOAD, OP.I64_LOAD32_S, OP.I64_LOAD32_U,
-             OP.I32_STORE, OP.F32_STORE, OP.I64_STORE32:
-            return 2;
-        case OP.I64_LOAD, OP.F64_LOAD, OP.I64_STORE, OP.F64_STORE:
-            return 3;
-        default:
-            return 4;
     }
 }
 
@@ -400,7 +379,7 @@ void wasmDisassembleCode(const(ubyte)[] code, const(WasmReloc)[] relocs, ref Out
 
                     default:
                         if (op >= OP.I32_LOAD && op <= OP.I64_STORE32)
-                            printMemArg(r, buf, naturalAlign(op));
+                            printMemArg(r, buf, naturalAlign(cast(OP) op));
                         break;
                 }
                 break;
@@ -453,4 +432,58 @@ unittest
     // opcodes past 0x7f are LEB128 encoded
     assert(disasm([OP.FD_PREFIX, 0xAE, 0x01]) == "0000:  i32x4.add\n)\n");
     assert(disasm([OP.FC_PREFIX, WASM_FC.I32_TRUNC_SAT_F64_S]) == "0000:  i32.trunc_sat_f64_s\n)\n");
+
+    assert(disasm([OP.FD_PREFIX, WASM_SIMD.V128_LOAD, 3, 16,
+                   OP.FD_PREFIX, WASM_SIMD.V128_STORE, 4, 0]) ==
+"0000:  v128.load offset=16 align=8
+0004:  v128.store
+)
+");
+
+    assert(disasm([OP.FD_PREFIX, WASM_SIMD.V128_CONST,
+                   1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 4, 0, 0, 0]) ==
+"0000:  v128.const i8x16 0x01 0x00 0x00 0x00 0x02 0x00 0x00 0x00 0x03 0x00 0x00 0x00 0x04 0x00 0x00 0x00
+)
+");
+
+    assert(disasm([OP.FC_PREFIX, WASM_FC.MEMORY_COPY, 0, 0,
+                   OP.FC_PREFIX, WASM_FC.MEMORY_FILL, 0]) ==
+"0000:  memory.copy
+0004:  memory.fill
+)
+");
+
+    assert(disasm([OP.BLOCK, WASM_TYPE.I32, OP.GLOBAL_GET, 3, OP.ELSE, OP.END]) ==
+"0000:  block (result i32)
+0002:    global.get 3
+0004:  else
+0005:  end
+)
+");
+
+    assert(disasm([OP.TRY_TABLE, WASM_VOID_BLOCK, 2,
+                   WASM_CATCH.CATCH, 3, 1, WASM_CATCH.CATCH_ALL, 0, OP.END]) ==
+"0000:  try_table catch 3 1 catch_all 0
+0008:  end
+)
+");
+
+    assert(disasm([OP.CALL_INDIRECT, 7, 0, OP.F32_CONST, 0, 0, 0x80, 0x3f, OP.DROP]) ==
+"0000:  call_indirect (type 7) 0
+0003:  f32.const 1
+0008:  drop
+)
+");
+
+    // an unnatural alignment is printed, a natural one is implied
+    assert(disasm([OP.I32_LOAD8_U, 0, 4, OP.I64_LOAD16_S, 2, 0]) ==
+"0000:  i32.load8_u offset=4
+0003:  i64.load16_s align=4
+)
+");
+
+    // unknown opcodes are printed as their encoding instead of being skipped
+    assert(disasm([0x06]) == "0000:  op:0x06\n)\n");
+    assert(disasm([OP.FD_PREFIX, 0xAC, 0x02]) == "0000:  v128.op:300\n)\n");
+    assert(disasm([OP.FC_PREFIX, 20]) == "0000:  fc.op:20\n)\n");
 }

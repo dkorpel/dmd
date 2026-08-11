@@ -283,12 +283,6 @@ Symbol* getRtlsym(RTLSYM i) @trusted
             assert(0);
     }
 
-    // The shared placeholder `t` carries no parameter types and a void return,
-    // which is fine for backends that derive the call ABI from the IR argument
-    // list.  The WASM backend, however, encodes a fixed function signature in
-    // the type section and validates operand-stack types against it, so each
-    // runtime symbol needs its real prototype.  Supply it at the source rather
-    // than reverse-engineering it from call sites in the WASM object writer.
     if (config.objfmt == OBJ_WASM)
         if (type* wt = wasmRtlsymType(i))
             (*ps).Stype = wt;
@@ -298,6 +292,7 @@ Symbol* getRtlsym(RTLSYM i) @trusted
 
 /******************************************
  * Build the real backend signature for rtlsym.
+ *
  * Specifically needed for WASM, where calls are validated so pushing args
  * to calls with a fake type results in an error.
  * x86/Windows-only symbols are skipped, and 32-bit is assumed

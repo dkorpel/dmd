@@ -447,3 +447,30 @@ enum WASM_SYM : uint
     NO_STRIP = 0x80,      // retain even without a reference (no --gc-sections stripping)
     TLS = 0x100,
 }
+
+/**
+ * The log2 of the access size of a load/store instruction, which is the
+ * alignment its memarg encodes when the access is naturally aligned.
+ * Params:
+ *      op = a load or store opcode
+ * Returns: log2 of the accessed byte size, 4 (the v128 access size) for anything else
+ */
+uint naturalAlign(OP op) @safe pure nothrow @nogc
+{
+    switch (op)
+    {
+        case OP.I32_LOAD8_S, OP.I32_LOAD8_U, OP.I64_LOAD8_S, OP.I64_LOAD8_U,
+             OP.I32_STORE8, OP.I64_STORE8:
+            return 0;
+        case OP.I32_LOAD16_S, OP.I32_LOAD16_U, OP.I64_LOAD16_S, OP.I64_LOAD16_U,
+             OP.I32_STORE16, OP.I64_STORE16:
+            return 1;
+        case OP.I32_LOAD, OP.F32_LOAD, OP.I64_LOAD32_S, OP.I64_LOAD32_U,
+             OP.I32_STORE, OP.F32_STORE, OP.I64_STORE32:
+            return 2;
+        case OP.I64_LOAD, OP.F64_LOAD, OP.I64_STORE, OP.F64_STORE:
+            return 3;
+        default:
+            return 4;
+    }
+}
