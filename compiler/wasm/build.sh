@@ -101,12 +101,7 @@ dmd)
   # WASI has no mmap; wasi-libc ships a malloc-backed emulation that
   # dmd.common.file's FileMapping links against (dead code in the browser, but it
   # has to resolve).
-  #
-  # DMD_OPT is empty by default: dmd's own -O global optimizer still miscompiles
-  # part of the frontend for wasm (dsymbolsem.aliasAssignInPlace; a snippet using
-  # std.algorithm's `map` then dies in semantic3). wasm-opt below does the
-  # optimization that actually matters for a browser download.
-  "$DMD" -mwasm32 ${DMD_OPT-} -version=WASI_EMULATED_MMAN \
+  "$DMD" -mwasm32 ${DMD_OPT--O} -version=WASI_EMULATED_MMAN \
     -i=dmd -i=druntime_embed \
     -Icompiler/src \
     -J. -Jcompiler/src/dmd/res -Jcompiler/wasm -J"$DRT" -J"$PHOBOS_ROOT" \
