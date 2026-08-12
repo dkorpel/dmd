@@ -96,6 +96,8 @@ private uint dataSymAddr(ref WasmModule wmod, const(Symbol)* sym, ref uint[strin
     return uint.max;
 }
 
+private __gshared uint[string] dataAddrByName;
+
 private uint[string] buildDataAddrByName(ref WasmModule wmod)
 {
     uint[string] byName;
@@ -237,6 +239,7 @@ void selfLink(ref WasmModule wmod)
     fillCallCtors(wmod);
     gatherMinfo(wmod);
     computeLayout(wmod);
+    dataAddrByName = buildDataAddrByName(wmod);
 }
 
 /// Resolve the code relocations a relocatable object leaves to wasm-ld.
@@ -247,7 +250,7 @@ void selfLink(ref WasmModule wmod)
 /// this module does not itself define.
 void patchSelfLinkCodeRelocs(ref WasmModule wmod, ref WasmFuncBody fb, ubyte[] code)
 {
-    uint[string] byName = buildDataAddrByName(wmod);
+    uint[string] byName = dataAddrByName;
     foreach (ref const WasmReloc r; fb.relocs)
     {
         if (r.type == R_WASM.TABLE_INDEX_SLEB)
