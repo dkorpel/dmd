@@ -973,7 +973,6 @@ function execProgram() {
     workerBusy = true;
     compileT0 = performance.now();
     $("spinner").hidden = false;
-    $("status").textContent = "compiling...";
     $("run").textContent = "";
     worker.postMessage({ type: "run", src: getSrc() });
     // The program may never return (or may trap the instance beyond recovery):

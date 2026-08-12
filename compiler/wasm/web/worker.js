@@ -7,8 +7,8 @@
 //   { type: "load", url }      -> loads/compiles dmd.wasm, replies "loaded"/"loadError"
 //   { type: "compile", src, wat } -> compiles `src`, replies "result"
 //                              (`wat` also compiles it for the wasm target)
-//   { type: "run", src }       -> compiles and runs `src`, posts "runPhase" when the
-//                              compile is done, replies "runResult"
+//   { type: "run", src }       -> compiles (if needed) and runs `src`, posting a
+//                              "runPhase" per stage, replies "runResult"
 // Replies carry only structured-cloneable data (plain strings/objects).
 
 import { loadDmd, compile, run, dmdLastModified } from "./glue.js";
@@ -44,7 +44,7 @@ self.onmessage = async (e) => {
     if (msg.type === "run") {
         let result;
         try {
-            result = run(msg.src, () => self.postMessage({ type: "runPhase", phase: "running" }));
+            result = run(msg.src, (phase) => self.postMessage({ type: "runPhase", phase }));
         } catch (err) {
             result = { output: "", errors: 1, diagnostics: "dmd.wasm worker error: " + String((err && err.message) || err) };
         }

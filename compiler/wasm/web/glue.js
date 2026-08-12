@@ -235,7 +235,25 @@ export function compile(source, { wat = false } = {}) {
 const RUN_REGION = 8 << 20;    // linear-memory slice holding the program's data + shadow stack
 const RUN_STACK = 1 << 20;
 
-export function run(source, onCompiled = () => {}) {
+// The last program built by run(), kept so pressing Run again on unchanged
+// source skips the (multi-second) whole-program build. The dmd.wasm instance it
+// was linked against is kept alive with it: the program's data lives in that
+// instance's memory and it imports that instance's libc.
+let runCtx = null;
+
+export function run(source, onPhase = () => {}) {
+    if (!runCtx || runCtx.source !== source) {
+        onPhase("compiling");
+        const built = build(source);
+        if (built.error)
+            return built.error;
+        runCtx = built.ctx;
+    }
+    onPhase("running");
+    return exec(runCtx);
+}
+
+function build(source) {
     newInstance();
     stdoutText = "";
     stderrText = "";
@@ -249,12 +267,10 @@ export function run(source, onCompiled = () => {}) {
         const region = exports.malloc(RUN_REGION);
         errors = exports.dmdwasm_build(ptr, bytes.length, region, RUN_STACK);
     } catch (e) {
-        return { output: stdoutText, errors: 1, diagnostics: stderrText + "\ndmd.wasm trapped: " + e.message };
+        return { error: { output: stdoutText, errors: 1, diagnostics: stderrText + "\ndmd.wasm trapped: " + e.message } };
     }
     if (errors)
-        return { output: "", errors, diagnostics: stderrText };
-
-    onCompiled();
+        return { error: { output: "", errors, diagnostics: stderrText } };
 
     const wasmPtr = exports.dmdwasm_wasm_ptr();
     const wasmLen = exports.dmdwasm_wasm_len();
@@ -271,13 +287,24 @@ export function run(source, onCompiled = () => {}) {
         get: (target, name) => (name in target ? target[name] : () => 0),
         has: () => true,
     });
+    return { ctx: { source, module: new WebAssembly.Module(bin), envImports,
+                    exports, memory, diagnostics: stderrText } };
+}
 
+// Instantiate the built program afresh and call `_start`. A new instance per run
+// re-initializes the program's data segments and shadow-stack pointer, so a
+// repeat run starts from the same state the first one did.
+function exec(ctx) {
+    // The WASI shim reads iovecs out of whichever memory the running code uses:
+    // the program's is the memory of the instance it was linked against.
+    exports = ctx.exports;
+    memory = ctx.memory;
     stdoutText = "";
     stderrText = "";
     let exitCode = 0;
     try {
-        const instance = new WebAssembly.Instance(new WebAssembly.Module(bin), {
-            env: envImports,
+        const instance = new WebAssembly.Instance(ctx.module, {
+            env: ctx.envImports,
             wasi_snapshot_preview1: wasiImports,
         });
         instance.exports._start();
@@ -289,5 +316,6 @@ export function run(source, onCompiled = () => {}) {
             return { output: stdoutText, errors: 1, exitCode: 1,
                      diagnostics: stderrText + "\nprogram trapped: " + e.message };
     }
-    return { output: stdoutText, errors: 0, exitCode, diagnostics: stderrText };
+    return { output: stdoutText, errors: 0, exitCode, diagnostics: ctx.diagnostics + stderrText };
 }
+
