@@ -129,6 +129,15 @@ void printAST(Dsymbol s, ref OutBuffer buf, int indent = 0, string prefix = null
         if (dec.type)
             buf.printf(" type: %s", typeName(dec.type));
     }
+    if (auto ald = s.isAliasDeclaration())
+    {
+        if (ald.aliassym)
+        {
+            buf.writestring(" aliases: ");
+            buf.writestring(ald.aliassym.astTypeName());
+            buf.printf(" `%s`", ald.aliassym.toChars());
+        }
+    }
     emitLineMarker(buf, s.loc);
     buf.writeByte('\n');
 
@@ -506,6 +515,22 @@ private void typeToBuffer(ref OutBuffer buf, Type t)
         buf.writeByte('(');
         buf.writestring(tyToString(t.ty));
         buf.writeByte(')');
+        // Named leaves also carry the name they refer to, e.g. the target of
+        // `alias X = Y;` before (TypeIdentifier) and after (TypeStruct, ...)
+        // semantic; without it the tag alone says nothing about which type it is.
+        if (auto tid = t.isTypeIdentifier())
+        {
+            buf.printf(" `%s", tid.ident.toChars());
+            foreach (o; tid.idents[])
+                buf.printf(".%s", o.toChars());
+            buf.writeByte('`');
+        }
+        else if (auto ts = t.isTypeStruct())
+            buf.printf(" `%s`", ts.sym.toChars());
+        else if (auto tc = t.isTypeClass())
+            buf.printf(" `%s`", tc.sym.toChars());
+        else if (auto te = t.isTypeEnum())
+            buf.printf(" `%s`", te.sym.toChars());
     }
 }
 
