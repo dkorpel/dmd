@@ -2,10 +2,11 @@
  * Definitions wasm-ld normally synthesizes, for `-mwasm-selflink` builds.
  *
  * A self-linked module has no linker to generate the constructor thunks, and no
- * wasi-libc to supply the `main` wrapper `rt.wasm.start._start` calls.  There
- * are no C global constructors in a D program, so the thunks are empty, and the
- * `__main_void` bridge forwards to the `__main_argc_argv` entry that druntime's
- * `_d_cmain` mixin generates.
+ * wasi-libc to supply the `main` wrapper `rt.wasm.start._start` calls.  The
+ * backend fills in the `__wasm_call_ctors` body here with the
+ * `pragma(crt_constructor)` functions of the program (`dmd.backend.wasm.selflink`),
+ * and the `__main_void` bridge forwards to the `__main_argc_argv` entry that
+ * druntime's `_d_cmain` mixin generates.
  *
  * Copyright: Copyright (C) 1999-2026 by The D Language Foundation, All Rights Reserved
  * License:   $(LINK2 https://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
