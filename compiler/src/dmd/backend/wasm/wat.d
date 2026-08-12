@@ -9,7 +9,7 @@
 module dmd.backend.wasm.wat;
 
 import dmd.backend.cc;
-import dmd.backend.cg : vasmSourceLines;
+import dmd.backend.cg : vasmSourceLines, VasmLine;
 import dmd.backend.symbol;
 import dmd.backend.wasm.codgen : localWasmType;
 import dmd.backend.wasm.enums;
@@ -247,7 +247,7 @@ void wasmDisassemble(ref WasmFuncBody fb, ref OutBuffer buf)
     foreach (Symbol* l; fb.locals[fb.numParams .. $])
         buf.printf("  (local %s)\n", typeName(localWasmType(l)));
 
-    wasmDisassembleCode(fb.code.peekSlice(), fb.relocs, buf);
+    wasmDisassembleCode(fb.code.peekSlice(), fb.relocs, buf, fb.lines);
 }
 
 /**
@@ -258,8 +258,9 @@ void wasmDisassemble(ref WasmFuncBody fb, ref OutBuffer buf)
  *      code = instruction bytes
  *      relocs = relocations into `code`, printed in place of the placeholder bytes
  *      buf = buffer to append the text to
+ *      lines = source line markers, emitted as `; line N` comments
  */
-void wasmDisassembleCode(const(ubyte)[] code, const(WasmReloc)[] relocs, ref OutBuffer buf)
+void wasmDisassembleCode(const(ubyte)[] code, const(WasmReloc)[] relocs, ref OutBuffer buf, const(VasmLine)[] lines = null)
 {
     auto r = Reader(code, relocs, 0);
     int depth = 1;
@@ -268,9 +269,9 @@ void wasmDisassembleCode(const(ubyte)[] code, const(WasmReloc)[] relocs, ref Out
     uint lastLine = 0;
     void emitLineMarker(uint off)
     {
-        while (li < fb.lines.length && fb.lines[li].offset <= off)
+        while (li < lines.length && lines[li].offset <= off)
         {
-            const ln = fb.lines[li].linnum;
+            const ln = lines[li].linnum;
             ++li;
             if (ln && ln != lastLine)
             {
