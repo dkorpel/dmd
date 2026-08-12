@@ -9,6 +9,19 @@
 
 export const EXAMPLES = [
 {
+	id: "helloWorld",
+	label: "Hello world",
+	panes: "sema,run",
+	height: 320,
+	code: `import std.stdio;
+
+void main()
+{
+	writeln("Hello, world!");
+}
+`,
+},
+{
 	id: "tokenKinds",
 	label: "Token kinds (lexer)",
 	panes: "lex",
