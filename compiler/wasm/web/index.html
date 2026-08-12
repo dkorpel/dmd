@@ -218,15 +218,6 @@
   <div class="pane" data-pane="src" data-stage="source" data-title="D source">
     <h2>D source <span class="badge">✎ editable</span></h2>
     <div id="src"></div>
-    <!-- Initial document for the CodeMirror editor (mounted into #src above)-->
-    <textarea id="src-init" hidden>module test;
-
-int add(int a, int b)
-{
-    return a + b;
-}
-
-</textarea>
   </div>
   <div class="pane" data-pane="lex" data-stage="parse" data-title="Tokens" data-tip="The token stream produced by the lexer">
     <h2 title="Internal lexer output: one line per source line, listing that line's TOK enum member names.">Tokens (lexer)</h2>
@@ -437,8 +428,9 @@ function watWanted() {
     const el = cols.querySelector('.pane[data-pane="wat"]');
     return !!el && !el.hidden;
 }
+let watFilled = false;
 function fillWatIfShown() {
-    if (watWanted() && !$("wat").textContent) run();
+    if (watWanted() && !watFilled) run();
 }
 for (const [stage] of STAGES) {
     if (stage === "source") continue;   // the editor is always visible — no toggle
@@ -647,7 +639,7 @@ let runTimer = null;
 let onDocChange = () => {};
 let onCursor = () => {};
 const editor = new EditorView({
-    doc: params.get("src") ?? $("src-init").value,   // ?src= seeds embedded demos
+    doc: params.get("src") ?? EXAMPLES[0].code,   // ?src= seeds embedded demos
     parent: $("src"),
     extensions: [
         basicSetup,                                      // line numbers, undo/redo, bracket match, ...
@@ -896,6 +888,7 @@ function render({ lex, parse, sema, ast, ir, irOpt, asm, asmUnopt, wat, errors, 
     renderLined("iropt", irOpt, false, "(no code generated)");
     renderLined("asmun", asmWithLineMarks(asmUnopt || ""), false, "(no code generated)");
     renderLined("asm", asmWithLineMarks(asm), false, "(no code generated)");
+    watFilled = !!wat;
     renderLined("wat", asmWithLineMarks(wat || ""), false, "(no code generated)");
     $("diag").innerHTML = diagnostics ? ansiToHtml(diagnostics) : "(no errors/deprecations or other output)";
     // Mirror the diagnostics inline in the editor (gutter + underline + tooltip).
@@ -940,6 +933,9 @@ function makeWorker() {
                 if (pendingRun) startCompile();           // newer edits arrived mid-compile
                 else $("spinner").hidden = true;
                 break;
+            case "runPhase":
+                $("status").textContent = msg.phase + "…";
+                break;
             case "runResult":
                 clearTimeout(execWatchdog);
                 workerBusy = false;
@@ -977,7 +973,7 @@ function execProgram() {
     workerBusy = true;
     compileT0 = performance.now();
     $("spinner").hidden = false;
-    $("status").textContent = "running…";
+    $("status").textContent = "compiling...";
     $("run").textContent = "";
     worker.postMessage({ type: "run", src: getSrc() });
     // The program may never return (or may trap the instance beyond recovery):
@@ -996,7 +992,7 @@ function execProgram() {
 function renderRun({ output, errors, exitCode, diagnostics }, ms) {
     const parts = [];
     if (output) parts.push(output);
-    if (errors) parts.push("(compilation failed — see diagnostics)");
+    if (errors) parts.push(diagnostics ? diagnostics.trimEnd() : "(compilation failed — see diagnostics)");
     else if (exitCode) parts.push("(exited with status " + exitCode + ")");
     $("run").innerHTML = ansiToHtml(parts.join("\n") || "(no output)");
     if (diagnostics)

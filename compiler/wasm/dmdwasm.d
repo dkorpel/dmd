@@ -477,6 +477,11 @@ private void buildImpl(const(char)* src, size_t len, uint dataBase, uint stackSi
         modules ~= compiledImports[i];
     }
     runDeferredSemantic3();
+    if (!global.hasMainFunction)
+    {
+        import dmd.errors : error;
+        error(Loc.initial, "no entry point: define `void main()` to run the program");
+    }
     if (global.errors)
         return;
 

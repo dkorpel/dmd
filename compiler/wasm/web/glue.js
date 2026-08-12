@@ -235,7 +235,7 @@ export function compile(source, { wat = false } = {}) {
 const RUN_REGION = 8 << 20;    // linear-memory slice holding the program's data + shadow stack
 const RUN_STACK = 1 << 20;
 
-export function run(source) {
+export function run(source, onCompiled = () => {}) {
     newInstance();
     stdoutText = "";
     stderrText = "";
@@ -253,6 +253,8 @@ export function run(source) {
     }
     if (errors)
         return { output: "", errors, diagnostics: stderrText };
+
+    onCompiled();
 
     const wasmPtr = exports.dmdwasm_wasm_ptr();
     const wasmLen = exports.dmdwasm_wasm_len();
