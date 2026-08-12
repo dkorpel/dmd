@@ -109,6 +109,12 @@
   .card .links a { margin-right: 12px; white-space: nowrap; }
   .card .links a::before { content: "‹›"; color: var(--aero-muted); margin-right: 4px; letter-spacing: -2px; }
 
+  /* Work-in-progress notice at the top of the tour. */
+  .wip { margin: 18px 0 0; padding: 10px 14px; font-size: 14px;
+         color: var(--aero-text-2); background: var(--aero-panel);
+         border: 1px solid var(--aero-line); border-left: 3px solid var(--codegen);
+         border-radius: 8px; box-shadow: var(--aero-gloss); }
+
   footer { color: var(--aero-muted); font-size: 13px; border-top: 1px solid var(--aero-line);
            padding-top: 18px; margin-top: 50px; }
 </style>
@@ -122,6 +128,8 @@
   </div>
 </header>
 <main>
+
+  <p class="wip">WIP: This tour is still being written and not finished yet!</p>
 
   <p>Hey, my name is Dennis Korpel. I've created this website with help of an AI agent, but the text is
      written by me in a plain text editor by me.</p>
