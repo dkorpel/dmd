@@ -8,6 +8,7 @@
 module dmdwasm;
 
 import dmd.globals : global;
+import dmd.dmodule : Module;
 import dmd.location : Loc;
 import dmd.common.outbuffer : OutBuffer;
 import dmd.backend.cc : block;
@@ -394,6 +395,9 @@ size_t       dmdwasm_wasm_len() => wasmOut[].length;
 /// beside this one: whole-program (druntime included), self-linked, with its
 /// data placed at `dataBase` and `stackSize` bytes of shadow stack above it, so
 /// it runs in this instance's linear memory and calls this instance's libc.
+/// Runs `dmdwasm_warm` first if the host has not. One build per instance state:
+/// a host that builds again has to restore the memory `dmdwasm_warm` left, or
+/// start from a fresh instance.
 /// Returns: 0 on success, the error count otherwise.
 uint dmdwasm_build(const(char)* src, size_t len, uint dataBase, uint stackSize)
 {
@@ -416,20 +420,33 @@ private static immutable string[] runtimeRoots = [
     "core.internal.gc.impl.manual.gc", "core.internal.gc.impl.proto.gc",
 ];
 
-private void buildImpl(const(char)* src, size_t len, uint dataBase, uint stackSize)
+/// Compile the runtime half of a program: everything `dmdwasm_build` needs that
+/// does not depend on the snippet. A host that snapshots the instance's memory
+/// after this call and restores it before each build pays for druntime once
+/// instead of once per Run.
+/// Returns: 0 on success, the error count otherwise.
+uint dmdwasm_warm(uint dataBase, uint stackSize)
 {
-    import dmd.dmodule : Module;
-    import dmd.identifier : Identifier;
-    import dmd.root.filename : FileName;
-    import dmd.dsymbolsem : dsymbolSemantic, importAll, runDeferredSemantic, runDeferredSemantic2, runDeferredSemantic3;
-    import dmd.semantic2 : semantic2;
-    import dmd.semantic3 : semantic3;
-    import dmd.astcodegen : ASTCodegen;
-    import dmd.compiler : includeImports, includeModulePatterns, compiledImports;
+    try
+        warmImpl(dataBase, stackSize);
+    catch (Throwable t)
+        reportICE(t);
+    return global.errors;
+}
+
+private __gshared bool warmed;
+
+/// Number of `compiledImports` entries already run through semantic3 and code
+/// generation, so a later pass only picks up what its own semantic added.
+private __gshared size_t compiledImportsDone;
+
+private void warmImpl(uint dataBase, uint stackSize)
+{
+    import dmd.compiler : includeImports, includeModulePatterns;
     import dmd.dmdparams : driverParams;
-    import dmd.dmsc : backend_init, backend_term;
+    import dmd.dmsc : backend_init;
     import dmd.errors : fatalErrorHandler;
-    import dmd.glue : generateCodeToBuffer, ObjcGlue_initialize;
+    import dmd.glue : generateCodeModules, ObjcGlue_initialize;
     import dmd.target : target;
     import dmd.backend.wasm.selflink : wasmSelfLink, wasmSelfLinkDataBase,
         wasmSelfLinkImportMemory, wasmSelfLinkStackSize, wasmSelfLinkDataSymbols,
@@ -445,9 +462,6 @@ private void buildImpl(const(char)* src, size_t len, uint dataBase, uint stackSi
     foreach (pattern; ["core", "rt", "object", "gc", "std", "etc"])
         includeModulePatterns.push(pattern.ptr);
 
-    Module[] modules;
-    modules ~= parseSource("input.d", "input", (cast(ubyte*) src)[0 .. len]);
-
     OutBuffer rootsSrc;
     rootsSrc.writestring("module __runtime_roots;\n");
     foreach (r; runtimeRoots)
@@ -456,32 +470,11 @@ private void buildImpl(const(char)* src, size_t len, uint dataBase, uint stackSi
         rootsSrc.writestring(r);
         rootsSrc.writestring(";\n");
     }
-    modules ~= parseSource("__runtime_roots.d", "__runtime_roots", cast(ubyte[]) rootsSrc[]);
-
+    Module[] modules = [parseSource("__runtime_roots.d", "__runtime_roots", cast(ubyte[]) rootsSrc[])];
     if (global.errors)
         return;
 
-    foreach (m; modules)
-        m.importAll(null);
-    foreach (m; modules)
-        m.dsymbolSemantic(null);
-    runDeferredSemantic();
-    foreach (m; modules)
-        m.semantic2(null);
-    runDeferredSemantic2();
-    foreach (m; modules)
-        m.semantic3(null);
-    for (size_t i = 0; i < compiledImports.length; i++)
-    {
-        compiledImports[i].semantic3(null);
-        modules ~= compiledImports[i];
-    }
-    runDeferredSemantic3();
-    if (!global.hasMainFunction)
-    {
-        import dmd.errors : error;
-        error(Loc.initial, "no entry point: define `void main()` to run the program");
-    }
+    modules = semanticPass(modules);
     if (global.errors)
         return;
 
@@ -502,14 +495,104 @@ private void buildImpl(const(char)* src, size_t len, uint dataBase, uint stackSi
     driverParams.optimize = false;
     backend_init(global.params, driverParams, target);
     ObjcGlue_initialize();
-    generateCodeToBuffer(modules, wasmOut);
+    generateCodeModules(modules, wasmOut);
+    trackEmitted(modules);
+    warmed = true;
+}
+
+private __gshared Module[] emittedModules;
+private __gshared size_t[] emittedMembers;
+
+private void trackEmitted(Module[] modules)
+{
+    foreach (m; modules)
+    {
+        emittedModules ~= m;
+        emittedMembers ~= m.members ? m.members.length : 0;
+    }
+}
+
+/// Generate code for the template instances a later semantic pass appended to
+/// an already generated module, and for any instance that generating those
+/// appends in turn.
+private void emitAppendedMembers()
+{
+    import dmd.glue : generateCodeAppendedMembers;
+
+    for (bool more = true; more; )
+    {
+        more = false;
+        foreach (i, m; emittedModules)
+        {
+            const n = m.members ? m.members.length : 0;
+            if (n <= emittedMembers[i])
+                continue;
+            generateCodeAppendedMembers(m, emittedMembers[i]);
+            emittedMembers[i] = n;
+            more = true;
+        }
+    }
+}
+
+private Module[] semanticPass(Module[] modules)
+{
+    import dmd.dsymbolsem : dsymbolSemantic, importAll, runDeferredSemantic, runDeferredSemantic2, runDeferredSemantic3;
+    import dmd.semantic2 : semantic2;
+    import dmd.semantic3 : semantic3;
+    import dmd.compiler : compiledImports;
+
+    foreach (m; modules)
+        m.importAll(null);
+    foreach (m; modules)
+        m.dsymbolSemantic(null);
+    runDeferredSemantic();
+    foreach (m; modules)
+        m.semantic2(null);
+    runDeferredSemantic2();
+    foreach (m; modules)
+        m.semantic3(null);
+    while (compiledImportsDone < compiledImports.length)
+    {
+        Module ci = compiledImports[compiledImportsDone++];
+        ci.semantic3(null);
+        modules ~= ci;
+    }
+    runDeferredSemantic3();
+    return modules;
+}
+
+private void buildImpl(const(char)* src, size_t len, uint dataBase, uint stackSize)
+{
+    import dmd.dmsc : backend_term;
+    import dmd.errors : error;
+    import dmd.glue : generateCodeModules, generateCodeFinish;
+    import dmd.backend.wasm.selflink : wasmSelfLinkUnresolved;
+
+    if (!warmed)
+    {
+        warmImpl(dataBase, stackSize);
+        if (!warmed)
+            return;
+    }
+
+    Module[] modules = [parseSource("input.d", "input", (cast(ubyte*) src)[0 .. len])];
+    if (global.errors)
+        return;
+
+    modules = semanticPass(modules);
+    if (!global.hasMainFunction)
+        error(Loc.initial, "no entry point: define `void main()` to run the program");
+    if (global.errors)
+        return;
+
+    generateCodeModules(modules, wasmOut);
+    trackEmitted(modules);
+    emitAppendedMembers();
+    generateCodeFinish();
     backend_term();
 
     foreach (name; wasmSelfLinkUnresolved)
-    {
-        import dmd.errors : error;
         error(Loc.initial, "undefined symbol `%.*s`", cast(int) name.length, name.ptr);
-    }
 }
 
 private extern(D) auto parseSource(string filename, string modname, ubyte[] text)

@@ -933,6 +933,8 @@ function makeWorker() {
                 if (pendingRun) startCompile();           // newer edits arrived mid-compile
                 else $("spinner").hidden = true;
                 break;
+            case "warmed":
+                break;
             case "runPhase":
                 $("status").textContent = msg.phase + "…";
                 break;
@@ -984,7 +986,7 @@ function execProgram() {
         $("spinner").hidden = true;
         $("status").textContent = "run timed out";
         $("run").textContent = "(program did not finish within " + (EXEC_TIMEOUT_MS / 1000) + " s — stopped)";
-        loadDmdWorker("dmd.wasm").catch(() => {});
+        loadDmdWorker("dmd.wasm").then(warmWorker).catch(() => {});
     }, EXEC_TIMEOUT_MS);
 }
 
@@ -997,6 +999,12 @@ function renderRun({ output, errors, exitCode, diagnostics }, ms) {
     if (diagnostics)
         $("diag").innerHTML = ansiToHtml(diagnostics);
     $("status").textContent = `${ms.toFixed(1)} ms`;
+}
+
+// Queued behind the first compile: the runtime half of a Run is the same for
+// every program, so it is compiled once while the user is still reading.
+function warmWorker() {
+    worker.postMessage({ type: "warm" });
 }
 
 function loadDmdWorker(url) {
@@ -1022,6 +1030,7 @@ function loadDmdWorker(url) {
         const runNow = () => { clearTimeout(runTimer); run(); };
         onDocChange = () => { clearTimeout(runTimer); runTimer = setTimeout(run, 500); };
         run();
+        warmWorker();
     } catch (e) {
         $("status").textContent = "load failed: " + e.message;
         console.error(e);

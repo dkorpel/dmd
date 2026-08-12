@@ -253,10 +253,46 @@ export function run(source, onPhase = () => {}) {
     return exec(runCtx);
 }
 
-function build(source) {
+// Compiling druntime is most of a build and does not depend on the snippet, so
+// it is done once, in `dmdwasm_warm`, and the resulting instance state — the
+// parsed and semantically analyzed runtime, its generated code, the allocator —
+// is snapshotted. Every build afterwards copies the snapshot back over the
+// instance's memory and compiles only the snippet against it, which is both
+// faster than a fresh compile and as clean: the restore undoes everything the
+// previous build and program run wrote.
+let warmCtx = null;
+
+// Compile the runtime ahead of the first Run, so pressing Run only pays for the
+// snippet. Safe to call more than once; later calls are no-ops.
+export function warmRuntime() {
+    if (!warmCtx)
+        warmUp();
+}
+
+function warmUp() {
     newInstance();
+    const region = exports.malloc(RUN_REGION);
+    if (exports.dmdwasm_warm(region, RUN_STACK))
+        throw new Error("dmd.wasm runtime precompile failed: " + stderrText);
+    warmCtx = { exports, memory, region, snapshot: new Uint8Array(memory.buffer).slice() };
+}
+
+// Memory can only have grown since the snapshot was taken, so writing it back
+// over the front of the buffer restores every live byte; what is above it is
+// unreachable once the allocator state is back to what it was.
+function restoreWarm() {
+    exports = warmCtx.exports;
+    memory = warmCtx.memory;
+    new Uint8Array(memory.buffer).set(warmCtx.snapshot);
+}
+
+function build(source) {
     stdoutText = "";
     stderrText = "";
+    if (warmCtx)
+        restoreWarm();
+    else
+        warmUp();
     const bytes = te.encode(source);
     const ptr = exports.dmdwasm_input_buffer(bytes.length + 1);
     new Uint8Array(memory.buffer, ptr, bytes.length).set(bytes);
@@ -264,8 +300,7 @@ function build(source) {
 
     let errors = 0;
     try {
-        const region = exports.malloc(RUN_REGION);
-        errors = exports.dmdwasm_build(ptr, bytes.length, region, RUN_STACK);
+        errors = exports.dmdwasm_build(ptr, bytes.length, warmCtx.region, RUN_STACK);
     } catch (e) {
         return { error: { output: stdoutText, errors: 1, diagnostics: stderrText + "\ndmd.wasm trapped: " + e.message } };
     }

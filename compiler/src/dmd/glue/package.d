@@ -213,20 +213,57 @@ public void generateCodeAndWrite(Module[] modules, const(char)*[] libmodules,
  */
 public void generateCodeToBuffer(Module[] modules, ref OutBuffer objbuf)
 {
-    Module firstm;
+    generateCodeModules(modules, objbuf);
+    generateCodeFinish();
+}
+
+private __gshared Module codegenFirstModule;
+
+/**
+ * Add `modules` to the object `generateCodeFinish` will emit.
+ *
+ * Split out of `generateCodeToBuffer` for hosts that generate code for one batch
+ * of modules and then, later, for more: the WebAssembly build compiles druntime
+ * once up front and each user snippet against it.
+ */
+public void generateCodeModules(Module[] modules, ref OutBuffer objbuf)
+{
     foreach (m; modules)
     {
         if (m.filetype == FileType.dhdr)
             continue;
-        if (!firstm)
+        if (!codegenFirstModule)
         {
-            firstm = m;
+            codegenFirstModule = m;
             obj_start(objbuf, m.srcfile.toChars());
         }
         genObjFile(m, false, false);
     }
-    if (!global.errors && firstm)
-        objmod.term(firstm.objfile.toString());
+}
+
+/**
+ * Code-generate the members `m` gained after its `generateCodeModules` pass.
+ *
+ * A template instance is appended to the members of the module its declaration
+ * lives in, so semantic on a later batch of modules can add instances to a
+ * module whose code was already generated. Those instances would otherwise
+ * never be emitted.
+ */
+public void generateCodeAppendedMembers(Module m, size_t from)
+{
+    glue.lastmname = m.srcfile.toChars();
+    objmod.initfile(glue.lastmname, null, m.toPrettyChars());
+    for (size_t i = from; i < m.members.length; i++)
+        toObjFile((*m.members)[i], false);
+    objmod.termfile();
+}
+
+/// Emit everything `generateCodeModules` accumulated into the object buffer.
+public void generateCodeFinish()
+{
+    if (!global.errors && codegenFirstModule)
+        objmod.term(codegenFirstModule.objfile.toString());
+    codegenFirstModule = null;
     objmod = null;
 }
 

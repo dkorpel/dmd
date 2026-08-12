@@ -5,13 +5,14 @@
 //
 // Protocol (main thread -> worker):
 //   { type: "load", url }      -> loads/compiles dmd.wasm, replies "loaded"/"loadError"
+//   { type: "warm" }          -> precompiles the runtime a Run needs, replies "warmed"
 //   { type: "compile", src, wat } -> compiles `src`, replies "result"
 //                              (`wat` also compiles it for the wasm target)
 //   { type: "run", src }       -> compiles (if needed) and runs `src`, posting a
 //                              "runPhase" per stage, replies "runResult"
 // Replies carry only structured-cloneable data (plain strings/objects).
 
-import { loadDmd, compile, run, dmdLastModified } from "./glue.js";
+import { loadDmd, compile, run, warmRuntime, dmdLastModified } from "./glue.js";
 
 self.onmessage = async (e) => {
     const msg = e.data;
@@ -23,6 +24,16 @@ self.onmessage = async (e) => {
         } catch (err) {
             self.postMessage({ type: "loadError", message: String((err && err.message) || err) });
         }
+        return;
+    }
+    if (msg.type === "warm") {
+        try {
+            warmRuntime();
+        } catch (err) {
+            // A failed precompile is not fatal: the next run() falls back to
+            // compiling the runtime itself.
+        }
+        self.postMessage({ type: "warmed" });
         return;
     }
     if (msg.type === "compile") {
