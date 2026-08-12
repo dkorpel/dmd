@@ -631,6 +631,13 @@ int dmdwasm_selftest()
 
 private extern(C) void __wasm_call_ctors();
 
+// The frontend hands GC-allocated AST nodes to arrays that `mem` allocates with
+// malloc, which the conservative GC does not scan, so a collection can free a
+// live symbol. The native driver avoids that by never collecting (see
+// dmd.main), and the wasm host, which is equally one-shot, does the same.
+private __gshared string[] gcDisabled = ["gcopt=disable:1 cleanup:none"];
+extern extern (C) __gshared string[] rt_options;
+
 /// Bring the instance up before any other export is called: `__wasm_call_ctors`
 /// runs the C-level global ctors (data relocations), then the full-runtime build
 /// hands off to `rt_init` for GC setup, TypeInfo registration and D module ctors.
@@ -643,7 +650,11 @@ int dmdwasm_init()
     else
     {
         import core.runtime : rt_init;
-        return rt_init();
+        import dmd.root.rmem : mem;
+        rt_options = gcDisabled;
+        const ok = rt_init();
+        mem.disableGC();
+        return ok;
     }
 }
 

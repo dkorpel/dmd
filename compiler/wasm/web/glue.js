@@ -233,6 +233,11 @@ export function compile(source, { wat = false } = {}) {
 // snippet's `printf`/`malloc` are the ones already in this instance and its
 // pointers stay dereferenceable on both sides.
 const RUN_REGION = 8 << 20;    // linear-memory slice holding the program's data + shadow stack
+// Restoring the snapshot rewinds the frontend, but not the libc allocator: its
+// heap top is derived from the memory size, which wasm can only grow. Builds
+// therefore keep claiming fresh pages, so past this much growth the warm
+// instance is dropped and the next build starts from a new one.
+const MEM_BUDGET = 512 << 20;
 const RUN_STACK = 1 << 20;
 
 // The last program built by run(), kept so pressing Run again on unchanged
@@ -286,6 +291,11 @@ function restoreWarm() {
     new Uint8Array(memory.buffer).set(warmCtx.snapshot);
 }
 
+function recycleIfGrown() {
+    if (memory.buffer.byteLength - warmCtx.snapshot.length > MEM_BUDGET)
+        warmCtx = null;
+}
+
 function build(source) {
     stdoutText = "";
     stderrText = "";
@@ -302,8 +312,10 @@ function build(source) {
     try {
         errors = exports.dmdwasm_build(ptr, bytes.length, warmCtx.region, RUN_STACK);
     } catch (e) {
+        warmCtx = null;   // a trapped instance is not worth reusing
         return { error: { output: stdoutText, errors: 1, diagnostics: stderrText + "\ndmd.wasm trapped: " + e.message } };
     }
+    recycleIfGrown();
     if (errors)
         return { error: { output: "", errors, diagnostics: stderrText } };
 
