@@ -172,6 +172,52 @@ private void gatherMinfo(ref WasmModule wmod)
     wmod.minfoStop = base + ds.reserved;
 }
 
+/// wasm-ld synthesizes `__wasm_call_ctors` from the WASM_INIT_FUNCS entries of
+/// the objects it links. Self-linking has no such step, so the stub
+/// `rt.wasm.selflink` defines stays empty and `pragma(crt_constructor)`
+/// functions (the GC registration among them) never run. Fill its body in with
+/// a call to each of them.
+private void fillCallCtors(ref WasmModule wmod)
+{
+    if (!wmod.initFuncs.length)
+        return;
+
+    uint idx = uint.max;
+    foreach (i; wmod.numImports .. wmod.funcs.length)
+    {
+        const Symbol* fs = wmod.funcs[i].sym;
+        if (fs && fs.Sident.ptr && fs.identifier == "__wasm_call_ctors")
+        {
+            idx = cast(uint) i;
+            break;
+        }
+    }
+    if (idx == uint.max)
+        return;
+    const size_t bodyIdx = idx - wmod.numImports;
+    if (bodyIdx >= wasmFuncBodies.length)
+        return;
+
+    OutBuffer* code = new OutBuffer();
+    foreach (Symbol* ctor; wmod.initFuncs)
+    {
+        const uint fi = funcIdxBySymOrName(wmod, ctor);
+        if (fi == uint.max)
+        {
+            noteUnresolved(ctor);
+            continue;
+        }
+        code.writeByte(OP.CALL);
+        code.writeuLEB128(fi);
+    }
+
+    WasmFuncBody* fb = &wasmFuncBodies[bodyIdx];
+    fb.code = code;
+    fb.relocs = null;
+    fb.locals = fb.locals[0 .. fb.numParams];
+    fb.lines = null;
+}
+
 private void computeLayout(ref WasmModule wmod)
 {
     wmod.dataEnd = (wmod.dataHeap + 15) & ~15;
@@ -188,6 +234,7 @@ private void computeLayout(ref WasmModule wmod)
 void selfLink(ref WasmModule wmod)
 {
     applyDataRelocs(wmod);
+    fillCallCtors(wmod);
     gatherMinfo(wmod);
     computeLayout(wmod);
 }
