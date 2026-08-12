@@ -16,13 +16,6 @@ extern (C) noreturn __assert(const(char)* file, int line, const(char)* msg) @nog
     _wasm_trap(1);
 }
 
-/// wasi-libc exposes errno as a plain global, druntime expects an accessor
-private extern (C) extern __gshared int errno;
-extern (C) ref int __errno_location() @nogc nothrow
-{
-    return errno;
-}
-
 private extern (C) void* gc_calloc(size_t sz, uint ba = 0, const scope TypeInfo ti = null) @nogc nothrow;
 
 // Only for &alloca, the wasm backend lowers direct alloca() calls to a dynamic
