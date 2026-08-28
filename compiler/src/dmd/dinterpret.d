@@ -30,6 +30,7 @@ import dmd.dstruct;
 import dmd.dsymbol;
 import dmd.dsymbolsem : ctfeSemantic, isOverlappedWith, toAlias;
 import dmd.dtemplate;
+import dmd.errors;
 import dmd.errorsink;
 import dmd.expression;
 import dmd.expressionsem;
@@ -5799,7 +5800,7 @@ public:
             {
                 if (se.sz != esz)
                     return false;
-                n = cast(uint) se.len;
+                n = cast(uint) se.length;
                 rhsStr = se;
             }
             else if (auto ale = newval.isArrayLiteralExp())

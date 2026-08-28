@@ -513,7 +513,7 @@ bool encodeSlice(ref CtfeMemory mem, Expression e, Type t, out LinearSlice s)
             return false;
         if (elemMutable && se.ownedByCtfe == OwnedBy.code)
             return false; // keep read-only diagnostics
-        const n = cast(uint) se.len;
+        const n = cast(uint) se.length;
         s = allocatePayload(mem, esz, n, n);
         if (s.alloc == 0)
             return false;
@@ -722,7 +722,7 @@ bool encodeInto(ref CtfeMemory mem, Expression e, Type t, CtfePtr dest)
             return false;
         auto se = e.isStringExp();
         const total = cast(uint) tb.size();
-        const n = se.len * se.sz;
+        const n = se.length * se.sz;
         if (n > total)
             return false;
         auto s = mem.slice(dest, total);
