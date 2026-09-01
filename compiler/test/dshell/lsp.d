@@ -275,6 +275,12 @@ immutable Case[] cases = [
         script: (ref c) {},
         expected: [`"method":"textDocument/publishDiagnostics"`, `"diagnostics":[]`],
     },
+    {
+        name: "diagnostics-cap",
+        source: manyErrors(),
+        script: (ref c) {},
+        expected: [`too many diagnostics, further messages suppressed`],
+    },
     // didChange reanalyzes: the error from didOpen disappears once the
     // document is edited to something valid (exercises repeated analysis)
     {
@@ -464,6 +470,14 @@ immutable Case[] cases = [
 // ----------------------------------------------------------------------------
 // LSP test framework
 // ----------------------------------------------------------------------------
+
+string manyErrors()
+{
+    string s = "module diag_cap;\n";
+    foreach (i; 0 .. 1500)
+        s ~= format("int x%d = undefined%d;\n", i, i);
+    return s;
+}
 
 void runCase(ref const Case tc)
 {

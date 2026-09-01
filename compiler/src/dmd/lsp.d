@@ -69,23 +69,49 @@ struct Diagnostic
     string message;
 }
 
+private size_t utf8Trim(const(char)[] s, size_t max) nothrow @nogc
+{
+    if (s.length <= max)
+        return s.length;
+    size_t n = max;
+    while (n > 0 && (s[n] & 0xC0) == 0x80)
+        n--;
+    return n;
+}
+
 /// ErrorSink that captures diagnostics into a list instead of printing them.
 /// One instance is owned by Lsp and reused across requests; callers must
 /// clear `diagnostics` before each analysis run.
 class ErrorSinkLsp : ErrorSinkCompiler
 {
+    enum maxDiagnostics = 1000;
+    enum maxMessageLength = 8 * 1024;
+
     Diagnostic[] diagnostics;
 
     // whether the last error was dropped as a duplicate, so its
     // supplemental lines are dropped as well
     private bool lastDuplicate;
 
+    private bool truncated;
+
     private void add(Loc loc, int severity, const(char)* format, va_list ap) nothrow
     {
+        if (diagnostics.length >= maxDiagnostics)
+        {
+            if (!truncated)
+            {
+                truncated = true;
+                diagnostics ~= Diagnostic(0, 0, 1, "too many diagnostics, further messages suppressed");
+            }
+            lastDuplicate = true;
+            return;
+        }
         OutBuffer msg;
         msg.vprintf(format, ap);
         auto sl = SourceLoc(loc);
-        auto message = msg.extractSlice.idup;
+        auto text = msg.extractSlice();
+        auto message = text[0 .. utf8Trim(text, maxMessageLength)].idup;
         foreach (ref d; diagnostics)
         {
             const first = d.message.length > message.length && d.message[message.length] == '\n'
@@ -104,9 +130,19 @@ class ErrorSinkLsp : ErrorSinkCompiler
     {
         if (diagnostics.length == 0 || lastDuplicate)
             return;
+        if (diagnostics[$ - 1].message.length >= maxMessageLength)
+            return;
         OutBuffer msg;
         msg.vprintf(format, ap);
-        diagnostics[$ - 1].message ~= "\n" ~ msg.extractSlice.idup;
+        auto text = msg.extractSlice();
+        diagnostics[$ - 1].message ~= "\n" ~ text[0 .. utf8Trim(text, maxMessageLength)].idup;
+    }
+
+    void clear() nothrow
+    {
+        diagnostics = null;
+        lastDuplicate = false;
+        truncated = false;
     }
 
     extern(C++) override:
@@ -1436,11 +1472,22 @@ void references(ref Lsp lsp, Params params, ref OutBuffer buf)
     deinitializeModule();
 }
 
+enum maxPayloadLength = 16 * 1024 * 1024;
+
+private void sendMessage(ref OutBuffer buf)
+{
+    printf("Content-Length: %d\r\n\r\n", cast(int) buf.length);
+    const data = buf.peekSlice();
+    if (data.length)
+        fwrite(data.ptr, 1, data.length, stdout);
+    fflush(stdout);
+}
+
 /// Send a textDocument/publishDiagnostics notification with errors and
 /// warnings collected from analyzing the document at `uri`.
 void publishDiagnostics(ref Lsp lsp, string uri)
 {
-    lsp.eSink.diagnostics = null;
+    lsp.eSink.clear();
     analyzeModule(lsp, uri);
     deinitializeModule();
 
@@ -1461,11 +1508,11 @@ void publishDiagnostics(ref Lsp lsp, string uri)
             line, col, line, col + 1, d.severity);
         buf.writeJsonString(d.message);
         buf.writestring(`"}`);
+        if (buf.length > maxPayloadLength)
+            break;
     }
     buf.writestring(`]}}`);
-    printf("Content-Length: %d\r\n\r\n", cast(int) buf.length);
-    printf("%s", buf.extractChars());
-    fflush(stdout);
+    sendMessage(buf);
 }
 
 int lspMain()
@@ -1516,6 +1563,19 @@ int lspMain()
                 break; // end of header
         }
 
+        if (contentLength <= 0)
+        {
+            if (ferror(stdin))
+                return 1;
+            continue;
+        }
+
+        if (contentLength > maxPayloadLength)
+        {
+            fprintf(stderr, "[!] Content-Length %d exceeds the payload limit, aborting\n", contentLength);
+            return 1;
+        }
+
         // Fill buffer up to contentLength
         if (contentLength > buffer.length)
             buffer.length = contentLength;
@@ -1538,7 +1598,16 @@ int lspMain()
         }
 
         // fprintf(stderr, "[!] Content length = %d\n", cast(int) contentLength);
-        fprintf(stderr, "[!] Content = %.*s\n", cast(int) json.length, json.ptr);
+        if (totalRead < json.length)
+        {
+            fprintf(stderr, "[!] truncated message: got %d of %d bytes\n",
+                cast(int) totalRead, cast(int) json.length);
+            return 1;
+        }
+
+        enum maxEcho = 4 * 1024;
+        fprintf(stderr, "[!] Content = %.*s\n",
+            cast(int) utf8Trim(json, maxEcho), json.ptr);
         JsonRpc result;
         jsonParse(result, json, eSink);
         fprintf(stderr, "[!] Responding to %.*s\n", cast(int) result.method.length, result.method.ptr);
@@ -1683,10 +1752,14 @@ void lspRespond(ref Lsp lsp, JsonRpc result)
     }
 
     buf.printf(`}`);
-    // fprintf(stderr, "[!] send response of length %d: %s\n", cast(int) buf.length, buf.peekChars());
-    printf("Content-Length: %d\r\n\r\n", cast(int) buf.length);
-    printf("%s", buf.extractChars());
-    fflush(stdout);
+    if (buf.length > maxPayloadLength)
+    {
+        fprintf(stderr, "[!] response of %d bytes exceeds the payload limit, replaced by null\n",
+            cast(int) buf.length);
+        buf.reset();
+        buf.printf(`{"jsonrpc":"2.0","id":%d,"result":null}`, result.id);
+    }
+    sendMessage(buf);
 }
 
 void writeJsonString(ref OutBuffer buf, const(char)[] str)
