@@ -13,10 +13,13 @@
 
 module dmd.root.speller;
 
+enum maxSpellerSeedLength = 64;
+
 /**************************************************
  * Looks for correct spelling.
  * Looks a distance of up to two.
  * This does an exhaustive search, so can potentially be very slow.
+ * Seeds longer than `maxSpellerSeedLength` are not searched at all.
  * Params:
  *      seed = wrongly spelled word
  *      dg = search delegate of the form `T delegate(const(char)[] p, out int cost)`
@@ -27,6 +30,8 @@ module dmd.root.speller;
 auto speller(alias dg)(const(char)[] seed)
 if (isSearchFunction!dg)
 {
+    if (seed.length > maxSpellerSeedLength)
+        return null;
     const size_t maxdist = seed.length < 4 ? seed.length / 2 : 2;
     foreach (distance; 0 .. maxdist)
     {
