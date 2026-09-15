@@ -2010,59 +2010,6 @@ JsonRpc jsonParse(ref JsonRpc result, const(char)[] text, ErrorSink eSink)
 {
     auto lexer = new Lexer("json", (text ~ "\0\0\0\0").ptr, 0, text.length, false, false, eSink, &global.compileEnv);
     lexer.popFront(); // Pop the 'reserved' token
-    const(char)[][] keys = [];
-
-    // Example: setPrimary(obj, ["pos", "x"], Token(3))
-    // Means we want to set: obj.pos.x = 3
-    // Returns: whether we found and set the field
-    bool setPrimary(T)(ref T destination, const(char)[][] keys, const ref Token token)
-    {
-        static if (is(T == struct))
-        {
-            if (keys.length == 0)
-                return false; // type mismatch: expected object, got int or string
-
-            foreach (member; __traits(allMembers, T))
-            {
-                if (keys[0] == member)
-                    return setPrimary(__traits(getMember, destination, member), keys[1 .. $], token);
-            }
-            return false; // field not found
-        }
-        else
-        {
-            if (keys.length != 0)
-                return false; // type mismatch: expected simple value, got object
-
-            static if (is(T == string))
-            {
-                if (token.value != TOK.string_)
-                    return false; // type mismatch: expected string, got int or something
-                destination = token.ustring.toDString.idup;
-            }
-            else static if (is(T : long))
-            {
-                if (!hasIntValue(token.value))
-                    return false; // type mismatch: expected int, got string or something
-                destination = cast(T) token.intvalue;
-            }
-            else
-                static assert(0, "unsupported field type `" ~ T.stringof ~ "`");
-
-            return true;
-        }
-    }
-
-    // Parse primary expression, number or string
-    void primary()
-    {
-        if (!hasIntValue(lexer.front) && lexer.front != TOK.string_)
-            eSink.error(lexer.scanloc, "Json value can't start with %s", Token.toChars(lexer.front));
-        else
-            setPrimary(result, keys, lexer.token);
-
-        lexer.popFront();
-    }
 
     /// Require a specific token, error if not present
     auto expect(TOK value)
@@ -2087,59 +2034,113 @@ JsonRpc jsonParse(ref JsonRpc result, const(char)[] text, ErrorSink eSink)
         return false;
     }
 
-    // Parse JSON array, e.g. [{}, "x", 5]
-    void array()()
+    // Parse a value of any shape without storing it, for unknown keys and type mismatches
+    void skipValue()()
     {
-        expect(TOK.leftBracket);
-        if (accepted(TOK.rightBracket))
-            return;
-
-
-        for (size_t i = 0; !lexer.empty; i++)
+        if (accepted(TOK.leftCurly))
         {
-            anyValue();
-            if (!accepted(TOK.comma))
-                break;
+            if (accepted(TOK.rightCurly))
+                return;
+
+            while (!lexer.empty)
+            {
+                expect(TOK.string_);
+                expect(TOK.colon);
+                skipValue();
+                if (!accepted(TOK.comma))
+                    break;
+            }
+            expect(TOK.rightCurly);
         }
-        expect(TOK.rightBracket);
-    }
-
-    // Parse JSON key-value pair, e.g. "key": 3
-    void keyValue()()
-    {
-        auto key = expect(TOK.string_);
-        keys ~= key.ustring.toDString; // push field on the stack
-        expect(TOK.colon);
-        anyValue();
-        keys = keys[0 .. $ - 1]; // pop field from stack
-    }
-
-    void obj()()
-    {
-        expect(TOK.leftCurly);
-        if (accepted(TOK.rightCurly))
-            return;
-
-        while (!lexer.empty)
+        else if (accepted(TOK.leftBracket))
         {
-            keyValue();
-            if (!accepted(TOK.comma))
-                break;
-        }
-        expect(TOK.rightCurly);
-    }
+            if (accepted(TOK.rightBracket))
+                return;
 
-    void anyValue()()
-    {
-        if (lexer.front == TOK.leftCurly)
-            obj();
-        else if (lexer.front == TOK.leftBracket)
-            array();
+            while (!lexer.empty)
+            {
+                skipValue();
+                if (!accepted(TOK.comma))
+                    break;
+            }
+            expect(TOK.rightBracket);
+        }
         else
-            primary();
+        {
+            if (!hasIntValue(lexer.front) && lexer.front != TOK.string_)
+                eSink.error(lexer.scanloc, "Json value can't start with %s", Token.toChars(lexer.front));
+            lexer.popFront();
+        }
     }
 
-    obj();
+    // Parse a json value into `destination`, recursing into struct fields.
+    // Arrays are parsed into the same destination, so `[{"text": "x"}]` sets `destination.text`.
+    void parseValue(T)(ref T destination)
+    {
+        if (accepted(TOK.leftBracket))
+        {
+            if (accepted(TOK.rightBracket))
+                return;
+
+            while (!lexer.empty)
+            {
+                parseValue(destination);
+                if (!accepted(TOK.comma))
+                    break;
+            }
+            expect(TOK.rightBracket);
+            return;
+        }
+
+        static if (is(T == struct))
+        {
+            if (lexer.front != TOK.leftCurly)
+                return skipValue(); // type mismatch: expected object, got int or string
+
+            expect(TOK.leftCurly);
+            if (accepted(TOK.rightCurly))
+                return;
+
+            while (!lexer.empty)
+            {
+                const key = expect(TOK.string_).ustring.toDString;
+                expect(TOK.colon);
+                parseMember(destination, key);
+                if (!accepted(TOK.comma))
+                    break;
+            }
+            expect(TOK.rightCurly);
+        }
+        else static if (is(T == string))
+        {
+            if (lexer.front != TOK.string_)
+                return skipValue(); // type mismatch: expected string, got int or something
+            destination = lexer.token.ustring.toDString.idup;
+            lexer.popFront();
+        }
+        else static if (is(T : long))
+        {
+            if (!hasIntValue(lexer.front))
+                return skipValue(); // type mismatch: expected int, got string or something
+            destination = cast(T) lexer.token.intvalue;
+            lexer.popFront();
+        }
+        else
+            static assert(0, "unsupported field type `" ~ T.stringof ~ "`");
+    }
+
+    // Parse the value of `key` into the field of that name, skip it when there is no such field
+    void parseMember(T)(ref T destination, const(char)[] key)
+    {
+        static foreach (member; __traits(allMembers, T))
+        {
+            if (key == member)
+                return parseValue(__traits(getMember, destination, member));
+        }
+        skipValue();
+    }
+
+    parseValue(result);
     return result;
 }
 
