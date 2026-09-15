@@ -26,7 +26,8 @@ Builds dmd.wasm from a dlang/dmd pull request applied on top of this checkout
   --index DIR regenerate DIR/index.json from DIR/*/meta.json and exit
 
 Environment: PHOBOS_ROOT (default: the phobos checkout next to the main dmd
-repository), HOST_DMD (build.d), GH_TOKEN (gh in CI).
+repository), HOST_DMD (build.d), GH_TOKEN (gh in CI), TRYPR_SOURCE (recorded
+in meta.json as "source": manual (default) or label, for automation).
 Requires gh (https://cli.github.com) with access to the PR's repository.
 Exit status 2 means the PR did not apply cleanly; resolve the conflicts in the
 tree it names and rerun with --no-apply.
@@ -165,7 +166,7 @@ mkdir -p "$OUT"
 cp "$TREE/compiler/wasm/dmd.wasm" "$OUT/dmd.wasm"
 NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 gh pr view "$PR" -R "$REPO" --json number,title,author,url,headRefOid,baseRefName,state \
-  --jq "{pr:.number,repo:\"$REPO\",title:.title,author:.author.login,url:.url,head:.headRefOid,baseRef:.baseRefName,base:\"$BASE\",state:.state,builtAt:\"$NOW\",explorerRef:\"$BASEHEAD\",applied:\"$APPLIED\"}" \
+  --jq "{pr:.number,repo:\"$REPO\",title:.title,author:.author.login,url:.url,head:.headRefOid,baseRef:.baseRefName,base:\"$BASE\",state:.state,builtAt:\"$NOW\",explorerRef:\"$BASEHEAD\",applied:\"$APPLIED\",source:\"${TRYPR_SOURCE:-manual}\"}" \
   > "$OUT/meta.json"
 
 rm -rf "$OUT/examples"
