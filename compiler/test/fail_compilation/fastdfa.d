@@ -645,4 +645,17 @@ void borrowInConditionInfect()
     }
 }
 
+void matchBorrow()
+{
+    __sumtype ST = int* | int;
+
+    int modify(ref ST st) => 2;
+
+    ST st;
+    st.match {
+        (int v) => 0,
+        (ref int* v) => modify(st)
+    };
+}
+
 /****************** End borrow checker (errors) ******************/

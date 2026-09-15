@@ -1460,6 +1460,70 @@ unittest
     assert(buf[] == "$(NOGC)|$(DDOC_FLAGS $(PURE))");
 }
 
+void emitSumTypeMemberComments(TypeSumType tst, Dsymbol sym, ref OutBuffer buf, Scope* sc, Loc loc)
+{
+    if (!(*tst.variantInfos).length)
+        return;
+    bool hasAnyComment = false;
+    foreach (vi; (*tst.variantInfos))
+    {
+        if (vi.comment && vi.comment[0])
+        {
+            hasAnyComment = true;
+            break;
+        }
+    }
+    if (!hasAnyComment)
+        return;
+
+    auto symArr = new Dsymbols(1);
+    (*symArr)[0] = sym;
+
+    buf.writestring("$(DDOC_SUMTYPE_MEMBERS ");
+    foreach (i, vi; (*tst.variantInfos))
+    {
+        if (!vi.comment || !vi.comment[0])
+            continue;
+        buf.writestring("$(DDOC_MEMBER");
+        buf.writestring("$(DDOC_MEMBER_HEADER");
+        {
+            buf.writestring("$(DDOC_ANCHOR ");
+            if (vi.name)
+                buf.writestring(vi.name.toChars());
+            else
+            {
+                buf.writestring("Variant");
+                buf.print(i);
+            }
+            buf.writeByte(')');
+            buf.writeByte(' ');
+            {
+                HdrGenState hgs;
+                hgs.ddoc = true;
+                toCBuffer(vi.type, buf, null, hgs);
+                if (vi.name)
+                {
+                    buf.writeByte(' ');
+                    buf.writestring(vi.name.toChars());
+                }
+            }
+        }
+        buf.writeByte(')');
+        buf.writestring(ddoc_decl_dd_s);
+        buf.writestring("$(DDOC_SECTIONS ");
+        buf.writestring("$(DDOC_SUMMARY ");
+        size_t o = buf.length;
+        buf.writestring(vi.comment);
+        escapeStrayParenthesis(loc, buf, o, true, sc.eSink);
+        highlightText(sc, symArr, loc, buf, o);
+        buf.writestring(")");
+        buf.writestring(")");
+        buf.writestring(ddoc_decl_dd_e);
+        buf.writeByte(')');
+    }
+    buf.writestring(")");
+}
+
 void emitComment(Dsymbol s, ref OutBuffer buf, Scope* sc)
 {
     extern (C++) final class EmitComment : Visitor
@@ -1561,11 +1625,22 @@ void emitComment(Dsymbol s, ref OutBuffer buf, Scope* sc)
                     // members are written, so nested member flags aren't consumed.
                     emitBehaviorFlags(*buf, iDescStart, &dc.a);
                     foreach (sym; dc.a)
+                    {
                         if (ScopeDsymbol sds = sym.isScopeDsymbol())
                         {
                             emitMemberComments(sds, *buf, sc);
                             break;
                         }
+                        if (AliasDeclaration ad = sym.isAliasDeclaration())
+                        {
+                            Type origType = ad.originalType ? ad.originalType : ad.type;
+                            if (auto tst = origType ? origType.isTypeSumType() : null)
+                            {
+                                emitSumTypeMemberComments(tst, ad, *buf, sc, ad.loc);
+                                break;
+                            }
+                        }
+                    }
                 }
                 buf.writestring(ddoc_decl_dd_e);
                 buf.writeByte(')');
@@ -1915,6 +1990,27 @@ void toDocBuffer(Dsymbol s, ref OutBuffer buf, Scope* sc)
             if (ad.isDeprecated())
                 buf.writestring("deprecated ");
             emitVisibility(*buf, ad);
+            Type origType = ad.originalType ? ad.originalType : ad.type;
+            if (auto tst = origType ? origType.isTypeSumType() : null)
+            {
+                buf.printf("__sumtype %s", ad.toChars());
+                buf.writestring(" = ");
+                foreach (i, vi; (*tst.variantInfos))
+                {
+                    if (i > 0)
+                        buf.writestring(" | ");
+                    HdrGenState hgs;
+                    hgs.ddoc = true;
+                    toCBuffer(vi.type, *buf, null, hgs);
+                    if (vi.name)
+                    {
+                        buf.writeByte(' ');
+                        buf.writestring(vi.name.toChars());
+                    }
+                }
+                buf.writestring(";\n");
+                return;
+            }
             buf.printf("alias %s = ", ad.toChars());
             if (Dsymbol s = ad.aliassym) // ident alias
             {
