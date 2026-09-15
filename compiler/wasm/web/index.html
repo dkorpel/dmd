@@ -50,6 +50,20 @@
   #spinner[hidden] { display: none; }
   @keyframes spin { to { transform: rotate(360deg); } }
   #updated { color: var(--aero-text-dim); font-size: 12px; margin-left: auto; white-space: nowrap; }
+  a.prlink { font: 12px system-ui; color: var(--code-kw); text-decoration: none; white-space: nowrap;
+             max-width: 40ch; overflow: hidden; text-overflow: ellipsis; }
+  a.prlink:hover { text-decoration: underline; }
+  a.prlink[hidden] { display: none; }
+  #prDialog { background: var(--aero-panel); color: var(--aero-text); border: 1px solid var(--aero-edge);
+              border-radius: 8px; padding: 14px 18px; font: 13px system-ui; max-width: 62ch; }
+  #prDialog::backdrop { background: rgba(0,0,0,.4); }
+  #prDialog h3 { margin: 0 0 8px; font-size: 14px; }
+  #prDialog p { margin: 6px 0; line-height: 1.4; }
+  #prDialog input { width: 9ch; font: inherit; }
+  #prDialog ul { margin: 4px 0 10px; padding-left: 18px; max-height: 12em; overflow: auto; }
+  #prDialog code { font: 12px ui-monospace, monospace; background: var(--code-inline-bg);
+                   color: var(--code-inline-fg); padding: 1px 4px; border-radius: 3px; }
+  #prDialog a { color: var(--code-kw); }
   .toolbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .toolbar .group { display: flex; align-items: center; gap: 4px; }
   .toolbar .sep { width: 1px; align-self: stretch; margin: 2px 6px;
@@ -186,6 +200,20 @@
 </style>
 </head>
 <body>
+<dialog id="prDialog">
+  <h3>Try a pull request</h3>
+  <p>dlang/dmd PR #<input id="prNum" type="number" min="1" placeholder="23803">
+     <button id="prOpen" class="chip" type="button">Open</button>
+     <button id="prMain" class="chip" type="button" hidden>Back to the main build</button></p>
+  <p>Hosted builds:</p>
+  <ul id="prList"><li>none yet</li></ul>
+  <p>To build another PR, open the
+     <a id="prBuildLink" href="#" target="_blank" rel="noopener">Build PR workflow</a>,
+     press <em>Run workflow</em> and enter the number, or run
+     <code>gh workflow run try-pr.yml -R dkorpel/dmd-explorer -f pr=N</code>.
+     It appears here after about five minutes.
+     Locally: <code>./compiler/wasm/trypr.sh N</code> on the wasm-web-app branch.</p>
+</dialog>
 <header>
   <div class="hdr-row">
     <h1>DMD explorer</h1>
@@ -202,9 +230,14 @@
         <button id="runBtn" class="chip" type="button"
                 title="Compile the program to WebAssembly and run it in this page (Ctrl/⌘+Shift+Enter)">▶ Run</button>
       </div>
+      <div class="group">
+        <button id="prBtn" class="chip" type="button"
+                title="Run the compiler from a dlang/dmd pull request">PR…</button>
+      </div>
     </div>
     <span id="spinner" title="Compiling…" hidden></span>
     <span id="status">loading dmd.wasm…</span>
+    <a id="prlink" class="prlink" hidden target="_blank" rel="noopener"></a>
     <span id="updated" title="When the dmd.wasm build on this page was last deployed"></span>
     <button id="themeToggle" class="theme-toggle" type="button" title="Toggle light/dark theme">☾</button>
   </div>
@@ -309,6 +342,8 @@ const LS_KEY = "dmdwasm.layout.v1";
 const params = new URLSearchParams(location.search);
 const EMBED = params.has("embed");
 if (EMBED) document.body.classList.add("embed");
+const PR = /^\d+$/.test(params.get("pr") || "") ? params.get("pr") : null;
+const TRYPR_URL = "https://github.com/dkorpel/dmd-explorer/actions/workflows/try-pr.yml";
 
 // ---- Pane show/hide + layout, persisted to localStorage ------------------
 
@@ -684,6 +719,47 @@ if (exSel) {
     });
 }
 
+const prDlg = $("prDialog");
+if (prDlg) {
+    $("prBuildLink").href = TRYPR_URL;
+    $("prBtn").addEventListener("click", () => prDlg.showModal());
+    prDlg.addEventListener("click", (e) => { if (e.target === prDlg) prDlg.close(); });
+    const openPr = () => {
+        const n = $("prNum").value.trim();
+        if (/^\d+$/.test(n)) location.search = "?pr=" + n;
+    };
+    $("prOpen").addEventListener("click", openPr);
+    $("prNum").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); openPr(); } });
+    $("prMain").hidden = !PR;
+    $("prMain").addEventListener("click", () => { location.search = ""; });
+    fetch("pr/index.json", { cache: "no-cache" })
+        .then((r) => (r.ok ? r.json() : []))
+        .then((list) => {
+            if (!Array.isArray(list) || !list.length) return;
+            const ul = $("prList");
+            ul.textContent = "";
+            for (const m of list) {
+                const li = document.createElement("li");
+                const a = document.createElement("a");
+                a.href = "?pr=" + m.pr;
+                a.textContent = `#${m.pr} ${m.title}`;
+                li.appendChild(a);
+                li.appendChild(document.createTextNode(` by ${m.author}, built ${String(m.builtAt || "").slice(0, 10)}`));
+                ul.appendChild(li);
+            }
+        })
+        .catch(() => {});
+}
+
+async function prBuildMeta(n) {
+    try {
+        const r = await fetch(`pr/${n}/meta.json`, { cache: "no-cache" });
+        return r.ok ? await r.json() : null;
+    } catch (e) {
+        return null;
+    }
+}
+
 // In an embedded demo, offer a one-click jump to the full explorer carrying the
 // reader's current edits (href is refreshed at click time so it stays current).
 if (EMBED) {
@@ -1016,9 +1092,28 @@ function loadDmdWorker(url) {
 
 (async () => {
     try {
-        await loadDmdWorker("dmd.wasm");
+        let wasmUrl = "dmd.wasm", prMeta = null;
+        if (PR) {
+            $("prBtn").textContent = `PR #${PR}`;
+            $("prNum").value = PR;
+            prMeta = await prBuildMeta(PR);
+            if (!prMeta) {
+                $("status").textContent = `no build for PR #${PR} yet`;
+                prDlg.showModal();
+                return;
+            }
+            wasmUrl = `pr/${PR}/dmd.wasm`;
+            $("prBtn").setAttribute("aria-pressed", "true");
+            const a = $("prlink");
+            a.href = prMeta.url;
+            a.textContent = `#${prMeta.pr} ${prMeta.title}`;
+            a.title = `by ${prMeta.author}, commit ${String(prMeta.head).slice(0, 10)} applied on the explorer's ${prMeta.baseRef} snapshot`;
+            a.hidden = false;
+        }
+        await loadDmdWorker(wasmUrl);
         $("status").textContent = "ready";
-        if (dmdLM) $("updated").textContent = "updated " + dmdLM.toISOString().slice(0, 10);
+        if (prMeta) $("updated").textContent = "built " + String(prMeta.builtAt).slice(0, 10);
+        else if (dmdLM) $("updated").textContent = "updated " + dmdLM.toISOString().slice(0, 10);
         // Ctrl+Enter (or ⌘+Enter on macOS) forces an immediate recompile.
         document.addEventListener("keydown", (e) => {
             if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); runNow(); }
