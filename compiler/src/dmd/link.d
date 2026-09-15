@@ -15,11 +15,12 @@ import core.stdc.ctype;
 import core.stdc.stdio;
 import core.stdc.stdlib;
 import core.stdc.string;
+import core.stdc.stdarg;
 
 import dmd.astenums;
 import dmd.compiler : includeImports;
 import dmd.dmdparams;
-import dmd.errors;
+import dmd.errors : ErrorSinkCompiler;
 import dmd.errorsink;
 import dmd.globals;
 import dmd.location;
@@ -629,6 +630,7 @@ public int runLINK(bool verbose, ErrorSink eSink)
             // legacy `msvcrtNNN` such as `msvcrt120` — do not detect Visual Studio; use
             // lld-link with the MinGW libraries instead.
             const isMingwRuntime = driverParams.mscrtlib == "ucrtbase" ||
+                driverParams.mscrtlib == "vcruntime140" || // legacy name for ucrtbase
                 (driverParams.mscrtlib.length > 6 &&
                  driverParams.mscrtlib[0 .. 6] == "msvcrt" && isdigit(driverParams.mscrtlib[6]));
             if (!isMingwRuntime)
@@ -652,6 +654,10 @@ public int runLINK(bool verbose, ErrorSink eSink)
             // /DEFAULTLIB directive; it also needs the VC runtime library.
             if (driverParams.mscrtlib == "ucrtbase")
                 cmdbuf.writestring(" vcruntime140.lib");
+            // And legacy_stdio_definitions.lib, as the printf/scanf family is defined
+            // inline in the MSVC 2015+ headers.
+            if (driverParams.mscrtlib == "ucrtbase" || driverParams.mscrtlib == "vcruntime140")
+                cmdbuf.writestring(" legacy_stdio_definitions.lib");
 
             if (const(char)* lflags = vsopt.linkOptions(target.isX86_64))
             {
@@ -1122,7 +1128,7 @@ version (Windows)
             else
             {
                 eSink.error(Loc.initial, "linker exited with status %d", status);
-                errorSupplemental(Loc.initial, "%s %s", cmd, args);
+                eSink.errorSupplemental(Loc.initial, "%s %s", cmd, args);
             }
         }
         return status;

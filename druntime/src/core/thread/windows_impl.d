@@ -15,6 +15,8 @@ module core.thread.windows_impl;
 import core.atomic;
 import core.exception : onOutOfMemoryError;
 import core.internal.traits : externDFunc;
+import core.memory : GC;
+import core.thread.context : StackContext;
 import core.thread.osthread;
 import core.thread.threadbase;
 import core.thread.types : ThreadID, ThreadDescr, ll_ThreadData;
@@ -27,7 +29,7 @@ version (all)
     import core.stdc.stdint : uintptr_t; // for _beginthreadex decl below
     import core.stdc.stdlib : free, malloc, realloc;
     import core.sys.windows.basetsd /+: HANDLE+/;
-    import core.sys.windows.threadaux /+: getThreadStackBottom, impersonate_thread, OpenThreadHandle+/;
+    import core.sys.windows.threadaux : getThreadStackBottom, impersonate_thread, OpenThreadHandle;
     import core.sys.windows.winbase /+: CloseHandle, CREATE_SUSPENDED, DuplicateHandle, GetCurrentThread,
         GetCurrentThreadId, GetCurrentProcess, GetExitCodeThread, GetSystemInfo, GetThreadContext,
         GetThreadPriority, INFINITE, ResumeThread, SetThreadPriority, Sleep,  STILL_ACTIVE,
@@ -45,7 +47,23 @@ version (GNU)
     import gcc.builtins;
 }
 
-package enum isSingleThreaded = false;
+/**
+ * Hook for whatever EH implementation is used to save/restore some data
+ * per stack.
+ *
+ * Params:
+ *     newContext = The return value of the prior call to this function
+ *         where the stack was last swapped out, or null when a fiber stack
+ *         is switched in for the first time.
+ */
+private extern(C) void* _d_eh_swapContext(void* newContext) nothrow @nogc;
+
+package void* swapContextImpl()(void* newContext) nothrow @nogc
+{
+    return _d_eh_swapContext(newContext);
+}
+
+package(core) enum isSingleThreaded = false;
 
 version (CoreDdoc) {} else
 class Thread : ThreadBase
@@ -79,7 +97,7 @@ class Thread : ThreadBase
 
     static Thread getThis() @safe nothrow @nogc
     {
-        return ThreadBase.getThis().toThread;
+        return ThreadBase.getThis().toThread!Thread;
     }
 
     version (all)
@@ -256,7 +274,192 @@ class Thread : ThreadBase
     package static void afterDeploy() nothrow @nogc { /* do nothing */ }
 }
 
+private
+{
+    // NOTE: These calls are not safe on Posix systems that use signals to
+    //       perform garbage collection.  The suspendHandler uses getThis()
+    //       to get the thread handle so getThis() must be a simple call.
+    //       Mutexes can't safely be acquired inside signal handlers, and
+    //       even if they could, the mutex needed (Thread.slock) is held by
+    //       thread_suspendAll().  So in short, these routines will remain
+    //       Windows-specific.  If they are truly needed elsewhere, the
+    //       suspendHandler will need a way to call a version of getThis()
+    //       that only does the TLS lookup without the fancy fallback stuff.
+
+    /**
+     * Registers the calling thread for use with the D Runtime.  If this routine
+     * is called for a thread which is already registered, no action is performed.
+     *
+     * NOTE: This routine does not run thread-local static constructors when called.
+     *       If full functionality as a D thread is desired, the following function
+     *       must be called after thread_attachThis:
+     *
+     *       extern (C) void rt_moduleTlsCtor();
+     *
+     * See_Also:
+     *     $(REF thread_detachThis, core,thread,threadbase)
+     */
+    package(core) extern (C) Thread thread_attachByAddr( ThreadID addr )
+    {
+        return thread_attachByAddrB( addr, getThreadStackBottom( addr ) );
+    }
+
+
+    /// ditto
+    extern (C) Thread thread_attachByAddrB( ThreadID addr, void* bstack )
+    {
+        GC.disable(); scope(exit) GC.enable();
+
+        if (auto t = thread_findByAddr(addr).toThread)
+            return t;
+
+        Thread        thisThread  = new Thread();
+        StackContext* thisContext = &thisThread.m_main;
+        assert( thisContext == thisThread.m_curr );
+
+        thisThread.m_tdescr.tid  = addr;
+        thisContext.bstack = bstack;
+        thisContext.tstack = thisContext.bstack;
+
+        thisThread.m_isDaemon = true;
+
+        if ( addr == GetCurrentThreadId() )
+        {
+            thisThread.m_tdescr.hndl = GetCurrentThreadHandle();
+            thisThread.tlsRTdataInit();
+            Thread.setThis( thisThread );
+        }
+        else
+        {
+            thisThread.m_tdescr.hndl = OpenThreadHandle( addr );
+            impersonate_thread(addr,
+            {
+                thisThread.tlsRTdataInit();
+                Thread.setThis( thisThread );
+            });
+        }
+
+        Thread.add( thisThread, false );
+        Thread.add( thisContext );
+        if ( Thread.sm_main !is null )
+            multiThreadedFlag = true;
+        return thisThread;
+    }
+}
+
+private
+{
+    //
+    // Entry point for Windows threads
+    //
+    extern (Windows) uint thread_entryPoint( void* arg ) nothrow
+    {
+        Thread  obj = cast(Thread) arg;
+        assert( obj );
+
+        obj.initDataStorage();
+
+        Thread.registerThis(obj);
+
+        scope (exit)
+        {
+            // allow the GC to clean up any resources it allocated for this thread.
+            import core.internal.gc.proxy : gc_getProxy;
+            gc_getProxy().cleanupThread(obj);
+
+            Thread.remove(obj);
+            obj.destroyDataStorage();
+        }
+        Thread.add(&obj.m_main);
+
+        // NOTE: No GC allocations may occur until the stack pointers have
+        //       been set and Thread.getThis returns a valid reference to
+        //       this thread object (this latter condition is not strictly
+        //       necessary on Windows but it should be followed for the
+        //       sake of consistency).
+
+        // TODO: Consider putting an auto exception object here (using
+        //       alloca) forOutOfMemoryError plus something to track
+        //       whether an exception is in-flight?
+
+        void append( Throwable t )
+        {
+            obj.filterCaughtThrowable(t);
+            if (t !is null)
+                obj.m_unhandled = Throwable.chainTogether(obj.m_unhandled, t);
+        }
+
+        version (D_InlineAsm_X86)
+        {
+            asm nothrow @nogc { fninit; }
+        }
+
+        try
+        {
+            rt_moduleTlsCtor();
+            try
+            {
+                obj.runFromEntryPoint();
+            }
+            catch ( Throwable t )
+            {
+                append( t );
+            }
+            rt_moduleTlsDtor();
+        }
+        catch ( Throwable t )
+        {
+            append( t );
+        }
+        return 0;
+    }
+
+
+    HANDLE GetCurrentThreadHandle() nothrow @nogc
+    {
+        const uint DUPLICATE_SAME_ACCESS = 0x00000002;
+
+        HANDLE curr = GetCurrentThread(),
+               proc = GetCurrentProcess(),
+               hndl;
+
+        DuplicateHandle( proc, curr, proc, &hndl, 0, TRUE, DUPLICATE_SAME_ACCESS );
+        return hndl;
+    }
+}
+
+version (CoreDdoc) {} else
+public  alias getpid = imported!"core.sys.windows.winbase".GetCurrentProcessId;
+
 package alias gettid = imported!"core.sys.windows.winbase".GetCurrentThreadId;
+
+package void* getStackBottomImpl() nothrow @nogc
+{
+    version (D_InlineAsm_X86)
+        asm pure nothrow @nogc { naked; mov EAX, FS:4; ret; }
+    else version (D_InlineAsm_X86_64)
+        asm pure nothrow @nogc
+        {    naked;
+             mov RAX, 8;
+             mov RAX, GS:[RAX];
+             ret;
+        }
+    else version (GNU_InlineAsm)
+    {
+        void *bottom;
+
+        version (X86)
+            asm pure nothrow @nogc { "movl %%fs:4, %0;" : "=r" (bottom); }
+        else version (X86_64)
+            asm pure nothrow @nogc { "movq %%gs:8, %0;" : "=r" (bottom); }
+        else
+            static assert(false, "Architecture not supported.");
+
+        return bottom;
+    }
+    else
+        static assert(false, "Architecture not supported.");
+}
 
 // Returns true on success
 package bool suspendThreadImpl(Thread t) @nogc nothrow
@@ -268,6 +471,70 @@ package bool suspendThreadImpl(Thread t) @nogc nothrow
 package bool resumeThreadImpl(Thread t) @nogc nothrow
 {
     return ResumeThread(t.m_tdescr.hndl) != 0xFFFFFFFF;
+}
+
+package void afterStopTheWorld(bool suspendedSelf, size_t cnt) @nogc nothrow { /* do nothing */ }
+
+package void loadStackAndRegInfo(Thread t, const bool sameThread) nothrow @nogc
+{
+    CONTEXT context = void;
+    context.ContextFlags = CONTEXT_INTEGER | CONTEXT_CONTROL;
+
+    if ( !GetThreadContext( t.m_tdescr.hndl, &context ) )
+        onThreadError( "Unable to load thread context" );
+    version (X86)
+    {
+        if ( !t.m_lock )
+            t.m_curr.tstack = cast(void*) context.Esp;
+        // eax,ebx,ecx,edx,edi,esi,ebp,esp
+        t.m_reg[0] = context.Eax;
+        t.m_reg[1] = context.Ebx;
+        t.m_reg[2] = context.Ecx;
+        t.m_reg[3] = context.Edx;
+        t.m_reg[4] = context.Edi;
+        t.m_reg[5] = context.Esi;
+        t.m_reg[6] = context.Ebp;
+        t.m_reg[7] = context.Esp;
+    }
+    else version (X86_64)
+    {
+        if ( !t.m_lock )
+            t.m_curr.tstack = cast(void*) context.Rsp;
+        // rax,rbx,rcx,rdx,rdi,rsi,rbp,rsp
+        t.m_reg[0] = context.Rax;
+        t.m_reg[1] = context.Rbx;
+        t.m_reg[2] = context.Rcx;
+        t.m_reg[3] = context.Rdx;
+        t.m_reg[4] = context.Rdi;
+        t.m_reg[5] = context.Rsi;
+        t.m_reg[6] = context.Rbp;
+        t.m_reg[7] = context.Rsp;
+        // r8,r9,r10,r11,r12,r13,r14,r15
+        t.m_reg[8]  = context.R8;
+        t.m_reg[9]  = context.R9;
+        t.m_reg[10] = context.R10;
+        t.m_reg[11] = context.R11;
+        t.m_reg[12] = context.R12;
+        t.m_reg[13] = context.R13;
+        t.m_reg[14] = context.R14;
+        t.m_reg[15] = context.R15;
+    }
+    else
+    {
+        static assert(false, "Architecture not supported." );
+    }
+    // a thread might change the stack, e.g. using non-D fibers, so we must not
+    // rely on the stack bottom saved when attaching/starting. Multiple fiber stacks cannot be
+    // captured, but make sure scanning does not crash accessing invalid memory ranges
+    // between stacks
+    if ( !t.m_lock )
+        t.m_curr.bstack = getThreadStackBottom( t.m_tdescr.hndl );
+}
+
+package void purgeStackAndRegInfo(Thread t, const bool sameThread) nothrow @nogc
+{
+    t.unloadStackInfo();
+    t.m_reg[0 .. $] = 0;
 }
 
 private

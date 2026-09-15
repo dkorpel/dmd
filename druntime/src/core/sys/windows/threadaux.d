@@ -17,8 +17,10 @@ import core.sys.windows.winbase/+ : CloseHandle, GetCurrentThreadId, GetCurrentP
     GetModuleHandleA, GetProcAddress+/;
 import core.sys.windows.windef/+ : BOOL, DWORD, FALSE, HRESULT+/;
 import core.stdc.stdlib;
+import core.memory;
 
 public import core.thread;
+public import core.thread.windows_impl : thread_attachByAddr;
 
 extern(Windows)
 HANDLE OpenThread(DWORD dwDesiredAccess, BOOL bInheritHandle, DWORD dwThreadId) nothrow @nogc;
@@ -371,6 +373,7 @@ void* GetTlsDataAddress( uint id ) nothrow
 // run rt_moduleTlsCtor in the context of the given thread
 void thread_moduleTlsCtor( uint id )
 {
+    GC.disable(); scope(exit) GC.enable();
     thread_aux.impersonate_thread(id, &rt_moduleTlsCtor);
 }
 
@@ -378,5 +381,6 @@ void thread_moduleTlsCtor( uint id )
 // run rt_moduleTlsDtor in the context of the given thread
 void thread_moduleTlsDtor( uint id )
 {
+    GC.disable(); scope(exit) GC.enable();
     thread_aux.impersonate_thread(id, &rt_moduleTlsDtor);
 }

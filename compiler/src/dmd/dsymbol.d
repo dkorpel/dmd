@@ -30,9 +30,9 @@ import dmd.dversion;
 import dmd.dscope;
 import dmd.dstruct;
 import dmd.dtemplate;
-import dmd.errors;
 import dmd.expression;
 import dmd.func;
+import dmd.hdrgen : toErrMsg;
 import dmd.identifier;
 import dmd.location;
 import dmd.mtype;
@@ -698,22 +698,16 @@ extern (C++) class Dsymbol : ASTNode
             {
                 addQualifiers(p.parent);
 
-                bool isOneMember(T)(T t)
+                if (!keepOneMember)
                 {
-                    import dmd.dsymbolsem;
+                    import dmd.dsymbolsem : oneMembers;
                     Dsymbol sym;
                     if (auto ti = p.parent.isTemplateInstance())
                         if (auto ident = p.getIdent())
                             if (ident is ti.name)
                                 if (oneMembers(ti.members, sym, ident) && sym is p)
-                                    return true;
-                    return false;
+                                    return;
                 }
-
-                if (!keepOneMember)
-                    if (isOneMember(p.parent.isTemplateInstance()) ||
-                        isOneMember(p.parent.isTemplateDeclaration()))
-                        return;
 
                 buf.writeByte('.');
             }
@@ -1226,6 +1220,8 @@ public:
 
     static void multiplyDefined(Loc loc, Dsymbol s1, Dsymbol s2)
     {
+        import dmd.globals : global;
+        auto eSink = global.errorSink;
         version (none)
         {
             printf("ScopeDsymbol::multiplyDefined()\n");
@@ -1234,9 +1230,9 @@ public:
         }
         if (loc.isValid())
         {
-            .error(loc, "`%s` matches conflicting symbols:", s1.ident.toErrMsg());
-            errorSupplemental(s1.loc, "%s `%s`", s1.kind(), s1.toPrettyChars());
-            errorSupplemental(s2.loc, "%s `%s`", s2.kind(), s2.toPrettyChars());
+            eSink.error(loc, "`%s` matches conflicting symbols:", s1.ident.toErrMsg());
+            eSink.errorSupplemental(s1.loc, "%s `%s`", s1.kind(), s1.toPrettyChars());
+            eSink.errorSupplemental(s2.loc, "%s `%s`", s2.kind(), s2.toPrettyChars());
 
             static if (0)
             {
@@ -1260,7 +1256,7 @@ public:
         }
         else
         {
-            .error(s1.loc, "%s `%s` conflicts with %s `%s` at %s", s1.kind, s1.toPrettyChars, s2.kind(), s2.toPrettyChars(), s2.loc.toChars());
+            eSink.error(s1.loc, "%s `%s` conflicts with %s `%s` at %s", s1.kind, s1.toPrettyChars, s2.kind(), s2.toPrettyChars(), s2.loc.toChars());
         }
     }
 

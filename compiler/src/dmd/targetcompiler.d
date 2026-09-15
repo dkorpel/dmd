@@ -11,9 +11,9 @@
 
 module dmd.targetcompiler;
 
-version (IN_GCC) {}        // compiler is being built with gdc
-else version (IN_LLVM) {}  // compiler is being built with ldc
-else version = MARS;       // default means compiler is built with Digital Mars compiler (DMD)
+version (IN_GCC) {}        // frontend is being built for gdc
+else version (IN_LLVM) {}  // frontend is being built for ldc
+else version = MARS;       // default means compiler being built is Digital Mars compiler (DMD)
 
 /***************************
  */
@@ -215,7 +215,7 @@ mixin template HostObjectNotFound()
         else version (MARS)
         {
             eSink.errorSupplemental(loc, "dmd might not be correctly installed. Run 'dmd -man' for installation instructions.");
-            eSink.errorSupplemental(loc, "config file: %.*s", configFile.length, configFile.ptr);
+            eSink.errorSupplemental(loc, "config file: %.*s", cast(int)configFile.length, configFile.ptr);
         }
         else
             static assert(0, "unknown compiler being built");

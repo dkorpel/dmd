@@ -18,7 +18,7 @@ import dmd.arraytypes;
 import dmd.astenums;
 import dmd.dsymbol;
 import dmd.dtemplate;
-import dmd.errors;
+import dmd.errors : fatal;
 import dmd.errorsink;
 import dmd.expression;
 import dmd.func;
@@ -596,7 +596,10 @@ extern (C++) class VarDeclaration : Declaration
             Dsymbol parent = toParent();
             if (!parent && !(storage_class & STC.static_))
             {
-                .error(loc, "%s `%s` forward referenced", kind, toPrettyChars);
+                import dmd.globals : global;
+                import dmd.errorsink;
+                auto eSink = global.errorSink;
+                eSink.error(loc, "%s `%s` forward referenced", kind, toPrettyChars);
                 type = Type.terror;
             }
             else if (storage_class & (STC.static_ | STC.extern_ | STC.gshared) ||

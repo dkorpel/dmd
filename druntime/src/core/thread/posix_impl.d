@@ -17,7 +17,7 @@ import core.exception : onOutOfMemoryError;
 import core.internal.traits : externDFunc;
 import core.thread.osthread;
 import core.thread.threadbase;
-import core.thread.types : ThreadID, ThreadDescr, ll_ThreadData;
+import core.thread.types : isStackGrowingDown, ThreadID, ThreadDescr, ll_ThreadData;
 import core.time;
 
 version (Posix):
@@ -112,12 +112,21 @@ version (GNU)
     import gcc.builtins;
 }
 
-package enum isSingleThreaded = false;
+private extern(C) void* _d_eh_swapContextDwarf(void* newContext) nothrow @nogc;
+package void* swapContextImpl(void* newContext) nothrow @nogc
+{
+    return _d_eh_swapContextDwarf(newContext);
+}
+
+version (WASI)
+    package(core) enum isSingleThreaded = true;
+else
+    package(core) enum isSingleThreaded = false;
 
 version (CoreDdoc) {} else
 class Thread : ThreadBase
 {
-    package shared bool     m_isRunning;
+    private shared bool m_isRunning;
 
     version (Solaris)
     {
@@ -160,7 +169,7 @@ class Thread : ThreadBase
 
     static Thread getThis() @safe nothrow @nogc
     {
-        return ThreadBase.getThis().toThread;
+        return ThreadBase.getThis().toThread!Thread;
     }
 
     version (Darwin)
@@ -589,6 +598,11 @@ class Thread : ThreadBase
         return atomicLoad(m_isRunning);
     }
 
+    override final protected @property void isRunning(bool newState) nothrow @nogc
+    {
+        atomicStore!(MemoryOrder.raw)(m_isRunning, newState);
+    }
+
     static void sleep( Duration val ) @nogc nothrow @trusted
     in
     {
@@ -780,13 +794,11 @@ do
     resumeSignalNo  = resumeSignalNumber;
 }
 
-//TODO: private
-
 version (CRuntime_WASI) {}
 else
 {
-    package __gshared int suspendSignalNumber;
-    package __gshared int resumeSignalNumber;
+    private __gshared int suspendSignalNumber;
+    private __gshared int resumeSignalNumber;
 }
 
 // Returns true on success
@@ -815,7 +827,691 @@ package bool resumeThreadImpl(Thread t) @nogc nothrow
         return pthread_kill(t.m_tdescr.tid, resumeSignalNumber) == 0;
 }
 
+package void afterStopTheWorld(bool suspendedSelf, size_t cnt) @nogc nothrow
+{
+    version (Darwin)
+    {}
+    else version (Solaris)
+    {}
+    else version (WASI)
+    {}
+    else version (Posix)
+    {
+        // Subtract own thread if we called suspend() on ourselves.
+        // For example, suspendedSelf would be false if the current
+        // thread ran thread_detachThis().
+        assert(cnt >= 1);
+        if (suspendedSelf)
+            --cnt;
+        // wait for semaphore notifications
+        for (; cnt; --cnt)
+        {
+            while (sem_wait(&suspendCount) != 0)
+            {
+                if (errno != EINTR)
+                    onThreadError("Unable to wait for semaphore");
+                errno = 0;
+            }
+        }
+    }
+}
+
+package void loadStackAndRegInfo(Thread t, const bool sameThread) nothrow @nogc
+{
+    version (Darwin)
+    {
+        version (X86)
+        {
+            x86_thread_state32_t    state = void;
+            mach_msg_type_number_t  count = x86_THREAD_STATE32_COUNT;
+
+            if ( thread_get_state( t.m_tdescr.tmach, x86_THREAD_STATE32, &state, &count ) != KERN_SUCCESS )
+                onThreadError( "Unable to load thread state" );
+            if ( !t.m_lock )
+                t.m_curr.tstack = cast(void*) state.esp;
+            // eax,ebx,ecx,edx,edi,esi,ebp,esp
+            t.m_reg[0] = state.eax;
+            t.m_reg[1] = state.ebx;
+            t.m_reg[2] = state.ecx;
+            t.m_reg[3] = state.edx;
+            t.m_reg[4] = state.edi;
+            t.m_reg[5] = state.esi;
+            t.m_reg[6] = state.ebp;
+            t.m_reg[7] = state.esp;
+        }
+        else version (X86_64)
+        {
+            x86_thread_state64_t    state = void;
+            mach_msg_type_number_t  count = x86_THREAD_STATE64_COUNT;
+
+            if ( thread_get_state( t.m_tdescr.tmach, x86_THREAD_STATE64, &state, &count ) != KERN_SUCCESS )
+                onThreadError( "Unable to load thread state" );
+            if ( !t.m_lock )
+                t.m_curr.tstack = cast(void*) state.rsp;
+            // rax,rbx,rcx,rdx,rdi,rsi,rbp,rsp
+            t.m_reg[0] = state.rax;
+            t.m_reg[1] = state.rbx;
+            t.m_reg[2] = state.rcx;
+            t.m_reg[3] = state.rdx;
+            t.m_reg[4] = state.rdi;
+            t.m_reg[5] = state.rsi;
+            t.m_reg[6] = state.rbp;
+            t.m_reg[7] = state.rsp;
+            // r8,r9,r10,r11,r12,r13,r14,r15
+            t.m_reg[8]  = state.r8;
+            t.m_reg[9]  = state.r9;
+            t.m_reg[10] = state.r10;
+            t.m_reg[11] = state.r11;
+            t.m_reg[12] = state.r12;
+            t.m_reg[13] = state.r13;
+            t.m_reg[14] = state.r14;
+            t.m_reg[15] = state.r15;
+        }
+        else version (AArch64)
+        {
+            arm_thread_state64_t state = void;
+            mach_msg_type_number_t count = ARM_THREAD_STATE64_COUNT;
+
+            if (thread_get_state(t.m_tdescr.tmach, ARM_THREAD_STATE64, &state, &count) != KERN_SUCCESS)
+                onThreadError("Unable to load thread state");
+            // TODO: ThreadException here recurses forever!  Does it
+            //still using onThreadError?
+            //printf("state count %d (expect %d)\n", count ,ARM_THREAD_STATE64_COUNT);
+            if (!t.m_lock)
+                t.m_curr.tstack = cast(void*) state.sp;
+
+            t.m_reg[0..29] = state.x;  // x0-x28
+            t.m_reg[29] = state.fp;    // x29
+            t.m_reg[30] = state.lr;    // x30
+            t.m_reg[31] = state.sp;    // x31
+            t.m_reg[32] = state.pc;
+        }
+        else version (ARM)
+        {
+            arm_thread_state32_t state = void;
+            mach_msg_type_number_t count = ARM_THREAD_STATE32_COUNT;
+
+            // Thought this would be ARM_THREAD_STATE32, but that fails.
+            // Mystery
+            if (thread_get_state(t.m_tdescr.tmach, ARM_THREAD_STATE, &state, &count) != KERN_SUCCESS)
+                onThreadError("Unable to load thread state");
+            // TODO: in past, ThreadException here recurses forever!  Does it
+            //still using onThreadError?
+            //printf("state count %d (expect %d)\n", count ,ARM_THREAD_STATE32_COUNT);
+            if (!t.m_lock)
+                t.m_curr.tstack = cast(void*) state.sp;
+
+            t.m_reg[0..13] = state.r;  // r0 - r13
+            t.m_reg[13] = state.sp;
+            t.m_reg[14] = state.lr;
+            t.m_reg[15] = state.pc;
+        }
+        else version (PPC)
+        {
+            ppc_thread_state_t state = void;
+            mach_msg_type_number_t count = PPC_THREAD_STATE_COUNT;
+
+            if (thread_get_state(t.m_tdescr.tmach, PPC_THREAD_STATE, &state, &count) != KERN_SUCCESS)
+                onThreadError("Unable to load thread state");
+            if (!t.m_lock)
+                t.m_curr.tstack = cast(void*) state.r[1];
+            t.m_reg[] = state.r[];
+        }
+        else version (PPC64)
+        {
+            ppc_thread_state64_t state = void;
+            mach_msg_type_number_t count = PPC_THREAD_STATE64_COUNT;
+
+            if (thread_get_state(t.m_tdescr.tmach, PPC_THREAD_STATE64, &state, &count) != KERN_SUCCESS)
+                onThreadError("Unable to load thread state");
+            if (!t.m_lock)
+                t.m_curr.tstack = cast(void*) state.r[1];
+            t.m_reg[] = state.r[];
+        }
+        else
+        {
+            static assert(false, "Architecture not supported." );
+        }
+    }
+    else version (Solaris)
+    {
+        if (!sameThread)
+        {
+            static int getLwpStatus(ulong lwpid, out lwpstatus_t status)
+            {
+                import core.sys.posix.fcntl : open, O_RDONLY;
+                import core.sys.posix.unistd : pread, close;
+                import core.internal.string : unsignedToTempString;
+
+                char[100] path = void;
+                auto pslice = path[0 .. $];
+                immutable n = unsignedToTempString(lwpid);
+                immutable ndigits = n.length;
+
+                // Construct path "/proc/self/lwp/%u/lwpstatus"
+                pslice[0 .. 15] = "/proc/self/lwp/";
+                pslice = pslice[15 .. $];
+                pslice[0 .. ndigits] = n[];
+                pslice = pslice[ndigits .. $];
+                pslice[0 .. 10] = "/lwpstatus";
+                pslice[10] = '\0';
+
+                // Read in lwpstatus data
+                int fd = open(path.ptr, O_RDONLY, 0);
+                if (fd >= 0)
+                {
+                    while (pread(fd, &status, status.sizeof, 0) == status.sizeof)
+                    {
+                        // Should only attempt to read the thread state once it
+                        // has been stopped by thr_suspend
+                        if (status.pr_flags & PR_STOPPED)
+                        {
+                            close(fd);
+                            return 0;
+                        }
+                        // Give it a chance to stop
+                        thread_yield();
+                    }
+                    close(fd);
+                }
+                return -1;
+            }
+
+            lwpstatus_t status = void;
+            if (getLwpStatus(t.m_tdescr.tid, status) != 0)
+                onThreadError("Unable to load thread state");
+
+            version (X86)
+            {
+                import core.sys.solaris.sys.regset; // REG_xxx
+
+                if (!t.m_lock)
+                    t.m_curr.tstack = cast(void*) status.pr_reg[REG_ESP];
+                // eax,ebx,ecx,edx,edi,esi,ebp,esp
+                t.m_reg[0] = status.pr_reg[REG_EAX];
+                t.m_reg[1] = status.pr_reg[REG_EBX];
+                t.m_reg[2] = status.pr_reg[REG_ECX];
+                t.m_reg[3] = status.pr_reg[REG_EDX];
+                t.m_reg[4] = status.pr_reg[REG_EDI];
+                t.m_reg[5] = status.pr_reg[REG_ESI];
+                t.m_reg[6] = status.pr_reg[REG_EBP];
+                t.m_reg[7] = status.pr_reg[REG_ESP];
+            }
+            else version (X86_64)
+            {
+                import core.sys.solaris.sys.regset; // REG_xxx
+
+                if (!t.m_lock)
+                    t.m_curr.tstack = cast(void*) status.pr_reg[REG_RSP];
+                // rax,rbx,rcx,rdx,rdi,rsi,rbp,rsp
+                t.m_reg[0] = status.pr_reg[REG_RAX];
+                t.m_reg[1] = status.pr_reg[REG_RBX];
+                t.m_reg[2] = status.pr_reg[REG_RCX];
+                t.m_reg[3] = status.pr_reg[REG_RDX];
+                t.m_reg[4] = status.pr_reg[REG_RDI];
+                t.m_reg[5] = status.pr_reg[REG_RSI];
+                t.m_reg[6] = status.pr_reg[REG_RBP];
+                t.m_reg[7] = status.pr_reg[REG_RSP];
+                // r8,r9,r10,r11,r12,r13,r14,r15
+                t.m_reg[8] = status.pr_reg[REG_R8];
+                t.m_reg[9] = status.pr_reg[REG_R9];
+                t.m_reg[10] = status.pr_reg[REG_R10];
+                t.m_reg[11] = status.pr_reg[REG_R11];
+                t.m_reg[12] = status.pr_reg[REG_R12];
+                t.m_reg[13] = status.pr_reg[REG_R13];
+                t.m_reg[14] = status.pr_reg[REG_R14];
+                t.m_reg[15] = status.pr_reg[REG_R15];
+            }
+            else version (SPARC)
+            {
+                import core.sys.solaris.sys.procfs : R_SP, R_PC;
+
+                if (!t.m_lock)
+                    t.m_curr.tstack = cast(void*) status.pr_reg[R_SP];
+                // g0..g7, o0..o7, l0..l7, i0..i7
+                t.m_reg[0 .. 32] = status.pr_reg[0 .. 32];
+                // pc
+                t.m_reg[32] = status.pr_reg[R_PC];
+            }
+            else version (SPARC64)
+            {
+                import core.sys.solaris.sys.procfs : R_SP, R_PC;
+
+                if (!t.m_lock)
+                {
+                    // SPARC V9 has a stack bias of 2047 bytes which must be added to get
+                    // the actual data of the stack frame.
+                    auto tstack = status.pr_reg[R_SP] + 2047;
+                    assert(tstack % 16 == 0);
+                    t.m_curr.tstack = cast(void*) tstack;
+                }
+                // g0..g7, o0..o7, l0..l7, i0..i7
+                t.m_reg[0 .. 32] = status.pr_reg[0 .. 32];
+                // pc
+                t.m_reg[32] = status.pr_reg[R_PC];
+            }
+            else
+            {
+                static assert(false, "Architecture not supported.");
+            }
+        }
+        else if (!t.m_lock)
+        {
+            t.m_curr.tstack = getStackTop();
+        }
+    }
+    else // other Posix
+    {
+        if (sameThread && !t.m_lock)
+        {
+            t.m_curr.tstack = getStackTop();
+        }
+    }
+}
+
+package void purgeStackAndRegInfo(Thread t, const bool sameThread) nothrow @nogc
+{
+    version (Darwin)
+    {
+        t.unloadStackInfo();
+        t.m_reg[0 .. $] = 0;
+    }
+    else version (Solaris)
+    {
+        t.unloadStackInfo();
+        t.m_reg[0 .. $] = 0;
+    }
+    else
+    {
+        if (sameThread)
+            t.unloadStackInfo();
+    }
+}
+
+package(core)
+{
+    // NOTE: A thread's cancelability state, determined by pthread_setcancelstate,
+    //       can be enabled (the default for new threads) or disabled.
+    //       If a thread has disabled cancelation, then a cancelation request remains
+    //       queued until the thread enables cancelation.  If a thread has enabled
+    //       cancelation, then its cancelability type determines when cancelation occurs.
+    //
+    // Call these routines when entering/leaving critical sections of the code that
+    // are not cancellation points.
+
+    extern (C) int thread_cancelDisable() nothrow
+    {
+        static if (__traits(compiles, core.sys.posix.pthread.PTHREAD_CANCEL_DISABLE))
+        {
+            import core.sys.posix.pthread : pthread_setcancelstate, PTHREAD_CANCEL_DISABLE;
+            int oldstate;
+            pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &oldstate);
+            return oldstate;
+        }
+        else
+        {
+            return 0;   // No thread cancellation on platform
+        }
+    }
+
+    extern (C) void thread_cancelRestore(int oldstate) nothrow
+    {
+        static if (__traits(compiles, core.sys.posix.pthread.PTHREAD_CANCEL_DISABLE))
+        {
+            import core.sys.posix.pthread : pthread_setcancelstate;
+            pthread_setcancelstate(oldstate, null);
+        }
+    }
+}
+
+private
+{
+    //
+    // Entry point for POSIX threads
+    //
+    version (CoreDdoc) {} else
+    extern (C) void* thread_entryPoint( void* arg ) nothrow
+    {
+        version (Shared)
+        {
+            Thread obj = cast(Thread)(cast(void**)arg)[0];
+            auto loadedLibraries = (cast(void**)arg)[1];
+            .free(arg);
+        }
+        else
+        {
+            Thread obj = cast(Thread)arg;
+        }
+        assert( obj );
+
+        // loadedLibraries need to be inherited from parent thread
+        // before initilizing GC for TLS (rt_tlsgc_init)
+        version (Shared)
+        {
+            externDFunc!("rt.sections_elf_shared.inheritLoadedLibraries",
+                         void function(void*) @nogc nothrow)(loadedLibraries);
+        }
+
+        obj.initDataStorage();
+
+        atomicStore!(MemoryOrder.raw)(obj.m_isRunning, true);
+
+        Thread.registerThis(obj); // can only receive signals from here on
+
+        scope (exit)
+        {
+            // allow the GC to clean up any resources it allocated for this thread.
+            import core.internal.gc.proxy : gc_getProxy;
+            gc_getProxy().cleanupThread(obj);
+
+            Thread.remove(obj);
+            atomicStore!(MemoryOrder.raw)(obj.m_isRunning, false);
+            obj.destroyDataStorage();
+        }
+        Thread.add(&obj.m_main);
+
+        static extern (C) void thread_cleanupHandler( void* arg ) nothrow @nogc
+        {
+            Thread  obj = cast(Thread) arg;
+            assert( obj );
+
+            // NOTE: If the thread terminated abnormally, just set it as
+            //       not running and let thread_suspendAll remove it from
+            //       the thread list.  This is safer and is consistent
+            //       with the Windows thread code.
+            atomicStore!(MemoryOrder.raw)(obj.m_isRunning,false);
+        }
+
+        // NOTE: Using void to skip the initialization here relies on
+        //       knowledge of how pthread_cleanup is implemented.  It may
+        //       not be appropriate for all platforms.  However, it does
+        //       avoid the need to link the pthread module.  If any
+        //       implementation actually requires default initialization
+        //       then pthread_cleanup should be restructured to maintain
+        //       the current lack of a link dependency.
+        static if (__traits(compiles, core.sys.posix.pthread.pthread_cleanup))
+        {
+            import core.sys.posix.pthread : pthread_cleanup;
+
+            pthread_cleanup cleanup = void;
+            cleanup.push( &thread_cleanupHandler, cast(void*) obj );
+        }
+        else static if (__traits(compiles, core.sys.posix.pthread.pthread_cleanup_push))
+        {
+            import core.sys.posix.pthread : pthread_cleanup_push;
+
+            pthread_cleanup_push(&thread_cleanupHandler, cast(void*) obj);
+        }
+        else
+        {
+            static assert( false, "Platform not supported." );
+        }
+
+        // NOTE: No GC allocations may occur until the stack pointers have
+        //       been set and Thread.getThis returns a valid reference to
+        //       this thread object (this latter condition is not strictly
+        //       necessary on Windows but it should be followed for the
+        //       sake of consistency).
+
+        // TODO: Consider putting an auto exception object here (using
+        //       alloca) forOutOfMemoryError plus something to track
+        //       whether an exception is in-flight?
+
+        void append( Throwable t )
+        {
+            obj.filterCaughtThrowable(t);
+            if (t !is null)
+                obj.m_unhandled = Throwable.chainTogether(obj.m_unhandled, t);
+        }
+        try
+        {
+            rt_moduleTlsCtor();
+            try
+            {
+                obj.runFromEntryPoint();
+            }
+            catch ( Throwable t )
+            {
+                append( t );
+            }
+            rt_moduleTlsDtor();
+            version (Shared)
+            {
+                externDFunc!("rt.sections_elf_shared.cleanupLoadedLibraries",
+                             void function() @nogc nothrow)();
+            }
+        }
+        catch ( Throwable t )
+        {
+            append( t );
+        }
+
+        // NOTE: Normal cleanup is handled by scope(exit).
+
+        static if (__traits(compiles, core.sys.posix.pthread.pthread_cleanup))
+        {
+            cleanup.pop( 0 );
+        }
+        else static if (__traits(compiles, core.sys.posix.pthread.pthread_cleanup_push))
+        {
+            import core.sys.posix.pthread : pthread_cleanup_pop;
+
+            pthread_cleanup_pop( 0 );
+        }
+
+        return null;
+    }
+
+    version (WASI) {}
+    else
+    {
+        //
+        // Used to track the number of suspended threads
+        //
+        __gshared sem_t suspendCount;
+
+
+        extern (C) bool thread_preSuspend( void* sp ) nothrow {
+            // NOTE: Since registers are being pushed and popped from the
+            //       stack, any other stack data used by this function should
+            //       be gone before the stack cleanup code is called below.
+            Thread obj = Thread.getThis();
+            if (obj is null)
+            {
+                return false;
+            }
+
+            if ( !obj.m_lock )
+            {
+                obj.m_curr.tstack = sp;
+            }
+
+            return true;
+        }
+
+        extern (C) bool thread_postSuspend() nothrow {
+            Thread obj = Thread.getThis();
+            if (obj is null)
+            {
+                return false;
+            }
+
+            if ( !obj.m_lock )
+            {
+                obj.m_curr.tstack = obj.m_curr.bstack;
+            }
+
+            return true;
+        }
+
+        extern (C) void thread_suspendHandler( int sig ) nothrow
+        in
+        {
+            assert( sig == suspendSignalNumber );
+        }
+        do
+        {
+            void op(void* sp) nothrow
+            {
+                int cancel_state = thread_cancelDisable();
+                scope(exit) thread_cancelRestore(cancel_state);
+
+                bool supported = thread_preSuspend(getStackTop());
+                assert(supported, "Tried to suspend a detached thread!");
+
+                scope(exit)
+                {
+                    supported = thread_postSuspend();
+                    assert(supported, "Tried to suspend a detached thread!");
+                }
+
+                sigset_t    sigres = void;
+                int         status;
+
+                status = sigfillset( &sigres );
+                assert( status == 0 );
+
+                status = sigdelset( &sigres, resumeSignalNumber );
+                assert( status == 0 );
+
+                status = sem_post( &suspendCount );
+                assert( status == 0 );
+
+                sigsuspend( &sigres );
+            }
+            callWithStackShell(&op);
+        }
+
+
+        extern (C) void thread_resumeHandler( int sig ) nothrow
+        in
+        {
+            assert( sig == resumeSignalNumber );
+        }
+        do
+        {
+
+        }
+    }
+}
+
+version (CoreDdoc) {} else
+public  alias getpid = imported!"core.sys.posix.unistd".getpid;
+
 package alias gettid = imported!"core.sys.posix.pthread".pthread_self;
+
+extern (C) @nogc nothrow
+{
+    version (CRuntime_Glibc)  version = PThread_Getattr_NP;
+    version (CRuntime_Bionic) version = PThread_Getattr_NP;
+    version (CRuntime_Musl)   version = PThread_Getattr_NP;
+    version (CRuntime_UClibc) version = PThread_Getattr_NP;
+
+    version (FreeBSD)         version = PThread_Attr_Get_NP;
+    version (NetBSD)          version = PThread_Attr_Get_NP;
+    version (DragonFlyBSD)    version = PThread_Attr_Get_NP;
+
+    version (PThread_Attr_Get_NP)
+    {
+        int pthread_attr_get_np(pthread_t thread, pthread_attr_t* attr);
+        alias pthread_getattr_np = pthread_attr_get_np;
+        version = PThread_Getattr_NP;
+    }
+    else
+        version (PThread_Getattr_NP) int pthread_getattr_np(pthread_t thread, pthread_attr_t* attr);
+
+    version (OpenBSD) int pthread_stackseg_np(pthread_t thread, stack_t* sinfo);
+}
+
+version (WebAssembly)
+    private extern(C) extern __gshared ubyte __stack_high;
+
+package void* getStackBottomImpl() nothrow @nogc
+{
+    version (Darwin)
+    {
+        import core.sys.darwin.pthread : pthread_get_stackaddr_np;
+        return pthread_get_stackaddr_np(pthread_self());
+    }
+    else version (PThread_Getattr_NP)
+    {
+        pthread_attr_t attr;
+        void* addr; size_t size;
+
+        pthread_attr_init(&attr);
+        pthread_getattr_np(pthread_self(), &attr);
+        pthread_attr_getstack(&attr, &addr, &size);
+        pthread_attr_destroy(&attr);
+        static if (isStackGrowingDown)
+            addr += size;
+        return addr;
+    }
+    else version (OpenBSD)
+    {
+        stack_t stk;
+
+        pthread_stackseg_np(pthread_self(), &stk);
+        return stk.ss_sp;
+    }
+    else version (Solaris)
+    {
+        stack_t stk;
+
+        thr_stksegment(&stk);
+        return stk.ss_sp;
+    }
+    else version (WebAssembly)
+    {
+        // the shadow stack is [.., __stack_high) and grows down
+        return &__stack_high;
+    }
+    else
+        static assert(false, "Platform not supported.");
+}
+
+
+// regression test for Issue 13416
+version (FreeBSD) unittest
+{
+    static void loop()
+    {
+        pthread_attr_t attr;
+        pthread_attr_init(&attr);
+        auto thr = pthread_self();
+        foreach (i; 0 .. 50)
+            pthread_attr_get_np(thr, &attr);
+        pthread_attr_destroy(&attr);
+    }
+
+    auto thr = new Thread(&loop).start();
+    foreach (i; 0 .. 50)
+    {
+        thread_suspendAll();
+        thread_resumeAll();
+    }
+    thr.join();
+}
+
+version (DragonFlyBSD) unittest
+{
+    static void loop()
+    {
+        pthread_attr_t attr;
+        pthread_attr_init(&attr);
+        auto thr = pthread_self();
+        foreach (i; 0 .. 50)
+            pthread_attr_get_np(thr, &attr);
+        pthread_attr_destroy(&attr);
+    }
+
+    auto thr = new Thread(&loop).start();
+    foreach (i; 0 .. 50)
+    {
+        thread_suspendAll();
+        thread_resumeAll();
+    }
+    thr.join();
+}
 
 package struct LLThreadProperties
 {

@@ -35,12 +35,14 @@ import dmd.denum;
 import dmd.dstruct;
 import dmd.dsymbol;
 import dmd.dtemplate;
-import dmd.errors;
+import dmd.errors : fatal;
+import dmd.errorsink;
 import dmd.expression;
 import dmd.id;
 import dmd.expressionsem : toBool, toInteger;
 import dmd.func;
 import dmd.globals;
+import dmd.hdrgen : toErrMsg;
 import dmd.init;
 import dmd.location;
 import dmd.mtype;
@@ -72,6 +74,8 @@ alias Dts = Array!(dt_t*);
 
 void Initializer_toDt(Initializer init, ref DtBuilder dtb, bool isCfile)
 {
+    auto eSink = global.errorSink;
+
     void visitError(ErrorInitializer)
     {
         assert(0);
@@ -125,12 +129,13 @@ void Initializer_toDt(Initializer init, ref DtBuilder dtb, bool isCfile)
             auto dtb = DtBuilder(0);
             Initializer_toDt(ai.value[i], dtb, isCfile);
             if (dts[length] && !ai.isCarray)
-                error(ai.loc, "duplicate initializations for index `%d`", length);
+                eSink.error(ai.loc, "duplicate initializations for index `%d`", length);
             dts[length] = dtb.finish();
             length++;
         }
 
-        Expression edefault = tb.nextOf().defaultInit(Loc.initial, isCfile);
+        assert(ai);
+        Expression edefault = tb.nextOf().defaultInit(ai.loc, isCfile);
 
         const n = tn.numberOfElems(ai.loc);
 
@@ -181,7 +186,7 @@ void Initializer_toDt(Initializer init, ref DtBuilder dtb, bool isCfile)
                 }
                 else if (ai.dim > tadim)
                 {
-                    error(ai.loc, "too many initializers, %u, for array[%llu]", ai.dim, cast(ulong) tadim);
+                    eSink.error(ai.loc, "too many initializers, %u, for array[%llu]", ai.dim, cast(ulong) tadim);
                 }
                 dtb.cat(dtbarray);
                 break;
@@ -234,6 +239,8 @@ void Initializer_toDt(Initializer init, ref DtBuilder dtb, bool isCfile)
 
 void Expression_toDt(Expression e, ref DtBuilder dtb)
 {
+    auto eSink = global.errorSink;
+
     dtb.checkInitialized();
 
     void nonConstExpError(Expression e)
@@ -242,7 +249,7 @@ void Expression_toDt(Expression e, ref DtBuilder dtb)
         {
             printf("Expression.toDt() op = %d e = %s \n", e.op, e.toChars());
         }
-        error(e.loc, "non-constant expression `%s`", e.toErrMsg());
+        eSink.error(e.loc, "non-constant expression `%s`", e.toErrMsg());
         dtb.nzeros(1);
     }
 
@@ -541,7 +548,7 @@ void Expression_toDt(Expression e, ref DtBuilder dtb)
     {
         if (!e.loweringCtfe)
         {
-            error(e.loc, "internal compiler error: failed to detect static initialization of associative array");
+            eSink.error(e.loc, "internal compiler error: failed to detect static initialization of associative array");
             assert(0);
         }
         Expression_toDt(e.loweringCtfe, dtb);
@@ -576,7 +583,7 @@ void Expression_toDt(Expression e, ref DtBuilder dtb)
             if ((v.isConst() || v.isImmutable()) &&
                 e.type.toBasetype().ty != Tsarray && v._init)
             {
-                error(e.loc, "recursive reference `%s`", e.toErrMsg());
+                eSink.error(e.loc, "recursive reference `%s`", e.toErrMsg());
                 return;
             }
             v.inuse++;
@@ -1040,7 +1047,7 @@ private void membersToDt(AggregateDeclaration ad, ref DtBuilder dtb,
             Expression e = (*elements)[firstFieldIndex + k];
             //printf("elements initializer %s\n", e.toChars());
             if (auto tsa = vd.type.toBasetype().isTypeSArray())
-                toDtElem(tsa, dtbx, e, isCtype);
+                toDtElem(e.loc, tsa, dtbx, e, isCtype);
             else if (bf)
             {
                 auto ie = e.isIntegerExp();
@@ -1086,14 +1093,14 @@ private void membersToDt(AggregateDeclaration ad, ref DtBuilder dtb,
                 auto ei = init.isExpInitializer();
                 auto tsa = vd.type.toBasetype().isTypeSArray();
                 if (ei && tsa)
-                    toDtElem(tsa, dtbx, ei.exp, isCtype);
+                    toDtElem(init.loc, tsa, dtbx, ei.exp, isCtype);
                 else
                     Initializer_toDt(init, dtbx, isCtype);
             }
             else if (offset <= vd.offset)
             {
                 //printf("\t\tdefault initializer\n");
-                Type_toDt(vd.type, dtbx);
+                Type_toDt(vd.loc, vd.type, dtbx);
             }
             if (dtbx.isZeroLength())
                 continue;
@@ -1122,16 +1129,16 @@ private void membersToDt(AggregateDeclaration ad, ref DtBuilder dtb,
 
 /* ================================================================= */
 
-void Type_toDt(Type t, ref DtBuilder dtb, bool isCtype = false)
+void Type_toDt(Loc loc, Type t, ref DtBuilder dtb, bool isCtype = false)
 {
     switch (t.ty)
     {
         case Tvector:
-            toDtElem(t.isTypeVector().basetype.isTypeSArray(), dtb, null, isCtype);
+            toDtElem(loc, t.isTypeVector().basetype.isTypeSArray(), dtb, null, isCtype);
             break;
 
         case Tsarray:
-            toDtElem(t.isTypeSArray(), dtb, null, isCtype);
+            toDtElem(loc, t.isTypeSArray(), dtb, null, isCtype);
             break;
 
         case Tstruct:
@@ -1139,12 +1146,12 @@ void Type_toDt(Type t, ref DtBuilder dtb, bool isCtype = false)
             break;
 
         default:
-            Expression_toDt(t.defaultInit(Loc.initial, isCtype), dtb);
+            Expression_toDt(t.defaultInit(loc, isCtype), dtb);
             break;
     }
 }
 
-private void toDtElem(TypeSArray tsa, ref DtBuilder dtb, Expression e, bool isCtype)
+private void toDtElem(Loc loc, TypeSArray tsa, ref DtBuilder dtb, Expression e, bool isCtype)
 {
     //printf("TypeSArray.toDtElem() tsa = %s\n", tsa.toChars());
     if (tsa.size(Loc.initial) == 0)
@@ -1167,7 +1174,7 @@ private void toDtElem(TypeSArray tsa, ref DtBuilder dtb, Expression e, bool isCt
             tbn = tnext.toBasetype();
         }
         if (!e)                             // if not already supplied
-            e = tsa.defaultInit(Loc.initial, isCtype);    // use default initializer
+            e = tsa.defaultInit(loc, isCtype);    // use default initializer
 
         if (!e.type.implicitConvTo(tnext))    // https://issues.dlang.org/show_bug.cgi?id=14996
         {
@@ -1258,9 +1265,10 @@ private extern (C++) class TypeInfoDtVisitor : Visitor
                 printf("expected = x%x, %s.structsize = x%x\n", cast(uint)expected,
                     typeclass.toChars(), cast(uint)typeclass.structsize);
             }
-            error(typeclass.loc, "`%s`: mismatch between compiler (%d bytes) and object.d or object.di (%d bytes) found",
+            auto eSink = global.errorSink;
+            eSink.error(typeclass.loc, "`%s`: mismatch between compiler (%d bytes) and object.d or object.di (%d bytes) found",
                 typeclass.toErrMsg(), cast(uint)expected, cast(uint)typeclass.structsize);
-            errorSupplemental(typeclass.loc, "check installation and import paths with `-v` compiler switch");
+            eSink.errorSupplemental(typeclass.loc, "check installation and import paths with `-v` compiler switch");
             fatal();
         }
     }

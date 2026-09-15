@@ -30,7 +30,6 @@ import dmd.dsymbolsem;
 import dmd.dtemplate;
 import dmd.expression;
 import dmd.expressionsem : canElideCopy, semanticTypeInfo;
-import dmd.errors;
 import dmd.errorsink;
 import dmd.func;
 import dmd.funcsem;
@@ -820,15 +819,8 @@ public:
         override void visit(CastExp e)
         {
             auto ce = cast(CastExp)e.copy();
-            if (auto lowering = ce.lowering)
-            {
-                ce.lowering = doInlineAs!Expression(lowering, ids);
-            }
-            else
-            {
-                ce.e1 = doInlineAs!Expression(e.e1, ids);
-            }
-
+            ce.lowering = doInlineAs!Expression(ce.lowering, ids);
+            ce.e1 = doInlineAs!Expression(e.e1, ids);
             result = ce;
         }
 
@@ -843,30 +835,18 @@ public:
         override void visit(CatExp e)
         {
             auto ce = e.copy().isCatExp();
-
-            if (auto lowering = ce.lowering)
-                ce.lowering = doInlineAs!Expression(lowering, ids);
-            else
-            {
-                ce.e1 = doInlineAs!Expression(e.e1, ids);
-                ce.e2 = doInlineAs!Expression(e.e2, ids);
-            }
-
+            ce.lowering = doInlineAs!Expression(ce.lowering, ids);
+            ce.e1 = doInlineAs!Expression(e.e1, ids);
+            ce.e2 = doInlineAs!Expression(e.e2, ids);
             result = ce;
         }
 
         override void visit(CatAssignExp e)
         {
             auto cae = cast(CatAssignExp) e.copy();
-
-            if (auto lowering = cae.lowering)
-                cae.lowering = doInlineAs!Expression(cae.lowering, ids);
-            else
-            {
-                cae.e1 = doInlineAs!Expression(e.e1, ids);
-                cae.e2 = doInlineAs!Expression(e.e2, ids);
-            }
-
+            cae.lowering = doInlineAs!Expression(cae.lowering, ids);
+            cae.e1 = doInlineAs!Expression(e.e1, ids);
+            cae.e2 = doInlineAs!Expression(e.e2, ids);
             result = cae;
         }
 
@@ -893,14 +873,11 @@ public:
 
         override void visit(ConstructExp e)
         {
-            if (e.lowering)
-            {
-                auto ce = cast(ConstructExp)e.copy();
-                ce.lowering = doInlineAs!Expression(ce.lowering, ids);
-                result = ce;
-            }
-            else
-                visit(cast(AssignExp) e);
+            auto ce = cast(ConstructExp)e.copy();
+            ce.lowering = doInlineAs!Expression(ce.lowering, ids);
+            ce.e1 = doInlineAs!Expression(e.e1, ids);
+            ce.e2 = doInlineAs!Expression(e.e2, ids);
+            result = ce;
         }
 
         override void visit(LoweredAssignExp e)
@@ -911,11 +888,7 @@ public:
         override void visit(EqualExp e)
         {
             auto ee = cast(EqualExp)e.copy();
-            if (auto lowering = ee.lowering)
-            {
-                ee.lowering = doInlineAs!Expression(lowering, ids);
-            }
-
+            ee.lowering = doInlineAs!Expression(ee.lowering, ids);
             ee.e1 = doInlineAs!Expression(e.e1, ids);
             ee.e2 = doInlineAs!Expression(e.e2, ids);
 
@@ -1017,9 +990,7 @@ public:
             auto ce = e.copy().isAssocArrayLiteralExp();
             ce.keys = arrayExpressionDoInline(e.keys);
             ce.values = arrayExpressionDoInline(e.values);
-            if (e.lowering)
-                ce.lowering = doInlineAs!Expression(e.lowering, ids);
-
+            ce.lowering = doInlineAs!Expression(e.lowering, ids);
             result = ce;
 
             semanticTypeInfo(null, e.type);
@@ -1610,7 +1581,7 @@ public:
              */
             if (auto pe = e.isPtrExp())
             {
-                if (pe.e1.isVarExp())
+                if (pe.e1.isVarExp() || pe.e1.isFuncExp())
                     e = pe.e1;
                 else if (auto se = pe.e1.isSymOffExp())
                     return se.var.isFuncDeclaration();
@@ -1688,7 +1659,10 @@ public:
         inlineFd(fd, explicitThis);
 
         if (global.params.v.verbose && (eresult || sresult))
-            message("inlined   %s =>\n          %s", fd.toPrettyChars(), parent.toPrettyChars());
+        {
+            auto eSink = global.errorSink;
+            eSink.message(Loc.init, "inlined   %s =>\n          %s", fd.toPrettyChars(), parent.toPrettyChars());
+        }
 
         if (eresult && e.type.ty != Tvoid)
         {
@@ -1848,10 +1822,21 @@ public:
 
         if (fd.localsymtab)
         {
+            // Sort by name: table order follows Identifier addresses,
+            // and inline decisions are order-dependent
+            Dsymbols symbols;
+            symbols.reserve(fd.localsymtab.length);
             foreach (keyValue; fd.localsymtab.tab.asRange)
+                symbols.push(keyValue.value);
+
+            static int compare(const Dsymbol* a, const Dsymbol* b)
             {
-                keyValue.value.accept(this);
+                return strcmp(a.ident.toChars(), b.ident.toChars());
             }
+            symbols.sort!compare();
+
+            foreach (s; symbols)
+                s.accept(this);
         }
     }
 
@@ -2115,6 +2100,8 @@ private bool canInline(FuncDeclaration fd, bool hasThis, bool statementsToo, PAS
     }
 
     {
+        scope v = new InlineScanVisitorDsymbol(pass, eSink);
+        fd.accept(v);
         cost = inlineCostFunction(fd, hasThis);
     }
     static if (CANINLINE_LOG)
@@ -2131,31 +2118,6 @@ private bool canInline(FuncDeclaration fd, bool hasThis, bool statementsToo, PAS
         fd.inlineStatusStmt = ILS.yes;
     else
         fd.inlineStatusExp = ILS.yes;
-
-    {
-        scope v = new InlineScanVisitorDsymbol(pass, eSink);
-        fd.accept(v);
-    }
-
-    if (fd.inlineStatusExp == ILS.uninitialized)
-    {
-        // Need to redo cost computation, as some statements or expressions have been inlined
-        cost = inlineCostFunction(fd, hasThis);
-        static if (CANINLINE_LOG)
-        {
-            printf("recomputed cost = %d for %s\n", cost, fd.toChars());
-        }
-
-        if (tooCostly(cost))
-            goto Lno;
-        if (!statementsToo && cost > COST_MAX)
-            goto Lno;
-
-        if (statementsToo)
-            fd.inlineStatusStmt = ILS.yes;
-        else
-            fd.inlineStatusExp = ILS.yes;
-    }
 
     static if (CANINLINE_LOG)
     {

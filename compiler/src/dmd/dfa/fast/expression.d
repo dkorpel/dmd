@@ -696,10 +696,6 @@ struct ExpressionWalker
                                     }
                                 }
 
-                                // does this var escape another? Can't model that.
-                                if (dfaVar.isByRef)
-                                    markUnmodellable(ei.exp);
-
                                 DFALatticeRef lr = this.walk(ei.exp);
 
                                 if (!(ei.exp.isConstructExp || ei.exp.isBlitExp))
@@ -905,18 +901,26 @@ struct ExpressionWalker
                 // See Slice
                 auto ie = expr.isIndexExp;
 
-                dfaCommon.printStateln("index rhs");
-                DFALatticeRef index = this.walk(ie.e2);
+                dfaCommon.printStructureln("Index[key] expression");
+
                 dfaCommon.printStateln("index lhs");
                 DFALatticeRef lhs = this.walk(ie.e1);
+                lhs.printState("lhs");
+
+                dfaCommon.printStateln("index rhs");
+                DFALatticeRef index = this.walk(ie.e2);
+                index.printState("rhs");
 
                 DFAVar* lhsCtx;
                 DFAConsequence* lhsCctx = lhs.getContext(lhsCtx);
+                DFAVar* indexVar = dfaCommon.findIndexVar(lhsCtx);
 
                 DFAObject* lhsObject;
 
                 Type lhsType = ie.e1.type;
                 bool resultHasEffect;
+
+                DFALatticeRef ret;
 
                 if (lhsCctx !is null)
                 {
@@ -941,31 +945,39 @@ struct ExpressionWalker
                     }
                 }
 
-                if (lhsCtx !is null && lhsCtx.isNullable)
+                if (lhsType.isTypeSArray !is null)
                 {
-                    // Dereference the lhs if its a pointer,
-                    //  this really should be the case, but it prevents unnecessary work for static arrays.
-                    lhs = seeDereference(ie.loc, lhs);
+                    // T[X] lhs;
+                    // lhs[index]
+
+                    ret = this.seeLogicalAnd(lhs, index);
+                    DFAConsequence* newCctx = ret.setContext(indexVar);
+
+                    if (lhsObject !is null && lhsObject.onTheStack)
+                        newCctx.obj = dfaCommon.makeInCellObject(lhsObject);
+                }
+                else
+                {
+                    // T[] lhs;
+                    // lhs[index]
+
+                    if (lhsCtx !is null && lhsCtx.isNullable)
+                    {
+                        // Dereference the lhs if its a pointer,
+                        //  this really should be the case, but it prevents unnecessary work for static arrays.
+                        lhs = seeDereference(ie.loc, lhs);
+                    }
+
+                    // (*lhs)[index]
+
+                    ret = this.seeLogicalAnd(lhs, index);
+                    DFAConsequence* newCctx = ret.setContext(indexVar);
+
+                    if (lhsObject !is null)
+                        newCctx.obj = dfaCommon.makeObject(lhsObject);
                 }
 
-                DFAVar* indexVar = dfaCommon.findIndexVar(lhsCtx);
-                DFALatticeRef combined = this.seeLogicalAnd(lhs, index);
-
-                DFAConsequence* newCctx = combined.addConsequence(indexVar);
-                combined.setContext(newCctx);
-
-                if (lhsObject !is null)
-                    newCctx.obj = dfaCommon.makeInCellObject(lhsObject);
-
-                if (resultHasEffect && indexVar !is null)
-                {
-                    if (indexVar.isTruthy)
-                        newCctx.truthiness = Truthiness.True;
-                    if (indexVar.isNullable)
-                        newCctx.nullable = Nullable.NonNull;
-                }
-
-                return combined;
+                return ret;
             }
 
         case EXP.slice:
@@ -1488,18 +1500,17 @@ struct ExpressionWalker
                 {
                     stmtWalker.startScope;
                     dfaCommon.currentDFAScope.sideEffectFree = true;
+                    dfaCommon.currentDFAScope.inConditional = true;
 
                     dfaCommon.printStateln("Question condition:");
                     conditionLR = this.walkCondition(qe.econd, predicateNegation);
                     conditionVar = conditionLR.getGateConsequenceVariable;
 
-                    stmtWalker.endScope;
+                    dfaCommon.currentDFAScope.sideEffectFree = false;
                 }
 
                 {
                     dfaCommon.printStateln("Question true branch:");
-                    stmtWalker.startScope;
-                    dfaCommon.currentDFAScope.inConditional = true;
 
                     DFAConsequence* c = conditionLR.getContext;
                     if (c !is null)
@@ -2165,6 +2176,10 @@ struct ExpressionWalker
                             }
 
                             DFAVar* var = dfaCommon.findVariable(vd);
+
+                            if (var !is null)
+                                var = var.resolveReference();
+
                             var.mayBeGlobal = !var.isStackVar;
 
                             if (var !is null)
@@ -2635,6 +2650,16 @@ struct ExpressionWalker
                     });
 
                     DFALatticeRef argExp = this.walk(arg);
+                    list.each[i].argObject = argExp.getContextObject;
+
+                    if (toCallFunctionType !is null && toCallFunctionType.parameterList.parameters !is null
+                            && argOffset < toCallFunctionType.parameterList.parameters.length)
+                    {
+                        auto param = (*toCallFunctionType.parameterList.parameters)[argOffset];
+                        list.each[i].paramType = param.type;
+                        list.each[i].paramIdent = param.ident;
+                    }
+
                     this.seeFunctionCallArgument(argExp, &list.each[i], toCallFunction, loc);
 
                     if (dfaCommon.currentDFAScope.controlFlowJumped)
@@ -2653,21 +2678,26 @@ struct ExpressionWalker
                 || (toCallFunctionType !is null
                         && toCallFunctionType.next !is null
                         && toCallFunctionType.next.isTypeNoreturn !is null);
+            const returnIsNullable = toCallFunctionType !is null
+                && toCallFunctionType.next !is null && toCallFunctionType.next.isTypeNullable;
 
             ret = dfaCommon.makeLatticeRef;
-            DFAConsequence* returnConsequence;
+            DFAConsequence* returnConsequence = ret.acquireConstantAsContext;
 
-            if (returnInfo.notNullOut == Fact.Guaranteed)
-                returnConsequence = ret.acquireConstantAsContext(Truthiness.True,
-                        Nullable.NonNull, null);
-            else
-                returnConsequence = ret.acquireConstantAsContext;
-
-            if (returnInfo.notNullOut != Fact.NotGuaranteed)
+            if (returnIsNullable)
             {
-                returnConsequence.obj = dfaCommon.makeObject();
-                returnConsequence.obj.minimumDeclaredAtDepth = dfaCommon.currentDFAScope.depth;
-                returnConsequence.obj.defaultTrackObj = true;
+                if (returnInfo.notNullOut == Fact.Guaranteed)
+                {
+                    returnConsequence.truthiness = Truthiness.True;
+                    returnConsequence.nullable = Nullable.NonNull;
+                }
+
+                if (returnInfo.notNullOut != Fact.NotGuaranteed)
+                {
+                    returnConsequence.obj = dfaCommon.makeObject();
+                    returnConsequence.obj.minimumDeclaredAtDepth = dfaCommon.currentDFAScope.depth;
+                    returnConsequence.obj.defaultTrackObj = true;
+                }
             }
 
             // If the function is no return, or it hasn't been semantically analysed yet,
@@ -2739,6 +2769,14 @@ struct ExpressionWalker
         if (assign)
         {
             rhsCctx.pa = pa;
+
+            // `lhs ~= rhs` lowers to `object._d_arrayappendT(lhs, rhs)`, which
+            //  copies rhs into lhs's (possibly reallocated) buffer. It does not
+            //  alias rhs, so the operand object must never be propagated to the
+            //  lhs. Otherwise a `scope` rhs would look like it was stored into
+            //  lhs, producing a false escape/lifetime error.
+            rhsCctx.obj = lhsCctx.obj;
+
             ret = this.seeAssign(lhs, false, rhs, be.loc, false,
                     nullableResult == 1 || nullableResult == 2 ? 3 : 0);
         }
@@ -2780,7 +2818,11 @@ struct ExpressionWalker
         {
             DFAVar* var = dfaCommon.findVariable(vd);
             if (var !is null)
+            {
+                // If this is a `ref` alias, the aliased variable is what escapes.
+                var = var.resolveReference();
                 var.markUnmodellable();
+            }
         }
 
         void perExpr(Expression expr)

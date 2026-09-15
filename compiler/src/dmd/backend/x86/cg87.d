@@ -1736,6 +1736,8 @@ L5:
         case OPd_f:
         case OPf_d:
         case OPd_ld:
+            if (e.Ecount)
+                goto Ldefault;
             mf1 = (tybasic(e.E1.Ety) == TYfloat || tybasic(e.E1.Ety) == TYifloat)
                     ? MFfloat : MFdouble;
             if (op != -1 && global87.stackused && !noted)
@@ -2993,7 +2995,7 @@ private void cdd_u64_I32(ref CGstate cg,ref CodeBuilder cdb, elem* e, ref regm_t
     regm_t retregs = mST0;
     codelem(cg,cdb,e.E1, retregs, false);
     tym_t tym = e.Ety;
-    retregs = pretregs;
+    retregs = pretregs & (ALLREGS | mBP);
     if (!retregs)
         retregs = ALLREGS;
     allocreg(cdb,retregs,tym);
@@ -3077,7 +3079,7 @@ private void cdd_u64_I64(ref CGstate cg,ref CodeBuilder cdb, elem* e, ref regm_t
     regm_t retregs = mST0;
     codelem(cg,cdb,e.E1, retregs, false);
     tym_t tym = e.Ety;
-    retregs = pretregs;
+    retregs = pretregs & (ALLREGS | mBP);
     if (!retregs)
         retregs = ALLREGS;
     const reg = allocreg(cdb,retregs,tym);
@@ -3149,7 +3151,7 @@ void cdd_u32(ref CGstate cg,ref CodeBuilder cdb, elem* e, ref regm_t pretregs)
     regm_t retregs = mST0;
     codelem(cg,cdb,e.E1, retregs, false);
     tym_t tym = e.Ety;
-    retregs = pretregs & ALLREGS;
+    retregs = pretregs & (ALLREGS | mBP);
     if (!retregs)
         retregs = ALLREGS;
     const reg = allocreg(cdb,retregs,tym);

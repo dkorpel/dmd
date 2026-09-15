@@ -40,7 +40,7 @@ import dmd.dsymbol;
 import dmd.dtemplate;
 import dmd.dversion;
 import dmd.enumsem;
-import dmd.errors;
+import dmd.errors : Classification, fatal;
 import dmd.errorsink;
 import dmd.expression;
 import dmd.expressionsem;
@@ -631,8 +631,23 @@ Dsymbol search_correct(Scope* _this, Identifier ident)
 
         // Do not show `@disable`d declarations
         if (auto decl = s.isDeclaration())
+        {
             if (decl.storage_class & STC.disable)
                 return null;
+            // Do not suggest an alias as a fix for its own undefined
+            // target while it is still resolving that target (`inuse`
+            // is set for the duration of that resolution). Using the
+            // suggestion would make the alias refer to itself, e.g.
+            // `alias Foo = Foo1;` with an undefined `Foo1` would
+            // otherwise suggest `Foo`, which is circular by
+            // construction: `alias Foo = Foo;`. This is specific to
+            // aliases: e.g. `Foo foo;` legitimately suggesting the
+            // variable `foo` itself is not circular in the same way
+            // and should still be shown.
+            // https://github.com/dlang/dmd/issues/18763
+            if (decl.isAliasDeclaration() && decl.inuse)
+                return null;
+        }
         // Or `deprecated` ones if we're not in a deprecated scope
         if (s.isDeprecated() && !sc.isDeprecated())
             return null;
@@ -908,8 +923,9 @@ private CtorDeclaration disabledDefaultCtor(AggregateDeclaration ad)
  */
 void noDefaultCtorSupplemental(AggregateDeclaration ad)
 {
+    auto eSink = global.errorSink;
     if (auto cd = disabledDefaultCtor(ad))
-        errorSupplemental(cd.loc, "because of `@disable this();` here");
+        eSink.errorSupplemental(cd.loc, "because of `@disable this();` here");
 
     foreach (field; ad.fields)
     {
@@ -918,7 +934,7 @@ void noDefaultCtorSupplemental(AggregateDeclaration ad)
         auto ts = field.type.baseElemOf().isTypeStruct();
         if (ts && ts.sym.noDefaultCtor)
         {
-            errorSupplemental(field.loc, "because field `%s` of type `%s` has disabled default construction",
+            eSink.errorSupplemental(field.loc, "because field `%s` of type `%s` has disabled default initialization",
                 field.toChars(), field.type.toErrMsg());
             noDefaultCtorSupplemental(ts.sym);
         }
@@ -1047,7 +1063,8 @@ uinteger_t size(Dsymbol _this, Loc loc)
         return aggregateDeclSize(ad, loc);
     else if (auto d = _this.isDeclaration())
         return declSize(d, loc);
-    .error(loc, "%s `%s` symbol `%s` has no size", _this.kind, _this.toPrettyChars, _this.toErrMsg());
+    auto eSink = global.errorSink;
+    eSink.error(loc, "%s `%s` symbol `%s` has no size", _this.kind, _this.toPrettyChars, _this.toErrMsg());
     return SIZE_INVALID;
 }
 
@@ -1418,7 +1435,8 @@ AlignDeclaration getAlignment(AlignDeclaration ad, Scope* sc)
 
             if (n < 1 || n & (n - 1) || ushort.max < n || !e.type.isIntegral())
             {
-                error(ad.loc, "alignment must be an integer positive power of 2, not 0x%llx", cast(ulong)n);
+                auto eSink = global.errorSink;
+                eSink.error(ad.loc, "alignment must be an integer positive power of 2, not 0x%llx", cast(ulong)n);
                 errors = true;
             }
             if (n > strictest)  // C11 6.7.5-6
@@ -1444,7 +1462,8 @@ Dsymbol toAlias2(Dsymbol s)
     {
         if (ad.inuse)
         {
-            .error(ad.loc, "%s `%s` recursive alias declaration", ad.kind, ad.toPrettyChars);
+            auto eSink = global.errorSink;
+            eSink.error(ad.loc, "%s `%s` recursive alias declaration", ad.kind, ad.toPrettyChars);
             return ad;
         }
         ad.inuse = 1;
@@ -1519,7 +1538,8 @@ private Dsymbol toAliasImpl(AliasDeclaration ad)
     }
     if (ad.inuse)
     {
-        .error(ad.loc, "%s `%s` recursive alias declaration", ad.kind, ad.toPrettyChars);
+        auto eSink = global.errorSink;
+        eSink.error(ad.loc, "%s `%s` recursive alias declaration", ad.kind, ad.toPrettyChars);
         return err();
     }
 
@@ -1608,7 +1628,8 @@ Dsymbol toAlias(Dsymbol s)
             }
             if (!ti.inst)
             {
-                .error(ti.loc, "%s `%s` cannot resolve forward reference", ti.kind, ti.toPrettyChars);
+                auto eSink = global.errorSink;
+                eSink.error(ti.loc, "%s `%s` cannot resolve forward reference", ti.kind, ti.toPrettyChars);
                 ti.errors = true;
                 return ti;
             }
@@ -1642,7 +1663,10 @@ const(char)* getMessage(DeprecatedDeclaration dd)
         if (auto se = dd.msg.toStringExp())
             dd.msgstr = se.toStringz().ptr;
         else
-            error(dd.msg.loc, "compile time constant expected, not `%s`", dd.msg.toErrMsg());
+        {
+            auto eSink = global.errorSink;
+            eSink.error(dd.msg.loc, "compile time constant expected, not `%s`", dd.msg.toErrMsg());
+        }
     }
     return dd.msgstr;
 }
@@ -1668,12 +1692,13 @@ bool checkDeprecated(Dsymbol d, Loc loc, Scope* sc)
         if (message)
             break;
     }
+    auto eSink = global.errorSink;
     if (message)
-        deprecation(loc, "%s `%s` is deprecated - %s", d.kind, d.toPrettyChars, message);
+        eSink.deprecation(loc, "%s `%s` is deprecated - %s", d.kind, d.toPrettyChars, message);
     else
-        deprecation(loc, "%s `%s` is deprecated", d.kind, d.toPrettyChars);
+        eSink.deprecation(loc, "%s `%s` is deprecated", d.kind, d.toPrettyChars);
 
-    deprecationSupplemental(d.loc, "`%s` is declared here", d.toErrMsg);
+    eSink.deprecationSupplemental(d.loc, "`%s` is declared here", d.toErrMsg);
 
     if (auto ti = sc.parent ? sc.parent.isInstantiated() : null)
         ti.printInstantiationTrace(Classification.deprecation);
@@ -1846,8 +1871,9 @@ bool checkHasBothRvalueAndCpCtor(StructDeclaration sd, CtorDeclaration ctor, Tem
      */
     if (sd && sd.hasCopyCtor && isRvalueConstructor(sd, ctor))
     {
-        .error(ctor.loc, "cannot define both an rvalue constructor and a copy constructor for `struct %s`", sd.toErrMsg());
-        .errorSupplemental(ti.loc, "Template instance `%s` creates an rvalue constructor for `struct %s`",
+        auto eSink = global.errorSink;
+        eSink.error(ctor.loc, "cannot define both an rvalue constructor and a copy constructor for `struct %s`", sd.toErrMsg());
+        eSink.errorSupplemental(ti.loc, "Template instance `%s` creates an rvalue constructor for `struct %s`",
                 ti.toPrettyChars(), sd.toChars());
 
         return true;
@@ -1980,7 +2006,8 @@ Expression resolveAliasThis(Scope* sc, Expression e, bool gag = false, bool find
  */
 private bool checkDeprecatedAliasThis(AliasThis at, Loc loc, Scope* sc)
 {
-    if (global.errorSink.useDeprecated != DiagnosticReporting.off
+    auto eSink = global.errorSink;
+    if (eSink.useDeprecated != DiagnosticReporting.off
         && at.isDeprecated() && !sc.isDeprecated())
     {
         const(char)* message = null;
@@ -1991,10 +2018,10 @@ private bool checkDeprecatedAliasThis(AliasThis at, Loc loc, Scope* sc)
                 break;
         }
         if (message)
-            deprecation(loc, "`alias %s this` is deprecated - %s",
+            eSink.deprecation(loc, "`alias %s this` is deprecated - %s",
                         at.sym.toErrMsg(), message);
         else
-            deprecation(loc, "`alias %s this` is deprecated",
+            eSink.deprecation(loc, "`alias %s this` is deprecated",
                         at.sym.toErrMsg());
 
         if (auto ti = sc.parent ? sc.parent.isInstantiated() : null)
@@ -2050,17 +2077,18 @@ private void checkImportDeprecation(Module m, Loc loc, Scope* sc)
     if (!m.md || !m.md.isdeprecated || sc.isDeprecated)
         return;
 
+    auto eSink = global.errorSink;
     Expression msg = m.md.msg;
     if (StringExp se = msg ? msg.toStringExp() : null)
     {
         const slice = se.peekString();
         if (slice.length)
         {
-            deprecation(m.loc, "%s `%s` is deprecated - %.*s", m.kind, m.toPrettyChars, cast(int)slice.length, slice.ptr);
+            eSink.deprecation(m.loc, "%s `%s` is deprecated - %.*s", m.kind, m.toPrettyChars, cast(int)slice.length, slice.ptr);
             return;
         }
     }
-    deprecation(m.loc, "%s `%s` is deprecated", m.kind, m.toPrettyChars);
+    eSink.deprecation(m.loc, "%s `%s` is deprecated", m.kind, m.toPrettyChars);
 }
 
 private extern(C++) final class DsymbolSemanticVisitor : Visitor
@@ -2070,14 +2098,17 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
     alias visit = Visitor.visit;
 
     Scope* sc;
-    this(Scope* sc) scope @safe
+    ErrorSink eSink;
+
+    this(Scope* sc) scope
     {
         this.sc = sc;
+        this.eSink = global.errorSink;
     }
 
     override void visit(Dsymbol dsym)
     {
-        .error(dsym.loc, "%s `%s` %p has no semantic routine", dsym.kind, dsym.toPrettyChars, dsym);
+        eSink.error(dsym.loc, "%s `%s` %p has no semantic routine", dsym.kind, dsym.toPrettyChars, dsym);
     }
 
     override void visit(ScopeDsymbol) { }
@@ -2104,7 +2135,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
         AggregateDeclaration ad = p.isAggregateDeclaration();
         if (!ad)
         {
-            error(dsym.loc, "alias this can only be a member of aggregate, not %s `%s`", p.kind(), p.toErrMsg());
+            eSink.error(dsym.loc, "alias this can only be a member of aggregate, not %s `%s`", p.kind(), p.toErrMsg());
             return;
         }
 
@@ -2115,14 +2146,14 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
             Dsymbol pscopesym;
             s = sc.search(dsym.loc, dsym.ident, pscopesym);
             if (s)
-                error(dsym.loc, "`%s` is not a member of `%s`", s.toErrMsg(), ad.toErrMsg());
+                eSink.error(dsym.loc, "`%s` is not a member of `%s`", s.toErrMsg(), ad.toErrMsg());
             else
-                error(dsym.loc, "undefined identifier `%s`", dsym.ident.toErrMsg());
+                eSink.error(dsym.loc, "undefined identifier `%s`", dsym.ident.toErrMsg());
             return;
         }
         if (ad.aliasthis && s != ad.aliasthis)
         {
-            error(dsym.loc, "there can be only one alias this");
+            eSink.error(dsym.loc, "there can be only one alias this");
             return;
         }
 
@@ -2150,7 +2181,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
             assert(t);
             if (ad.type.implicitConvTo(t) > MATCH.nomatch)
             {
-                error(dsym.loc, "alias this is not reachable as `%s` already converts to `%s`", ad.toErrMsg(), t.toErrMsg());
+                eSink.error(dsym.loc, "alias this is not reachable as `%s` already converts to `%s`", ad.toErrMsg(), t.toErrMsg());
             }
         }
 
@@ -2266,7 +2297,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
                 dsym.storage_class &= ~STC.extern_;
             }
             else
-                .error(dsym.loc, "%s `%s` extern symbols cannot have initializers", dsym.kind, dsym.toPrettyChars);
+                eSink.error(dsym.loc, "%s `%s` extern symbols cannot have initializers", dsym.kind, dsym.toPrettyChars);
 
         }
 
@@ -2278,7 +2309,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
         {
             if (!(dsym.storage_class & STC.autoref))
             {
-                .error(dsym.loc, "%s `%s` - `auto ref` variable must have `auto` and `ref` adjacent", dsym.kind, dsym.toErrMsg());
+                eSink.error(dsym.loc, "%s `%s` - `auto ref` variable must have `auto` and `ref` adjacent", dsym.kind, dsym.toErrMsg());
                 dsym.storage_class |= STC.autoref;
             }
         }
@@ -2372,14 +2403,14 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
             }
             if (autoDollarDims.length && !dsym._init)
             {
-                .error(dsym.loc, "cannot infer static array length from `$`, provide an initializer");
+                eSink.error(dsym.loc, "cannot infer static array length from `$`, provide an initializer");
                 dsym.type = Type.terror;
                 dsym.errors = true;
                 dsym.semanticRun = PASS.semanticdone;
                 return;
             }
             //printf("inferring type for %s with init %s\n", dsym.toChars(), dsym._init.toChars());
-            dsym._init = dsym._init.inferInitializerType(sc, dsym.type);
+            dsym._init = dsym._init.inferInitializerType(sc, dsym.type, global.errorSink);
             dsym.type = dsym._init.initializerToExpression(null, sc.inCfile).type;
 
             if (autoDollarDims.length)
@@ -2392,7 +2423,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
                     auto elem = t.nextOf();
                     if (!elem)
                     {
-                        .error(dsym.loc,
+                        eSink.error(dsym.loc,
                             "cannot infer static array element type for `auto[$]`, " ~
                             "provide an array initializer");
                         t = Type.terror;
@@ -2429,7 +2460,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
             // `$` inference outside top-level static-array declarations is invalid.
             if (hasUnresolvedDollar(dsym.type) && !dsym.type.toBasetype().isTypeSArray())
             {
-                .error(dsym.loc,
+                eSink.error(dsym.loc,
                     "cannot infer static array length from `$` in this type position; " ~
                     "only direct static array declarations can infer `$` from an initializer");
                 resolveDollarToZero(dsym.type, dsym.loc);
@@ -2586,7 +2617,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
         {
             if (!dsym._init || dsym._init.isVoidInitializer())
             {
-                .error(dsym.loc, "cannot infer static array length from `$`, provide an initializer");
+                eSink.error(dsym.loc, "cannot infer static array length from `$`, provide an initializer");
                 tsa.dim = new IntegerExp(dsym.loc, 0, Type.tsize_t);
                 dsym._init = new ErrorInitializer();
                 dsym.type = Type.terror;
@@ -2612,7 +2643,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
                     }
                     if (!dimInferred)
                     {
-                        .error(dsym.loc, "cannot infer static array length from `$`, provide an initializer");
+                        eSink.error(dsym.loc, "cannot infer static array length from `$`, provide an initializer");
                         tsa.dim = new IntegerExp(dsym.loc, 0, Type.tsize_t);
                         dsym._init = new ErrorInitializer();
                         dsym.type = Type.terror;
@@ -2641,10 +2672,10 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
         if (hasUnresolvedDollar(dsym.type))
         {
             if (dsym.type.toBasetype().isTypeSArray())
-                .error(dsym.loc, "cannot infer static array length from `$`, provide an initializer");
+                eSink.error(dsym.loc, "cannot infer static array length from `$`, provide an initializer");
             else
             {
-                .error(dsym.loc,
+                eSink.error(dsym.loc,
                     "cannot infer static array length from `$` in this type position; " ~
                     "only direct static array declarations can infer `$` from an initializer");
             }
@@ -2679,7 +2710,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
             {
                 if (dsym.alignment.fromAlignas())
                 {
-                    error(dsym.loc, "`_Alignas` specifier cannot be less strict than alignment of `%s`",
+                    eSink.error(dsym.loc, "`_Alignas` specifier cannot be less strict than alignment of `%s`",
                           dsym.toErrMsg());
                 }
                 if (!dsym.alignment.isPack())
@@ -2706,17 +2737,17 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
         {
             if (inferred)
             {
-                .error(dsym.loc, "%s `%s` - type `%s` is inferred from initializer `%s`, and variables cannot be of type `void`",
+                eSink.error(dsym.loc, "%s `%s` - type `%s` is inferred from initializer `%s`, and variables cannot be of type `void`",
                     dsym.kind, dsym.toPrettyChars, dsym.type.toErrMsg(), toChars(dsym._init));
             }
             else
-                .error(dsym.loc, "%s `%s` - variables cannot be of type `void`", dsym.kind, dsym.toPrettyChars);
+                eSink.error(dsym.loc, "%s `%s` - variables cannot be of type `void`", dsym.kind, dsym.toPrettyChars);
             dsym.type = Type.terror;
             tb = dsym.type;
         }
         if (tb.ty == Tfunction)
         {
-            .error(dsym.loc, "%s `%s` cannot be declared to be a function", dsym.kind, dsym.toPrettyChars);
+            eSink.error(dsym.loc, "%s `%s` cannot be declared to be a function", dsym.kind, dsym.toPrettyChars);
             dsym.type = Type.terror;
             tb = dsym.type;
         }
@@ -2726,7 +2757,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
             // or when the variable is defined externally
             if (!ts.sym.members && !(dsym.storage_class & (STC.ref_ | STC.extern_)))
             {
-                .error(dsym.loc, "%s `%s` - no definition of struct `%s`", dsym.kind, dsym.toPrettyChars, ts.toErrMsg());
+                eSink.error(dsym.loc, "%s `%s` - no definition of struct `%s`", dsym.kind, dsym.toPrettyChars, ts.toErrMsg());
 
                 // Explain why the definition is required when it's part of another type
                 if (!dsym.type.isTypeStruct())
@@ -2734,17 +2765,17 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
                     // Prefer Loc of the dependant type
                     const s = dsym.type.toDsymbol(sc);
                     const loc = (s ? s : dsym).loc;
-                    loc.errorSupplemental("required by type `%s`", dsym.type.toChars());
+                    eSink.errorSupplemental(loc, "required by type `%s`", dsym.type.toChars());
                 }
-                errorSupplemental(dsym.loc, "see https://dlang.org/spec/struct.html#opaque_struct_unions");
-                errorSupplemental(dsym.loc, "perhaps declare a variable with pointer type `%s*` instead", dsym.type.toChars());
+                eSink.errorSupplemental(dsym.loc, "see https://dlang.org/spec/struct.html#opaque_struct_unions");
+                eSink.errorSupplemental(dsym.loc, "perhaps declare a variable with pointer type `%s*` instead", dsym.type.toChars());
 
                 // Flag variable as error to avoid invalid error messages due to unknown size
                 dsym.type = Type.terror;
             }
         }
         if ((dsym.storage_class & STC.auto_) && !inferred && !(dsym.storage_class & STC.autoref))
-            .error(dsym.loc, "%s `%s` - storage class `auto` has no effect if type is not inferred, did you mean `scope`?", dsym.kind, dsym.toPrettyChars);
+            eSink.error(dsym.loc, "%s `%s` - storage class `auto` has no effect if type is not inferred, did you mean `scope`?", dsym.kind, dsym.toPrettyChars);
 
         if (auto tt = tb.isTypeTuple())
         {
@@ -2843,7 +2874,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
                 size_t tedim = te.exps.length;
                 if (tedim != nelems)
                 {
-                    error(dsym.loc, "sequence of %d elements cannot be assigned to sequence of %d elements", cast(int)tedim, cast(int)nelems);
+                    eSink.error(dsym.loc, "sequence of %d elements cannot be assigned to sequence of %d elements", cast(int)tedim, cast(int)nelems);
                     for (size_t u = tedim; u < nelems; u++) // fill dummy expression
                         te.exps.push(ErrorExp.get());
                 }
@@ -2917,12 +2948,12 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
         if (STC stc = dsym.storage_class & (STC.synchronized_ | STC.override_ | STC.abstract_ | STC.final_))
         {
             if (stc == STC.final_)
-                .error(dsym.loc, "%s `%s` cannot be `final`, perhaps you meant `const`?", dsym.kind, dsym.toPrettyChars);
+                eSink.error(dsym.loc, "%s `%s` cannot be `final`, perhaps you meant `const`?", dsym.kind, dsym.toPrettyChars);
             else
             {
                 OutBuffer buf;
                 stcToBuffer(buf, stc);
-                .error(dsym.loc, "%s `%s` cannot be `%s`", dsym.kind, dsym.toPrettyChars, buf.peekChars());
+                eSink.error(dsym.loc, "%s `%s` cannot be `%s`", dsym.kind, dsym.toPrettyChars, buf.peekChars());
             }
             dsym.storage_class &= ~stc; // strip off
         }
@@ -2941,11 +2972,11 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
             {
                 OutBuffer buf;
                 stcToBuffer(buf, stc);
-                .error(dsym.loc, "%s `%s` cannot be `scope` and `%s`", dsym.kind, dsym.toPrettyChars, buf.peekChars());
+                eSink.error(dsym.loc, "%s `%s` cannot be `scope` and `%s`", dsym.kind, dsym.toPrettyChars, buf.peekChars());
             }
             else if (dsym.isMember())
             {
-                error(dsym.loc, "field `%s` cannot be `scope`", dsym.toErrMsg());
+                eSink.error(dsym.loc, "field `%s` cannot be `scope`", dsym.toErrMsg());
             }
             else if (!dsym.type.hasPointers())
             {
@@ -2969,7 +3000,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
                 if (global.params.v.field && dsym.storage_class & (STC.const_ | STC.immutable_) && dsym._init && !dsym._init.isVoidInitializer())
                 {
                     const(char)* s = (dsym.storage_class & STC.immutable_) ? "immutable" : "const";
-                    message(dsym.loc, "`%s.%s` is `%s` field", ad.toPrettyChars(), dsym.toChars(), s);
+                    eSink.message(dsym.loc, "`%s.%s` is `%s` field", ad.toPrettyChars(), dsym.toChars(), s);
                 }
                 dsym.storage_class |= STC.field;
                 if (auto ts = tbn.isTypeStruct())
@@ -2983,11 +3014,11 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
             InterfaceDeclaration id = parent.isInterfaceDeclaration();
             if (id)
             {
-                error(dsym.loc, "field `%s` not allowed in interface", dsym.toErrMsg());
+                eSink.error(dsym.loc, "field `%s` not allowed in interface", dsym.toErrMsg());
             }
             else if (aad && aad.sizeok == Sizeok.done)
             {
-                error(dsym.loc, "cannot declare field `%s` because it will change the determined size of `%s`", dsym.toErrMsg(), aad.toErrMsg());
+                eSink.error(dsym.loc, "cannot declare field `%s` because it will change the determined size of `%s`", dsym.toErrMsg(), aad.toErrMsg());
             }
 
             /* Templates cannot add fields to aggregates
@@ -3007,7 +3038,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
                 AggregateDeclaration ad2 = ti.tempdecl.isMember();
                 if (ad2 && dsym.storage_class != STC.none)
                 {
-                    .error(dsym.loc, "%s `%s` - cannot use template to add field to aggregate `%s`", dsym.kind, dsym.toPrettyChars, ad2.toErrMsg());
+                    eSink.error(dsym.loc, "%s `%s` - cannot use template to add field to aggregate `%s`", dsym.kind, dsym.toPrettyChars, ad2.toErrMsg());
                 }
             }
         }
@@ -3016,14 +3047,14 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
 
         if ((dsym.storage_class & (STC.ref_ | STC.field)) == (STC.ref_ | STC.field) && dsym.ident != Id.This)
         {
-            .error(dsym.loc, "%s `%s` - field declarations cannot be `ref`", dsym.kind, dsym.toPrettyChars);
+            eSink.error(dsym.loc, "%s `%s` - field declarations cannot be `ref`", dsym.kind, dsym.toPrettyChars);
         }
 
         if (dsym.type.hasWild())
         {
             if (dsym.storage_class & (STC.static_ | STC.extern_ | STC.gshared | STC.manifest | STC.field) || dsym.isDataseg())
             {
-                .error(dsym.loc, "%s `%s` - only parameters or stack-based variables can be `inout`", dsym.kind, dsym.toPrettyChars);
+                eSink.error(dsym.loc, "%s `%s` - only parameters or stack-based variables can be `inout`", dsym.kind, dsym.toPrettyChars);
             }
             FuncDeclaration func = sc.func;
             if (func)
@@ -3041,7 +3072,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
                 }
                 if (!isWild)
                 {
-                    .error(dsym.loc, "%s `%s` - `inout` variables can only be declared inside `inout` functions", dsym.kind, dsym.toPrettyChars);
+                    eSink.error(dsym.loc, "%s `%s` - `inout` variables can only be declared inside `inout` functions", dsym.kind, dsym.toPrettyChars);
                 }
             }
         }
@@ -3062,7 +3093,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
                 }
                 else
                 {
-                    .error(dsym.loc, "%s `%s` - default construction is disabled for type `%s`", dsym.kind, dsym.toPrettyChars, dsym.type.toErrMsg());
+                    eSink.error(dsym.loc, "%s `%s` - default initialization is disabled for type `%s`", dsym.kind, dsym.toPrettyChars, dsym.type.toErrMsg());
                     noDefaultCtorSupplemental(tbn.isTypeStruct().sym);
                 }
             }
@@ -3079,11 +3110,11 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
                     dsym.storage_class &= ~STC.ref_;
                 }
                 else
-                    .error(dsym.loc, "%s `%s` - initializer is required for `ref` variable", dsym.kind, dsym.toPrettyChars);
+                    eSink.error(dsym.loc, "%s `%s` - initializer is required for `ref` variable", dsym.kind, dsym.toPrettyChars);
             }
             else if (dsym._init.isVoidInitializer())
             {
-                .error(dsym.loc, "%s `%s` - void initializer not allowed for `ref` variable", dsym.kind, dsym.toPrettyChars);
+                eSink.error(dsym.loc, "%s `%s` - void initializer not allowed for `ref` variable", dsym.kind, dsym.toPrettyChars);
             }
         }
 
@@ -3092,7 +3123,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
         {
             if (dsym.storage_class & (STC.field | STC.out_ | STC.ref_ | STC.static_ | STC.manifest | STC.gshared) || !fd)
             {
-                .error(dsym.loc, "%s `%s` globals, statics, fields, manifest constants, ref and out parameters cannot be `scope`", dsym.kind, dsym.toPrettyChars);
+                eSink.error(dsym.loc, "%s `%s` globals, statics, fields, manifest constants, ref and out parameters cannot be `scope`", dsym.kind, dsym.toPrettyChars);
             }
 
             // @@@DEPRECATED_2.097@@@  https://dlang.org/deprecate.html#scope%20as%20a%20type%20constraint
@@ -3101,7 +3132,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
             if (!(dsym.storage_class & STC.scope_))
             {
                 if (!(dsym.storage_class & STC.parameter) && dsym.ident != Id.withSym)
-                    .error(dsym.loc, "%s `%s` reference to `scope class` must be `scope`", dsym.kind, dsym.toPrettyChars);
+                    eSink.error(dsym.loc, "%s `%s` reference to `scope class` must be `scope`", dsym.kind, dsym.toPrettyChars);
             }
         }
 
@@ -3144,14 +3175,14 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
         if (dsym._init)
         { } // remember we had an explicit initializer
         else if (dsym.storage_class & STC.manifest)
-            .error(dsym.loc, "%s `%s` - manifest constants must have initializers", dsym.kind, dsym.toPrettyChars);
+            eSink.error(dsym.loc, "%s `%s` - manifest constants must have initializers", dsym.kind, dsym.toPrettyChars);
 
         // Don't allow non-extern, non-__gshared variables to be interfaced with C++
         if (dsym._linkage == LINK.cpp && !(dsym.storage_class & (STC.ctfe | STC.extern_ | STC.gshared)) && dsym.isDataseg())
         {
             const char* p = (dsym.storage_class & STC.shared_) ? "shared" : "static";
-            .error(dsym.loc, "%s `%s` cannot have `extern(C++)` linkage because it is `%s`", dsym.kind, dsym.toPrettyChars, p);
-            errorSupplemental(dsym.loc, "perhaps declare it as `__gshared` instead");
+            eSink.error(dsym.loc, "%s `%s` cannot have `extern(C++)` linkage because it is `%s`", dsym.kind, dsym.toPrettyChars, p);
+            eSink.errorSupplemental(dsym.loc, "perhaps declare it as `__gshared` instead");
             dsym.errors = true;
         }
 
@@ -3172,7 +3203,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
 
             //printf("Providing default initializer for '%s'\n", dsym.toChars());
             if (sz == SIZE_INVALID && dsym.type.ty != Terror)
-                .error(dsym.loc, "%s `%s` - size of type `%s` is invalid", dsym.kind, dsym.toPrettyChars, dsym.type.toErrMsg());
+                eSink.error(dsym.loc, "%s `%s` - size of type `%s` is invalid", dsym.kind, dsym.toPrettyChars, dsym.type.toErrMsg());
 
             Type tv = dsym.type;
             while (tv.ty == Tsarray)    // Don't skip Tenum
@@ -3207,7 +3238,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
             }
             if (dsym.type.baseElemOf().ty == Tvoid)
             {
-                .error(dsym.loc, "%s `%s` of type `%s` does not have a default initializer", dsym.kind, dsym.toPrettyChars, dsym.type.toErrMsg());
+                eSink.error(dsym.loc, "%s `%s` of type `%s` does not have a default initializer", dsym.kind, dsym.toPrettyChars, dsym.type.toErrMsg());
             }
             else if (auto e = dsym.type.defaultInit(dsym.loc))
             {
@@ -3228,7 +3259,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
                 dsym._init.isVoidInitializer() &&
                 !(dsym.storage_class & STC.field))
             {
-                .error(dsym.loc, "%s `%s` - incomplete array type must have initializer", dsym.kind, dsym.toPrettyChars);
+                eSink.error(dsym.loc, "%s `%s` - incomplete array type must have initializer", dsym.kind, dsym.toPrettyChars);
             }
 
             ExpInitializer ei = dsym._init.isExpInitializer();
@@ -3259,17 +3290,17 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
                         ArrayInitializer ai = dsym._init.isArrayInitializer();
                         Expression e;
                         if (ai && tb.ty == Taarray)
-                            e = ai.toAssocArrayLiteral(tb);
+                            e = ai.toAssocArrayLiteral(tb, global.errorSink);
                         else
                             e = dsym._init.initializerToExpression(dsym.type, sc.inCfile);
                         if (!e)
                         {
                             // Run semantic, but don't need to interpret
-                            dsym._init = dsym._init.initializerSemantic(sc, dsym.type, INITnointerpret);
+                            dsym._init = dsym._init.initializerSemantic(sc, dsym.type, INITnointerpret, global.errorSink);
                             e = dsym._init.initializerToExpression(null, sc.inCfile);
                             if (!e)
                             {
-                                .error(dsym.loc, "%s `%s` is not a static and cannot have static initializer", dsym.kind, dsym.toPrettyChars);
+                                eSink.error(dsym.loc, "%s `%s` is not a static and cannot have static initializer", dsym.kind, dsym.toPrettyChars);
                                 e = ErrorExp.get();
                             }
                         }
@@ -3281,7 +3312,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
                     {
                         // C11 6.7.9-22 determine the size of the incomplete array,
                         // or issue an error that the initializer is invalid.
-                        dsym._init = dsym._init.initializerSemantic(sc, dsym.type, INITinterpret);
+                        dsym._init = dsym._init.initializerSemantic(sc, dsym.type, INITinterpret, global.errorSink);
                     }
 
                     if (ei && dsym.isScope())
@@ -3306,7 +3337,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
                                     import dmd.escape : setUnsafeDIP1000;
                                     const inSafeFunc = sc.func && sc.func.isSafeBypassingInference();   // isSafeBypassingInference may call setUnsafe().
                                     if (setUnsafeDIP1000(*sc, false, dsym.loc, "`scope` allocation of `%s` with a non-`scope` constructor", dsym))
-                                        errorSupplemental(ne.member.loc, "is the location of the constructor");
+                                        eSink.errorSupplemental(ne.member.loc, "is the location of the constructor");
                                 }
                                 ne.onstack = 1;
                                 dsym.onstack = true;
@@ -3357,7 +3388,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
                             }
                             else
                             {
-                                .error(dsym.loc, "rvalue `%s` cannot be assigned to `ref %s`", exp.toErrMsg(), dsym.toErrMsg());
+                                eSink.error(dsym.loc, "rvalue `%s` cannot be assigned to `ref %s`", exp.toErrMsg(), dsym.toErrMsg());
                                 exp = ErrorExp.get();
                             }
                         }
@@ -3370,7 +3401,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
                             }
                             else
                             {
-                                .error(dsym.loc, "type `%s` cannot be assigned to `ref %s %s`", ta.toErrMsg(), tp.toErrMsg(), dsym.toErrMsg());
+                                eSink.error(dsym.loc, "type `%s` cannot be assigned to `ref %s %s`", ta.toErrMsg(), tp.toErrMsg(), dsym.toErrMsg());
                                 exp = ErrorExp.get();
                             }
                         }
@@ -3383,7 +3414,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
                             }
                             else
                             {
-                                .error(dsym.loc, "bitfield `%s` cannot be assigned to `ref %s`", exp.toErrMsg(), dsym.toErrMsg());
+                                eSink.error(dsym.loc, "bitfield `%s` cannot be assigned to `ref %s`", exp.toErrMsg(), dsym.toErrMsg());
                                 exp = ErrorExp.get();
                             }
                         }
@@ -3409,14 +3440,14 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
                 {
                     // https://issues.dlang.org/show_bug.cgi?id=14166
                     // Don't run CTFE for the temporary variables inside typeof
-                    dsym._init = dsym._init.initializerSemantic(sc, dsym.type, sc.intypeof == 1 ? INITnointerpret : INITinterpret);
+                    dsym._init = dsym._init.initializerSemantic(sc, dsym.type, sc.intypeof == 1 ? INITnointerpret : INITinterpret, global.errorSink);
                     import dmd.semantic2 : lowerStaticAAs;
                     lowerStaticAAs(dsym, sc);
                     auto init_err = dsym._init.isExpInitializer();
                     if (init_err && init_err.exp.op == EXP.showCtfeContext)
                     {
                         init_err.exp = ErrorExp.get();
-                        errorSupplemental(dsym.loc, "compile time context created here");
+                        eSink.errorSupplemental(dsym.loc, "compile time context created here");
                     }
                 }
             }
@@ -3494,12 +3525,12 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
                             {
                                 // The only allowable initializer is a (non-copy) constructor
                                 if (ei.exp.isLvalue())
-                                    .error(dsym.loc, "%s `%s` of type struct `%s` uses `this(this)`, which is not allowed in static initialization", dsym.kind, dsym.toPrettyChars, tb2.toErrMsg());
+                                    eSink.error(dsym.loc, "%s `%s` of type struct `%s` uses `this(this)`, which is not allowed in static initialization", dsym.kind, dsym.toPrettyChars, tb2.toErrMsg());
                             }
                         }
                     }
 
-                    dsym._init = dsym._init.initializerSemantic(sc, dsym.type, INITinterpret);
+                    dsym._init = dsym._init.initializerSemantic(sc, dsym.type, INITinterpret, global.errorSink);
                     dsym.inuse--;
                     if (global.errors > errors)
                     {
@@ -3531,7 +3562,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
             {
                 // currently disabled because of std.stdio.stdin, stdout and stderr
                 if (dsym.isDataseg() && !(dsym.storage_class & STC.extern_))
-                    .error(dsym.loc, "%s `%s` static storage variables cannot have destructors", dsym.kind, dsym.toPrettyChars);
+                    eSink.error(dsym.loc, "%s `%s` static storage variables cannot have destructors", dsym.kind, dsym.toPrettyChars);
             }
         }
 
@@ -3575,7 +3606,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
         const bool isAnonymous = dsym.isAnonymous();
         if (isAnonymous && dsym._init)
         {
-             .error(dsym._init.loc, "anonymous bitfield cannot have default initializer");
+             eSink.error(dsym._init.loc, "anonymous bitfield cannot have default initializer");
              dsym._init = null;
              dsym.errors = true;
         }
@@ -3586,12 +3617,12 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
 
         if (!(sc.previews.bitfields || sc.inCfile))
         {
-            .error(dsym.loc, "%s `%s` use `-%spreview=bitfields` for bitfield support", dsym.kind, dsym.toPrettyChars, SwitchPrefix.ptr);
+            eSink.error(dsym.loc, "%s `%s` use `-%spreview=bitfields` for bitfield support", dsym.kind, dsym.toPrettyChars, SwitchPrefix.ptr);
         }
 
         if (!dsym.parent.isStructDeclaration() && !dsym.parent.isClassDeclaration())
         {
-            .error(dsym.loc, "%s `%s` - bitfield must be member of struct, union, or class", dsym.kind, dsym.toPrettyChars);
+            eSink.error(dsym.loc, "%s `%s` - bitfield must be member of struct, union, or class", dsym.kind, dsym.toPrettyChars);
         }
 
         sc = sc.startCTFE();
@@ -3602,29 +3633,29 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
         {
             // C11 6.7.2.1-5
             if (isAnonymous)
-                error(dsym.loc, "anonymous bitfield cannot be of non-integral type `%s`", dsym.type.toErrMsg());
+                eSink.error(dsym.loc, "anonymous bitfield cannot be of non-integral type `%s`", dsym.type.toErrMsg());
             else
-                error(dsym.loc, "bitfield `%s` cannot be of non-integral type `%s`", dsym.toErrMsg(), dsym.type.toErrMsg());
+                eSink.error(dsym.loc, "bitfield `%s` cannot be of non-integral type `%s`", dsym.toErrMsg(), dsym.type.toErrMsg());
             dsym.errors = true;
             return;
         }
         if (!width.isIntegerExp())
         {
-            error(width.loc, "bitfield width `%s` is not an integer constant", dsym.width.toErrMsg());
+            eSink.error(width.loc, "bitfield width `%s` is not an integer constant", dsym.width.toErrMsg());
             dsym.errors = true;
         }
         const uwidth = width.toInteger(); // uwidth is unsigned
         if (uwidth == 0 && !isAnonymous)
         {
-            error(dsym.loc, "bitfield `%s` cannot have zero width", dsym.toErrMsg());
+            eSink.error(dsym.loc, "bitfield `%s` cannot have zero width", dsym.toErrMsg());
             dsym.errors = true;
         }
         if (cast(long)uwidth < 0)
         {
             if (isAnonymous)
-                error(width.loc, "anonymous bitfield has negative width `%lld`", cast(long)uwidth);
+                eSink.error(width.loc, "anonymous bitfield has negative width `%lld`", cast(long)uwidth);
             else
-                error(width.loc, "bitfield `%s` has negative width `%lld`", dsym.toErrMsg(), cast(long)uwidth);
+                eSink.error(width.loc, "bitfield `%s` has negative width `%lld`", dsym.toErrMsg(), cast(long)uwidth);
             dsym.errors = true;
         }
         else
@@ -3636,9 +3667,9 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
             if (uwidth > max_width)
             {
                 if (isAnonymous)
-                    error(width.loc, "width `%lld` of anonymous bitfield does not fit in type `%s`", cast(long)uwidth, dsym.type.toErrMsg());
+                    eSink.error(width.loc, "width `%lld` of anonymous bitfield does not fit in type `%s`", cast(long)uwidth, dsym.type.toErrMsg());
                 else
-                    error(width.loc, "width `%lld` of bitfield `%s` does not fit in type `%s`", cast(long)uwidth, dsym.toErrMsg(), dsym.type.toErrMsg());
+                    eSink.error(width.loc, "width `%lld` of bitfield `%s` does not fit in type `%s`", cast(long)uwidth, dsym.toErrMsg(), dsym.type.toErrMsg());
                 dsym.errors = true;
             }
         }
@@ -3749,7 +3780,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
                 import dmd.access : symbolIsVisible;
                 if (!symbolIsVisible(sc, sym) && !sym.errors)
                 {
-                    .error(imp.loc, "%s `%s` member `%s` is not visible from module `%s`", imp.mod.kind, imp.mod.toPrettyChars,
+                    eSink.error(imp.loc, "%s `%s` member `%s` is not visible from module `%s`", imp.mod.kind, imp.mod.toPrettyChars,
                         imp.names[i].toErrMsg(), sc._module.toErrMsg());
                     sym.errors = true;
                 }
@@ -3764,9 +3795,9 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
                 // https://issues.dlang.org/show_bug.cgi?id=23908
                 // Don't suggest symbols from the importer's module
                 if (s && s.parent != importer)
-                    .error(imp.loc, "%s `%s` import `%s` not found, did you mean %s `%s`?", imp.mod.kind, imp.mod.toPrettyChars, imp.names[i].toErrMsg(), s.kind(), s.toPrettyChars());
+                    eSink.error(imp.loc, "%s `%s` import `%s` not found, did you mean %s `%s`?", imp.mod.kind, imp.mod.toPrettyChars, imp.names[i].toErrMsg(), s.kind(), s.toPrettyChars());
                 else
-                    .error(imp.loc, "%s `%s` import `%s` not found", imp.mod.kind, imp.mod.toPrettyChars, imp.names[i].toErrMsg());
+                    eSink.error(imp.loc, "%s `%s` import `%s` not found", imp.mod.kind, imp.mod.toPrettyChars, imp.names[i].toErrMsg());
                 ad.type = Type.terror;
             }
         }
@@ -3818,7 +3849,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
         auto ad = p.isAggregateDeclaration();
         if (!ad)
         {
-            error(scd.loc, "%s can only be a part of an aggregate, not %s `%s`", scd.kind(), p.kind(), p.toErrMsg());
+            eSink.error(scd.loc, "%s can only be a part of an aggregate, not %s `%s`", scd.kind(), p.kind(), p.toErrMsg());
             scd.errors = true;
             return;
         }
@@ -3875,8 +3906,9 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
         const len = buf.length;
         buf.writeByte(0);
         const str = buf.extractSlice()[0 .. len];
-        const bool doUnittests = global.params.parsingUnittestsRequired();
-        scope p = new Parser!ASTCodegen(sc._module, str, false, global.errorSink, &global.compileEnv, doUnittests);
+        auto mod = sc._module;
+        const bool doUnittests = global.params.parsingUnittestsRequired(mod.isRoot);
+        scope p = new Parser!ASTCodegen(mod, str, false, global.errorSink, &global.compileEnv, doUnittests);
         adjustLocForMixin(str, cd.loc, *p.baseLoc, global.params.mixinOut);
         p.linnum = p.baseLoc.startLine;
         p.nextToken();
@@ -3887,7 +3919,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
 
         if (p.token.value != TOK.endOfFile)
         {
-            .error(cd.loc, "%s `%s` incomplete mixin declaration `%s`", cd.kind, cd.toPrettyChars, str.ptr);
+            eSink.error(cd.loc, "%s `%s` incomplete mixin declaration `%s`", cd.kind, cd.toPrettyChars, str.ptr);
             return null;
         }
         return d;
@@ -3924,7 +3956,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
             const sident = se.toStringz();
             if (!sident.length || !Identifier.isValidIdentifier(sident))
             {
-                error(ns.exp.loc, "expected valid identifier for C++ namespace but got `%s`", se.toErrMsg());
+                eSink.error(ns.exp.loc, "expected valid identifier for C++ namespace but got `%s`", se.toErrMsg());
                 return null;
             }
             else
@@ -3961,7 +3993,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
                         return; // An error happened in `identFromSE`
                 }
                 else
-                    error(ns.exp.loc, "`%s`: index %llu is not a string constant, it is a `%s`",
+                    eSink.error(ns.exp.loc, "`%s`: index %llu is not a string constant, it is a `%s`",
                                  ns.exp.toErrMsg(), cast(ulong) d, ns.exp.type.toErrMsg());
             }
         }
@@ -3972,7 +4004,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
         {
         }
         else if (!ns.exp.type.isTypeError())
-            error(ns.exp.loc, "compile time string constant (or sequence) expected, not `%s`",
+            eSink.error(ns.exp.loc, "compile time string constant (or sequence) expected, not `%s`",
                          ns.exp.toErrMsg());
         attribSemantic(ns);
     }
@@ -3982,7 +4014,9 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
         //printf("UserAttributeDeclaration::semantic() %p\n", this);
         if (uad.decl && !uad._scope)
             uad.Dsymbol.setScope(sc); // for function local symbols
-        arrayExpressionSemantic(uad.atts.peekSlice(), sc, true);
+        Scope* sc2 = sc.startCTFE();
+        arrayExpressionSemantic(uad.atts.peekSlice(), sc2, true);
+        sc2.endCTFE();
         return attribSemantic(uad);
     }
 
@@ -4212,7 +4246,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
                 else
                     assert(0);
             }
-            .error(tm.loc, "%s `%s` recursive mixin instantiation", tm.kind, tm.toPrettyChars);
+            eSink.error(tm.loc, "%s `%s` recursive mixin instantiation", tm.kind, tm.toPrettyChars);
             return;
 
         Lcontinue:
@@ -4271,7 +4305,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
         if (++nest > global.recursionLimit)
         {
             global.gag = 0; // ensure error message gets printed
-            .error(tm.loc, "%s `%s` recursive expansion", tm.kind, tm.toPrettyChars);
+            eSink.error(tm.loc, "%s `%s` recursive expansion", tm.kind, tm.toPrettyChars);
             fatal();
         }
 
@@ -4299,7 +4333,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
         // Give additional context info if error occurred during instantiation
         if (global.errors != errorsave)
         {
-            .error(tm.loc, "%s `%s` error instantiating", tm.kind, tm.toPrettyChars);
+            eSink.error(tm.loc, "%s `%s` error instantiating", tm.kind, tm.toPrettyChars);
             tm.errors = true;
         }
 
@@ -4343,7 +4377,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
             TupleExp tup = name ? null : resolved.isTupleExp();
             if (!tup && !name)
             {
-                error(ns.loc, "expected string expression for namespace name, got `%s`", ns.identExp.toErrMsg());
+                eSink.error(ns.loc, "expected string expression for namespace name, got `%s`", ns.identExp.toErrMsg());
                 return;
             }
             ns.identExp = resolved; // we don't need to keep the old AST around
@@ -4352,7 +4386,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
                 const(char)[] ident = name.toStringz();
                 if (ident.length == 0 || !Identifier.isValidIdentifier(ident))
                 {
-                    error(ns.loc, "expected valid identifier for C++ namespace but got `%.*s`", cast(int)ident.length, ident.ptr);
+                    eSink.error(ns.loc, "expected valid identifier for C++ namespace but got `%.*s`", cast(int)ident.length, ident.ptr);
                     return;
                 }
                 ns.ident = Identifier.idPool(ident);
@@ -4366,13 +4400,13 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
                     name = exp.toStringExp();
                     if (!name)
                     {
-                        error(ns.loc, "expected string expression for namespace name, got `%s`", exp.toErrMsg());
+                        eSink.error(ns.loc, "expected string expression for namespace name, got `%s`", exp.toErrMsg());
                         return;
                     }
                     const(char)[] ident = name.toStringz();
                     if (ident.length == 0 || !Identifier.isValidIdentifier(ident))
                     {
-                        error(ns.loc, "expected valid identifier for C++ namespace but got `%.*s`", cast(int)ident.length, ident.ptr);
+                        eSink.error(ns.loc, "expected valid identifier for C++ namespace but got `%.*s`", cast(int)ident.length, ident.ptr);
                         return;
                     }
                     if (i == 0)
@@ -4449,7 +4483,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
         AggregateDeclaration ad = p.isAggregateDeclaration();
         if (!ad)
         {
-            error(ctd.loc, "constructor can only be a member of aggregate, not %s `%s`", p.kind(), p.toErrMsg());
+            eSink.error(ctd.loc, "constructor can only be a member of aggregate, not %s `%s`", p.kind(), p.toErrMsg());
             ctd.type = Type.terror;
             ctd.errors = true;
             return;
@@ -4460,9 +4494,9 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
         if (sc.stc & STC.static_)
         {
             if (sc.stc & STC.shared_)
-                error(ctd.loc, "`shared static` has no effect on a constructor inside a `shared static` block. Use `shared static this()`");
+                eSink.error(ctd.loc, "`shared static` has no effect on a constructor inside a `shared static` block. Use `shared static this()`");
             else
-                error(ctd.loc, "`static` has no effect on a constructor inside a `static` block. Use `static this()`");
+                eSink.error(ctd.loc, "`static` has no effect on a constructor inside a `static` block. Use `static this()`");
         }
 
         sc.stc &= ~STC.static_; // not a static constructor
@@ -4494,7 +4528,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
             {
                 if (ctd.fbody || !(ctd.storage_class & STC.disable))
                 {
-                    .error(ctd.loc, "%s `%s` default constructor for structs only allowed " ~
+                    eSink.error(ctd.loc, "%s `%s` default constructor for structs only allowed " ~
                         "with `@disable`, no body, and no parameters", ctd.kind, ctd.toPrettyChars);
                     ctd.storage_class |= STC.disable;
                     ctd.fbody = null;
@@ -4508,12 +4542,12 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
             {
                 if (ctd.storage_class & STC.disable)
                 {
-                    .error(ctd.loc, "%s `%s` is marked `@disable`, so it cannot have default "~
+                    eSink.error(ctd.loc, "%s `%s` is marked `@disable`, so it cannot have default "~
                               "arguments for all parameters.", ctd.kind, ctd.toPrettyChars);
-                    errorSupplemental(ctd.loc, "Use `@disable this();` if you want to disable default initialization.");
+                    eSink.errorSupplemental(ctd.loc, "Use `@disable this();` if you want to disable default initialization.");
                 }
                 else
-                    .error(ctd.loc, "%s `%s` all parameters have default arguments, "~
+                    eSink.error(ctd.loc, "%s `%s` all parameters have default arguments, "~
                               "but structs cannot have default constructors.", ctd.kind, ctd.toPrettyChars);
             }
             else if ((dim == 1 || (dim > 1 && tf.parameterList[1].defaultArg)))
@@ -4557,7 +4591,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
         StructDeclaration ad = p.isStructDeclaration();
         if (!ad)
         {
-            error(pbd.loc, "postblit can only be a member of struct, not %s `%s`", p.kind(), p.toErrMsg());
+            eSink.error(pbd.loc, "postblit can only be a member of struct, not %s `%s`", p.kind(), p.toErrMsg());
             pbd.type = Type.terror;
             pbd.errors = true;
             return;
@@ -4593,7 +4627,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
         AggregateDeclaration ad = p.isAggregateDeclaration();
         if (!ad)
         {
-            error(dd.loc, "destructor can only be a member of aggregate, not %s `%s`", p.kind(), p.toErrMsg());
+            eSink.error(dd.loc, "destructor can only be a member of aggregate, not %s `%s`", p.kind(), p.toErrMsg());
             dd.type = Type.terror;
             dd.errors = true;
             return;
@@ -4668,7 +4702,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
         if (!p.isScopeDsymbol())
         {
             const(char)* s = isShared ? "shared " : "";
-            error(sd.loc, "`%sstatic` %s can only be member of module/aggregate/template, not %s `%s`", s, what, p.kind(), p.toErrMsg());
+            eSink.error(sd.loc, "`%sstatic` %s can only be member of module/aggregate/template, not %s `%s`", s, what, p.kind(), p.toErrMsg());
             sd.type = Type.terror;
             sd.errors = true;
             return;
@@ -4732,7 +4766,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
         if (save != LINK.d)
         {
             const(char)* s = isShared ? "shared " : "";
-            deprecation(sd.loc, "`%sstatic` %s can only be of D linkage", s, what);
+            eSink.deprecation(sd.loc, "`%sstatic` %s can only be of D linkage", s, what);
             // Just correct it
             sc.linkage = LINK.d;
         }
@@ -4763,11 +4797,11 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
             {
                 auto trust = sharedCtor.type.isTypeFunction().trust;
                 if (trust != TRUST.system && trust != TRUST.trusted)
-                    error(e.loc, "a module constructor using `@%s` must be `@system` or `@trusted`", Id.udaStandalone.toErrMsg());
+                    eSink.error(e.loc, "a module constructor using `@%s` must be `@system` or `@trusted`", Id.udaStandalone.toErrMsg());
                 sharedCtor.standalone = true;
             }
             else
-                .error(e.loc, "`@%s` can only be used on shared static constructors", Id.udaStandalone.toErrMsg());
+                eSink.error(e.loc, "`@%s` can only be used on shared static constructors", Id.udaStandalone.toErrMsg());
 
             return 1;
         });
@@ -4793,7 +4827,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
         AggregateDeclaration ad = p.isAggregateDeclaration();
         if (!ad)
         {
-            error(invd.loc, "`invariant` can only be a member of aggregate, not %s `%s`", p.kind(), p.toErrMsg());
+            eSink.error(invd.loc, "`invariant` can only be a member of aggregate, not %s `%s`", p.kind(), p.toErrMsg());
             invd.type = Type.terror;
             invd.errors = true;
             return;
@@ -4836,13 +4870,20 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
         Dsymbol p = utd.parent.pastMixin();
         if (!p.isScopeDsymbol())
         {
-            error(utd.loc, "`unittest` can only be a member of module/aggregate/template, not %s `%s`", p.kind(), p.toErrMsg());
+            eSink.error(utd.loc, "`unittest` can only be a member of module/aggregate/template, not %s `%s`", p.kind(), p.toErrMsg());
             utd.type = Type.terror;
             utd.errors = true;
             return;
         }
 
-        if (global.params.useUnitTests)
+        auto use = global.params.useUnitTests;
+        if (use && global.params.useUnitTestsRootOnly)
+        {
+            auto m = sc._module;
+            if (m && !m.isRoot())
+                use = false;
+        }
+        if (use)
         {
             if (!utd.type)
                 utd.type = new TypeFunction(ParameterList(), Type.tvoid, LINK.d, utd.storage_class);
@@ -4882,7 +4923,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
         Dsymbol p = sc.parent.pastMixin();
         if (!p.isAggregateDeclaration())
         {
-            error(nd.loc, "`new()` can only be a member of an aggregate, not %s `%s`",
+            eSink.error(nd.loc, "`new()` can only be a member of an aggregate, not %s `%s`",
                 p.kind(), p.toErrMsg());
             return;
         }
@@ -4949,7 +4990,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
 
             sd.storage_class |= sc.stc;
             if (sd.storage_class & STC.abstract_)
-                .error(sd.loc, "%s `%s` structs, unions cannot be `abstract`", sd.kind, sd.toPrettyChars);
+                eSink.error(sd.loc, "%s `%s` structs, unions cannot be `abstract`", sd.kind, sd.toPrettyChars);
 
             sd.userAttribDecl = sc.userAttribDecl;
 
@@ -4995,7 +5036,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
         {
             if (sd.type.ty != Terror)
             {
-                .error(sd.loc, "%s `%s` circular or forward reference", sd.kind, sd.toPrettyChars);
+                eSink.error(sd.loc, "%s `%s` circular or forward reference", sd.kind, sd.toPrettyChars);
                 sd.errors = true;
                 sd.type = Type.terror;
             }
@@ -5101,8 +5142,8 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
 
                 if (fcall && fcall.isStatic())
                 {
-                    .error(fcall.loc, "%s `%s` `static opCall` is hidden by constructors and can never be called", sd.kind, sd.toPrettyChars);
-                    errorSupplemental(fcall.loc, "Please use a factory method instead, or replace all constructors with `static opCall`.");
+                    eSink.error(fcall.loc, "%s `%s` `static opCall` is hidden by constructors and can never be called", sd.kind, sd.toPrettyChars);
+                    eSink.errorSupplemental(fcall.loc, "Please use a factory method instead, or replace all constructors with `static opCall`.");
                 }
             }
         }
@@ -5116,7 +5157,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
                 if (!isCCompatible(sd, sym))
                 {
                     // Already issued an error.
-                    errorSupplemental(sd.loc, "C %ss with the same name from different imports are merged", sd.kind);
+                    eSink.errorSupplemental(sd.loc, "C %ss with the same name from different imports are merged", sd.kind);
                 }
                 else {
                     /* This is two structs imported from different C files.
@@ -5133,7 +5174,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
                     printf("type = %d sym = %p, %s\n", sd.type.ty, sym, sym.toPrettyChars());
                 }
                 // https://issues.dlang.org/show_bug.cgi?id=19024
-                .error(sd.loc, "%s `%s` already exists at %s. Perhaps in another function with the same name?", sd.kind, sd.toPrettyChars, sym.loc.toChars());
+                eSink.error(sd.loc, "%s `%s` already exists at %s. Perhaps in another function with the same name?", sd.kind, sd.toPrettyChars, sym.loc.toChars());
             }
         }
 
@@ -5158,7 +5199,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
             // Deprecated in 2.100
             // Make an error in 2.110
             if (sd.storage_class & STC.scope_)
-                deprecation(sd.loc, "`scope` as a type constraint is deprecated.  Use `scope` at the usage site.");
+                eSink.deprecation(sd.loc, "`scope` as a type constraint is deprecated.  Use `scope` at the usage site.");
         }
         //printf("-StructDeclaration::semantic(this=%p, '%s', sizeok = %d)\n", sd, sd.toPrettyChars(), sd.sizeok);
     }
@@ -5167,7 +5208,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
     // Checks if two structs are compatible
     // Implements the rules according to C23 6.2.7
     //
-    static bool isCCompatible(StructDeclaration a, StructDeclaration b)
+    bool isCCompatible(StructDeclaration a, StructDeclaration b)
     {
         // Get the name of a type, while avoiding exposing "__tagXXX" anonymous structs
         static const(char)* typeName(Type t)
@@ -5182,14 +5223,14 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
 
         void incompatError()
         {
-            .error(a.loc, "%s `%s` already exists with an incompatible definition.",
+            eSink.error(a.loc, "%s `%s` already exists with an incompatible definition.",
                     a.kind, typeName(a.type));
-            errorSupplemental(b.loc, "previously declared here");
+            eSink.errorSupplemental(b.loc, "previously declared here");
         }
 
 
         // For recursive calls into unnamed structs (so Type.equals() doesn't work).
-        static bool isCCompatibleUnnamedStruct(Type a, Type b)
+        bool isCCompatibleUnnamedStruct(Type a, Type b)
         {
             TypeStruct ats = a.isTypeStruct();
             if (!ats) return false;
@@ -5205,7 +5246,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
         }
 
         // Treat arrays of anonymous structs/unions as compatible when element types match.
-        static bool isCCompatibleType(Type a, Type b)
+        bool isCCompatibleType(Type a, Type b)
         {
             if (a.equals(b))
                 return true;
@@ -5223,7 +5264,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
         if (a.fields.length != b.fields.length)
         {
             incompatError();
-            errorSupplemental(a.loc, "`%s` has %u field(s) while `%s` has %u field(s)",
+            eSink.errorSupplemental(a.loc, "`%s` has %u field(s) while `%s` has %u field(s)",
                     a.toPrettyChars(), cast(uint)a.fields.length, b.toPrettyChars(), cast(uint)b.fields.length);
             return false;
         }
@@ -5231,39 +5272,39 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
         if ((a.isUnionDeclaration() is null) != (b.isUnionDeclaration() is null))
         {
             incompatError();
-            errorSupplemental(a.loc, "`%s` is a %s while `%s` is a %s",
+            eSink.errorSupplemental(a.loc, "`%s` is a %s while `%s` is a %s",
                     a.toPrettyChars(), a.kind, b.toPrettyChars(), b.kind);
             return false;
         }
         if (a.alignment != b.alignment)
         {
             incompatError();
-            errorSupplemental(a.loc, "`%s` has different alignment or packing", a.toPrettyChars());
+            eSink.errorSupplemental(a.loc, "`%s` has different alignment or packing", a.toPrettyChars());
             if (a.alignment.isDefault() && ! b.alignment.isDefault())
             {
-                errorSupplemental(a.loc, "`%s` alignment: default", a.toPrettyChars());
-                errorSupplemental(b.loc, "`%s` alignment: %u",
+                eSink.errorSupplemental(a.loc, "`%s` alignment: default", a.toPrettyChars());
+                eSink.errorSupplemental(b.loc, "`%s` alignment: %u",
                         b.toPrettyChars(), cast(uint)b.alignment.get());
             }
             else if (!a.alignment.isDefault() && b.alignment.isDefault())
             {
-                errorSupplemental(a.loc, "`%s` alignment: %u",
+                eSink.errorSupplemental(a.loc, "`%s` alignment: %u",
                         a.toPrettyChars(), cast(uint)a.alignment.get());
-                errorSupplemental(b.loc, "`%s` alignment: default",
+                eSink.errorSupplemental(b.loc, "`%s` alignment: default",
                         b.toPrettyChars());
             }
             else if (a.alignment.get() != b.alignment.get())
             {
-                errorSupplemental(a.loc, "`%s` alignment: %u",
+                eSink.errorSupplemental(a.loc, "`%s` alignment: %u",
                         a.toPrettyChars(), cast(uint)a.alignment.get());
-                errorSupplemental(b.loc, "`%s` alignment: %u",
+                eSink.errorSupplemental(b.loc, "`%s` alignment: %u",
                         b.toPrettyChars(), cast(uint)b.alignment.get());
             }
             if (a.alignment.isPack() != b.alignment.isPack())
             {
-                errorSupplemental(a.loc, "`%s` packed: %s",
+                eSink.errorSupplemental(a.loc, "`%s` packed: %s",
                         a.toPrettyChars(), a.alignment.isPack()?"true".ptr:"false".ptr);
-                errorSupplemental(b.loc, "`%s` packed: %s",
+                eSink.errorSupplemental(b.loc, "`%s` packed: %s",
                         b.toPrettyChars(), b.alignment.isPack()?"true".ptr:"false".ptr);
             }
             return false;
@@ -5283,10 +5324,10 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
                 if (a_field.type.isTypeError()) return false;
                 if (b_field.type.isTypeError()) return false;
 
-                errorSupplemental(a_field.loc, "Field %u differs in type", cast(uint)i);
-                errorSupplemental(a_field.loc, "typeof(%s): %s",
+                eSink.errorSupplemental(a_field.loc, "Field %u differs in type", cast(uint)i);
+                eSink.errorSupplemental(a_field.loc, "typeof(%s): %s",
                         a_field.toChars(), typeName(a_field.type));
-                errorSupplemental(b_field.loc, "typeof(%s): %s",
+                eSink.errorSupplemental(b_field.loc, "typeof(%s): %s",
                         b_field.toChars(), typeName(b_field.type));
                 return false;
             }
@@ -5298,36 +5339,36 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
             if (a_field.alignment != b_field.alignment)
             {
                 incompatError();
-                errorSupplemental(a_field.loc, "Field %u differs in alignment or packing", cast(uint)i);
+                eSink.errorSupplemental(a_field.loc, "Field %u differs in alignment or packing", cast(uint)i);
                 if (a_field.alignment.isDefault() && ! b_field.alignment.isDefault())
                 {
-                    errorSupplemental(a_field.loc, "`%s.%s` alignment: default",
+                    eSink.errorSupplemental(a_field.loc, "`%s.%s` alignment: default",
                             a.toPrettyChars(),a_field.toChars());
-                    errorSupplemental(b_field.loc, "`%s.%s` alignment: %u",
+                    eSink.errorSupplemental(b_field.loc, "`%s.%s` alignment: %u",
                             b.toPrettyChars(), b_field.toChars(), cast(uint)b_field.alignment.get());
                 }
                 else if (!a_field.alignment.isDefault() && b_field.alignment.isDefault())
                 {
-                    errorSupplemental(a_field.loc, "`%s.%s` alignment: %u",
+                    eSink.errorSupplemental(a_field.loc, "`%s.%s` alignment: %u",
                             a.toPrettyChars(), a_field.toChars(), cast(uint)a_field.alignment.get());
-                    errorSupplemental(b_field.loc, "`%s.%s` alignment: default",
+                    eSink.errorSupplemental(b_field.loc, "`%s.%s` alignment: default",
                             b.toPrettyChars(), b_field.toChars());
                 }
                 else if (a_field.alignment.get() != b_field.alignment.get())
                 {
-                    errorSupplemental(a_field.loc, "`%s.%s` alignment: %u",
+                    eSink.errorSupplemental(a_field.loc, "`%s.%s` alignment: %u",
                             a.toPrettyChars(), a_field.toChars(),
                             cast(uint)a_field.alignment.get());
-                    errorSupplemental(b_field.loc, "`%s.%s` alignment: %u",
+                    eSink.errorSupplemental(b_field.loc, "`%s.%s` alignment: %u",
                             b.toPrettyChars(), b_field.toChars(),
                             cast(uint)b_field.alignment.get());
                 }
                 if (a_field.alignment.isPack() != b_field.alignment.isPack())
                 {
-                    errorSupplemental(a_field.loc, "`%s.%s` packed: %s",
+                    eSink.errorSupplemental(a_field.loc, "`%s.%s` packed: %s",
                             a.toPrettyChars(), a_field.toChars(),
                             a_field.alignment.isPack()?"true".ptr:"false".ptr);
-                    errorSupplemental(b_field.loc, "`%s.%s` packed: %s",
+                    eSink.errorSupplemental(b_field.loc, "`%s.%s` packed: %s",
                             b.toPrettyChars(), b_field.toChars(),
                             b_field.alignment.isPack()?"true".ptr:"false".ptr);
                 }
@@ -5342,26 +5383,26 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
                 if (!b_field.ident.isAnonymous())
                 {
                     incompatError();
-                    errorSupplemental(a_field.loc, "Field %u differs in name", cast(uint)i);
-                    errorSupplemental(a_field.loc, "(anonymous)", a_field.ident.toChars());
-                    errorSupplemental(b_field.loc, "%s", b_field.ident.toChars());
+                    eSink.errorSupplemental(a_field.loc, "Field %u differs in name", cast(uint)i);
+                    eSink.errorSupplemental(a_field.loc, "(anonymous)", a_field.ident.toChars());
+                    eSink.errorSupplemental(b_field.loc, "%s", b_field.ident.toChars());
                     return false;
                 }
             }
             else if (b_field.ident.isAnonymous())
             {
                 incompatError();
-                errorSupplemental(a_field.loc, "Field %u differs in name", cast(uint)i);
-                errorSupplemental(a_field.loc, "%s", a_field.ident.toChars());
-                errorSupplemental(b_field.loc, "(anonymous)");
+                eSink.errorSupplemental(a_field.loc, "Field %u differs in name", cast(uint)i);
+                eSink.errorSupplemental(a_field.loc, "%s", a_field.ident.toChars());
+                eSink.errorSupplemental(b_field.loc, "(anonymous)");
                 return false;
             }
             else if (a_field.ident != b_field.ident)
             {
                 incompatError();
-                errorSupplemental(a_field.loc, "Field %u differs in name", cast(uint)i);
-                errorSupplemental(a_field.loc, "%s", a_field.ident.toChars());
-                errorSupplemental(b_field.loc, "%s", b_field.ident.toChars());
+                eSink.errorSupplemental(a_field.loc, "Field %u differs in name", cast(uint)i);
+                eSink.errorSupplemental(a_field.loc, "%s", a_field.ident.toChars());
+                eSink.errorSupplemental(b_field.loc, "%s", b_field.ident.toChars());
                 return false;
             }
 
@@ -5373,19 +5414,19 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
             if ((bfa is null) != (bfb is null))
             {
                 incompatError();
-                errorSupplemental(a_field.loc, "Field %u differs in being a bitfield", cast(uint)i);
+                eSink.errorSupplemental(a_field.loc, "Field %u differs in being a bitfield", cast(uint)i);
                 if (bfa is null)
                 {
-                    errorSupplemental(a_field.loc, "`%s.%s` is not a bitfield",
+                    eSink.errorSupplemental(a_field.loc, "`%s.%s` is not a bitfield",
                             a.toPrettyChars(), a_field.toChars());
-                    errorSupplemental(b_field.loc, "`%s.%s` is a bitfield",
+                    eSink.errorSupplemental(b_field.loc, "`%s.%s` is a bitfield",
                             b.toPrettyChars(), b_field.toChars());
                 }
                 else if (bfb is null)
                 {
-                    errorSupplemental(a_field.loc, "`%s.%s` *is a bitfield",
+                    eSink.errorSupplemental(a_field.loc, "`%s.%s` *is a bitfield",
                             a.toPrettyChars(), a_field.toChars());
-                    errorSupplemental(b_field.loc, "`%s.%s` is not a bitfield",
+                    eSink.errorSupplemental(b_field.loc, "`%s.%s` is not a bitfield",
                             b.toPrettyChars(), b_field.toChars());
                 }
                 return false;
@@ -5395,10 +5436,10 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
                 if (bfa.fieldWidth != bfb.fieldWidth)
                 {
                     incompatError();
-                    errorSupplemental(a_field.loc, "Field %u differs in bitfield width", cast(uint)i);
-                    errorSupplemental(a_field.loc, "`%s.%s`: %u",
+                    eSink.errorSupplemental(a_field.loc, "Field %u differs in bitfield width", cast(uint)i);
+                    eSink.errorSupplemental(a_field.loc, "`%s.%s`: %u",
                             a.toPrettyChars(), a_field.toChars(), bfa.fieldWidth);
-                    errorSupplemental(b_field.loc, "`%s.%s`: %u",
+                    eSink.errorSupplemental(b_field.loc, "`%s.%s`: %u",
                             b.toPrettyChars(), b_field.toChars(), bfb.fieldWidth);
                     return false;
                 }
@@ -5468,7 +5509,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
 
             cldec.storage_class |= sc.stc;
             if (cldec.storage_class & STC.auto_)
-                .error(cldec.loc, "%s `%s` storage class `auto` is invalid when declaring a class, did you mean to use `scope`?", cldec.kind, cldec.toPrettyChars);
+                eSink.error(cldec.loc, "%s `%s` storage class `auto` is invalid when declaring a class, did you mean to use `scope`?", cldec.kind, cldec.toPrettyChars);
             if (cldec.storage_class & STC.scope_)
                 cldec.stack = true;
             if (cldec.storage_class & STC.abstract_)
@@ -5568,7 +5609,9 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
                 if (!tc)
                 {
                     if (b.type != Type.terror)
-                        .error(cldec.loc, "%s `%s` base type must be `class` or `interface`, not `%s`", cldec.kind, cldec.toPrettyChars, b.type.toErrMsg());
+                        eSink.error(cldec.loc, "%s `%s` base type must be `class` or `interface`, not `%s`", cldec.kind, cldec.toPrettyChars, b.type.toErrMsg());
+                    else
+                        cldec.errors = true;
                     cldec.baseclasses.remove(0);
                     goto L7;
                 }
@@ -5588,7 +5631,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
                 {
                     if (cdb == cldec)
                     {
-                        .error(cldec.loc, "%s `%s` circular inheritance", cldec.kind, cldec.toPrettyChars);
+                        eSink.error(cldec.loc, "%s `%s` circular inheritance", cldec.kind, cldec.toPrettyChars);
                         cldec.baseclasses.remove(0);
                         goto L7;
                     }
@@ -5632,29 +5675,29 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
                     {
                         if (multiClassError == 0)
                         {
-                            .error(cldec.loc,"`%s`: base class must be specified first, " ~
+                            eSink.error(cldec.loc,"`%s`: base class must be specified first, " ~
                                   "before any interfaces.", cldec.toPrettyChars());
                             multiClassError += 1;
                         }
                         else if (multiClassError >= 1)
                         {
                                 if(multiClassError == 1)
-                                    .error(cldec.loc, "`%s`: multiple class inheritance is not supported." ~
+                                    eSink.error(cldec.loc, "`%s`: multiple class inheritance is not supported." ~
                                           " Use multiple interface inheritance and/or composition.", cldec.toPrettyChars());
                                 multiClassError += 1;
 
                                 if (tc.sym.fields.length)
-                                    errorSupplemental(cldec.loc,"`%s` has fields, consider making it a member of `%s`",
+                                    eSink.errorSupplemental(cldec.loc,"`%s` has fields, consider making it a member of `%s`",
                                                       b.type.toChars(), cldec.type.toChars());
                                 else
-                                    errorSupplemental(cldec.loc,"`%s` has no fields, consider making it an `interface`",
+                                    eSink.errorSupplemental(cldec.loc,"`%s` has no fields, consider making it an `interface`",
                                                       b.type.toChars());
                         }
                     }
                     // It's something else: e.g. `int` in `class Foo : Bar, int { ... }`
                     else if (b.type != Type.terror)
                     {
-                        error(cldec.loc,"`%s`: base type must be `interface`, not `%s`",
+                        eSink.error(cldec.loc,"`%s`: base type must be `interface`, not `%s`",
                               cldec.toPrettyChars(), b.type.toErrMsg());
                     }
                     cldec.baseclasses.remove(i);
@@ -5667,7 +5710,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
                     BaseClass* b2 = (*cldec.baseclasses)[j];
                     if (b2.sym == tc.sym)
                     {
-                        .error(cldec.loc, "%s `%s` inherits from duplicate interface `%s`", cldec.kind, cldec.toPrettyChars, b2.sym.toErrMsg());
+                        eSink.error(cldec.loc, "%s `%s` inherits from duplicate interface `%s`", cldec.kind, cldec.toPrettyChars, b2.sym.toErrMsg());
                         cldec.baseclasses.remove(i);
                         continue BCLoop;
                     }
@@ -5734,7 +5777,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
             if (cldec.baseClass)
             {
                 if (cldec.baseClass.storage_class & STC.final_)
-                    .error(cldec.loc, "%s `%s` cannot inherit from class `%s` because it is `final`", cldec.kind, cldec.toPrettyChars, cldec.baseClass.toErrMsg());
+                    eSink.error(cldec.loc, "%s `%s` cannot inherit from class `%s` because it is `final`", cldec.kind, cldec.toPrettyChars, cldec.baseClass.toErrMsg());
 
                 // Inherit properties from base class
                 if (cldec.baseClass.isCOMclass())
@@ -5742,7 +5785,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
                 if (cldec.baseClass.isCPPclass())
                     cldec.classKind = ClassKind.cpp;
                 if (cldec.classKind != cldec.baseClass.classKind)
-                    .error(cldec.loc, "%s `%s` with %s linkage cannot inherit from class `%s` with %s linkage", cldec.kind, cldec.toPrettyChars,
+                    eSink.error(cldec.loc, "%s `%s` with %s linkage cannot inherit from class `%s` with %s linkage", cldec.kind, cldec.toPrettyChars,
                         ClassKindToChars(cldec.classKind), cldec.baseClass.toErrMsg(), ClassKindToChars(cldec.baseClass.classKind));
 
                 if (cldec.baseClass.stack)
@@ -5760,7 +5803,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
                     cldec.com = true;
                 if (cldec.classKind == ClassKind.cpp && !b.sym.isCPPinterface())
                 {
-                    .error(cldec.loc, "C++ class `%s` cannot implement D interface `%s`",
+                    eSink.error(cldec.loc, "C++ class `%s` cannot implement D interface `%s`",
                         cldec.toPrettyChars(), b.sym.toPrettyChars());
                 }
             }
@@ -5822,7 +5865,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
             {
                 if (cldec.classKind == ClassKind.cpp && cldec.baseClass.vtbl.length == 0)
                 {
-                    .error(cldec.loc, "%s `%s` C++ base class `%s` needs at least one virtual function", cldec.kind, cldec.toPrettyChars, cldec.baseClass.toErrMsg());
+                    eSink.error(cldec.loc, "%s `%s` C++ base class `%s` needs at least one virtual function", cldec.kind, cldec.toPrettyChars, cldec.baseClass.toErrMsg());
                 }
 
                 // Copy vtbl[] from base class
@@ -5848,7 +5891,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
             {
                 // Use the base class's 'this' member
                 if (cldec.storage_class & STC.static_)
-                    .error(cldec.loc, "%s `%s` static class cannot inherit from nested class `%s`", cldec.kind, cldec.toPrettyChars, cldec.baseClass.toErrMsg());
+                    eSink.error(cldec.loc, "%s `%s` static class cannot inherit from nested class `%s`", cldec.kind, cldec.toPrettyChars, cldec.baseClass.toErrMsg());
                 if (cldec.toParentLocal() != cldec.baseClass.toParentLocal() &&
                     (!cldec.toParentLocal() ||
                      !cldec.baseClass.toParentLocal().getType() ||
@@ -5856,14 +5899,14 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
                 {
                     if (cldec.toParentLocal())
                     {
-                        .error(cldec.loc, "%s `%s` is nested within `%s`, but super class `%s` is nested within `%s`", cldec.kind, cldec.toPrettyChars,
+                        eSink.error(cldec.loc, "%s `%s` is nested within `%s`, but super class `%s` is nested within `%s`", cldec.kind, cldec.toPrettyChars,
                             cldec.toParentLocal().toErrMsg(),
                             cldec.baseClass.toErrMsg(),
                             cldec.baseClass.toParentLocal().toErrMsg());
                     }
                     else
                     {
-                        .error(cldec.loc, "%s `%s` is not nested, but super class `%s` is nested within `%s`", cldec.kind, cldec.toPrettyChars,
+                        eSink.error(cldec.loc, "%s `%s` is not nested, but super class `%s` is nested within `%s`", cldec.kind, cldec.toPrettyChars,
                             cldec.baseClass.toErrMsg(),
                             cldec.baseClass.toParentLocal().toErrMsg());
                     }
@@ -5877,14 +5920,14 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
                     {
                         if (cldec.toParent2() && cldec.toParent2() != cldec.toParentLocal())
                         {
-                            .error(cldec.loc, "%s `%s` needs the frame pointer of `%s`, but super class `%s` needs the frame pointer of `%s`", cldec.kind, cldec.toPrettyChars,
+                            eSink.error(cldec.loc, "%s `%s` needs the frame pointer of `%s`, but super class `%s` needs the frame pointer of `%s`", cldec.kind, cldec.toPrettyChars,
                                 cldec.toParent2().toErrMsg(),
                                 cldec.baseClass.toErrMsg(),
                                 cldec.baseClass.toParent2().toErrMsg());
                         }
                         else
                         {
-                            .error(cldec.loc, "%s `%s` doesn't need a frame pointer, but super class `%s` needs the frame pointer of `%s`", cldec.kind, cldec.toPrettyChars,
+                            eSink.error(cldec.loc, "%s `%s` doesn't need a frame pointer, but super class `%s` needs the frame pointer of `%s`", cldec.kind, cldec.toPrettyChars,
                                 cldec.baseClass.toErrMsg(),
                                 cldec.baseClass.toParent2().toErrMsg());
                         }
@@ -5943,7 +5986,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
             foreach (v; cldec.fields)
             {
                 if (v.storage_class & STC.nodefaultctor)
-                    error(v.loc, "field `%s` must be initialized in constructor", v.toErrMsg());
+                    eSink.error(v.loc, "field `%s` must be initialized in constructor", v.toErrMsg());
             }
         }
 
@@ -5979,7 +6022,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
             }
             else
             {
-                .error(cldec.loc, "%s `%s` cannot implicitly generate a default constructor when base class `%s` is missing a default constructor", cldec.kind, cldec.toPrettyChars,
+                eSink.error(cldec.loc, "%s `%s` cannot implicitly generate a default constructor when base class `%s` is missing a default constructor", cldec.kind, cldec.toPrettyChars,
                     cldec.baseClass.toPrettyChars());
             }
         }
@@ -6008,7 +6051,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
         if (auto f = hasIdentityOpAssign(cldec, sc2))
         {
             if (!(f.storage_class & STC.disable))
-                .error(f.loc, "%s `%s` identity assignment operator overload is illegal", cldec.kind, cldec.toPrettyChars);
+                eSink.error(f.loc, "%s `%s` identity assignment operator overload is illegal", cldec.kind, cldec.toPrettyChars);
         }
 
         cldec.inv = buildInv(cldec, sc2);
@@ -6028,7 +6071,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
             cldec.isAbstract();               // recalculate
             if (cldec.isabstract != isabstractsave)
             {
-                .error(cldec.loc, "%s `%s` cannot infer `abstract` attribute due to circular dependencies", cldec.kind, cldec.toPrettyChars);
+                eSink.error(cldec.loc, "%s `%s` cannot infer `abstract` attribute due to circular dependencies", cldec.kind, cldec.toPrettyChars);
             }
         }
 
@@ -6041,7 +6084,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
                 printf("this = %p %s\n", cldec, cldec.toPrettyChars());
                 printf("type = %d sym = %p, %s\n", cldec.type.ty, cd, cd.toPrettyChars());
             }
-            .error(cldec.loc, "%s `%s` already exists at %s. Perhaps in another function with the same name?", cldec.kind, cldec.toPrettyChars, cd.loc.toChars());
+            eSink.error(cldec.loc, "%s `%s` already exists at %s. Perhaps in another function with the same name?", cldec.kind, cldec.toPrettyChars, cd.loc.toChars());
         }
 
         if (global.errors != errors || (cldec.baseClass && cldec.baseClass.errors))
@@ -6062,7 +6105,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
                 if (!vd.isThisDeclaration() &&
                     vd.visible() >= Visibility(Visibility.Kind.public_))
                 {
-                    .error(vd.loc, "%s `%s` Field members of a `synchronized` class cannot be `%s`", vd.kind, vd.toPrettyChars,
+                    eSink.error(vd.loc, "%s `%s` Field members of a `synchronized` class cannot be `%s`", vd.kind, vd.toPrettyChars,
                         visibilityToChars(vd.visible().kind));
                 }
             }
@@ -6082,7 +6125,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
             // Make an error in 2.110
             // Don't forget to remove code at https://github.com/dlang/dmd/blob/b2f8274ba76358607fc3297a1e9f361480f9bcf9/src/dmd/dsymbolsem.d#L1032-L1036
             if (cldec.storage_class & STC.scope_)
-                deprecation(cldec.loc, "`scope` as a type constraint is deprecated.  Use `scope` at the usage site.");
+                eSink.deprecation(cldec.loc, "`scope` as a type constraint is deprecated.  Use `scope` at the usage site.");
         }
     }
 
@@ -6224,7 +6267,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
                 if (!tc || !tc.sym.isInterfaceDeclaration())
                 {
                     if (b.type != Type.terror)
-                        .error(idec.loc, "%s `%s` base type must be `interface`, not `%s`", idec.kind, idec.toPrettyChars, b.type.toErrMsg());
+                        eSink.error(idec.loc, "%s `%s` base type must be `interface`, not `%s`", idec.kind, idec.toPrettyChars, b.type.toErrMsg());
                     idec.baseclasses.remove(i);
                     continue;
                 }
@@ -6235,14 +6278,14 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
                     BaseClass* b2 = (*idec.baseclasses)[j];
                     if (b2.sym == tc.sym)
                     {
-                        .error(idec.loc, "%s `%s` inherits from duplicate interface `%s`", idec.kind, idec.toPrettyChars, b2.sym.toErrMsg());
+                        eSink.error(idec.loc, "%s `%s` inherits from duplicate interface `%s`", idec.kind, idec.toPrettyChars, b2.sym.toErrMsg());
                         idec.baseclasses.remove(i);
                         continue BCLoop;
                     }
                 }
                 if (tc.sym == idec || idec.isBaseOf2(tc.sym))
                 {
-                    .error(idec.loc, "%s `%s` circular inheritance of interface", idec.kind, idec.toPrettyChars);
+                    eSink.error(idec.loc, "%s `%s` circular inheritance of interface", idec.kind, idec.toPrettyChars);
                     idec.baseclasses.remove(i);
                     continue;
                 }
@@ -6391,7 +6434,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
             // Made an error in 2.100, but removal depends on `scope class` being removed too
             // Don't forget to remove code at https://github.com/dlang/dmd/blob/b2f8274ba76358607fc3297a1e9f361480f9bcf9/src/dmd/dsymbolsem.d#L1032-L1036
             if (idec.storage_class & STC.scope_)
-                error(idec.loc, "`scope` as a type constraint is obsolete.  Use `scope` at the usage site.");
+                eSink.error(idec.loc, "`scope` as a type constraint is obsolete.  Use `scope` at the usage site.");
         }
     }
 }
@@ -6428,11 +6471,13 @@ private extern(C++) class AddMemberVisitor : Visitor
 
     Scope* sc;
     ScopeDsymbol sds;
+    ErrorSink eSink;
 
-    this(Scope* sc, ScopeDsymbol sds) @safe
+    this(Scope* sc, ScopeDsymbol sds)
     {
         this.sc = sc;
         this.sds = sds;
+        this.eSink = global.errorSink;
     }
 
     override void visit(Dsymbol dsym)
@@ -6493,7 +6538,7 @@ private extern(C++) class AddMemberVisitor : Visitor
             if (dsym.ident == Id.__sizeof ||
                 !(sc && sc.inCfile) && (dsym.ident == Id.__xalignof || dsym.ident == Id._mangleof))
             {
-                .error(dsym.loc, "%s `%s` `.%s` property cannot be redefined", dsym.kind, dsym.toPrettyChars, dsym.ident.toErrMsg());
+                eSink.error(dsym.loc, "%s `%s` `.%s` property cannot be redefined", dsym.kind, dsym.toPrettyChars, dsym.ident.toErrMsg());
                 dsym.errors = true;
             }
         }
@@ -6590,7 +6635,7 @@ private extern(C++) class AddMemberVisitor : Visitor
             {
                 Package pkg = m.parent ? m.parent.isPackage() : null;
                 if (!pkg || !visd.visibility.pkg.isAncestorPackageOf(pkg))
-                    .error(visd.loc, "%s `%s` does not bind to one of ancestor packages of module `%s`", visd.kind(), visd.toPrettyChars(false), m.toPrettyChars(true));
+                    eSink.error(visd.loc, "%s `%s` does not bind to one of ancestor packages of module `%s`", visd.kind(), visd.toPrettyChars(false), m.toPrettyChars(true));
             }
         }
         attribAddMember(visd, sc, sds);
@@ -6650,14 +6695,14 @@ private extern(C++) class AddMemberVisitor : Visitor
         // just make sure subsequent debug declarations work.
         if (!m)
         {
-            .error(ds.loc, "%s `%s` declaration must be at module level", ds.kind, ds.toPrettyChars);
+            eSink.error(ds.loc, "%s `%s` declaration must be at module level", ds.kind, ds.toPrettyChars);
             ds.errors = true;
         }
         else
         {
             if (m.debugidsNot && findCondition(*m.debugidsNot, ds.ident))
             {
-                .error(ds.loc, "%s `%s` defined after use", ds.kind, ds.toPrettyChars);
+                eSink.error(ds.loc, "%s `%s` defined after use", ds.kind, ds.toPrettyChars);
                 ds.errors = true;
             }
             if (!m.debugids)
@@ -6675,14 +6720,14 @@ private extern(C++) class AddMemberVisitor : Visitor
         VersionCondition.checkReserved(vs.loc, vs.ident.toString());
         if (!m)
         {
-            .error(vs.loc, "%s `%s` declaration must be at module level", vs.kind, vs.toPrettyChars);
+            eSink.error(vs.loc, "%s `%s` declaration must be at module level", vs.kind, vs.toPrettyChars);
             vs.errors = true;
         }
         else
         {
             if (m.versionidsNot && findCondition(*m.versionidsNot, vs.ident))
             {
-                .error(vs.loc, "%s `%s` defined after use", vs.kind, vs.toPrettyChars);
+                eSink.error(vs.loc, "%s `%s` defined after use", vs.kind, vs.toPrettyChars);
                 vs.errors = true;
             }
             if (!m.versionids)
@@ -6960,6 +7005,7 @@ void aliasSemantic(AliasDeclaration ds, Scope* sc)
     // type. If it is a symbol, then `.aliassym` is set and type is `null` -
     // toAlias() will return `.aliassym`
 
+    auto eSink = global.errorSink;
     const errors = global.errors;
     Type oldtype = ds.type;
 
@@ -6990,9 +7036,9 @@ void aliasSemantic(AliasDeclaration ds, Scope* sc)
                 // don't error for `var1.static_symbol`
                 if (s && s.needThis())
                 {
-                    error(ds.loc, "cannot alias %s member `%s` of variable `%s`",
+                    eSink.error(ds.loc, "cannot alias %s member `%s` of variable `%s`",
                         s.kind(), s.toErrMsg(), mt.ident.toErrMsg());
-                    errorSupplemental(ds.loc, "Use `typeof(%s)` instead to preserve behaviour",
+                    eSink.errorSupplemental(ds.loc, "Use `typeof(%s)` instead to preserve behaviour",
                         mt.ident.toChars());
                 }
             }
@@ -7002,7 +7048,7 @@ void aliasSemantic(AliasDeclaration ds, Scope* sc)
         {
             if (tident.ident is ds.ident && !tident.idents.length)
             {
-                error(ds.loc, "`alias %s = %s;` cannot alias itself, use a qualified name to create an overload set",
+                eSink.error(ds.loc, "`alias %s = %s;` cannot alias itself, use a qualified name to create an overload set",
                     ds.ident.toErrMsg(), tident.ident.toErrMsg());
                 ds.type = Type.terror;
             }
@@ -7018,7 +7064,7 @@ void aliasSemantic(AliasDeclaration ds, Scope* sc)
         return errorRet();
     if (s == ds)
     {
-        .error(ds.loc, "%s `%s` cannot resolve", ds.kind, ds.toPrettyChars);
+        eSink.error(ds.loc, "%s `%s` cannot resolve", ds.kind, ds.toPrettyChars);
         return errorRet();
     }
     if (!s || !s.isEnumMember())
@@ -7049,7 +7095,7 @@ void aliasSemantic(AliasDeclaration ds, Scope* sc)
                 if (!s)
                 {
                     if (e.op != EXP.error)
-                        .error(ds.loc, "%s `%s` cannot alias an expression `%s`", ds.kind, ds.toPrettyChars, e.toErrMsg());
+                        eSink.error(ds.loc, "%s `%s` cannot alias an expression `%s`", ds.kind, ds.toPrettyChars, e.toErrMsg());
                     return errorRet();
                 }
             }
@@ -7087,6 +7133,7 @@ void aliasSemantic(AliasDeclaration ds, Scope* sc)
 private void aliasAssignSemantic(AliasAssign ds, Scope* sc)
 {
     //printf("AliasAssign::semantic() %p,  %s\n", ds, ds.ident.toChars());
+    auto eSink = global.errorSink;
 
     void errorRet()
     {
@@ -7105,7 +7152,7 @@ private void aliasAssignSemantic(AliasAssign ds, Scope* sc)
         Dsymbol as = sc.search(ds.loc, ds.ident, scopesym);
         if (!as)
         {
-            .error(ds.loc, "%s `%s` undefined identifier `%s`", ds.kind, ds.toPrettyChars, ds.ident.toErrMsg());
+            eSink.error(ds.loc, "%s `%s` undefined identifier `%s`", ds.kind, ds.toPrettyChars, ds.ident.toErrMsg());
             return null;
         }
         if (as.errors)
@@ -7114,13 +7161,13 @@ private void aliasAssignSemantic(AliasAssign ds, Scope* sc)
         auto ad = as.isAliasDeclaration();
         if (!ad)
         {
-            .error(ds.loc, "%s `%s` identifier `%s` must be an alias declaration", ds.kind, ds.toPrettyChars, as.toErrMsg());
+            eSink.error(ds.loc, "%s `%s` identifier `%s` must be an alias declaration", ds.kind, ds.toPrettyChars, as.toErrMsg());
             return null;
         }
 
         if (ad.overnext)
         {
-            error(ds.loc, "%s `%s` cannot reassign overloaded alias", ds.kind, ds.toPrettyChars);
+            eSink.error(ds.loc, "%s `%s` cannot reassign overloaded alias", ds.kind, ds.toPrettyChars);
             return null;
         }
 
@@ -7130,12 +7177,12 @@ private void aliasAssignSemantic(AliasAssign ds, Scope* sc)
         {
             if (!adParent)
                 adParent = ds.toParent();
-            .error(ds.loc, "`%s` must have same parent `%s` as alias `%s`", ds.ident.toErrMsg(), adParent.toErrMsg(), ad.toErrMsg());
+            eSink.error(ds.loc, "`%s` must have same parent `%s` as alias `%s`", ds.ident.toErrMsg(), adParent.toErrMsg(), ad.toErrMsg());
             return null;
         }
         if (!adParent.isTemplateInstance())
         {
-            .error(ds.loc, "%s `%s` must be a member of a template", ds.kind, ds.toPrettyChars);
+            eSink.error(ds.loc, "%s `%s` must be a member of a template", ds.kind, ds.toPrettyChars);
             return null;
         }
 
@@ -7149,7 +7196,7 @@ private void aliasAssignSemantic(AliasAssign ds, Scope* sc)
     if (aliassym.wasRead)
     {
         if (!aliassym.errors)
-            error(ds.loc, "%s was read, so cannot reassign", aliassym.toErrMsg());
+            eSink.error(ds.loc, "%s was read, so cannot reassign", aliassym.toErrMsg());
         aliassym.errors = true;
         return errorRet();
     }
@@ -7217,7 +7264,7 @@ private void aliasAssignSemantic(AliasAssign ds, Scope* sc)
         return errorRet();
     if (s == aliassym)
     {
-        .error(ds.loc, "%s `%s` cannot resolve", ds.kind, ds.toPrettyChars);
+        eSink.error(ds.loc, "%s `%s` cannot resolve", ds.kind, ds.toPrettyChars);
         return errorRet();
     }
 
@@ -7249,7 +7296,7 @@ private void aliasAssignSemantic(AliasAssign ds, Scope* sc)
                 if (!s)
                 {
                     if (e.op != EXP.error)
-                        .error(ds.loc, "%s `%s` cannot alias an expression `%s`", ds.kind, ds.toPrettyChars, e.toErrMsg());
+                        eSink.error(ds.loc, "%s `%s` cannot alias an expression `%s`", ds.kind, ds.toPrettyChars, e.toErrMsg());
                     return errorRet();
                 }
             }
@@ -7514,10 +7561,11 @@ bool determineFields(AggregateDeclaration ad)
             return 1;   // failed already
 
         const(char)* psz = (v.type.toBasetype().ty == Tsarray) ? "static array of " : "";
+        auto eSink = global.errorSink;
         if (!v.isAnonymous())
-            .error(v.loc, "%s `%s` cannot have field `%s` with %ssame struct type", ad.kind, ad.toPrettyChars, v.toErrMsg(), psz);
+            eSink.error(v.loc, "%s `%s` cannot have field `%s` with %ssame struct type", ad.kind, ad.toPrettyChars, v.toErrMsg(), psz);
         else
-            .error(v.loc, "%s `%s` cannot have anonymous field with %ssame struct type", ad.kind, ad.toPrettyChars, psz);
+            eSink.error(v.loc, "%s `%s` cannot have anonymous field with %ssame struct type", ad.kind, ad.toPrettyChars, psz);
         // Don't cache errors from speculative semantic
         if (!global.gag)
         {
@@ -7753,12 +7801,14 @@ private extern(C++) class SearchVisitor : Visitor
     Identifier ident;
     SearchOptFlags flags;
     Dsymbol result;
+    ErrorSink eSink;
 
-    this(Loc loc, Identifier ident, SearchOptFlags flags) @safe
+    this(Loc loc, Identifier ident, SearchOptFlags flags)
     {
         this.loc = loc;
         this.ident = ident;
         this.flags = flags;
+        this.eSink = global.errorSink;
     }
 
     void setResult(Dsymbol d)
@@ -8100,7 +8150,7 @@ private extern(C++) class SearchVisitor : Visitor
                     auto ae = exp.isArrayExp();
                     if (ae && ae.arguments.length != 1)
                     {
-                        error(exp.loc, "`%s` only defines opDollar for one dimension", ad.toErrMsg());
+                        eSink.error(exp.loc, "`%s` only defines opDollar for one dimension", ad.toErrMsg());
                         return setResult(null);
                     }
                     Declaration d = s.isDeclaration();
@@ -8109,7 +8159,7 @@ private extern(C++) class SearchVisitor : Visitor
                 }
                 e = e.expressionSemantic(ass._scope);
                 if (!e.type)
-                    error(exp.loc, "`%s` has no value", e.toErrMsg());
+                    eSink.error(exp.loc, "`%s` has no value", e.toErrMsg());
                 t = e.type.toBasetype();
                 if (t && t.ty == Tfunction)
                     e = new CallExp(e.loc, e);
@@ -8153,7 +8203,15 @@ private extern(C++) class SearchVisitor : Visitor
         //printf("%s.Import.search(ident = '%s', flags = x%x)\n", imp.toChars(), ident.toChars(), flags);
         if (!imp.pkg)
         {
-            imp.load(null);
+            // Load may fail (eg; for dmd as a library users who continue for sema)
+            if (imp.load(null))
+            {
+                if (imp.mod)
+                    imp.mod.errors = true;
+                return setResult(null);
+            }
+            if (!imp.mod)
+                return setResult(null); // Failed
             imp.mod.importAll(null);
             imp.mod.dsymbolSemantic(null);
         }
@@ -8171,7 +8229,7 @@ private extern(C++) class SearchVisitor : Visitor
         if (!ns.members || !ns.symtab) // opaque or semantic() is not yet called
         {
             if (!(flags & SearchOpt.ignoreErrors))
-                .error(loc, "%s `%s` is forward referenced when looking for `%s`", ns.kind, ns.toPrettyChars, ident.toErrMsg());
+                eSink.error(loc, "%s `%s` is forward referenced when looking for `%s`", ns.kind, ns.toPrettyChars, ident.toErrMsg());
             return setResult(null);
         }
 
@@ -8271,7 +8329,7 @@ private extern(C++) class SearchVisitor : Visitor
         {
             // .stringof is always defined (but may be hidden by some other symbol)
             if(ident != Id.stringof && !(flags & SearchOpt.ignoreErrors) && sd.semanticRun < PASS.semanticdone)
-                .error(loc, "%s `%s` is forward referenced when looking for `%s`", sd.kind, sd.toPrettyChars, ident.toErrMsg());
+                eSink.error(loc, "%s `%s` is forward referenced when looking for `%s`", sd.kind, sd.toPrettyChars, ident.toErrMsg());
             return setResult(null);
         }
 
@@ -8506,10 +8564,12 @@ extern(C++) class ImportAllVisitor : Visitor
 {
     alias visit = typeof(super).visit;
     Scope* sc;
+    ErrorSink eSink;
 
-    this(Scope* sc) @safe
+    this(Scope* sc)
     {
         this.sc = sc;
+        this.eSink = global.errorSink;
     }
 
     override void visit(Dsymbol d) {}
@@ -8563,7 +8623,7 @@ extern(C++) class ImportAllVisitor : Visitor
             return; // already done
         if (m.filetype == FileType.ddoc)
         {
-            error(m.loc, "%s `%s` is a Ddoc file, cannot import it", m.kind, m.toPrettyChars);
+            eSink.error(m.loc, "%s `%s` is a Ddoc file, cannot import it", m.kind, m.toPrettyChars);
             return;
         }
 
@@ -8649,6 +8709,8 @@ extern(C++) class ImportAllVisitor : Visitor
     */
 extern (D) bool load(Import imp, Scope* sc)
 {
+    auto eSink = global.errorSink;
+
     // See if existing module
     const errors = global.errors;
     DsymbolTable dst = Package.resolve(imp.packages, null, &imp.pkg);
@@ -8656,7 +8718,7 @@ extern (D) bool load(Import imp, Scope* sc)
     {
         if (pkg && pkg.isModule())
         {
-            .error(loc, "can only import from a module, not from a member of module `%s`. Did you mean `import %s : %s`?", pkg.toErrMsg(), pkg.toPrettyChars(), id.toErrMsg());
+            eSink.error(loc, "can only import from a module, not from a member of module `%s`. Did you mean `import %s : %s`?", pkg.toErrMsg(), pkg.toPrettyChars(), id.toErrMsg());
             mod = pkg.isModule(); // Error recovery - treat as import of that module
             return true;
         }
@@ -8670,7 +8732,7 @@ extern (D) bool load(Import imp, Scope* sc)
         {
             if (s.isAliasDeclaration())
             {
-                .error(imp.loc, "%s `%s` conflicts with `%s`", s.kind(), s.toPrettyChars(), imp.id.toErrMsg());
+                eSink.error(imp.loc, "%s `%s` conflicts with `%s`", s.kind(), s.toPrettyChars(), imp.id.toErrMsg());
             }
             else if (Package p = s.isPackage())
             {
@@ -8689,7 +8751,7 @@ extern (D) bool load(Import imp, Scope* sc)
                         {
                             // show error if Module.load does not
                             if (preverrors == global.errors)
-                                .error(imp.loc, "%s `%s` from file %s conflicts with %s `%s`", imp.mod.kind(), imp.mod.toPrettyChars(), imp.mod.srcfile.toChars, p.kind(), p.toPrettyChars());
+                                eSink.error(imp.loc, "%s `%s` from file %s conflicts with %s `%s`", imp.mod.kind(), imp.mod.toPrettyChars(), imp.mod.srcfile.toChars, p.kind(), p.toPrettyChars());
                             return true;
                         }
                     }
@@ -8700,16 +8762,16 @@ extern (D) bool load(Import imp, Scope* sc)
                 }
                 if (!imp.mod)
                 {
-                    .error(imp.loc, "can only import from a module, not from package `%s.%s`", p.toPrettyChars(), imp.id.toErrMsg());
+                    eSink.error(imp.loc, "can only import from a module, not from package `%s.%s`", p.toPrettyChars(), imp.id.toErrMsg());
                 }
             }
             else if (imp.pkg)
             {
-                .error(imp.loc, "can only import from a module, not from package `%s.%s`", imp.pkg.toPrettyChars(), imp.id.toErrMsg());
+                eSink.error(imp.loc, "can only import from a module, not from package `%s.%s`", imp.pkg.toPrettyChars(), imp.id.toErrMsg());
             }
             else
             {
-                .error(imp.loc, "can only import from a module, not from package `%s`", imp.id.toErrMsg());
+                eSink.error(imp.loc, "can only import from a module, not from package `%s`", imp.id.toErrMsg());
             }
         }
     }
@@ -9303,6 +9365,184 @@ Dsymbols* include(Dsymbol d, Scope* sc)
     return icv.symbols;
 }
 
+bool propagateStorageClasses(UnpackDeclaration upd)
+{
+    foreach (d; *upd.decl)
+    {
+        STC d_storage_class;
+        if (auto vd = d.isVarDeclaration())
+        {
+            vd.storage_class |= upd.declared_storage_class;
+            d_storage_class = vd.storage_class;
+            // allow `auto (a, int b) =`
+            if (vd.type)
+                vd.storage_class &= ~STC.auto_;
+        }
+        else if (auto up = d.isUnpackDeclaration())
+        {
+            if (!up.propagateStorageClasses())
+                return false;
+            d_storage_class = up.storage_class;
+        }
+        else
+        {
+            assert(0);
+        }
+
+        auto eSink = global.errorSink;
+        if (d_storage_class & STC.static_ && !(upd.storage_class & STC.static_))
+        {
+            eSink.error(upd.loc, "cannot specify `static` for individual components of an unpack declaration");
+            return false;
+        }
+        if (d_storage_class & STC.manifest && !(upd.storage_class & STC.manifest))
+        {
+            eSink.error(upd.loc, "cannot specify `enum` for individual components of an unpack declaration");
+            return false;
+        }
+        if (d_storage_class & (STC.ref_ | STC.out_))
+        {
+            upd.storage_class |= d_storage_class & (STC.ref_ | STC.out_);
+        }
+    }
+
+    return true;
+}
+
+private void lowerUnpack(UnpackDeclaration upd, Scope* sc)
+{
+    if (upd.lowered)
+        return;
+    if (!sc)
+        return;
+
+    void fail()
+    {
+        upd.decl = null;
+        upd.lowered = true;
+    }
+    if (auto uda = upd.userAttribDecl)
+    {
+        sc.eSink.error(upd.loc, "user defined attributes are not supported yet on unpack declarations");
+        return fail();
+    }
+
+    import dmd.expressionsem;
+    bool needctfe = (upd.storage_class & (STC.manifest | STC.static_)) != 0;
+    if (needctfe)
+    {
+        sc.condition = true;
+        sc = sc.startCTFE();
+    }
+    // _init = _init.inferType(sc); // TODO?
+    upd._init = upd._init.expressionSemantic(sc);
+    upd._init = resolveProperties(sc, upd._init);
+    if (needctfe)
+    {
+        sc = sc.endCTFE();
+        import dmd.dinterpret;
+        upd._init = upd._init.ctfeInterpret();
+    }
+
+    if (upd._init.type.isTypeError())
+    {
+        return fail();
+    }
+
+    TupleExp tup = null;
+    auto tinit = upd._init.type;
+
+    if (upd._init.type.isTypeTuple() && upd._init.isTupleExp())
+    {
+        tup = cast(TupleExp)upd._init;
+    }
+    else
+    {
+        import dmd.dsymbolsem : resolveAliasThis;
+        upd._init = resolveAliasThis(sc, upd._init);
+        if (upd._init.type.isTypeTuple() && upd._init.isTupleExp())
+        {
+            tup = cast(TupleExp)upd._init;
+        }
+    }
+
+    if (!tup)
+    {
+        sc.eSink.error(upd.loc, "right hand side of unpack declaration must resolve to a tuple or expression sequence, not `%s`",
+            tinit.toChars());
+        return fail();
+    }
+    if (upd.decl.length != tup.exps.length)
+    {
+        sc.eSink.error(upd.loc, "incompatible number of components for unpack declaration (`%d` vs. `%d`)", cast(int)upd.decl.length, cast(int)tup.exps.length);
+        return fail();
+    }
+
+    if (!upd.propagateStorageClasses())
+        return fail();
+
+    Expressions* exps = null;
+    if (tup.isAliasThisTuple())
+    {
+        assert(upd.decl.length != 0);
+        import dmd.sideeffect: copyToTemp;
+        auto v = copyToTemp(upd.storage_class, "__tup", tup);
+        import dmd.dsymbolsem : dsymbolSemantic;
+        v.dsymbolSemantic(sc);
+        auto ve = new VarExp(upd.loc, v);
+        ve.type = tup.type;
+
+        exps = new Expressions();
+        exps.setDim(1);
+        (*exps)[0] = ve;
+        expandAliasThisTuples(exps, 0);
+    }
+    else
+    {
+        exps = tup.exps;
+        expandTuples(exps);
+    }
+    assert(exps.length == upd.decl.length);
+
+    foreach (i, d; *upd.decl)
+    {
+        auto exp = (*exps)[i];
+        if (i == 0)
+        {
+            exp = Expression.combine(tup.e0, exp);
+        }
+        if (auto var = d.isVarDeclaration())
+        {
+            assert (!var._init);
+            var._init = new ExpInitializer(exp.loc, exp);
+        }
+        else if (auto unp = d.isUnpackDeclaration())
+        {
+            assert (!unp._init);
+            unp._init = exp;
+        }
+        else
+        {
+            assert(0);
+        }
+        if (upd._scope)
+        {
+            import dmd.dsymbolsem : addMember;
+            d.addMember(upd._scope, upd.scopesym);
+        }
+    }
+    if (upd._scope)
+    {
+        foreach (d; *upd.decl)
+        {
+            import dmd.dsymbolsem : setScope;
+            d.setScope(upd._scope);
+        }
+    }
+    upd.lowered = true;
+
+}
+
 extern(C++) class ConditionIncludeVisitor : Visitor
 {
     alias visit = typeof(super).visit;
@@ -9439,7 +9679,7 @@ extern(C++) class ConditionIncludeVisitor : Visitor
         }
         upd.onStack = true;
         scope(exit) upd.onStack = false;
-        upd.lower(upd._scope ? upd._scope : sc);
+        upd.lowerUnpack(upd._scope ? upd._scope : sc);
         if (!upd.lowered)
         {
             symbols = null;
@@ -9468,14 +9708,15 @@ void checkGNUABITag(Dsymbol sym, LINK linkage)
     foreachUdaNoSemantic(sym, (exp) {
         if (!isGNUABITag(exp))
             return 0; // continue
+        auto eSink = global.errorSink;
         if (sym.isCPPNamespaceDeclaration() || sym.isNspace())
         {
-            .error(exp.loc, "`@%s` cannot be applied to namespaces", Id.udaGNUAbiTag.toErrMsg());
+            eSink.error(exp.loc, "`@%s` cannot be applied to namespaces", Id.udaGNUAbiTag.toErrMsg());
             sym.errors = true;
         }
         else if (linkage != LINK.cpp)
         {
-            .error(exp.loc, "`@%s` can only apply to C++ symbols", Id.udaGNUAbiTag.toErrMsg());
+            eSink.error(exp.loc, "`@%s` can only apply to C++ symbols", Id.udaGNUAbiTag.toErrMsg());
             sym.errors = true;
         }
         // Only one `@gnuAbiTag` is allowed by semantic2
@@ -9595,7 +9836,7 @@ private Expression callScopeDtor(VarDeclaration vd, Scope* sc)
          * could be set.
          */
         //if (cd.isInterfaceDeclaration())
-        //    error("interface `%s` cannot be scope", cd.toErrMsg());
+        //    eSink.error("interface `%s` cannot be scope", cd.toErrMsg());
 
         if (!vd.onstack) // if any destructors
             continue;
@@ -9637,9 +9878,10 @@ bool determineSize(AggregateDeclaration ad, Loc loc)
     if (ad.sizeok == Sizeok.done)
         return true;    // succeeded
 
+    auto eSink = global.errorSink;
     if (!ad.members)
     {
-        .error(loc, "%s `%s` unknown size", ad.kind, ad.toPrettyChars);
+        eSink.error(loc, "%s `%s` unknown size", ad.kind, ad.toPrettyChars);
         return false;
     }
 
@@ -9650,7 +9892,7 @@ bool determineSize(AggregateDeclaration ad, Loc loc)
     {
         // There's unresolvable forward reference.
         if (ad.type != Type.terror)
-            error(loc, "%s `%s` no size because of forward reference", ad.kind, ad.toPrettyChars);
+            eSink.error(loc, "%s `%s` no size because of forward reference", ad.kind, ad.toPrettyChars);
         // Don't cache errors from speculative semantic, might be resolvable later.
         // https://issues.dlang.org/show_bug.cgi?id=16574
         if (!global.gag)
@@ -9703,7 +9945,7 @@ private extern(C++) class CheckCtorConstInitVisitor : Visitor
         {
             /* doesn't work if more than one static ctor */
             if (vd.ctorinit == 0 && vd.isCtorinit() && !vd.isField())
-                error("missing initializer in static constructor for const variable");
+                eSink.error("missing initializer in static constructor for const variable");
         }
     }
 
@@ -10210,14 +10452,15 @@ private bool checkOverlappedFields(AggregateDeclaration ad)
             if (v2._init.isVoidInitializer())
                 continue;
 
+            auto eSink = global.errorSink;
             if (vd._init && !vdIsVoidInit && v2._init)
             {
-                .error(ad.loc, "overlapping default initialization for field `%s` and `%s`", v2.toErrMsg(), vd.toErrMsg());
+                eSink.error(ad.loc, "overlapping default initialization for field `%s` and `%s`", v2.toErrMsg(), vd.toErrMsg());
                 errors = true;
             }
             else if (v2._init && i < j)
             {
-                .error(v2.loc, "union field `%s` with default initialization `%s` must be before field `%s`",
+                eSink.error(v2.loc, "union field `%s` with default initialization `%s` must be before field `%s`",
                     v2.toErrMsg(), dmd.hdrgen.toChars(v2._init), vd.toErrMsg());
                 errors = true;
             }
@@ -10358,13 +10601,14 @@ private extern(C++) class FinalizeSizeVisitor : Visitor
         // Set the offsets of the fields and determine the size of the struct
         FieldState fieldState;
         bool isunion = sd.isUnionDeclaration() !is null;
+        auto eSink = global.errorSink;
         for (size_t i = 0; i < sd.members.length; i++)
         {
             Dsymbol s = (*sd.members)[i];
             s.setFieldOffset(sd, &fieldState, isunion);
             if (sd.type.ty == Terror)
             {
-                errorSupplemental(s.loc, "error on member `%s`", s.toPrettyChars);
+                eSink.errorSupplemental(s.loc, "error on member `%s`", s.toPrettyChars);
                 sd.errors = true;
                 return;
             }
