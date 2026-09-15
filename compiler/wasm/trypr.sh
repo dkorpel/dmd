@@ -3,7 +3,7 @@ set -eu
 
 usage() {
   cat <<'USAGE'
-usage: compiler/wasm/trypr.sh [--in-place] [--out DIR] [--repo OWNER/NAME] <pr-number>
+usage: compiler/wasm/trypr.sh [--in-place] [--no-apply] [--out DIR] [--repo OWNER/NAME] <pr-number>
        compiler/wasm/trypr.sh --index DIR
 
 Builds dmd.wasm from a dlang/dmd pull request applied on top of this checkout
@@ -13,19 +13,23 @@ Builds dmd.wasm from a dlang/dmd pull request applied on top of this checkout
       Creates worktrees under tmp/prbuild/ from this checkout's HEAD and from
       PHOBOS_ROOT's HEAD, applies the PR's diff (merge-base..head) to the dmd
       one, builds the native dmd, the wasm druntime + Phobos archives and
-      dmd.wasm there, and writes compiler/wasm/web/pr/23803/{dmd.wasm,meta.json}
-      plus pr/index.json. Then serve compiler/wasm/web and open
-      index.html?pr=23803. Worktrees persist, so later builds are incremental.
+      dmd.wasm there, and writes compiler/wasm/web/pr/23803/ with dmd.wasm,
+      meta.json, and the PR's test cases as examples/ + examples.json, plus
+      pr/index.json. Then serve compiler/wasm/web and open index.html?pr=23803.
+      Worktrees persist, so later builds are incremental.
 
   --in-place  apply the PR to this checkout and PHOBOS_ROOT directly (CI)
-  --out DIR   write dmd.wasm + meta.json there instead of web/pr/<N>
+  --no-apply  the tree already contains the PR (resolved by hand after a
+              conflict, or a prepared branch): skip the reset and the apply
+  --out DIR   write the build there instead of web/pr/<N>
   --repo R    repository the PR belongs to (default dlang/dmd)
   --index DIR regenerate DIR/index.json from DIR/*/meta.json and exit
 
 Environment: PHOBOS_ROOT (default: the phobos checkout next to the main dmd
 repository), HOST_DMD (build.d), GH_TOKEN (gh in CI).
 Requires gh (https://cli.github.com) with access to the PR's repository.
-Exit status 2 means the PR did not apply cleanly on this branch.
+Exit status 2 means the PR did not apply cleanly; resolve the conflicts in the
+tree it names and rerun with --no-apply.
 USAGE
 }
 
@@ -62,12 +66,14 @@ fresh_worktree() {
 DMD_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 REPO=dlang/dmd
 INPLACE=
+NOAPPLY=
 OUT=
 PR=
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --in-place) INPLACE=1 ;;
+    --no-apply) NOAPPLY=1 ;;
     --out) OUT="$2"; shift ;;
     --repo) REPO="$2"; shift ;;
     --index) gen_index "$2"; exit 0 ;;
@@ -107,8 +113,12 @@ else
   TREE="$WORK/dmd"
   PHOBOS_TREE="$WORK/phobos"
   mkdir -p "$WORK"
-  fresh_worktree "$DMD_ROOT" "$TREE" "$BASEHEAD"
-  fresh_worktree "$PHOBOS_ROOT" "$PHOBOS_TREE" "$(git -C "$PHOBOS_ROOT" rev-parse HEAD)"
+  if [ -n "$NOAPPLY" ]; then
+    [ -f "$TREE/.git" ] || { echo "--no-apply needs an existing tree at $TREE" >&2; exit 1; }
+  else
+    fresh_worktree "$DMD_ROOT" "$TREE" "$BASEHEAD"
+  fi
+  [ -f "$PHOBOS_TREE/.git" ] && [ -n "$NOAPPLY" ] || fresh_worktree "$PHOBOS_ROOT" "$PHOBOS_TREE" "$(git -C "$PHOBOS_ROOT" rev-parse HEAD)"
   mkdir -p "$TREE/generated/wasm"
   for t in "$DMD_ROOT"/generated/wasm/wasi-sysroot-*.tar.gz; do
     [ -f "$t" ] && [ ! -f "$TREE/generated/wasm/$(basename "$t")" ] && cp "$t" "$TREE/generated/wasm/"
@@ -120,18 +130,24 @@ echo "== phobos tree $PHOBOS_TREE ($(git -C "$PHOBOS_TREE" rev-parse --short HEA
 if [ "$(git -C "$TREE" rev-parse --is-shallow-repository)" = true ]; then DEPTH=--depth=1; else DEPTH=; fi
 git -C "$TREE" fetch -q $DEPTH "https://github.com/$REPO" "$BASE" "$HEAD"
 
-PATCH="$(mktemp)"
-git -C "$TREE" diff --binary "$BASE" "$HEAD" > "$PATCH"
-[ -s "$PATCH" ] || { echo "PR has no changes against $BASEREF" >&2; exit 1; }
-git -C "$TREE" diff --stat "$BASE" "$HEAD" | tail -1
-if ! git -C "$TREE" apply --3way "$PATCH"; then
-  echo "== PR does not apply cleanly on top of $BASEHEAD; conflicts in:" >&2
-  git -C "$TREE" diff --name-only --diff-filter=U >&2
-  echo "   (rebase the wasm-web-app branch onto a newer $BASEREF, or resolve in $TREE)" >&2
+if [ -n "$NOAPPLY" ]; then
+  APPLIED=manual
+  echo "== not applying the PR: using the tree as is"
+else
+  APPLIED=clean
+  PATCH="$(mktemp)"
+  git -C "$TREE" diff --binary "$BASE" "$HEAD" > "$PATCH"
+  [ -s "$PATCH" ] || { echo "PR has no changes against $BASEREF" >&2; exit 1; }
+  git -C "$TREE" diff --stat "$BASE" "$HEAD" | tail -1
+  if ! git -C "$TREE" apply --3way "$PATCH"; then
+    echo "== PR does not apply cleanly on top of $BASEHEAD; conflicts in:" >&2
+    git -C "$TREE" diff --name-only --diff-filter=U >&2
+    echo "   (resolve them in $TREE and rerun with --no-apply, or merge a newer $BASEREF into this branch)" >&2
+    rm -f "$PATCH"
+    exit 2
+  fi
   rm -f "$PATCH"
-  exit 2
 fi
-rm -f "$PATCH"
 
 echo "== building native dmd"
 (cd "$TREE" && ./compiler/src/build.d)
@@ -149,8 +165,32 @@ mkdir -p "$OUT"
 cp "$TREE/compiler/wasm/dmd.wasm" "$OUT/dmd.wasm"
 NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 gh pr view "$PR" -R "$REPO" --json number,title,author,url,headRefOid,baseRefName,state \
-  --jq "{pr:.number,repo:\"$REPO\",title:.title,author:.author.login,url:.url,head:.headRefOid,baseRef:.baseRefName,base:\"$BASE\",state:.state,builtAt:\"$NOW\",explorerRef:\"$BASEHEAD\"}" \
+  --jq "{pr:.number,repo:\"$REPO\",title:.title,author:.author.login,url:.url,head:.headRefOid,baseRef:.baseRefName,base:\"$BASE\",state:.state,builtAt:\"$NOW\",explorerRef:\"$BASEHEAD\",applied:\"$APPLIED\"}" \
   > "$OUT/meta.json"
+
+rm -rf "$OUT/examples"
+mkdir -p "$OUT/examples"
+first=1
+{
+  printf '['
+  for f in $(git -C "$TREE" diff --name-only --diff-filter=AM "$BASE" "$HEAD" -- compiler/test | grep -E '^compiler/test/(compilable|runnable|fail_compilation)/[A-Za-z0-9_.-]+\.d$'); do
+    [ -f "$TREE/$f" ] || continue
+    rel="${f#compiler/test/}"
+    name="$(echo "$rel" | tr / _)"
+    case "${rel%%/*}" in
+      compilable) panes=sema,diag ;;
+      fail_compilation) panes=diag ;;
+      *) panes=run,diag ;;
+    esac
+    cp "$TREE/$f" "$OUT/examples/$name"
+    [ "$first" = 1 ] || printf ','
+    first=0
+    printf '{"label":"%s","file":"examples/%s","panes":"%s"}' "$rel" "$name" "$panes"
+  done
+  printf ']\n'
+} > "$OUT/examples.json"
+echo "   $(ls "$OUT/examples" | wc -l) test cases exported as examples"
+
 [ -z "$GEN_INDEX" ] || gen_index "$(dirname "$OUT")"
 echo "== done: $OUT"
 [ -z "$GEN_INDEX" ] || echo "   serve $DMD_ROOT/compiler/wasm/web and open index.html?pr=$PR"

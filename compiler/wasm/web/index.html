@@ -231,6 +231,8 @@
                 title="Compile the program to WebAssembly and run it in this page (Ctrl/⌘+Shift+Enter)">▶ Run</button>
       </div>
       <div class="group">
+        <button id="shareBtn" class="chip" type="button"
+                title="Copy a link to this page with the current source (and PR build) in the URL">🔗 Share</button>
         <button id="prBtn" class="chip" type="button"
                 title="Run the compiler from a dlang/dmd pull request">PR…</button>
       </div>
@@ -674,7 +676,7 @@ let runTimer = null;
 let onDocChange = () => {};
 let onCursor = () => {};
 const editor = new EditorView({
-    doc: params.get("src") ?? EXAMPLES[0].code,   // ?src= seeds embedded demos
+    doc: params.has("z") ? "" : (params.get("src") ?? EXAMPLES[0].code),   // ?src= seeds embedded demos, ?z= is decoded later
     parent: $("src"),
     extensions: [
         basicSetup,                                      // line numbers, undo/redo, bracket match, ...
@@ -696,17 +698,36 @@ const getSrc = () => editor.state.doc.toString();
 // Populated from the shared catalog (examples.js) that the tour's inline demos
 // also draw from, so the two never drift apart.
 const exSel = $("examples");
-if (exSel) {
-    EXAMPLES.forEach((ex, i) => {
+let examples = EXAMPLES;
+function setExamples(list, placeholder) {
+    examples = list;
+    exSel.textContent = "";
+    const ph = document.createElement("option");
+    ph.value = ""; ph.selected = true; ph.disabled = true; ph.hidden = true;
+    ph.textContent = placeholder;
+    exSel.appendChild(ph);
+    list.forEach((ex, i) => {
         const o = document.createElement("option");
         o.value = String(i);
         o.textContent = ex.label;
         exSel.appendChild(o);
     });
-    exSel.addEventListener("change", () => {
-        const ex = EXAMPLES[+exSel.value];
+}
+async function exampleCode(ex) {
+    if (ex.code != null) return ex.code;
+    const r = await fetch(ex.file, { cache: "no-cache" });
+    if (!r.ok) throw new Error(`${ex.file}: HTTP ${r.status}`);
+    return r.text();
+}
+if (exSel) {
+    setExamples(EXAMPLES, "Load an example…");
+    exSel.addEventListener("change", async () => {
+        const ex = examples[+exSel.value];
         if (!ex) return;
-        editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: ex.code } });
+        let code;
+        try { code = await exampleCode(ex); }
+        catch (e) { $("status").textContent = "example failed to load: " + e.message; return; }
+        editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: code } });
         // Match the tour's pane configuration: show the example's declared panes
         // (plus the always-on source input), hide the rest.
         const want = new Set((ex.panes || "").split(",").map((s) => s.trim()).filter(Boolean));
@@ -758,6 +779,44 @@ async function prBuildMeta(n) {
     } catch (e) {
         return null;
     }
+}
+
+const b64url = {
+    enc: (bytes) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""),
+    dec: (s) => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0)),
+};
+async function encodeSnippet(text) {
+    const raw = new TextEncoder().encode(text);
+    if (typeof CompressionStream !== "function") return null;
+    const zs = new Blob([raw]).stream().pipeThrough(new CompressionStream("deflate-raw"));
+    return b64url.enc(new Uint8Array(await new Response(zs).arrayBuffer()));
+}
+async function decodeSnippet(z) {
+    try {
+        const ds = new Blob([b64url.dec(z)]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+        return await new Response(ds).text();
+    } catch (e) {
+        return null;
+    }
+}
+async function shareLink() {
+    const q = new URLSearchParams();
+    if (PR) q.set("pr", PR);
+    const z = await encodeSnippet(getSrc());
+    if (z) q.set("z", z); else q.set("src", getSrc());
+    return location.origin + location.pathname + "?" + q.toString();
+}
+if ($("shareBtn")) {
+    $("shareBtn").addEventListener("click", async () => {
+        const url = await shareLink();
+        window.history.replaceState(null, "", url);
+        try {
+            await navigator.clipboard.writeText(url);
+            $("status").textContent = `link copied (${url.length} chars)`;
+        } catch (e) {
+            $("status").textContent = "link is in the address bar";
+        }
+    });
 }
 
 // In an embedded demo, offer a one-click jump to the full explorer carrying the
@@ -1109,6 +1168,19 @@ function loadDmdWorker(url) {
             a.textContent = `#${prMeta.pr} ${prMeta.title}`;
             a.title = `by ${prMeta.author}, commit ${String(prMeta.head).slice(0, 10)} applied on the explorer's ${prMeta.baseRef} snapshot`;
             a.hidden = false;
+            fetch(`pr/${PR}/examples.json`, { cache: "no-cache" })
+                .then((r) => (r.ok ? r.json() : []))
+                .then((list) => {
+                    if (!Array.isArray(list) || !list.length) return;
+                    for (const ex of list) ex.file = `pr/${PR}/${ex.file}`;
+                    setExamples(list, `Tests from PR #${PR}…`);
+                })
+                .catch(() => {});
+        }
+        if (params.has("z")) {
+            const text = await decodeSnippet(params.get("z"));
+            if (text != null) editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: text } });
+            else $("status").textContent = "could not decode the snippet in the URL";
         }
         await loadDmdWorker(wasmUrl);
         $("status").textContent = "ready";
