@@ -384,10 +384,20 @@ Dsymbol definitionTarget(ASTNode obj)
 }
 
 /// Write an LSP Location JSON object for a name of `len` characters at `sl`.
+/// The filename may be relative (a module found via a relative -I path), but a
+/// file:// URI needs an absolute path: file://source/x.d makes `source` the
+/// URI authority and the client opens the non-existing /x.d.
 void writeLocationAt(ref OutBuffer buf, SourceLoc sl, int len)
 {
+    const(char)[] filename = sl.filename;
+    if (!FileName.absolute(filename))
+    {
+        OutBuffer nameBuf;
+        nameBuf.writestring(filename);
+        filename = FileName.toAbsolute(nameBuf.peekChars()).toDString();
+    }
     buf.writestring(`{"uri":"file://`);
-    buf.writeJsonString(sl.filename);
+    buf.writeJsonString(filename);
     buf.printf(`","range":{"start":{"line":%d,"character":%d},"end":{"line":%d,"character":%d}}}`,
         sl.line - 1, sl.column - 1, sl.line - 1, sl.column - 1 + len);
 }
