@@ -11,6 +11,7 @@
 | [file.d](https://github.com/dlang/dmd/blob/master/compiler/src/dmd/root/file.d)               | Read a file from disk and store it in memory                                               |
 | [filename.d](https://github.com/dlang/dmd/blob/master/compiler/src/dmd/root/filename.d)       | Encapsulate path and file names                                                            |
 | [hash.d](https://github.com/dlang/dmd/blob/master/compiler/src/dmd/root/hash.d)               | Calculate a hash for a byte array                                                          |
+| [json.d](https://github.com/dlang/dmd/blob/master/compiler/src/dmd/root/json.d)               | Parse JSON text into D structs, and escape strings for JSON output                         |
 | [longdouble.d](https://github.com/dlang/dmd/blob/master/compiler/src/dmd/root/longdouble.d)   | 80-bit floating point number implementation in case they are not natively supported        |
 | [man.d](https://github.com/dlang/dmd/blob/master/compiler/src/dmd/root/man.d)                 | Opens an online manual page                                                                |
 | [optional.d](https://github.com/dlang/dmd/blob/master/compiler/src/dmd/root/optional.d)       | Implementation of an 'Optional' type                                                       |
