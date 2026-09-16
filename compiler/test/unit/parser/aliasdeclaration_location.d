@@ -97,19 +97,19 @@ static foreach (test; tests)
         static if (test.index == 1)
         {
             assert(visitor.l.linnum == 2);
-            assert(visitor.l.charnum  == 5);
+            assert(visitor.l.charnum  == 15);
         }
 
         static if (test.index == 2)
         {
             assert(visitor.l.linnum == 3);
-            assert(visitor.l.charnum  == 5);
+            assert(visitor.l.charnum  == 11);
         }
 
         static if (test.index == 3)
         {
             assert(visitor.l.linnum == 4);
-            assert(visitor.l.charnum  == 5);
+            assert(visitor.l.charnum  == 11);
         }
     }
 }

@@ -575,6 +575,8 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
         sym.parent = sc.scopesym;
         sym.endlinnum = ss.endloc.linnum;
         sc = sc.push(sym);
+        if (onScopeEntered)
+            onScopeEntered(ss.loc, ss.endloc, sc);
 
         // for CompoundStatement flatten just returns its statements, so no need
         //  to wrap it in another CompoundStatement
@@ -737,6 +739,8 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
         sym.endlinnum = fs.endloc.linnum;
         sc = sc.push(sym);
         sc.inLoop = true;
+        if (onScopeEntered)
+            onScopeEntered(fs.loc, fs.endloc, sc);
 
         if (fs.condition)
         {
@@ -982,6 +986,8 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
         sym.endlinnum = fs.endloc.linnum;
         auto sc2 = sc.push(sym);
         sc2.inLoop = true;
+        if (onScopeEntered)
+            onScopeEntered(fs.loc, fs.endloc, sc2);
 
         foreach (Parameter p; *fs.parameters)
         {
@@ -1806,6 +1812,8 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
         sym.parent = sc.scopesym;
         sym.endlinnum = ifs.endloc.linnum;
         Scope* scd = sc.push(sym);
+        if (onScopeEntered)
+            onScopeEntered(ifs.loc, ifs.endloc, scd);
         if (ifs.param)
         {
             /* Declare param, which we will set to be the
@@ -3508,6 +3516,8 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
             sym._scope = sc;
             sc = sc.push(sym);
             sc.insert(sym);
+            if (onScopeEntered)
+                onScopeEntered(ws.loc, ws.endloc, sc);
             ws._body = ws._body.statementSemantic(sc);
             sc.pop();
             if (ws._body && ws._body.isErrorStatement())

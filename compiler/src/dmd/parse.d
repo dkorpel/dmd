@@ -48,6 +48,7 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
         int inBrackets; // inside [] of array index or slice
         Loc lookingForElse; // location of lonely if looking for an else
         bool doUnittests; // parse unittest blocks
+        bool incompleteExp;
     }
 
     /*********************
@@ -4735,7 +4736,6 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
         /* Declarations that start with `alias`
          */
         bool isAliasDeclaration = false;
-        auto aliasLoc = token.loc;
         if (token.value == TOK.alias_)
         {
             if (auto a = parseAliasDeclarations(comment))
@@ -4938,7 +4938,7 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
                 {
                     error("alias cannot have initializer");
                 }
-                AST.Declaration v = new AST.AliasDeclaration(aliasLoc, ident, t);
+                AST.Declaration v = new AST.AliasDeclaration(loc, ident, t);
 
                 v.storage_class = storage_class;
                 if (pAttrs)
@@ -5257,6 +5257,7 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
             while (1)
             {
                 auto ident = token.ident;
+                const identLoc = token.loc;
                 nextToken();
                 AST.TemplateParameters* tpl = null;
                 if (token.value == TOK.leftParenthesis)
@@ -5338,7 +5339,7 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
                         }
                     }
 
-                    v = new AST.AliasDeclaration(loc, ident, s);
+                    v = new AST.AliasDeclaration(identLoc, ident, s);
                 }
                 else if (token.value == TOK.this_ && peekNext() == TOK.semicolon)
                 {
@@ -5346,7 +5347,7 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
                     auto tokThis = token.ident;
                     nextToken();
                     auto t = new AST.TypeIdentifier(loc, tokThis);
-                    v = new AST.AliasDeclaration(loc, ident, t);
+                    v = new AST.AliasDeclaration(identLoc, ident, t);
                 }
                 else
                 {
@@ -5401,7 +5402,7 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
                         }
                     }
 
-                    v = new AST.AliasDeclaration(loc, ident, t);
+                    v = new AST.AliasDeclaration(identLoc, ident, t);
                 }
                 if (!attributesAppended)
                     storage_class = appendStorageClass(storage_class, funcStc);
@@ -6170,6 +6171,7 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
         AST.Statement elsebody;
         bool isfinal;
         const loc = token.loc;
+        incompleteExp = false;
 
         //printf("parseStatement()\n");
         if (flags & ParseStatementFlags.curly && token.value != TOK.leftCurly)
@@ -6320,14 +6322,16 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
                         // The current token closes the enclosing scope; leave it in
                         // place so the rest of the file parses normally (e.g. an
                         // incomplete expression at the end of a block while editing).
-                        if (exp.op != EXP.error)
+                        if (exp.op != EXP.error && !incompleteExp)
                         {
                             error("found `%s` when expecting `;` following expression", token.toChars());
                             eSink.errorSupplemental(exp.loc, "expression: `%s`", exp.toChars());
                         }
+                        incompleteExp = false;
                     }
-                    else if (exp.op == EXP.error)
+                    else if (exp.op == EXP.error || incompleteExp)
                     {
+                        incompleteExp = false;
                         // A parse error was already reported for this expression and
                         // the offending token was left in place; let the statement
                         // parser retry from it (e.g. an incomplete `e.` followed by
@@ -9433,6 +9437,11 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
                 // enclosing expression, statement or block (e.g. an incomplete
                 // `e.` at the end of a line while editing) and is needed for
                 // the parser to recover.
+                if (compileEnv.lsp)
+                {
+                    incompleteExp = true;
+                    return new AST.DotIdExp(loc, e, Id.empty, token.loc);
+                }
                 return new AST.ErrorExp();
 
             case TOK.plusPlus:

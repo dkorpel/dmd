@@ -12,7 +12,7 @@ module dmd.file_manager;
 
 import core.stdc.stdio;
 import dmd.common.outbuffer;
-import dmd.root.stringtable : StringTable;
+import dmd.root.stringtable : StringTable, StringValue;
 import dmd.root.file : File;
 import dmd.root.filename : FileName, isDirSeparator;
 import dmd.root.string : toDString;
@@ -292,6 +292,14 @@ nothrow:
         if (auto val = files.lookup(name))      // if `name` is cached
             return val.value;                   // return its contents
 
+        if (!FileName.absolute(name))
+        {
+            OutBuffer nameBuf;
+            nameBuf.writestring(name);
+            if (auto val = files.lookup(FileName.toAbsolute(nameBuf.peekChars()).toDString()))
+                return val.value;
+        }
+
         if (FileName.exists(name) != 1) // if not an ordinary file
             return null;
 
@@ -321,5 +329,10 @@ nothrow:
     {
         auto val = files.insert(filename.toString, buffer);
         return val == null ? null : val.value;
+    }
+
+    int opApply(scope int delegate(const(char)[] name, const(ubyte)[] contents) nothrow dg) nothrow
+    {
+        return files.opApply((const(StringValue!(const(ubyte)[]))* sv) => dg(sv.toString(), sv.value));
     }
 }

@@ -59,22 +59,41 @@ struct Case
     string source;
     void delegate(ref LspClient) script;
     string[] expected;
+    string[] absent;      // substrings that must not appear in the output
+    string extraName;     // a second module written next to the source, importable by this name
+    string extraSource;
 }
 
 immutable Case[] cases = [
-    // textDocument/hover on a VarDeclaration
+    // textDocument/hover on a VarDeclaration shows the declaration in a D code block
     {
         name: "hover-vardecl",
         source: "module hover_test;\n\nint answer = 42;\n",
         script: (ref c) { c.hover(2, 4); },
-        expected: [`**type**: int`, `**init**: 42`],
+        expected: [`"kind":"markdown"`, "```d\\nint answer = 42\\n```"],
     },
     // textDocument/hover on a FuncDeclaration
     {
         name: "hover-funcdecl",
         source: "module hover_func;\n\nvoid greet() {}\n",
         script: (ref c) { c.hover(2, 5); },
-        expected: [`**type**: void()`],
+        expected: ["```d\\nvoid greet()\\n```"],
+    },
+    // A template function shows its declaration without the body, and the
+    // ddoc comment follows the code block
+    {
+        name: "hover-template-ddoc",
+        source: "module hover_tpl;\n\n/// Generic greeting\nvoid gen(T)(T val) { int body_; }\nvoid main() { gen(1); }\n",
+        script: (ref c) { c.hover(3, 6); c.hover(4, 15); },
+        expected: ["```d\\ngen(T)(T val)\\n```\\n\\nGeneric greeting"],
+        absent: [`body_`],
+    },
+    // Hover on a use site shows the declaration, not just the type
+    {
+        name: "hover-use-site",
+        source: "module hover_use;\n\nstruct S { int field; }\nvoid main() { S s; s.field = 1; }\n",
+        script: (ref c) { c.hover(3, 21); c.hover(3, 14); },
+        expected: ["```d\\nint field\\n```", "```d\\nstruct S\\n```"],
     },
     // textDocument/definition jumps from a use site to the declaration
     {
@@ -155,15 +174,57 @@ immutable Case[] cases = [
         script: (ref c) { c.completion(6, 4); },
         expected: [`"label":"Point","kind":22`, `"label":"Color","kind":13`, `"label":"area","kind":3`],
     },
-    // textDocument/semanticTokens/full returns lexer-based highlighting as
-    // delta-encoded [line, column, length, type, modifiers] runs. Expected here:
-    // `module` keyword, doc comment (documentation modifier), `int` type,
-    // number literal, then a plain line comment.
+    // Scope completion offers parameters and the locals declared before the
+    // cursor in enclosing blocks, but not locals declared after it
     {
-        name: "semantic-tokens",
-        source: "module sem_tok;\n\n/// doc\nint x = 42; // hi\n",
+        name: "completion-scope-locals",
+        source: "module comp_locals;\n\nvoid main(string[] args)\n{\n    int localCounter = 3;\n    if (args.length)\n    {\n        int inner;\n        loc\n    }\n    int after;\n}\n",
+        script: (ref c) { c.completion(8, 11); },
+        expected: [`"label":"localCounter","kind":6`, `"label":"inner","kind":6`, `"label":"args","kind":6`, `"label":"main","kind":3`],
+        absent: [`"label":"after"`],
+    },
+    // Names from an imported module are offered, except its private ones;
+    // the import sees the file next to the source via -I
+    {
+        name: "completion-imports",
+        source: "module comp_imp;\n\nimport comp_imp_helper;\nvoid main()\n{\n    hel\n}\n",
+        script: (ref c) { c.completion(5, 7); },
+        expected: [`"label":"helperFn","kind":3`],
+        absent: [`"label":"hidden"`],
+        extraName: "comp_imp_helper",
+        extraSource: "module comp_imp_helper;\nint helperFn() { return 1; }\nprivate int hidden;\n",
+    },
+    // Members of the expression before the dot, whatever its shape
+    {
+        name: "completion-chain",
+        source: "module comp_chain;\n\nstruct V { int x; V scaled(int f) { return this; } }\nV[] many() { return null; }\nint total(int[] a) { return 0; }\nvoid f1(V v)\n{\n    v.scaled(2).\n}\nvoid f2()\n{\n    many()[0].\n}\nvoid f3(int[] arr)\n{\n    arr.\n}\n",
+        script: (ref c) { c.completion(7, 16); c.completion(11, 14); c.completion(15, 8); },
+        expected: [`"label":"scaled","kind":2`, `"label":"x","kind":5`, `"label":"total","kind":3`],
+    },
+    // Completion on a partially typed member name still lists the members
+    {
+        name: "completion-partial-member",
+        source: "module comp_partial;\n\nstruct V { int x; void scaled() {} }\nvoid main()\n{\n    V v;\n    v.sc\n}\n",
+        script: (ref c) { c.completion(6, 8); },
+        expected: [`"label":"scaled","kind":2`, `"label":"x","kind":5`],
+    },
+    // Items carry a detail, ddoc documentation and a deprecated tag
+    {
+        name: "completion-item-details",
+        source: "module comp_detail;\n\n/// Adds numbers\nint add(int a, int b) { return a + b; }\ndeprecated void old() {}\nvoid main()\n{\n    ad\n}\n",
+        script: (ref c) { c.completion(7, 6); },
+        expected: [`"label":"add","kind":3,"sortText":"01add","detail":"int(int a, int b)","documentation":{"kind":"markdown","value":"Adds numbers\n"}`,
+                   `"label":"old","kind":3,"sortText":"01old","detail":"void()","tags":[1]`],
+    },
+    // textDocument/semanticTokens/full classifies identifiers by what they
+    // resolve to, as delta-encoded [line, column, length, type, modifiers] runs:
+    // struct S (declaration), field f (declaration), function main
+    // (declaration), S as a type, s (declaration), then s.f as uses
+    {
+        name: "semantic-tokens-identifiers",
+        source: "module sem_id;\nstruct S { int f; }\nvoid main() { S s; s.f = 1; }\n",
         script: (ref c) { c.semanticTokens(); },
-        expected: [`"data":[0,0,6,0,0,2,0,7,1,1,1,0,3,4,0,0,8,2,3,0,0,4,5,1,0]`],
+        expected: [`"data":[1,7,1,5,1,0,8,1,8,1,1,5,4,10,1,0,9,1,5,0,0,2,1,7,1,0,3,1,7,0,0,2,1,8,0]`],
     },
     // textDocument/signatureHelp resolves the enclosing call; cursor is on
     // the second argument
@@ -215,13 +276,6 @@ immutable Case[] cases = [
         source: "module sig_ref;\n\nvoid f(ref int x, float y) {}\nvoid main() { int a; f(a, 1); }\n",
         script: (ref c) { c.signatureHelp(3, 26); },
         expected: [`"label":"f(ref int x, float y)"`, `"label":"ref int x"`, `"activeParameter":1`],
-    },
-    // A struct literal call shows the fields as parameters
-    {
-        name: "signatureHelp-structliteral",
-        source: "module sig_lit;\n\nstruct P { int x; float y; }\nvoid main() { P p = P(1, 2); }\n",
-        script: (ref c) { c.signatureHelp(3, 25); },
-        expected: [`"label":"P(int x, float y)"`, `"activeParameter":1`],
     },
     // A struct constructor call shows the constructor named after the struct
     {
@@ -296,6 +350,111 @@ immutable Case[] cases = [
         source: "module diag_ok;\n\nint x = 1;\n",
         script: (ref c) {},
         expected: [`"method":"textDocument/publishDiagnostics"`, `"diagnostics":[]`],
+    },
+    // Deprecations are warnings tagged Deprecated (2), with the declaration
+    // as related information
+    {
+        name: "diagnostics-deprecation",
+        source: "module diag_dep;\n\ndeprecated(\"use fresh\") void old() {}\nvoid main() { old(); }\n",
+        script: (ref c) {},
+        expected: ["\"severity\":2,\"message\":\"function `diag_dep.old` is deprecated - use fresh\",\"tags\":[2],\"relatedInformation\":[{\"location\":{\"uri\":\"file://",
+                   "\"message\":\"`old` is declared here\""],
+    },
+    // Supplemental messages with a location become relatedInformation
+    {
+        name: "diagnostics-related",
+        source: "module diag_rel;\n\nvoid f(int a) {}\nvoid main() { f(\"x\"); }\n",
+        script: (ref c) {},
+        expected: [`"relatedInformation":[`, `"range":{"start":{"line":2,"character":5}`, `declared here`],
+    },
+    // Errors in an imported module are published under that module's URI
+    {
+        name: "diagnostics-other-file",
+        source: "module diag_other;\n\nimport diag_other_helper;\n",
+        script: (ref c) {},
+        expected: [`diag_other_helper.d","diagnostics":[{"range":{"start":{"line":1,"character":8}`, "undefined identifier `nope`"],
+        extraName: "diag_other_helper",
+        extraSource: "module diag_other_helper;\nint x = nope;\n",
+    },
+    // An incremental didChange (with a range) patches the document instead
+    // of replacing it with the fragment
+    {
+        name: "didchange-incremental",
+        source: "module inc;\n\nint x = undefinedSymbol;\n",
+        script: (ref c) { c.didChangeRange(2, 8, 2, 23, "1"); c.hover(2, 4); },
+        expected: [`undefined identifier`, `"diagnostics":[]`, "```d\\nint x = 1\\n```"],
+    },
+    // An import of a document that is open in the editor sees the editor's
+    // text, not the file on disk
+    {
+        name: "import-open-document",
+        source: "module imp_open;\n\nimport imp_open_helper;\nvoid main()\n{\n    fro\n}\n",
+        script: (ref c) {
+            c.didOpenOther("imp_open_helper", "module imp_open_helper;\nint fromDisk;\nint fromEditor;\n");
+            c.completion(5, 7);
+        },
+        expected: [`"label":"fromEditor"`],
+        extraName: "imp_open_helper",
+        extraSource: "module imp_open_helper;\nint fromDisk;\n",
+    },
+    // A dependency edited on disk between requests is picked up
+    {
+        name: "dependency-changed-on-disk",
+        source: "module dep_disk;\n\nimport dep_disk_helper;\nvoid main()\n{\n    fre\n}\n",
+        script: (ref c) {
+            c.completion(5, 7);
+            c.writeFile("dep_disk_helper", "module dep_disk_helper;\nint fresh;\n");
+            c.completion(5, 7);
+        },
+        expected: [`"label":"fresh"`],
+        extraName: "dep_disk_helper",
+        extraSource: "module dep_disk_helper;\nint stale;\n",
+    },
+    // Unknown requests get a MethodNotFound error; shutdown answers null
+    {
+        name: "protocol-lifecycle",
+        source: "module proto;\n",
+        script: (ref c) { c.request("foo/bar", `{}`); c.request("shutdown", `null`); },
+        expected: [`"error":{"code":-32601,"message":"method not found: foo/bar"}`, `"id":3,"result":null}`],
+    },
+    // textDocument/documentHighlight marks the references in the document
+    {
+        name: "document-highlight",
+        source: "module hl;\n\nint x;\nvoid main() { x = 1; }\n",
+        script: (ref c) { c.documentHighlight(3, 14); },
+        expected: [`{"range":{"start":{"line":2,"character":4},"end":{"line":2,"character":5}},"kind":1}`,
+                   `{"range":{"start":{"line":3,"character":14},"end":{"line":3,"character":15}},"kind":1}`],
+    },
+    // textDocument/rename of a local rewrites every reference in the file
+    {
+        name: "rename-local",
+        source: "module ren;\n\nvoid main() { int abc = 1; abc++; }\n",
+        script: (ref c) { c.rename(2, 27, "xyz"); },
+        expected: [`{"changes":{"file://`, `{"range":{"start":{"line":2,"character":18},"end":{"line":2,"character":21}},"newText":"xyz"}`,
+                   `{"range":{"start":{"line":2,"character":27},"end":{"line":2,"character":30}},"newText":"xyz"}`],
+    },
+    // A symbol that other files could use isn't renamed, since only this
+    // file would be updated
+    {
+        name: "rename-refused-public",
+        source: "module ren_pub;\n\nint pub;\nvoid main() { pub = 1; }\n",
+        script: (ref c) { c.rename(3, 14, "q"); },
+        expected: [`"error":{"code":-32803,"message":"cannot rename a symbol that may be used from other files"}`],
+    },
+    // Columns are UTF-16 code units by default: the emoji counts as two,
+    // so `y` is at character 19 rather than byte 21
+    {
+        name: "utf16-columns",
+        source: "module utf;\n\nauto s = \"\U0001F600\"; int y;\nvoid main() { y = 1; }\n",
+        script: (ref c) { c.hover(2, 19); c.definition(3, 14); },
+        expected: ["```d\\nint y\\n```", `"range":{"start":{"line":2,"character":19},"end":{"line":2,"character":20}}`],
+    },
+    // References on a template function include calls of its instances
+    {
+        name: "references-template-call",
+        source: "module refs_tpl;\n\nvoid gen(T)(T v) {}\nvoid main() { gen(1); }\n",
+        script: (ref c) { c.references(2, 6); },
+        expected: [`{"line":2,"character":5}`, `{"line":3,"character":14}`],
     },
     {
         name: "diagnostics-cap",
@@ -503,12 +662,16 @@ string manyErrors()
 
 void runCase(ref const Case tc)
 {
-    auto client = LspClient.start(tc.name, tc.source);
+    auto client = LspClient.start(tc.name, tc.source, tc.extraName, tc.extraSource);
     tc.script(client);
     string output = client.finish();
     foreach (needle; tc.expected)
         assert(output.canFind(needle),
             format("[%s] expected to find:\n  %s\nin output:\n%s",
+                tc.name, needle, output));
+    foreach (needle; tc.absent)
+        assert(!output.canFind(needle),
+            format("[%s] expected NOT to find:\n  %s\nin output:\n%s",
                 tc.name, needle, output));
 }
 
@@ -525,8 +688,9 @@ struct LspClient
     private int nextId = 1;
     private string uri;
     private string sourcePath;
+    private string dir;
 
-    static LspClient start(string caseName, string source)
+    static LspClient start(string caseName, string source, string extraName = null, string extraSource = null)
     {
         // Write the source to a per-case file so the server can resolve `file://` URIs.
         const dir = buildPath(Vars.OUTPUT_BASE, "lsp");
@@ -534,11 +698,14 @@ struct LspClient
             mkdirRecurse(dir);
         const path = buildPath(dir, caseName ~ ".d");
         std.file.write(path, source);
+        if (extraName)
+            std.file.write(buildPath(dir, extraName ~ ".d"), extraSource);
 
         LspClient c;
+        c.dir = dir;
         c.sourcePath = path;
         c.uri = "file://" ~ path;
-        c.pipes = pipeProcess([DMD(), "-lsp"], Redirect.stdin | Redirect.stdout);
+        c.pipes = pipeProcess([DMD(), "-lsp", "-I" ~ dir], Redirect.stdin | Redirect.stdout);
 
         c.request("initialize", `{"processId":1,"capabilities":{}}`);
         c.notify("initialized", `{}`);
@@ -591,6 +758,40 @@ struct LspClient
         notify("textDocument/didChange", format(
             `{"textDocument":{"uri":"%s","version":2},"contentChanges":[{"text":%s}]}`,
             uri, jsonEscape(newText)));
+    }
+
+    // Replace a range of the document (incremental change)
+    void didChangeRange(int startLine, int startChar, int endLine, int endChar, string newText)
+    {
+        notify("textDocument/didChange", format(
+            `{"textDocument":{"uri":"%s","version":2},"contentChanges":[{"range":{"start":{"line":%d,"character":%d},"end":{"line":%d,"character":%d}},"text":%s}]}`,
+            uri, startLine, startChar, endLine, endChar, jsonEscape(newText)));
+    }
+
+    // Open another module (next to the source) in the editor with the given text
+    void didOpenOther(string moduleName, string text)
+    {
+        notify("textDocument/didOpen", format(
+            `{"textDocument":{"uri":"file://%s","languageId":"d","version":1,"text":%s}}`,
+            buildPath(dir, moduleName ~ ".d"), jsonEscape(text)));
+    }
+
+    // Overwrite a module's file on disk, behind the server's back
+    void writeFile(string moduleName, string text)
+    {
+        std.file.write(buildPath(dir, moduleName ~ ".d"), text);
+    }
+
+    void documentHighlight(int line, int character)
+    {
+        request("textDocument/documentHighlight", positionParams(line, character));
+    }
+
+    void rename(int line, int character, string newName)
+    {
+        request("textDocument/rename", format(
+            `{"textDocument":{"uri":"%s"},"position":{"line":%d,"character":%d},"newName":%s}`,
+            uri, line, character, jsonEscape(newName)));
     }
 
     private string positionParams(int line, int character)

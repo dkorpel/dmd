@@ -16133,6 +16133,11 @@ private Expression dotIdSemanticPropX(DotIdExp exp, Scope* sc)
     if (Expression ex = unaSemantic(exp, sc))
         return ex;
 
+    if (onMemberLookup)
+        onMemberLookup(exp.e1, exp.ident, exp.loc, exp.identLoc);
+    if (exp.ident == Id.empty && global.params.lsp)
+        return ErrorExp.get();
+
     auto eSink = global.errorSink;
 
     if (!sc.inCfile && exp.ident == Id._mangleof)

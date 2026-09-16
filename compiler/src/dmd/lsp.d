@@ -1,30 +1,29 @@
 /**
-Implements dmd as a languag server, following the Language Server Protocol (LSP)
+Implements dmd as a language server, following the Language Server Protocol (LSP)
 
-Provides 'hover', 'go to definition', completion, diagnostics, and lexer-based
-syntax highlighting (semantic tokens).
+Provides hover, go to definition, completion, signature help, references,
+document symbols, document highlight, rename, diagnostics and semantic tokens.
 
 See_Also: https://microsoft.github.io/language-server-protocol/
 */
 module dmd.lsp;
 
 // dmd -main -unittest -i -J../.. -Jdmd/res -run dmd/lsp.d
-// bdmdd && cat ../test/testlspinput.txt | dmdd -lsp
-// echo -e "Content-Length: 49\r\n\r\n{\"jsonrpc\":\"2.0\",\"method\":\"initialize\",\"id\":1}" | nc -U /tmp/lsp-socket
 
 import core.stdc.stdio;
 import core.vararg;
 import dmd.aggregate;
 import dmd.arraytypes;
 import dmd.astenums;
-import dmd.ast_node;
 import dmd.attrib;
 import dmd.common.outbuffer;
 import dmd.dcast : implicitConvTo;
 import dmd.dclass;
 import dmd.declaration;
 import dmd.denum;
+import dmd.dimport;
 import dmd.dmodule;
+import dmd.dscope;
 import dmd.dstruct;
 import dmd.dsymbol;
 import dmd.dsymbolsem;
@@ -32,10 +31,12 @@ import dmd.dtemplate;
 import dmd.errors : ErrorSinkCompiler;
 import dmd.errorsink;
 import dmd.expression;
+import dmd.file_manager;
 import dmd.func;
 import dmd.globals;
+import dmd.hdrgen : HdrGenState, toCBuffer, parameterToChars;
+import dmd.id;
 import dmd.identifier;
-import dmd.lexer;
 import dmd.location;
 import dmd.mtype;
 import dmd.typesem : Type_init, toBasetype;
@@ -43,23 +44,38 @@ import dmd.root.file;
 import dmd.root.filename;
 import dmd.root.json;
 import dmd.root.string;
-import dmd.rootobject;
 import dmd.semantic2;
 import dmd.semantic3;
-import dmd.target;
-import dmd.tokens;
 import dmd.visitor;
 
 
 struct Lsp
 {
-    // dmd.globals.Param params;
-
-    /// In-memory document store: URI -> content (kept in sync via textDocument/did* notifications)
+    /// URI -> text of the documents open in the editor
     string[string] openDocuments;
 
     /// Sink that collects diagnostics produced during analyzeModule
     ErrorSinkLsp eSink;
+
+    /// Whether the client counts columns in UTF-16 code units rather than bytes
+    bool utf16 = true;
+
+    bool shutdownRequested;
+
+    /// The last analysis, reused by requests on the same document text
+    Analysis cache;
+
+    /// Other documents diagnostics were last published to, to clear them later
+    string[] publishedUris;
+}
+
+/// A supplemental note attached to a diagnostic, with its own location.
+struct RelatedInfo
+{
+    int line;
+    int column;
+    const(char)[] filename;
+    string message;
 }
 
 /// One LSP diagnostic collected from an ErrorSink callback.
@@ -68,8 +84,11 @@ struct Diagnostic
 {
     int line;
     int column;
+    const(char)[] filename;
     int severity; // 1=Error, 2=Warning, 3=Info, 4=Hint
+    bool deprecation;
     string message;
+    RelatedInfo[] related;
 }
 
 private size_t utf8Trim(const(char)[] s, size_t max) nothrow @nogc
@@ -83,8 +102,8 @@ private size_t utf8Trim(const(char)[] s, size_t max) nothrow @nogc
 }
 
 /// ErrorSink that captures diagnostics into a list instead of printing them.
-/// One instance is owned by Lsp and reused across requests; callers must
-/// clear `diagnostics` before each analysis run.
+/// One instance is owned by Lsp and reused across requests; `clear` is called
+/// before each analysis run.
 class ErrorSinkLsp : ErrorSinkCompiler
 {
     enum maxDiagnostics = 1000;
@@ -98,47 +117,56 @@ class ErrorSinkLsp : ErrorSinkCompiler
 
     private bool truncated;
 
-    private void add(Loc loc, int severity, const(char)* format, va_list ap) nothrow
+    private static string formatMessage(const(char)* format, va_list ap) nothrow
+    {
+        OutBuffer msg;
+        msg.vprintf(format, ap);
+        auto text = msg.extractSlice();
+        return text[0 .. utf8Trim(text, maxMessageLength)].idup;
+    }
+
+    private void add(Loc loc, int severity, bool deprecation, const(char)* format, va_list ap) nothrow
     {
         if (diagnostics.length >= maxDiagnostics)
         {
             if (!truncated)
             {
                 truncated = true;
-                diagnostics ~= Diagnostic(0, 0, 1, "too many diagnostics, further messages suppressed");
+                diagnostics ~= Diagnostic(0, 0, null, 1, false, "too many diagnostics, further messages suppressed");
             }
             lastDuplicate = true;
             return;
         }
-        OutBuffer msg;
-        msg.vprintf(format, ap);
         auto sl = SourceLoc(loc);
-        auto text = msg.extractSlice();
-        auto message = text[0 .. utf8Trim(text, maxMessageLength)].idup;
+        auto message = formatMessage(format, ap);
         foreach (ref d; diagnostics)
         {
-            const first = d.message.length > message.length && d.message[message.length] == '\n'
-                ? d.message[0 .. message.length] : d.message;
-            if (d.line == sl.line && d.column == sl.column && d.severity == severity && first == message)
+            if (d.line == sl.line && d.column == sl.column && d.severity == severity
+                && d.message == message && d.filename == sl.filename)
             {
                 lastDuplicate = true;
                 return;
             }
         }
         lastDuplicate = false;
-        diagnostics ~= Diagnostic(sl.line, sl.column, severity, message);
+        diagnostics ~= Diagnostic(sl.line, sl.column, sl.filename, severity, deprecation, message);
     }
 
-    private void appendToLast(const(char)* format, va_list ap) nothrow
+    private void appendToLast(Loc loc, const(char)* format, va_list ap) nothrow
     {
         if (diagnostics.length == 0 || lastDuplicate)
             return;
-        if (diagnostics[$ - 1].message.length >= maxMessageLength)
+        auto d = &diagnostics[$ - 1];
+        auto text = formatMessage(format, ap);
+        auto sl = SourceLoc(loc);
+        if (sl.line > 0 && sl.filename.length)
+        {
+            d.related ~= RelatedInfo(sl.line, sl.column, sl.filename, text);
             return;
-        OutBuffer msg;
-        msg.vprintf(format, ap);
-        auto text = msg.extractSlice();
-        diagnostics[$ - 1].message ~= "\n" ~ text[0 .. utf8Trim(text, maxMessageLength)].idup;
+        }
+        if (d.message.length >= maxMessageLength)
+            return;
+        d.message ~= "\n" ~ text;
     }
 
     void clear() nothrow
@@ -162,188 +190,382 @@ class ErrorSinkLsp : ErrorSinkCompiler
         if (global.gag)
             global.gaggedErrors++;
         else
-            add(loc, 1, format, ap);
+            add(loc, 1, false, format, ap);
     }
     void vwarning(Loc loc, const(char)* format, va_list ap)
     {
         if (!global.gag)
-            add(loc, 2, format, ap);
+            add(loc, 2, false, format, ap);
+    }
+    void vdeprecation(Loc loc, const(char)* format, va_list ap)
+    {
+        if (useDeprecated == DiagnosticReporting.off)
+            return;
+        if (useDeprecated == DiagnosticReporting.error)
+            return verror(loc, format, ap);
+        if (global.gag)
+        {
+            global.gaggedDeprecations++;
+            return;
+        }
+        global.deprecations++;
+        add(loc, 2, true, format, ap);
     }
     void verrorSupplemental(Loc loc, const(char)* format, va_list ap)
     {
         if (!global.gag)
-            appendToLast(format, ap);
+            appendToLast(loc, format, ap);
     }
     void vwarningSupplemental(Loc loc, const(char)* format, va_list ap)
     {
         if (!global.gag)
-            appendToLast(format, ap);
+            appendToLast(loc, format, ap);
+    }
+    void vdeprecationSupplemental(Loc loc, const(char)* format, va_list ap)
+    {
+        if (useDeprecated != DiagnosticReporting.off && !global.gag)
+            appendToLast(loc, format, ap);
+    }
+    void vmessage(Loc loc, const(char)* format, va_list ap)
+    {
+        OutBuffer msg;
+        msg.vprintf(format, ap);
+        fprintf(stderr, "%s\n", msg.peekChars());
     }
 }
 
+// ----------------------------------------------------------------------------
+// URIs and position encoding
+// ----------------------------------------------------------------------------
 
-extern(C++) class LspVisitor : SemanticTimeTransitiveVisitor
+private int hexDigit(char c)
+{
+    if (c >= '0' && c <= '9')
+        return c - '0';
+    if (c >= 'a' && c <= 'f')
+        return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F')
+        return c - 'A' + 10;
+    return -1;
+}
+
+/// The file system path of a `file://` URI, with percent-escapes decoded.
+/// Returns: null for other URI schemes.
+string uriFilename(string uri)
+{
+    if (!uri.startsWith("file://"))
+        return null;
+    auto path = uri["file://".length .. $];
+    char[] result;
+    result.reserve(path.length);
+    for (size_t i = 0; i < path.length; i++)
+    {
+        if (path[i] == '%' && i + 2 < path.length && hexDigit(path[i + 1]) >= 0 && hexDigit(path[i + 2]) >= 0)
+        {
+            result ~= cast(char)(hexDigit(path[i + 1]) * 16 + hexDigit(path[i + 2]));
+            i += 2;
+        }
+        else
+            result ~= path[i];
+    }
+    version (Windows)
+    {
+        if (result.length >= 3 && result[0] == '/' && result[2] == ':')
+            result = result[1 .. $];
+    }
+    return cast(string) result;
+}
+
+/// Write `filename` as a `file://` URI. A relative filename (a module found
+/// via a relative -I path) is made absolute: file://source/x.d makes `source`
+/// the URI authority and the client opens the non-existing /x.d.
+void writeFileUri(ref OutBuffer buf, const(char)[] filename)
+{
+    if (!FileName.absolute(filename))
+    {
+        OutBuffer nameBuf;
+        nameBuf.writestring(filename);
+        filename = FileName.toAbsolute(nameBuf.peekChars()).toDString();
+    }
+    buf.writestring("file://");
+    version (Windows)
+    {
+        if (filename.length >= 2 && filename[1] == ':')
+            buf.writeByte('/');
+    }
+    foreach (char c; filename)
+    {
+        const unreserved = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+            || c == '-' || c == '.' || c == '_' || c == '~' || c == '/';
+        version (Windows)
+            const keep = unreserved || c == ':';
+        else
+            const keep = unreserved;
+        if (keep)
+            buf.writeByte(c);
+        else
+            buf.printf("%%%02X", cast(uint) cast(ubyte) c);
+    }
+}
+
+/// Number of UTF-16 code units needed for the UTF-8 text `s`
+size_t utf16Length(const(char)[] s) nothrow @nogc
+{
+    size_t n = 0;
+    foreach (char c; s)
+    {
+        if ((c & 0xC0) != 0x80)
+            n++;
+        if (c >= 0xF0)
+            n++;
+    }
+    return n;
+}
+
+/// Byte offset in `line` of the character `units` UTF-16 code units in
+size_t utf16ToByteOffset(const(char)[] line, size_t units) nothrow @nogc
+{
+    size_t n = 0;
+    foreach (i, char c; line)
+    {
+        if ((c & 0xC0) != 0x80)
+        {
+            if (n >= units)
+                return i;
+            n++;
+            if (c >= 0xF0)
+                n++;
+        }
+    }
+    return line.length;
+}
+
+/// The text of 0-based line `line` in `content`, without its line terminator
+const(char)[] lineSlice(const(char)[] content, int line) nothrow @nogc
+{
+    size_t start = 0;
+    for (int l = 0; l < line; l++)
+    {
+        while (start < content.length && content[start] != '\n')
+            start++;
+        if (start < content.length)
+            start++;
+    }
+    size_t end = start;
+    while (end < content.length && content[end] != '\n' && content[end] != '\r')
+        end++;
+    return content[start .. end];
+}
+
+/// The text of the document `filename`: the editor's copy when it is open,
+/// otherwise the copy the compiler read (or reads now) from disk.
+const(char)[] fileContent(ref Lsp lsp, const(char)[] filename)
+{
+    foreach (uri, content; lsp.openDocuments)
+    {
+        if (sameFile(uriFilename(uri), filename))
+            return content;
+    }
+    if (auto bytes = global.fileManager.getFileContents(FileName(filename)))
+        return cast(const(char)[]) bytes;
+    return null;
+}
+
+/// Whether two file names refer to the same file (one may be relative)
+bool sameFile(const(char)[] a, const(char)[] b)
+{
+    if (a == b)
+        return true;
+    if (a.length == 0 || b.length == 0)
+        return false;
+    if (FileName.absolute(a) == FileName.absolute(b))
+        return false;
+    OutBuffer nameBuf;
+    nameBuf.writestring(FileName.absolute(a) ? b : a);
+    return FileName.toAbsolute(nameBuf.peekChars()).toDString() == (FileName.absolute(a) ? a : b);
+}
+
+/// Convert a 1-based byte column on 1-based line `line` of `filename` to the
+/// client's 0-based column
+int clientColumn(ref Lsp lsp, const(char)[] filename, int line, int byteColumn)
+{
+    const col = byteColumn > 0 ? byteColumn - 1 : 0;
+    if (!lsp.utf16)
+        return col;
+    auto text = lineSlice(fileContent(lsp, filename), line - 1);
+    return cast(int) utf16Length(text[0 .. col < text.length ? col : text.length]);
+}
+
+/// Convert the client's 0-based column on 0-based `line` of `content` to a
+/// 0-based byte column
+int byteColumn(ref Lsp lsp, const(char)[] content, int line, int character)
+{
+    if (!lsp.utf16)
+        return character;
+    return cast(int) utf16ToByteOffset(lineSlice(content, line), character);
+}
+
+/// Convert the (0-based, byte) `pos` in the document at `uri` to a byte
+/// column the compiler-side code expects
+Position toBytePosition(ref Lsp lsp, string uri, Position pos)
+{
+    if (auto content = uri in lsp.openDocuments)
+        pos.character = byteColumn(lsp, *content, pos.line, pos.character);
+    return pos;
+}
+
+/// Write an LSP Range for `len` bytes at 1-based (line, column) in `filename`
+void writeRange(ref OutBuffer buf, ref Lsp lsp, const(char)[] filename, int line, int column, int len)
+{
+    const start = clientColumn(lsp, filename, line, column);
+    const end = clientColumn(lsp, filename, line, column + len);
+    buf.printf(`{"start":{"line":%d,"character":%d},"end":{"line":%d,"character":%d}}`,
+        line - 1, start, line - 1, end);
+}
+
+/// Write an LSP Location JSON object for a name of `len` characters at `sl`.
+void writeLocationAt(ref OutBuffer buf, ref Lsp lsp, SourceLoc sl, int len)
+{
+    buf.writestring(`{"uri":"`);
+    writeFileUri(buf, sl.filename);
+    buf.writestring(`","range":`);
+    writeRange(buf, lsp, sl.filename, sl.line, sl.column, len);
+    buf.writestring(`}`);
+}
+
+/// Write an LSP Location JSON object pointing at s's declaration.
+/// Returns: false (and writes nothing) when s has no usable location.
+bool writeLocation(ref OutBuffer buf, ref Lsp lsp, Dsymbol s)
+{
+    SourceLoc sl = SourceLoc(declarationLoc(s));
+    if (sl.filename.length == 0 || sl.line == 0)
+        return false;
+    writeLocationAt(buf, lsp, sl, declarationLength(s));
+    return true;
+}
+
+/// Length of the identifier at a declaration's location
+int declarationLength(Dsymbol s)
+{
+    if (s.isCtorDeclaration())
+        return cast(int) "this".length;
+    return s.ident ? cast(int) s.ident.toString().length : 1;
+}
+
+// ----------------------------------------------------------------------------
+// Identifier occurrences
+// ----------------------------------------------------------------------------
+
+/// A declaration or use of a named symbol in the analyzed document
+struct Occurrence
+{
+    SourceLoc loc;
+    int len;
+    Dsymbol sym;
+    bool declaration;
+}
+
+/// Collects every occurrence of a resolved symbol, and every call, in a module
+extern(C++) final class OccurrenceVisitor : SemanticTimeTransitiveVisitor
 {
     alias visit = typeof(super).visit;
 
-    int line;
-    int column;
-    ASTNode result;
+    Occurrence[] occurrences;
+    CallExp[] calls;
 
-    this(int line, int column)
+    extern (D) void add(Loc loc, Dsymbol s, bool declaration, size_t len = 0)
     {
-        this.line = line;
-        this.column = column;
-    }
-
-    bool inLoc(Loc loc, Identifier ident)
-    {
-        return inLocLen(loc, ident.toString().length);
-    }
-
-    bool inLocLen(Loc loc, size_t len)
-    {
-        if (!loc.isValid)
-            return false;
-        auto sl = SourceLoc(loc);
-        const endCol = sl.column + len;
-        return (this.line == sl.line && this.column >= sl.column && this.column <= endCol);
-    }
-
-    override void visit(StructDeclaration d)
-    {
-        if (inLoc(d.loc, d.ident))
-            this.result = d;
-        super.visit(d);
-    }
-
-    override void visit(FuncDeclaration d)
-    {
-        if (inLoc(d.loc, d.ident))
-            this.result = d;
-        checkParameters(d);
-        super.visit(d);
-    }
-
-    override void visit(CtorDeclaration d)
-    {
-        if (inLocLen(d.loc, "this".length))
-            this.result = d;
-        checkParameters(d);
-        super.visit(d);
-    }
-
-    final void checkParameters(FuncDeclaration d)
-    {
-        if (!d.parameters)
+        if (!loc.isValid || !s || !s.ident)
             return;
-        foreach (v; *d.parameters)
-            if (v.ident && inLoc(v.loc, v.ident))
-                this.result = v;
+        SourceLoc sl = SourceLoc(loc);
+        if (sl.line == 0 || sl.filename != rootFilename)
+            return;
+        if (len == 0)
+            len = s.isCtorDeclaration() ? "this".length : s.ident.toString().length;
+        occurrences ~= Occurrence(sl, cast(int) len, s, declaration);
     }
 
-    override void visit(ClassDeclaration d)
+    extern (D) void addDeclaration(Dsymbol s)
     {
-        if (inLoc(d.loc, d.ident))
-            this.result = d;
-        super.visit(d);
+        if (s.ident && (s.isCtorDeclaration() || !s.ident.toString().startsWith("__")))
+            add(s.loc, s, true);
     }
 
-    override void visit(InterfaceDeclaration d)
+    extern (D) void addFunction(FuncDeclaration d)
     {
-        if (inLoc(d.loc, d.ident))
-            this.result = d;
-        super.visit(d);
+        if (!d.isGenerated)
+            addDeclaration(d);
+        if (d.parameters)
+            foreach (p; *d.parameters)
+                addDeclaration(p);
     }
 
-    override void visit(EnumDeclaration d)
-    {
-        if (d.ident && inLoc(d.loc, d.ident))
-            this.result = d;
-        super.visit(d);
-    }
+    override void visit(StructDeclaration d) { addDeclaration(d); super.visit(d); }
+    override void visit(ClassDeclaration d) { addDeclaration(d); super.visit(d); }
+    override void visit(InterfaceDeclaration d) { addDeclaration(d); super.visit(d); }
+    override void visit(EnumDeclaration d) { addDeclaration(d); super.visit(d); }
+    override void visit(EnumMember em) { addDeclaration(em); super.visit(em); }
+    override void visit(AliasDeclaration d) { addDeclaration(d); super.visit(d); }
+    override void visit(VarDeclaration d) { addDeclaration(d); super.visit(d); }
+    override void visit(FuncDeclaration d) { addFunction(d); super.visit(d); }
+    override void visit(CtorDeclaration d) { addFunction(d); super.visit(d); }
 
-    override void visit(EnumMember em)
+    override void visit(TemplateDeclaration d)
     {
-        if (inLoc(em.loc, em.ident))
-            this.result = em;
-        super.visit(em);
-    }
-
-    override void visit(VarDeclaration d)
-    {
-        if (inLoc(d.loc, d.ident))
-            this.result = d;
-        // The variable's type may be written as a named type (e.g. `S s;`);
-        // if the cursor is on the type name, resolve to the type's declaration
-        else if (auto ti = d.originalType ? d.originalType.isTypeIdentifier() : null)
-        {
-            if (inLoc(ti.loc, ti.ident))
-            {
-                if (auto s = typeSymbolOf(d.type))
-                    this.result = s;
-            }
-        }
+        add(declarationLoc(d), d, true);
         super.visit(d);
     }
 
     override void visit(VarExp e)
     {
-        // Skip compiler-synthesized references like a struct's `__init` symbol
-        // (a SymbolDeclaration sharing the struct's name and location)
-        if (!e.var.isSymbolDeclaration() && inLoc(e.loc, e.var.ident))
-            this.result = e;
+        if (!e.var.isSymbolDeclaration())
+            add(e.loc, e.var, false);
     }
 
     override void visit(DotVarExp e)
     {
-        // A struct constructor call `S(...)` lowers to `sle.__ctor(...)` with
-        // identLoc at the type name, so match against the aggregate's name
-        Identifier id = e.var ? e.var.ident : null;
-        if (auto ctor = e.var ? e.var.isCtorDeclaration() : null)
-            if (auto ad = ctor.isMember())
-                id = ad.ident;
-        if (id && inLoc(e.identLoc, id))
-            this.result = e;
+        Dsymbol s = e.var;
+        if (auto ctor = s ? s.isCtorDeclaration() : null)
+            s = ctor.isMember();
+        add(e.identLoc, s, false);
         super.visit(e);
     }
 
     override void visit(StructLiteralExp e)
     {
-        if (e.sd && e.sd.ident && inLoc(e.loc, e.sd.ident))
-            this.result = e;
+        add(e.loc, e.sd, false);
         super.visit(e);
     }
 
     override void visit(NewExp e)
     {
         if (auto s = typeSymbolOf(e.type))
-            if (s.ident && inLoc(e.typeLoc, s.ident))
-                this.result = e;
+            add(e.typeLoc, e.member ? e.member : s, false, s.ident.toString().length);
         super.visit(e);
     }
 
     override void visit(ScopeExp e)
     {
-        if (e.sds && e.sds.ident && inLoc(e.loc, e.sds.ident))
-            this.result = e;
+        add(e.loc, e.sds, false);
         super.visit(e);
     }
 
     override void visit(TypeExp e)
     {
-        if (auto s = typeSymbolOf(e.type))
-            if (s.ident && inLoc(e.loc, s.ident))
-                this.result = e;
+        add(e.loc, typeSymbolOf(e.type), false);
+        super.visit(e);
+    }
+
+    override void visit(CallExp e)
+    {
+        calls ~= e;
         super.visit(e);
     }
 }
 
-/// Returns: the declaration of a struct/class/interface/enum type (following
-/// one level of pointer indirection), or null for other types.
+/// The declaration of a struct, class, interface or enum type, through one level of pointer
 Dsymbol typeSymbolOf(Type t)
 {
-    // check enums before toBasetype(), which resolves them to their base type
     static Dsymbol direct(Type t)
     {
         if (auto te = t.isTypeEnum())
@@ -363,61 +585,45 @@ Dsymbol typeSymbolOf(Type t)
     return tp ? direct(tp.next) : null;
 }
 
-/// Resolve the AST node under the cursor to the declaration it references,
-/// for textDocument/definition. A declaration resolves to itself.
-Dsymbol definitionTarget(ASTNode obj)
+/// Where the name of `s` is declared; a template's at its eponymous member
+Loc declarationLoc(Dsymbol s)
 {
-    if (auto e = isExpression(obj))
-    {
-        if (auto ve = e.isVarExp())
-            return ve.var;
-        if (auto dve = e.isDotVarExp())
-            return dve.var;
-        if (auto sle = e.isStructLiteralExp())
-            return sle.sd;
-        if (auto ne = e.isNewExp())
-            return ne.member ? ne.member : typeSymbolOf(ne.type);
-        if (auto se = e.isScopeExp())
-            return se.sds;
-        if (auto te = e.isTypeExp())
-            return typeSymbolOf(te.type);
+    if (auto td = s.isTemplateDeclaration())
+        if (td.onemember)
+            return td.onemember.loc;
+    return s.loc;
+}
+
+/// Every occurrence and call in `m`, plus the uses only known through frontend hooks
+OccurrenceVisitor collectOccurrences(Module m)
+{
+    auto visitor = new OccurrenceVisitor();
+    visitor.visit(m);
+    visitor.occurrences ~= hookRefs;
+    return visitor;
+}
+
+/// The symbol whose name is at `cursor`, or null
+Dsymbol symbolAt(Occurrence[] occurrences, SourceLoc cursor)
+{
+    foreach (o; occurrences)
+        if (o.loc.line == cursor.line && cursor.column >= o.loc.column && cursor.column <= o.loc.column + o.len)
+            return o.sym;
+    return null;
+}
+
+/// The symbol at the cursor of a request
+Dsymbol symbolAt(ref Lsp lsp, Params params)
+{
+    Module m = analyzeModule(lsp, params.textDocument.uri);
+    if (!m)
         return null;
-    }
-    return isDsymbol(obj);
+    return symbolAt(collectOccurrences(m).occurrences, toSourceLoc(params.textDocument.uri, params.position));
 }
 
-/// Write an LSP Location JSON object for a name of `len` characters at `sl`.
-/// The filename may be relative (a module found via a relative -I path), but a
-/// file:// URI needs an absolute path: file://source/x.d makes `source` the
-/// URI authority and the client opens the non-existing /x.d.
-void writeLocationAt(ref OutBuffer buf, SourceLoc sl, int len)
-{
-    const(char)[] filename = sl.filename;
-    if (!FileName.absolute(filename))
-    {
-        OutBuffer nameBuf;
-        nameBuf.writestring(filename);
-        filename = FileName.toAbsolute(nameBuf.peekChars()).toDString();
-    }
-    buf.writestring(`{"uri":"file://`);
-    buf.writeJsonString(filename);
-    buf.printf(`","range":{"start":{"line":%d,"character":%d},"end":{"line":%d,"character":%d}}}`,
-        sl.line - 1, sl.column - 1, sl.line - 1, sl.column - 1 + len);
-}
-
-/// Write an LSP Location JSON object pointing at s's declaration.
-/// Returns: false (and writes nothing) when s has no usable location.
-bool writeLocation(ref OutBuffer buf, Dsymbol s)
-{
-    SourceLoc sl = SourceLoc(s.loc);
-    if (sl.filename.length == 0 || sl.line == 0)
-        return false;
-    int len = s.ident ? cast(int) s.ident.toString().length : 1;
-    if (s.isCtorDeclaration())
-        len = cast(int) "this".length;
-    writeLocationAt(buf, sl, len);
-    return true;
-}
+// ----------------------------------------------------------------------------
+// Analysis
+// ----------------------------------------------------------------------------
 
 version (Posix)
 {
@@ -434,20 +640,100 @@ version (Posix)
     private __gshared Module lspFatalModule;
 }
 
-/// Run the dmd pipeline (read → parse → semantic) on the document at `uri`.
-/// Errors are routed through `lsp.eSink`; caller is responsible for clearing
-/// `lsp.eSink.diagnostics` beforehand and for calling `deinitializeModule()`
-/// when done with the returned module.
-///
-/// A compiler fatal() during analysis is caught (diagnostics collected up to
-/// that point remain in `lsp.eSink`), so a single bad document cannot bring
-/// the server down. When the fatal() fired after parsing, the partially
-/// analyzed module is returned so requests can still see its declarations.
-///
-/// Returns: the post-semantic Module, the partially analyzed Module on a
-/// recovered fatal(), or null on read/parse failure.
+/// A file the last analysis read from disk, with the bytes it saw
+struct DepFile
+{
+    const(char)[] name;
+    const(ubyte)[] contents;
+}
+
+/// The last analysis, reused by requests on the same document text
+struct Analysis
+{
+    bool valid;
+    string uri;
+    string text;
+    Module mod;
+    DepFile[] deps;
+}
+
+/// An `e1.ident` member access recorded by `onMemberLookup`; an incomplete `e1.` has the empty identifier
+struct MemberAccess
+{
+    Expression e1;
+    Identifier ident;
+    SourceLoc loc;
+    SourceLoc identLoc;
+}
+
+/// A scope recorded by `onScopeEntered`: the scope symbols visible in it, innermost first
+struct ScopeRecord
+{
+    SourceLoc loc;
+    SourceLoc endloc;
+    ScopeDsymbol[] chain;
+}
+
+private __gshared Occurrence[] hookRefs;
+private __gshared MemberAccess[] memberAccesses;
+private __gshared ScopeRecord[] scopeRecords;
+private __gshared const(char)[] rootFilename;
+
+private void recordConstantFold(Dsymbol d, Loc loc)
+{
+    SourceLoc sl = SourceLoc(loc);
+    if (sl.line == 0 || sl.filename != rootFilename || !d.ident)
+        return;
+    hookRefs ~= Occurrence(sl, cast(int) d.ident.toString().length, d, false);
+}
+
+private void recordTypeResolved(Type t, Dsymbol s, Identifier ident, Loc loc)
+{
+    Dsymbol ts = typeSymbolOf(t);
+    if (ts && ts.ident !is ident)
+        ts = null;
+    if (!ts && s && s.ident is ident)
+        ts = s;
+    if (ts)
+        recordConstantFold(ts, loc);
+}
+
+private void recordMemberLookup(Expression e1, Identifier ident, Loc loc, Loc identLoc)
+{
+    SourceLoc sl = SourceLoc(loc);
+    if (sl.line == 0 || sl.filename != rootFilename)
+        return;
+    memberAccesses ~= MemberAccess(e1, ident, sl, SourceLoc(identLoc));
+}
+
+private void recordScopeEntered(Loc loc, Loc endloc, Scope* sc)
+{
+    SourceLoc sl = SourceLoc(loc);
+    if (sl.line == 0 || sl.filename != rootFilename)
+        return;
+    ScopeDsymbol[] chain;
+    for (Scope* s = sc; s; s = s.enclosing)
+    {
+        if (s.scopesym && (chain.length == 0 || chain[$ - 1] !is s.scopesym))
+            chain ~= s.scopesym;
+    }
+    scopeRecords ~= ScopeRecord(sl, SourceLoc(endloc), chain);
+}
+
+/// Analyze the document at `uri`, or return the previous result when its text
+/// and every file it depends on are unchanged. Diagnostics end up in `lsp.eSink`.
+/// A compiler fatal() abandons that one analysis instead of exiting the server.
+/// Returns: the Module, partially analyzed after a fatal(), or null on read/parse failure.
 Module analyzeModule(ref Lsp lsp, string uri)
 {
+    string text;
+    if (auto p = uri in lsp.openDocuments)
+        text = *p;
+    if (lsp.cache.valid && lsp.cache.uri == uri && lsp.cache.text == text && depsUnchanged(lsp.cache.deps))
+        return lsp.cache.mod;
+
+    deinitializeModule(lsp);
+    Module m;
     version (Posix)
     {
         // Save the pre-analysis globals where the recovery path can reach them:
@@ -462,51 +748,56 @@ Module analyzeModule(ref Lsp lsp, string uri)
             lspFatalArmed = false;
             global.errorSink = lspFatalSavedSink;
             global.errors = lspFatalSavedErrors;
-            Module m = lspFatalModule;
+            m = lspFatalModule;
             lspFatalModule = null;
-            return m;
         }
-        lspFatalArmed = true;
-        Module m = analyzeModuleImpl(lsp, uri);
-        lspFatalArmed = false;
-        lspFatalModule = null;
-        return m;
+        else
+        {
+            lspFatalArmed = true;
+            m = analyzeModuleImpl(lsp, uri);
+            lspFatalArmed = false;
+            lspFatalModule = null;
+        }
     }
     else
-        return analyzeModuleImpl(lsp, uri);
+        m = analyzeModuleImpl(lsp, uri);
+
+    if (m)
+        lsp.cache = Analysis(true, uri, text, m, collectDeps(lsp));
+    return m;
 }
 
-/// The actual analysis pipeline; see analyzeModule for the fatal() guard.
-/// Use of a symbol whose reference doesn't survive in the AST: a folded-away
-/// constant (enum member, manifest constant, via the `onConstantFold` hook) or
-/// a type name written in source (via `onTypeResolved` — types are interned,
-/// so the written spelling's location is otherwise discarded).
-struct FoldedRef
+/// Every file the compiler read from disk during the last analysis
+private DepFile[] collectDeps(ref Lsp lsp)
 {
-    Dsymbol d;
-    SourceLoc loc;
+    DepFile[] all;
+    foreach (name, contents; global.fileManager)
+        all ~= DepFile(name, contents);
+    DepFile[] deps;
+    foreach (dep; all)
+    {
+        bool open = false;
+        foreach (uri, _; lsp.openDocuments)
+            if (sameFile(uriFilename(uri), dep.name))
+                open = true;
+        if (!open)
+            deps ~= dep;
+    }
+    return deps;
 }
 
-private __gshared FoldedRef[] foldedRefs;
-private __gshared const(char)[] foldedRefFilename;
-
-private void recordConstantFold(Dsymbol d, Loc loc)
+/// Whether every file in `deps` still has the bytes the analysis saw
+private bool depsUnchanged(DepFile[] deps)
 {
-    SourceLoc sl = SourceLoc(loc);
-    if (sl.line == 0 || sl.filename != foldedRefFilename)
-        return;
-    foldedRefs ~= FoldedRef(d, sl);
-}
-
-private void recordTypeResolved(Type t, Dsymbol s, Identifier ident, Loc loc)
-{
-    Dsymbol ts = typeSymbolOf(t);
-    if (ts && ts.ident !is ident)
-        ts = null;
-    if (!ts && s && s.ident is ident)
-        ts = s;
-    if (ts)
-        recordConstantFold(ts, loc);
+    foreach (dep; deps)
+    {
+        OutBuffer buf;
+        if (File.read(dep.name, buf))
+            return false;
+        if (buf.peekSlice() != dep.contents)
+            return false;
+    }
+    return true;
 }
 
 private Module analyzeModuleImpl(ref Lsp lsp, string uri)
@@ -514,22 +805,32 @@ private Module analyzeModuleImpl(ref Lsp lsp, string uri)
     Type_init();
     Module._init();
     Loc._init();
-    foldedRefs = null;
+    hookRefs = null;
+    memberAccesses = null;
+    scopeRecords = null;
+    lsp.eSink.clear();
     onConstantFold = &recordConstantFold;
     onTypeResolved = &recordTypeResolved;
+    onMemberLookup = &recordMemberLookup;
+    onScopeEntered = &recordScopeEntered;
+
+    foreach (docUri, content; lsp.openDocuments)
+    {
+        const filename = uriFilename(docUri);
+        if (filename.length == 0)
+            continue;
+        const bytes = cast(const(ubyte)[]) (content ~ "\0\0\0\0");
+        global.fileManager.add(FileName(filename), bytes[0 .. $ - 4]);
+    }
 
     SourceLoc sl = toSourceLoc(uri, Position(0, 0));
-    foldedRefFilename = sl.filename;
+    rootFilename = sl.filename;
     const(char)[] p = FileName.name(sl.filename); // strip path
     auto ext = FileName.ext(sl.filename);
     p = p[0 .. $ - ext.length - 1];
     Loc loc = Loc.singleFilename(sl.filename.ptr);
     auto id = Identifier.idPool(p);
     Module m = new Module(loc, sl.filename, id, /*ddoc*/ true, false);
-
-    // Use in-memory content if available (avoids reading unsaved file from disk)
-    if (auto content = uri in lsp.openDocuments)
-        m.src = cast(const(ubyte)[]) (*content ~ "\0\0\0\0");
 
     // Route compiler diagnostics into our collector for the duration of analysis
     auto savedSink = global.errorSink;
@@ -566,404 +867,373 @@ private Module analyzeModuleImpl(ref Lsp lsp, string uri)
     return m;
 }
 
-/// Reset compiler globals so the next analyzeModule call starts fresh.
-void deinitializeModule()
+/// Drop the last analysis and reset compiler globals so the next
+/// analyzeModule call starts fresh.
+void deinitializeModule(ref Lsp lsp)
 {
+    lsp.cache = Analysis.init;
+    hookRefs = null;
+    memberAccesses = null;
+    scopeRecords = null;
     Type_init();
     Module.deinitialize();
     FuncDeclaration.lastMain = null;
+    global.fileManager = new FileManager();
 
-    // The server analyzes the module afresh on every request, so the previous
-    // analysis is now unreachable garbage. dmd runs with the collecting GC
-    // under -lsp (see main.d), but its default schedule lets that garbage pile
-    // up between collections, so a long editing session ratchets RSS upward.
-    // Collect eagerly and hand the freed pages back to the OS to keep the
-    // server's footprint flat across thousands of edits.
+    // The previous analysis is now unreachable garbage. dmd runs with the
+    // collecting GC under -lsp (see main.d), but its default schedule lets that
+    // garbage pile up between collections, so a long editing session ratchets
+    // RSS upward. Collect eagerly and hand the freed pages back to the OS to
+    // keep the server's footprint flat across thousands of edits.
     import core.memory : GC;
     GC.collect();
     GC.minimize();
 }
 
-/// Find the AST node under the cursor.
-ASTNode findCursorObject(ref Lsp lsp, Params params)
+// ----------------------------------------------------------------------------
+// Hover
+// ----------------------------------------------------------------------------
+
+/// The template `s` is the eponymous member or an instance member of, if any
+private TemplateDeclaration templateOf(Dsymbol s)
 {
-    lsp.eSink.diagnostics = null;
-    SourceLoc sl = toSourceLoc(params.textDocument.uri, params.position);
-    Module m = analyzeModule(lsp, params.textDocument.uri);
-    if (!m)
-    {
-        deinitializeModule();
+    if (!s.parent)
         return null;
-    }
-    scope visitor = new LspVisitor(sl.line, sl.column);
-    visitor.visit(m);
-    deinitializeModule();
-    if (visitor.result)
-        return visitor.result;
-    return foldedRefAt(sl.line, sl.column, sl.filename);
+    if (auto ti = s.parent.isTemplateInstance())
+        return ti.tempdecl ? ti.tempdecl.isTemplateDeclaration() : null;
+    if (auto td = s.parent.isTemplateDeclaration())
+        return td.onemember is s ? td : null;
+    return null;
 }
 
-/// Find the declaration of a folded-away constant use or written type name
-/// covering the cursor, for spots where the referencing expression or type
-/// spelling no longer exists in the AST.
-private Dsymbol foldedRefAt(int line, int column, const(char)[] filename)
+/// Markdown with the declaration of `s` in a D code block, followed by its ddoc comment
+private string hoverText(Dsymbol s)
 {
-    foreach (fr; foldedRefs)
+    if (auto td = templateOf(s))
+        s = td;
+    OutBuffer hover;
+    hover.writestring("```d\n");
+    if (auto td = s.isTemplateDeclaration())
+        hover.writestring(td.toChars());
+    else if (s.isDeclaration())
     {
-        if (fr.loc.line != line || fr.loc.filename != filename || !fr.d.ident)
+        HdrGenState hgs;
+        hgs.hdrgen = true;
+        hgs.insideAggregate = 1;
+        toCBuffer(s, hover, hgs);
+        while (hover.length && (hover[hover.length - 1] == '\n' || hover[hover.length - 1] == ';'))
+            hover.setsize(hover.length - 1);
+    }
+    else
+        hover.printf("%s %s", s.kind(), s.toChars());
+    hover.writestring("\n```");
+    if (s.comment)
+    {
+        hover.writestring("\n\n");
+        hover.writestring(s.comment.toDString());
+    }
+    return hover.extractSlice().idup;
+}
+
+// ----------------------------------------------------------------------------
+// Completion
+// ----------------------------------------------------------------------------
+
+/// LSP CompletionItemKind of `s`
+private int completionKind(Dsymbol s)
+{
+    if (auto td = s.isTemplateDeclaration())
+        return td.onemember ? completionKind(td.onemember) : 3;
+    if (auto fd = s.isFuncDeclaration())
+        return fd.isThis() ? 2 : 3;
+    if (s.isInterfaceDeclaration())
+        return 8;
+    if (s.isClassDeclaration())
+        return 7;
+    if (s.isStructDeclaration())
+        return 22;
+    if (s.isEnumDeclaration())
+        return 13;
+    if (s.isEnumMember())
+        return 20;
+    if (auto vd = s.isVarDeclaration())
+    {
+        if (vd.storage_class & STC.manifest)
+            return 21;
+        return vd.isField() ? 5 : 6;
+    }
+    if (s.isModule() || s.isPackage() || s.isImport() || s.isTemplateMixin())
+        return 9;
+    if (auto ad = s.isAliasDeclaration())
+        return ad.aliassym && ad.aliassym !is s ? completionKind(ad.aliassym) : 7;
+    return 1;
+}
+
+/// A completion candidate and how many scopes out it was found
+struct Candidate
+{
+    Dsymbol s;
+    int depth;
+}
+
+/// Keeps the first symbol seen for each name, so inner scopes shadow outer ones
+struct CandidateSet
+{
+    Candidate[] items;
+    bool[Identifier] seen;
+    SourceLoc cursor;
+
+    void add(Dsymbol s, int depth)
+    {
+        if (!s || !s.ident || s.ident == Id.This || s.ident.toString().startsWith("__"))
+            return;
+        if (auto fd = s.isFuncDeclaration())
+            if (fd.isGenerated)
+                return;
+        if (auto vd = s.isVarDeclaration())
+        {
+            if (vd.parent && vd.parent.isFuncDeclaration() && cursor.line)
+            {
+                SourceLoc sl = SourceLoc(vd.loc);
+                if (sl.filename == cursor.filename && (sl.line > cursor.line || (sl.line == cursor.line && sl.column > cursor.column)))
+                    return;
+            }
+        }
+        if (s.ident in seen)
+            return;
+        seen[s.ident] = true;
+        items ~= Candidate(s, depth);
+    }
+}
+
+/// Whether a member of another module can be named from outside it; `_`-prefixed names are library internals
+private bool visibleFromOutside(Dsymbol s)
+{
+    if (s.ident && s.ident.toString().startsWith("_"))
+        return false;
+    const kind = s.visible().kind;
+    return kind != Visibility.Kind.private_ && kind != Visibility.Kind.undefined;
+}
+
+/// Add the symbols declared directly in `sds` and, for aggregates, in its bases
+private void addScopeMembers(ScopeDsymbol sds, ref CandidateSet set, int depth, bool fromOutside)
+{
+    if (sds.symtab)
+    {
+        foreach (kv; sds.symtab.tab.asRange)
+            if (!fromOutside || visibleFromOutside(kv.value))
+                set.add(kv.value, depth);
+    }
+    if (auto cd = sds.isClassDeclaration())
+    {
+        if (cd.baseClass)
+            addScopeMembers(cd.baseClass, set, depth + 1, fromOutside);
+        foreach (b; cd.interfaces)
+            if (b.sym)
+                addScopeMembers(b.sym, set, depth + 1, fromOutside);
+    }
+    if (auto ws = sds.isWithScopeSymbol())
+        if (ws.withstate && ws.withstate.exp)
+            addTypeMembers(ws.withstate.exp.type, set, depth);
+}
+
+/// Add the members of aggregate or enum type `t`
+private void addTypeMembers(Type t, ref CandidateSet set, int depth)
+{
+    if (!t)
+        return;
+    if (auto te = t.isTypeEnum())
+    {
+        if (te.sym.members)
+            foreach (s; *te.sym.members)
+                if (s.isEnumMember())
+                    set.add(s, depth);
+        return;
+    }
+    if (auto agg = typeSymbolOf(t) ? typeSymbolOf(t).isAggregateDeclaration() : null)
+        addScopeMembers(agg, set, depth, false);
+}
+
+/// Add the members of the modules `sds` imports, and transitively of their public imports
+private void addImportedScopes(ScopeDsymbol sds, ref CandidateSet set, int depth, ref bool[Dsymbol] visited, bool publicOnly)
+{
+    if (!sds.importedScopes)
+        return;
+    foreach (i, ss; *sds.importedScopes)
+    {
+        if (publicOnly && sds.visibilities[i] < Visibility.Kind.public_)
             continue;
-        const endCol = fr.loc.column + fr.d.ident.toString().length;
-        if (column >= fr.loc.column && column <= endCol)
-            return fr.d;
+        auto imported = ss.isScopeDsymbol();
+        if (!imported || imported in visited)
+            continue;
+        visited[imported] = true;
+        addScopeMembers(imported, set, depth, true);
+        addImportedScopes(imported, set, depth + 1, visited, true);
+    }
+}
+
+/// The recorded scope chain in effect at `cursor`, innermost first, or null
+private ScopeDsymbol[] scopeChainAt(SourceLoc cursor)
+{
+    static bool before(SourceLoc a, SourceLoc b)
+    {
+        return a.line < b.line || (a.line == b.line && a.column <= b.column);
+    }
+    ScopeRecord* best;
+    foreach (ref r; scopeRecords)
+    {
+        if (!before(r.loc, cursor) || !before(cursor, r.endloc))
+            continue;
+        if (!best || before(best.loc, r.loc))
+            best = &r;
+    }
+    return best ? best.chain : null;
+}
+
+/// Add everything visible at the cursor: the scope chain's symbols, then their imports
+private void addScopeCandidates(Module m, SourceLoc cursor, ref CandidateSet set)
+{
+    ScopeDsymbol[] chain = scopeChainAt(cursor);
+    if (chain.length == 0)
+        chain = [m];
+    foreach (i, sds; chain)
+        addScopeMembers(sds, set, cast(int) i, false);
+    bool[Dsymbol] visited;
+    foreach (i, sds; chain)
+        addImportedScopes(sds, set, cast(int) (chain.length + i), visited, false);
+}
+
+/// The member access whose identifier, or for an incomplete `e.` the spot after the dot, is at the cursor
+private MemberAccess* memberAccessAt(SourceLoc cursor)
+{
+    foreach (ref ma; memberAccesses)
+    {
+        if (ma.ident == Id.empty)
+        {
+            if (ma.loc.line == cursor.line && cursor.column > ma.loc.column)
+                return &ma;
+            continue;
+        }
+        if (ma.identLoc.line != cursor.line)
+            continue;
+        const endCol = ma.identLoc.column + ma.ident.toString().length;
+        if (cursor.column >= ma.identLoc.column && cursor.column <= endCol)
+            return &ma;
     }
     return null;
 }
 
-/// LSP CompletionItemKind values for the kinds we currently emit.
-private int completionKind(Dsymbol s)
+/// Add module-level functions visible at the cursor whose first parameter accepts `baseType`
+private void addUfcsCandidates(Module m, SourceLoc cursor, Type baseType, ref CandidateSet set)
 {
-    if (auto fd = s.isFuncDeclaration())
-        return fd.isThis() ? 2 : 3;        // Method : Function
-    if (s.isInterfaceDeclaration())
-        return 8;                          // Interface
-    if (s.isClassDeclaration())
-        return 7;                          // Class
-    if (s.isStructDeclaration())
-        return 22;                         // Struct
-    if (s.isEnumDeclaration())
-        return 13;                         // Enum
-    if (s.isEnumMember())
-        return 20;                         // EnumMember
-    if (auto vd = s.isVarDeclaration())
-        return vd.isField() ? 5 : 6;       // Field : Variable
-    return 1;                              // Text (fallback)
+    if (!baseType || baseType.ty == Terror)
+        return;
+    CandidateSet all;
+    all.cursor = cursor;
+    addScopeCandidates(m, cursor, all);
+    foreach (c; all.items)
+    {
+        auto fd = c.s.isFuncDeclaration();
+        if (!fd || fd.isThis() || !fd.parent || !fd.parent.isModule())
+            continue;
+        for (FuncDeclaration f = fd; f; f = f.overnext ? f.overnext.isFuncDeclaration() : null)
+        {
+            auto tf = f.type ? f.type.isTypeFunction() : null;
+            if (!tf || tf.parameterList.length == 0)
+                continue;
+            auto pt = tf.parameterList[0].type;
+            if (pt && implicitConvTo(baseType, pt) != MATCH.nomatch)
+            {
+                set.add(fd, c.depth);
+                break;
+            }
+        }
+    }
 }
 
-/// Convert a list of symbols into LSP CompletionItem JSON, written
-/// comma-separated into `buf` (no enclosing brackets).
-void writeCompletionItems(ref OutBuffer buf, Dsymbol[] syms)
+/// Add the members reachable through `ma.e1.`
+private void addMemberCandidates(Module m, SourceLoc cursor, ref MemberAccess ma, ref CandidateSet set)
 {
-    bool first = true;
-    foreach (s; syms)
+    Expression e1 = ma.e1;
+    if (auto se = e1.isScopeExp())
     {
-        if (!s || !s.ident)
-            continue;
-        if (!first)
+        const outside = se.sds.isModule() || se.sds.isPackage();
+        addScopeMembers(se.sds, set, 0, outside);
+        bool[Dsymbol] visited;
+        if (outside)
+            addImportedScopes(se.sds, set, 1, visited, true);
+        return;
+    }
+    if (auto te = e1.isTypeExp())
+        return addTypeMembers(te.type, set, 0);
+    if (!e1.type)
+        return;
+    addTypeMembers(e1.type, set, 0);
+    addUfcsCandidates(m, cursor, e1.type, set);
+}
+
+/// Write `items` as comma-separated CompletionItem objects
+void writeCompletionItems(ref OutBuffer buf, Candidate[] items)
+{
+    foreach (i, c; items)
+    {
+        Dsymbol s = c.s;
+        if (i)
             buf.writestring(",");
-        first = false;
-        buf.printf(`{"label":"%s","kind":%d`, s.ident.toChars, completionKind(s));
-        auto d = s.isDeclaration();
-        if (d && d.type)
+        buf.writestring(`{"label":"`);
+        buf.writeJsonString(s.ident.toString());
+        buf.printf(`","kind":%d,"sortText":"%02d`, completionKind(s), c.depth < 99 ? c.depth : 99);
+        buf.writeJsonString(s.ident.toString());
+        buf.writestring(`"`);
+        const(char)* detail;
+        if (auto td = s.isTemplateDeclaration())
+            detail = td.toChars();
+        else if (auto d = s.isDeclaration())
+            detail = d.type ? d.type.toChars() : null;
+        else if (s.isAggregateDeclaration() || s.isEnumDeclaration() || s.isModule() || s.isPackage())
+            detail = s.kind();
+        if (detail)
         {
             buf.writestring(`,"detail":"`);
-            buf.writeJsonString(d.type.toChars.toDString);
+            buf.writeJsonString(detail.toDString());
             buf.writestring(`"`);
+        }
+        if (s.isDeprecated())
+            buf.writestring(`,"tags":[1]`);
+        if (s.comment)
+        {
+            buf.writestring(`,"documentation":{"kind":"markdown","value":"`);
+            buf.writeJsonString(s.comment.toDString());
+            buf.writestring(`"}`);
         }
         buf.writestring(`}`);
     }
 }
 
-private bool isIdentChar(char c)
-{
-    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
-        || (c >= '0' && c <= '9') || c == '_';
-}
-
-/// What kind of completion the cursor position asks for.
-struct CompletionContext
-{
-    bool member;              // completing `base.` member access
-    const(char)[] baseIdent;  // identifier before the dot when member == true
-}
-
-/// Convert an LSP Position (0-based line/character) to a byte offset in `content`.
-size_t byteOffset(const(char)[] content, Position pos)
-{
-    size_t off = 0;
-    for (int line = 0; line < pos.line && off < content.length; off++)
-    {
-        if (content[off] == '\n')
-            line++;
-    }
-    off += pos.character;
-    if (off > content.length)
-        off = content.length;
-    return off;
-}
-
-/// Convert a byte offset in `content` back to a 0-based LSP Position.
-Position offsetPosition(const(char)[] content, size_t off)
-{
-    Position pos;
-    foreach (i; 0 .. off)
-    {
-        if (i < content.length && content[i] == '\n')
-        {
-            pos.line++;
-            pos.character = 0;
-        }
-        else
-            pos.character++;
-    }
-    return pos;
-}
-
-/// Inspect the source text left of the cursor to see whether we're completing
-/// a member access (`ident.` possibly followed by a partial member name).
-CompletionContext completionContext(const(char)[] content, Position pos)
-{
-    size_t off = byteOffset(content, pos);
-
-    // Skip back over the partially typed identifier, if any
-    size_t i = off;
-    while (i > 0 && isIdentChar(content[i - 1]))
-        i--;
-
-    CompletionContext result;
-    if (i > 0 && content[i - 1] == '.')
-    {
-        result.member = true;
-        const end = i - 1;
-        size_t start = end;
-        while (start > 0 && isIdentChar(content[start - 1]))
-            start--;
-        if (start < end)
-            result.baseIdent = content[start .. end];
-    }
-    return result;
-}
-
-/// Finds the last variable declaration named `name` in the module.
-extern(C++) final class VarFinder : SemanticTimeTransitiveVisitor
-{
-    alias visit = typeof(super).visit;
-
-    const(char)[] name;
-    VarDeclaration result;
-
-    extern (D) this(const(char)[] name)
-    {
-        this.name = name;
-    }
-
-    override void visit(VarDeclaration d)
-    {
-        if (d.ident && d.ident.toString() == name)
-            this.result = d;
-        super.visit(d);
-    }
-
-    override void visit(FuncDeclaration d)
-    {
-        if (d.parameters)
-            foreach (p; *d.parameters)
-                visit(p);
-        super.visit(d);
-    }
-}
-
-/// Finds the innermost function whose body's line range contains `line`.
-extern(C++) final class FuncFinder : SemanticTimeTransitiveVisitor
-{
-    alias visit = typeof(super).visit;
-
-    int line;
-    FuncDeclaration result;
-
-    extern (D) this(int line)
-    {
-        this.line = line;
-    }
-
-    override void visit(FuncDeclaration d)
-    {
-        if (d.loc.isValid && d.endloc.isValid)
-        {
-            const start = SourceLoc(d.loc).line;
-            const end = SourceLoc(d.endloc).line;
-            if (start <= line && line <= end)
-                this.result = d;
-        }
-        super.visit(d);
-    }
-}
-
-/// Finds an aggregate or enum declaration named `name`, looking through
-/// attribute blocks and into nested aggregates.
-Dsymbol findTypeSymbol(ref Dsymbols members, const(char)[] name)
-{
-    foreach (s; members)
-    {
-        if (auto ad = s.isAttribDeclaration())
-        {
-            if (auto d = ad.include(null))
-                if (auto found = findTypeSymbol(*d, name))
-                    return found;
-            continue;
-        }
-        if (s.ident && s.ident.toString() == name && (s.isAggregateDeclaration() || s.isEnumDeclaration()))
-            return s;
-        if (auto agg = s.isAggregateDeclaration())
-            if (agg.members)
-                if (auto found = findTypeSymbol(*agg.members, name))
-                    return found;
-    }
-    return null;
-}
-
-/// Append the fields and methods of `ad` (and base classes) to `syms`,
-/// skipping compiler-generated members.
-void collectMembers(AggregateDeclaration ad, ref Dsymbol[] syms)
-{
-    while (ad)
-    {
-        if (ad.members)
-        {
-            foreach (s; *ad.members)
-            {
-                if (!s.ident || s.ident.toString().startsWith("__"))
-                    continue;
-                if (auto fd = s.isFuncDeclaration())
-                {
-                    if (!fd.isGenerated)
-                        syms ~= fd;
-                }
-                else if (auto vd = s.isVarDeclaration())
-                    syms ~= vd;
-            }
-        }
-        auto cd = ad.isClassDeclaration();
-        ad = cd ? cd.baseClass : null;
-    }
-}
-
-/// Append this module's top-level functions whose first parameter accepts
-/// `baseType` (callable via UFCS on a value of that type) to `syms`.
-void collectUfcsCandidates(Module m, Type baseType, ref Dsymbol[] syms)
-{
-    if (!m.members || !baseType)
-        return;
-    void scan(ref Dsymbols members)
-    {
-        foreach (s; members)
-        {
-            if (auto ad = s.isAttribDeclaration())
-            {
-                if (auto d = ad.include(null))
-                    scan(*d);
-                continue;
-            }
-            auto fd = s.isFuncDeclaration();
-            if (!fd || !fd.ident || fd.ident.toString().startsWith("__") || fd.isGenerated)
-                continue;
-            auto tf = fd.type ? fd.type.isTypeFunction() : null;
-            if (!tf || tf.parameterList.length == 0)
-                continue;
-            auto pt = tf.parameterList[0].type;
-            if (pt && implicitConvTo(baseType, pt) != MATCH.nomatch)
-                syms ~= fd;
-        }
-    }
-    scan(*m.members);
-}
-
-/// Compute completion items for the request in `params`: members of the
-/// aggregate before a `.` plus UFCS-callable module functions, or module-level
-/// types and functions otherwise.
-/// No templates; only plainly declared types and functions are offered.
+/// The completion items at the cursor: the members of the expression before a `.`
+/// plus UFCS-callable functions, or everything in scope otherwise
 void completionItems(ref Lsp lsp, Params params, ref OutBuffer buf)
 {
-    lsp.eSink.diagnostics = null;
-    CompletionContext ctx;
-    if (auto content = params.textDocument.uri in lsp.openDocuments)
-        ctx = completionContext(*content, params.position);
-
     Module m = analyzeModule(lsp, params.textDocument.uri);
     if (!m)
-    {
-        deinitializeModule();
         return;
-    }
-
-    Dsymbol[] syms;
-    if (ctx.member)
-    {
-        Type baseType;
-        Dsymbol typeSym;
-        if (ctx.baseIdent.length == 0)
-        {
-        }
-        else if (ctx.baseIdent == "this")
-        {
-            scope ff = new FuncFinder(params.position.line + 1);
-            ff.visit(m);
-            if (ff.result)
-            {
-                if (auto ad = ff.result.isMember2())
-                {
-                    typeSym = ad;
-                    baseType = ad.type;
-                }
-            }
-        }
-        else
-        {
-            scope finder = new VarFinder(ctx.baseIdent);
-            finder.visit(m);
-            if (finder.result)
-            {
-                baseType = finder.result.type;
-                typeSym = typeSymbolOf(baseType);
-            }
-            else if (m.members)
-            {
-                typeSym = findTypeSymbol(*m.members, ctx.baseIdent);
-                if (!typeSym)
-                {
-                    if (auto s = m.search(Loc.initial, Identifier.idPool(ctx.baseIdent)))
-                    {
-                        s = s.toAlias();
-                        if (s.isAggregateDeclaration() || s.isEnumDeclaration())
-                            typeSym = s;
-                    }
-                }
-            }
-        }
-        if (typeSym)
-        {
-            if (auto ad = typeSym.isAggregateDeclaration())
-                collectMembers(ad, syms);
-            else if (auto ed = typeSym.isEnumDeclaration())
-            {
-                if (ed.members)
-                    foreach (s; *ed.members)
-                        if (s.isEnumMember())
-                            syms ~= s;
-            }
-        }
-        if (baseType)
-            collectUfcsCandidates(m, baseType, syms);
-    }
-    else if (m.members)
-    {
-        foreach (s; *m.members)
-        {
-            if (!s.ident)
-                continue;
-            if (s.isFuncDeclaration() || s.isAggregateDeclaration() || s.isEnumDeclaration())
-                syms ~= s;
-        }
-    }
-    writeCompletionItems(buf, syms);
-    deinitializeModule();
+    SourceLoc cursor = toSourceLoc(params.textDocument.uri, params.position);
+    CandidateSet set;
+    set.cursor = cursor;
+    if (auto ma = memberAccessAt(cursor))
+        addMemberCandidates(m, cursor, *ma, set);
+    else
+        addScopeCandidates(m, cursor, set);
+    writeCompletionItems(buf, set.items);
 }
 
-/// Convert a function type's parameters into LSP SignatureInformation JSON for
-/// a single signature, written into `buf`.
+// ----------------------------------------------------------------------------
+// Signature help
+// ----------------------------------------------------------------------------
+
+/// Write one SignatureInformation for `tf` called as `name`
 void writeSignature(ref OutBuffer buf, const(char)[] name, TypeFunction tf)
 {
-    import dmd.hdrgen : parameterToChars;
-
     const(char)[][] labels;
     foreach (i; 0 .. tf.parameterList.length)
         labels ~= parameterToChars(tf.parameterList[i], tf, false).toDString;
@@ -991,384 +1261,66 @@ void writeSignature(ref OutBuffer buf, const(char)[] name, TypeFunction tf)
     buf.writestring(`]}`);
 }
 
-/// The enclosing call found by scanning left of the cursor.
-struct CallContext
+/// The overload set `fd` belongs to
+private FuncDeclaration[] overloadsOf(FuncDeclaration fd)
 {
-    bool found;            /// whether an unclosed call paren was found
-    size_t openParen;      /// byte offset of the unmatched `(`
-    int activeParameter;   /// top-level commas between it and the cursor
-}
-
-/// Scan the source text left of byte offset `off` for the innermost unclosed
-/// call paren, counting top-level commas along the way. A plain paren/bracket
-/// depth scan; string literals are not tokenized.
-CallContext findEnclosingCall(const(char)[] content, size_t off)
-{
-    int parens, brackets, commas;
-    for (size_t i = off; i > 0;)
+    Dsymbol start = fd;
+    if (auto p = fd.parent ? fd.parent.isScopeDsymbol() : null)
+        if (p.symtab)
+            if (auto s = p.symtab.lookup(fd.ident))
+                start = s;
+    FuncDeclaration[] overloads;
+    for (Dsymbol s = start; s;)
     {
-        const c = content[--i];
-        if (c == ')')
-            parens++;
-        else if (c == ']')
-            brackets++;
-        else if (c == '[' && brackets > 0)
-            brackets--;
-        else if (c == '(')
-        {
-            if (parens == 0)
-                return CallContext(true, i, commas);
-            parens--;
-        }
-        else if (c == ',' && parens == 0 && brackets == 0)
-            commas++;
-        else if ((c == ';' || c == '{' || c == '}') && parens == 0)
+        auto f = s.isFuncDeclaration();
+        if (!f)
             break;
+        overloads ~= f;
+        s = f.overnext;
     }
-    return CallContext(false, 0, 0);
+    return overloads.length ? overloads : [fd];
 }
 
-/// Finds the CallExp whose callee is the given expression node.
-extern(C++) final class CallFinder : SemanticTimeTransitiveVisitor
-{
-    alias visit = typeof(super).visit;
-
-    Expression callee;
-    CallExp result;
-
-    extern (D) this(Expression callee)
-    {
-        this.callee = callee;
-    }
-
-    override void visit(CallExp e)
-    {
-        if (e.e1 is callee)
-            this.result = e;
-        super.visit(e);
-    }
-}
-
-/// Resolve the callee identifier at `content[nameStart .. nameEnd]` by name
-/// lookup, for calls whose semantically resolved form did not survive in the
-/// AST (e.g. an unclosed call while editing that swallowed later statements).
-/// An identifier directly before a `.` scopes the lookup to that variable's
-/// aggregate type (or the type itself for `Type.member(`).
-private Dsymbol calleeByName(Module m, const(char)[] content, size_t nameStart, size_t nameEnd)
-{
-    if (nameStart >= nameEnd)
-        return null;
-    auto id = Identifier.idPool(content[nameStart .. nameEnd]);
-    Dsymbol found;
-    if (nameStart > 0 && content[nameStart - 1] == '.')
-    {
-        const bend = nameStart - 1;
-        size_t bstart = bend;
-        while (bstart > 0 && isIdentChar(content[bstart - 1]))
-            bstart--;
-        if (bstart == bend)
-            return null;
-        auto baseIdent = content[bstart .. bend];
-        Dsymbol typeSym;
-        scope vf = new VarFinder(baseIdent);
-        vf.visit(m);
-        if (vf.result)
-            typeSym = typeSymbolOf(vf.result.type);
-        if (!typeSym && m.members)
-            typeSym = findTypeSymbol(*m.members, baseIdent);
-        if (!typeSym)
-        {
-            if (auto s = m.search(Loc.initial, Identifier.idPool(baseIdent)))
-            {
-                s = s.toAlias();
-                if (s.isAggregateDeclaration() || s.isEnumDeclaration())
-                    typeSym = s;
-            }
-        }
-        if (!typeSym)
-            return null;
-        found = typeSym.search(Loc.initial, id);
-    }
-    else
-        found = m.search(Loc.initial, id);
-    return found ? found.toAlias() : null;
-}
-
-// ----------------------------------------------------------------------------
-// Syntax highlighting (textDocument/semanticTokens, lexer-based)
-// ----------------------------------------------------------------------------
-
-/// Indices into the `tokenTypes` legend sent in the initialize response;
-/// keep in sync with the string array there.
-enum SemanticTokenType : int
-{
-    keyword,
-    comment,
-    string_,
-    number,
-    type,
-}
-
-/// Bits of the `tokenModifiers` legend sent in the initialize response
-enum SemanticTokenModifier : int
-{
-    documentation = 1 << 0,
-}
-
-/// Map a lexed token to an index in the `tokenTypes` legend, or -1 when the
-/// token gets no highlighting (identifiers, operators, punctuation).
-private int semanticTokenType(const ref Token tok)
-{
-    with (TOK) switch (tok.value)
-    {
-    case comment:
-        return SemanticTokenType.comment;
-    case string_, interpolated, hexadecimalString,
-         charLiteral, wcharLiteral, dcharLiteral, wchar_tLiteral:
-        return SemanticTokenType.string_;
-    case int32Literal: .. case imaginary80Literal:
-        return SemanticTokenType.number;
-    case void_: .. case bool_:
-        return SemanticTokenType.type;
-    default:
-        return tok.isKeyword() ? SemanticTokenType.keyword : -1;
-    }
-}
-
-/// True for ddoc comments: `///`, `/**`, `/++` (but not `/**/`, `/++/`)
-private bool isDocComment(const(char)[] text)
-{
-    if (text.length < 3 || text[0] != '/')
-        return false;
-    if (text[1] == '/')
-        return text[2] == '/';
-    return text[1] == text[2] && text.length > 4;
-}
-
-/// Lex `content` and write LSP semantic token data (comma-separated integers,
-/// no enclosing brackets) into `buf`.
-///
-/// Each token is 5 integers per the LSP spec: line delta, start-character
-/// delta, length, token type (legend index), modifier bitmask. Multi-line
-/// tokens (block comments, multi-line strings) become one entry per line
-/// because not every client supports multi-line tokens. Columns are byte
-/// offsets, like everywhere else in this server.
-void writeSemanticTokens(const(char)[] content, ref OutBuffer buf)
-{
-    const text = content ~ "\0\0\0\0"; // the lexer requires a null-terminated buffer
-    // Lexing errors (e.g. unterminated strings) surface via publishDiagnostics
-    // from full analysis; here they would only produce duplicates
-    scope eSink = new ErrorSinkNull();
-    scope lexer = new Lexer("lsp", text.ptr, 0, content.length,
-        /*doDocComment*/ false, /*commentToken*/ true, eSink, &global.compileEnv);
-
-    // Cursor converting byte offsets to 0-based (line, column); tokens come
-    // in source order, so it only ever moves forward.
-    size_t cursor = 0;
-    int line = 0;
-    int column = 0;
-    void advanceTo(size_t offset)
-    {
-        for (; cursor < offset; cursor++)
-        {
-            if (text[cursor] == '\n')
-            {
-                line++;
-                column = 0;
-            }
-            else
-                column++;
-        }
-    }
-
-    int prevLine = 0;
-    int prevColumn = 0;
-    bool first = true;
-    void emit(int tokLine, int tokColumn, int length, int type, int modifiers)
-    {
-        if (!first)
-            buf.writestring(",");
-        first = false;
-        const deltaLine = tokLine - prevLine;
-        const deltaColumn = deltaLine == 0 ? tokColumn - prevColumn : tokColumn;
-        buf.printf("%d,%d,%d,%d,%d", deltaLine, deltaColumn, length, type, modifiers);
-        prevLine = tokLine;
-        prevColumn = tokColumn;
-    }
-
-    for (lexer.nextToken(); lexer.token.value != TOK.endOfFile; lexer.nextToken())
-    {
-        const type = semanticTokenType(lexer.token);
-        if (type < 0)
-            continue;
-        // lexer.p sits just past the token's last character after each scan
-        const start = cast(size_t)(lexer.token.ptr - text.ptr);
-        size_t end = cast(size_t)(lexer.p - text.ptr);
-        // A // comment token includes its terminating newline; drop it
-        while (end > start && (text[end - 1] == '\n' || text[end - 1] == '\r'))
-            end--;
-
-        const modifiers = type == SemanticTokenType.comment && isDocComment(text[start .. end])
-            ? SemanticTokenModifier.documentation : 0;
-
-        advanceTo(start);
-        // Emit one entry per source line the token covers
-        int segLine = line;
-        int segColumn = column;
-        size_t segStart = start;
-        foreach (i; start .. end + 1)
-        {
-            if (i != end && text[i] != '\n')
-                continue;
-            size_t segEnd = i;
-            if (segEnd > segStart && text[segEnd - 1] == '\r')
-                segEnd--;
-            if (segEnd > segStart)
-                emit(segLine, segColumn, cast(int)(segEnd - segStart), type, modifiers);
-            segLine++;
-            segColumn = 0;
-            segStart = i + 1;
-        }
-    }
-}
-
-/// Handle textDocument/semanticTokens/full: write the "data" array contents
-/// for the document in `params` into `buf`.
-void semanticTokens(ref Lsp lsp, Params params, ref OutBuffer buf)
-{
-    if (auto content = params.textDocument.uri in lsp.openDocuments)
-        return writeSemanticTokens(*content, buf);
-
-    // Not open in the editor (unusual, but allowed); highlight the disk version
-    SourceLoc sl = toSourceLoc(params.textDocument.uri, Position(0, 0));
-    OutBuffer fileContent;
-    if (sl.filename.length && File.read(sl.filename, fileContent))
-        writeSemanticTokens(cast(const(char)[]) fileContent.peekSlice(), buf);
-}
-
-unittest
-{
-    static string dataOf(string source)
-    {
-        OutBuffer buf;
-        writeSemanticTokens(source, buf);
-        return buf.extractSlice().idup;
-    }
-
-    // type / number / comment, delta-encoded along one line
-    assert(dataOf("int x = 5; // c\n") == "0,0,3,4,0,0,8,1,3,0,0,3,4,1,0");
-
-    // doc comments get the `documentation` modifier bit
-    assert(dataOf("/// doc\nint x;\n") == "0,0,7,1,1,1,0,3,4,0");
-
-    // multi-line tokens are split into one entry per line
-    assert(dataOf("/*a\nb*/ int x;\n") == "0,0,3,1,0,1,0,3,1,0,0,4,3,4,0");
-
-    // keywords and string literals
-    assert(dataOf(`return "s";`) == "0,0,6,0,0,0,7,3,2,0");
-
-    // no highlightable tokens at all
-    assert(dataOf("") == "");
-    assert(dataOf("x\n") == "");
-}
-
-/// Handle textDocument/signatureHelp: resolve the callee of the call
-/// enclosing the cursor and emit one SignatureInformation per overload.
-/// For a UFCS call the receiver counts as the signature's first parameter,
-/// so `activeParameter` is shifted past it.
+/// Handle textDocument/signatureHelp: the innermost resolved call starting at or
+/// before the cursor on its line; the active parameter is the last argument
+/// starting at or before the cursor
 void signatureHelp(ref Lsp lsp, Params params, ref OutBuffer buf)
 {
-    lsp.eSink.diagnostics = null;
-    FuncDeclaration fd;
-    const(char)[] aggName;
-    TypeFunction fieldTf;
-    int activeParam;
-    if (auto content = params.textDocument.uri in lsp.openDocuments)
+    SourceLoc cursor = toSourceLoc(params.textDocument.uri, params.position);
+    CallExp call;
+    if (Module m = analyzeModule(lsp, params.textDocument.uri))
     {
-        const call = findEnclosingCall(*content, byteOffset(*content, params.position));
-        size_t i = call.openParen;
-        while (i > 0 && ((*content)[i - 1] == ' ' || (*content)[i - 1] == '\t'))
-            i--;
-        if (call.found && i > 0 && isIdentChar((*content)[i - 1]))
+        foreach (ce; collectOccurrences(m).calls)
         {
-            activeParam = call.activeParameter;
-            const nameEnd = i;
-            while (i > 0 && isIdentChar((*content)[i - 1]))
-                i--;
-            const pos = offsetPosition(*content, i);
-            if (Module m = analyzeModule(lsp, params.textDocument.uri))
-            {
-                scope visitor = new LspVisitor(pos.line + 1, pos.character + 1);
-                visitor.visit(m);
-                Dsymbol target = definitionTarget(visitor.result);
-                if (!target)
-                {
-                    SourceLoc csl = toSourceLoc(params.textDocument.uri, pos);
-                    target = foldedRefAt(csl.line, csl.column, csl.filename);
-                }
-                if (!target)
-                    target = calleeByName(m, *content, i, nameEnd);
-                if (target)
-                {
-                    fd = target.isFuncDeclaration();
-                    if (!fd)
-                    {
-                        if (auto ad = target.isAggregateDeclaration())
-                        {
-                            aggName = ad.ident.toString();
-                            if (ad.ctor)
-                                fd = ad.ctor.isFuncDeclaration();
-                            if (!fd)
-                            {
-                                if (auto sd = ad.isStructDeclaration())
-                                {
-                                    auto ps = new Parameters();
-                                    foreach (v; sd.fields)
-                                        ps.push(new Parameter(v.loc, STC.none, v.type, v.ident, null, null, null));
-                                    fieldTf = new TypeFunction(ParameterList(ps), Type.tvoid, LINK.d);
-                                }
-                            }
-                        }
-                    }
-                }
-                if (fd)
-                {
-                    if (fd.isCtorDeclaration())
-                    {
-                        if (auto pad = fd.isMember())
-                            aggName = pad.ident.toString();
-                    }
-                    if (auto e = isExpression(visitor.result))
-                    {
-                        scope callFinder = new CallFinder(e);
-                        callFinder.visit(m);
-                        if (callFinder.result && callFinder.result.isUfcsRewrite)
-                            activeParam++;
-                    }
-                }
-            }
-            deinitializeModule();
+            SourceLoc sl = SourceLoc(ce.loc);
+            if (!ce.f || sl.filename != rootFilename || sl.line != cursor.line || sl.column > cursor.column)
+                continue;
+            if (!call || SourceLoc(call.loc).column < sl.column)
+                call = ce;
         }
     }
 
     FuncDeclaration[] overloads;
-    if (fd)
+    const(char)[] name;
+    int activeParam;
+    if (call)
     {
-        Dsymbol start = fd;
-        if (auto p = fd.parent ? fd.parent.isScopeDsymbol() : null)
-            if (p.symtab)
-                if (auto s = p.symtab.lookup(fd.ident))
-                    start = s;
-        for (Dsymbol s = start; s;)
+        overloads = overloadsOf(call.f);
+        name = call.f.ident.toString();
+        if (auto ctor = call.f.isCtorDeclaration())
+            if (auto ad = ctor.isMember())
+                name = ad.ident.toString();
+        if (call.arguments)
         {
-            auto f = s.isFuncDeclaration();
-            if (!f)
-                break;
-            overloads ~= f;
-            s = f.overnext;
+            foreach (arg; *call.arguments)
+            {
+                SourceLoc al = SourceLoc(arg.loc);
+                if (al.line < cursor.line || (al.line == cursor.line && al.column <= cursor.column))
+                    activeParam++;
+            }
         }
-        if (overloads.length == 0)
-            overloads = [fd];
+        if (activeParam)
+            activeParam--;
     }
 
     int activeSig = 0;
@@ -1392,12 +1344,144 @@ void signatureHelp(ref Lsp lsp, Params params, ref OutBuffer buf)
         if (!first)
             buf.writestring(",");
         first = false;
-        writeSignature(buf, aggName ? aggName : f.ident.toString(), tf);
+        writeSignature(buf, name, tf);
     }
-    if (overloads.length == 0 && fieldTf && aggName)
-        writeSignature(buf, aggName, fieldTf);
     buf.printf(`],"activeSignature":%d,"activeParameter":%d}`, activeSig, activeParam);
 }
+
+// ----------------------------------------------------------------------------
+// Semantic tokens
+// ----------------------------------------------------------------------------
+
+/// Indices into the `tokenTypes` legend of the initialize response
+enum SemanticTokenType : int
+{
+    type,
+    namespace,
+    class_,
+    enum_,
+    interface_,
+    struct_,
+    parameter,
+    variable,
+    property,
+    enumMember,
+    function_,
+    method,
+}
+
+/// Bits of the `tokenModifiers` legend of the initialize response
+enum SemanticTokenModifier : int
+{
+    declaration = 1 << 0,
+    static_ = 1 << 1,
+    deprecated_ = 1 << 2,
+    readonly = 1 << 3,
+    defaultLibrary = 1 << 4,
+}
+
+/// The token type for an occurrence of `s`, or -1
+private int symbolTokenType(Dsymbol s)
+{
+    if (auto td = s.isTemplateDeclaration())
+        return td.onemember ? symbolTokenType(td.onemember) : SemanticTokenType.function_;
+    if (auto fd = s.isFuncDeclaration())
+        return fd.isThis() ? SemanticTokenType.method : SemanticTokenType.function_;
+    if (s.isEnumMember())
+        return SemanticTokenType.enumMember;
+    if (auto vd = s.isVarDeclaration())
+    {
+        if (vd.storage_class & STC.parameter)
+            return SemanticTokenType.parameter;
+        return vd.isField() ? SemanticTokenType.property : SemanticTokenType.variable;
+    }
+    if (s.isInterfaceDeclaration())
+        return SemanticTokenType.interface_;
+    if (s.isClassDeclaration())
+        return SemanticTokenType.class_;
+    if (s.isStructDeclaration())
+        return SemanticTokenType.struct_;
+    if (s.isEnumDeclaration())
+        return SemanticTokenType.enum_;
+    if (s.isModule() || s.isPackage() || s.isImport())
+        return SemanticTokenType.namespace;
+    if (s.isTemplateInstance())
+        return SemanticTokenType.type;
+    if (auto ad = s.isAliasDeclaration())
+        return ad.aliassym && ad.aliassym !is s ? symbolTokenType(ad.aliassym) : SemanticTokenType.type;
+    return -1;
+}
+
+/// The modifier bits for `s`, excluding `declaration`
+private int symbolTokenModifiers(Dsymbol s)
+{
+    int mods = 0;
+    if (s.isDeprecated())
+        mods |= SemanticTokenModifier.deprecated_;
+    if (auto vd = s.isVarDeclaration())
+    {
+        if ((vd.storage_class & STC.manifest) || vd.isEnumMember()
+            || (vd.type && (vd.type.isConst() || vd.type.isImmutable())))
+            mods |= SemanticTokenModifier.readonly;
+        if (vd.isStatic() && !vd.isField() && vd.parent && vd.parent.isAggregateDeclaration())
+            mods |= SemanticTokenModifier.static_;
+    }
+    if (auto fd = s.isFuncDeclaration())
+        if (fd.isStatic() && fd.parent && fd.parent.isAggregateDeclaration())
+            mods |= SemanticTokenModifier.static_;
+    SourceLoc sl = SourceLoc(s.loc);
+    if (sl.line > 0 && sl.filename != rootFilename)
+        mods |= SemanticTokenModifier.defaultLibrary;
+    return mods;
+}
+
+/// Handle textDocument/semanticTokens/full: one token per occurrence, sorted,
+/// overlaps dropped, delta-encoded, columns in the client's encoding
+void semanticTokens(ref Lsp lsp, Params params, ref OutBuffer buf)
+{
+    Module m = analyzeModule(lsp, params.textDocument.uri);
+    if (!m)
+        return;
+    auto tokens = collectOccurrences(m).occurrences;
+    foreach (i; 1 .. tokens.length)
+    {
+        auto t = tokens[i];
+        size_t j = i;
+        while (j > 0 && (t.loc.line < tokens[j - 1].loc.line
+            || (t.loc.line == tokens[j - 1].loc.line && t.loc.column < tokens[j - 1].loc.column)))
+        {
+            tokens[j] = tokens[j - 1];
+            j--;
+        }
+        tokens[j] = t;
+    }
+
+    int prevLine = 1;
+    int prevColumn = 0;
+    int prevEnd = 0;
+    bool first = true;
+    foreach (ref t; tokens)
+    {
+        const type = symbolTokenType(t.sym);
+        if (type < 0 || (t.loc.line == prevLine && t.loc.column < prevEnd))
+            continue;
+        const column = clientColumn(lsp, rootFilename, t.loc.line, t.loc.column);
+        const length = clientColumn(lsp, rootFilename, t.loc.line, t.loc.column + t.len) - column;
+        const mods = symbolTokenModifiers(t.sym) | (t.declaration ? SemanticTokenModifier.declaration : 0);
+        if (!first)
+            buf.writestring(",");
+        buf.printf("%d,%d,%d,%d,%d", t.loc.line - prevLine, t.loc.line == prevLine ? column - prevColumn : column,
+            length, type, mods);
+        first = false;
+        prevLine = t.loc.line;
+        prevColumn = column;
+        prevEnd = t.loc.column + t.len;
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Document symbols
+// ----------------------------------------------------------------------------
 
 /// LSP SymbolKind values for the kinds documentSymbol emits.
 private int documentSymbolKind(Dsymbol s)
@@ -1422,7 +1506,7 @@ private int documentSymbolKind(Dsymbol s)
 /// Write one DocumentSymbol JSON object for `s`, recursing into aggregate and
 /// enum members as `children`.
 /// Returns: false (and writes nothing) for unnamed, generated, or locationless symbols.
-private bool writeDocumentSymbol(ref OutBuffer buf, Dsymbol s)
+private bool writeDocumentSymbol(ref OutBuffer buf, ref Lsp lsp, Dsymbol s)
 {
     const(char)[] name = s.ident ? s.ident.toString() : null;
     int kind = documentSymbolKind(s);
@@ -1443,22 +1527,25 @@ private bool writeDocumentSymbol(ref OutBuffer buf, Dsymbol s)
     buf.writestring(`{"name":"`);
     buf.writeJsonString(name);
     buf.printf(`","kind":%d,`, kind);
+    if (s.isDeprecated())
+        buf.writestring(`"tags":[1],`);
 
-    int endLine = sl.line - 1;
-    int endCol = sl.column - 1 + len;
+    int endLine = sl.line;
+    int endCol = sl.column + len;
     if (auto fd = s.isFuncDeclaration())
     {
         SourceLoc el = SourceLoc(fd.endloc);
         if (el.line > 0)
         {
-            endLine = el.line - 1;
-            endCol = el.column;
+            endLine = el.line;
+            endCol = el.column + 1;
         }
     }
     buf.printf(`"range":{"start":{"line":%d,"character":%d},"end":{"line":%d,"character":%d}},`,
-        sl.line - 1, sl.column - 1, endLine, endCol);
-    buf.printf(`"selectionRange":{"start":{"line":%d,"character":%d},"end":{"line":%d,"character":%d}}`,
-        sl.line - 1, sl.column - 1, sl.line - 1, sl.column - 1 + len);
+        sl.line - 1, clientColumn(lsp, sl.filename, sl.line, sl.column),
+        endLine - 1, clientColumn(lsp, sl.filename, endLine, endCol));
+    buf.writestring(`"selectionRange":`);
+    writeRange(buf, lsp, sl.filename, sl.line, sl.column, len);
 
     Dsymbols* members = null;
     if (auto ad = s.isAggregateDeclaration())
@@ -1468,7 +1555,7 @@ private bool writeDocumentSymbol(ref OutBuffer buf, Dsymbol s)
     if (members)
     {
         buf.writestring(`,"children":[`);
-        writeDocumentSymbols(buf, *members);
+        writeDocumentSymbols(buf, lsp, *members);
         buf.writestring(`]`);
     }
     buf.writestring(`}`);
@@ -1476,20 +1563,20 @@ private bool writeDocumentSymbol(ref OutBuffer buf, Dsymbol s)
 }
 
 /// Write a comma-separated list of DocumentSymbols for declarations in `members`.
-private void writeDocumentSymbols(ref OutBuffer buf, ref Dsymbols members)
+private void writeDocumentSymbols(ref OutBuffer buf, ref Lsp lsp, ref Dsymbols members)
 {
     bool first = true;
-    writeDocumentSymbols(buf, members, first);
+    writeDocumentSymbols(buf, lsp, members, first);
 }
 
-private void writeDocumentSymbols(ref OutBuffer buf, ref Dsymbols members, ref bool first)
+private void writeDocumentSymbols(ref OutBuffer buf, ref Lsp lsp, ref Dsymbols members, ref bool first)
 {
     foreach (s; members)
     {
         if (auto ad = s.isAttribDeclaration())
         {
             if (auto d = ad.include(null))
-                writeDocumentSymbols(buf, *d, first);
+                writeDocumentSymbols(buf, lsp, *d, first);
             continue;
         }
         if (!s.isFuncDeclaration() && !s.isAggregateDeclaration()
@@ -1498,7 +1585,7 @@ private void writeDocumentSymbols(ref OutBuffer buf, ref Dsymbols members, ref b
         const before = buf.length;
         if (!first)
             buf.writestring(",");
-        if (writeDocumentSymbol(buf, s))
+        if (writeDocumentSymbol(buf, lsp, s))
             first = false;
         else
             buf.setsize(before);
@@ -1509,169 +1596,152 @@ private void writeDocumentSymbols(ref OutBuffer buf, ref Dsymbols members, ref b
 /// array for the module's declarations.
 void documentSymbols(ref Lsp lsp, Params params, ref OutBuffer buf)
 {
-    lsp.eSink.diagnostics = null;
     Module m = analyzeModule(lsp, params.textDocument.uri);
     buf.writestring(`[`);
     if (m && m.members)
-        writeDocumentSymbols(buf, *m.members);
+        writeDocumentSymbols(buf, lsp, *m.members);
     buf.writestring(`]`);
-    deinitializeModule();
 }
 
-/// Collects the location of every expression referencing `target`
-/// (by symbol identity, not by name).
-extern(C++) final class ReferenceVisitor : SemanticTimeTransitiveVisitor
+// ----------------------------------------------------------------------------
+// References, highlight, rename
+// ----------------------------------------------------------------------------
+
+/// What occurrences are compared by: a constructor stands for its aggregate,
+/// a template's eponymous and instance members for the template
+private Dsymbol referenceTarget(Dsymbol s)
 {
-    alias visit = typeof(super).visit;
-
-    struct RefLoc
-    {
-        SourceLoc loc;
-        int len;
-    }
-
-    Dsymbol target;
-    AggregateDeclaration targetAgg;
-    int targetLen;
-    RefLoc[] refs;
-
-    extern (D) this(Dsymbol target)
-    {
-        this.target = target;
-        this.targetLen = cast(int) target.ident.toString().length;
-        if (auto ad = target.isAggregateDeclaration())
-            this.targetAgg = ad;
-        else if (auto ctor = target.isCtorDeclaration())
-            this.targetAgg = ctor.isMember();
-    }
-
-    extern (D) int aggLen()
-    {
-        return cast(int) targetAgg.ident.toString().length;
-    }
-
-    extern (D) void add(Loc loc, int len)
-    {
-        addSourceLoc(SourceLoc(loc), len);
-    }
-
-    extern (D) void addSourceLoc(SourceLoc sl, int len)
-    {
-        if (sl.line == 0)
-            return;
-        foreach (r; refs)
-            if (r.loc.line == sl.line && r.loc.column == sl.column && r.loc.filename == sl.filename)
-                return;
-        refs ~= RefLoc(sl, len);
-    }
-
-    override void visit(VarExp e)
-    {
-        if (e.var is target)
-            add(e.loc, targetLen);
-    }
-
-    override void visit(DotVarExp e)
-    {
-        if (e.var is target || (targetAgg && isCtorOf(e.var, targetAgg)))
-        {
-            // Struct constructor calls `S(...)` have identLoc at the type name
-            const len = e.var.isCtorDeclaration() ? aggLen() : targetLen;
-            add(e.identLoc, len);
-        }
-        super.visit(e);
-    }
-
-    extern (D) static bool isCtorOf(Declaration d, AggregateDeclaration ad)
-    {
-        auto ctor = d.isCtorDeclaration();
-        return ctor && ctor.isMember() is ad;
-    }
-
-    override void visit(StructLiteralExp e)
-    {
-        if (targetAgg && e.sd is targetAgg)
-            add(e.loc, aggLen());
-        super.visit(e);
-    }
-
-    override void visit(NewExp e)
-    {
-        if (targetAgg && (e.member ? isCtorOf(e.member, targetAgg) : typeSymbolOf(e.type) is targetAgg))
-            add(e.typeLoc.isValid ? e.typeLoc : e.loc, aggLen());
-        super.visit(e);
-    }
-
-    override void visit(ScopeExp e)
-    {
-        if (e.sds is target)
-            add(e.loc, targetLen);
-        super.visit(e);
-    }
-
-    override void visit(TypeExp e)
-    {
-        if (typeSymbolOf(e.type) is target)
-            add(e.loc, targetLen);
-        super.visit(e);
-    }
+    if (auto ctor = s.isCtorDeclaration())
+        if (auto ad = ctor.isMember())
+            return ad;
+    if (auto td = templateOf(s))
+        return td;
+    return s;
 }
 
-/// Handle textDocument/references: the declaration of the symbol under the
-/// cursor plus all its uses. Single-file scope: only the analyzed module is
-/// searched, no cross-module search.
-void references(ref Lsp lsp, Params params, ref OutBuffer buf)
+/// The symbol at the cursor and its declaration plus every occurrence of it in the document
+private Occurrence[] findReferences(ref Lsp lsp, Params params, out Dsymbol target)
 {
-    lsp.eSink.diagnostics = null;
-    SourceLoc sl = toSourceLoc(params.textDocument.uri, params.position);
     Module m = analyzeModule(lsp, params.textDocument.uri);
     if (!m)
-    {
-        deinitializeModule();
-        buf.writestring(`[]`);
-        return;
-    }
-    scope cursor = new LspVisitor(sl.line, sl.column);
-    cursor.visit(m);
-    Dsymbol target = definitionTarget(cursor.result);
-    if (!target)
-        target = foldedRefAt(sl.line, sl.column, sl.filename);
+        return null;
+    auto occurrences = collectOccurrences(m).occurrences;
+    target = symbolAt(occurrences, toSourceLoc(params.textDocument.uri, params.position));
     if (!target || !target.ident)
+        return null;
+    Occurrence[] refs;
+    SourceLoc dl = SourceLoc(declarationLoc(target));
+    if (dl.line)
+        refs ~= Occurrence(dl, declarationLength(target), target, true);
+    foreach (o; occurrences)
     {
-        deinitializeModule();
-        buf.writestring(`[]`);
-        return;
+        if (referenceTarget(o.sym) !is referenceTarget(target))
+            continue;
+        bool seen = false;
+        foreach (r; refs)
+            if (r.loc.line == o.loc.line && r.loc.column == o.loc.column && r.loc.filename == o.loc.filename)
+                seen = true;
+        if (!seen)
+            refs ~= o;
     }
-    scope finder = new ReferenceVisitor(target);
-    finder.add(target.loc, target.isCtorDeclaration() ? cast(int) "this".length : finder.targetLen);
-    finder.visit(m);
-    static TemplateDeclaration instanceTd(Dsymbol d)
+    return refs;
+}
+
+/// Handle textDocument/references
+void references(ref Lsp lsp, Params params, ref OutBuffer buf)
+{
+    Dsymbol target;
+    buf.writestring(`[`);
+    foreach (i, r; findReferences(lsp, params, target))
     {
-        auto ti = d.isInstantiated();
-        return ti && ti.tempdecl ? ti.tempdecl.isTemplateDeclaration() : null;
+        if (i)
+            buf.writestring(",");
+        writeLocationAt(buf, lsp, r.loc, r.len);
     }
-    TemplateDeclaration targetTd = target.isTemplateDeclaration();
-    if (!targetTd && target.parent)
-        if (auto td = target.parent.isTemplateDeclaration())
-            if (td.onemember is target)
-                targetTd = td;
-    if (!targetTd)
-        targetTd = instanceTd(target);
-    foreach (fr; foldedRefs)
-        if (fr.d is target || (targetTd && (fr.d is targetTd || instanceTd(fr.d) is targetTd)))
-            finder.addSourceLoc(fr.loc, finder.targetLen);
+    buf.writestring(`]`);
+}
+
+/// Handle textDocument/documentHighlight: the references within the document
+void documentHighlight(ref Lsp lsp, Params params, ref OutBuffer buf)
+{
+    Dsymbol target;
+    const filename = uriFilename(params.textDocument.uri);
     buf.writestring(`[`);
     bool first = true;
-    foreach (r; finder.refs)
+    foreach (r; findReferences(lsp, params, target))
     {
+        if (!sameFile(r.loc.filename, filename))
+            continue;
         if (!first)
             buf.writestring(",");
         first = false;
-        writeLocationAt(buf, r.loc, r.len);
+        buf.writestring(`{"range":`);
+        writeRange(buf, lsp, r.loc.filename, r.loc.line, r.loc.column, r.len);
+        buf.writestring(`,"kind":1}`);
     }
     buf.writestring(`]`);
-    deinitializeModule();
 }
+
+/// Whether every use of `s` must be in the file declaring it: locals,
+/// parameters, nested functions, and private symbols
+private bool renameStaysInFile(Dsymbol s)
+{
+    for (Dsymbol p = s.parent; p; p = p.parent)
+    {
+        if (p.isFuncDeclaration())
+            return true;
+        if (p.isModule())
+            break;
+    }
+    if (s.visible().kind == Visibility.Kind.private_)
+        return true;
+    for (Dsymbol p = s.parent; p; p = p.parent)
+    {
+        if (p.isModule())
+            break;
+        if (p.visible().kind == Visibility.Kind.private_)
+            return true;
+    }
+    return false;
+}
+
+/// Handle textDocument/rename: a WorkspaceEdit replacing every reference.
+/// Returns: an error message when the rename can't be done completely.
+string rename(ref Lsp lsp, Params params, ref OutBuffer buf)
+{
+    if (params.newName.length == 0)
+        return "no new name given";
+    Dsymbol target;
+    auto refs = findReferences(lsp, params, target);
+    if (!target)
+        return "no renamable symbol at the cursor";
+    const filename = uriFilename(params.textDocument.uri);
+    if (!sameFile(SourceLoc(target.loc).filename, filename))
+        return "cannot rename a symbol declared in another file";
+    if (!renameStaysInFile(target))
+        return "cannot rename a symbol that may be used from other files";
+    if (target.isCtorDeclaration())
+        return "cannot rename a constructor";
+    buf.writestring(`{"changes":{"`);
+    buf.writeJsonString(params.textDocument.uri);
+    buf.writestring(`":[`);
+    foreach (i, r; refs)
+    {
+        if (i)
+            buf.writestring(",");
+        buf.writestring(`{"range":`);
+        writeRange(buf, lsp, r.loc.filename, r.loc.line, r.loc.column, r.len);
+        buf.writestring(`,"newText":"`);
+        buf.writeJsonString(params.newName);
+        buf.writestring(`"}`);
+    }
+    buf.writestring(`]}}`);
+    return null;
+}
+
+// ----------------------------------------------------------------------------
+// Protocol
+// ----------------------------------------------------------------------------
 
 enum maxPayloadLength = 16 * 1024 * 1024;
 
@@ -1684,36 +1754,141 @@ private void sendMessage(ref OutBuffer buf)
     fflush(stdout);
 }
 
-/// Send a textDocument/publishDiagnostics notification with errors and
-/// warnings collected from analyzing the document at `uri`.
-void publishDiagnostics(ref Lsp lsp, string uri)
+private void writeDiagnostic(ref OutBuffer buf, ref Lsp lsp, ref Diagnostic d)
 {
-    lsp.eSink.clear();
-    analyzeModule(lsp, uri);
-    deinitializeModule();
+    buf.writestring(`{"range":`);
+    if (d.line > 0)
+        writeRange(buf, lsp, d.filename, d.line, d.column, 1);
+    else
+        buf.writestring(`{"start":{"line":0,"character":0},"end":{"line":0,"character":1}}`);
+    buf.printf(`,"severity":%d,"message":"`, d.severity);
+    buf.writeJsonString(d.message);
+    buf.writestring(`"`);
+    if (d.deprecation)
+        buf.writestring(`,"tags":[2]`);
+    if (d.related.length)
+    {
+        buf.writestring(`,"relatedInformation":[`);
+        foreach (i, r; d.related)
+        {
+            if (i)
+                buf.writestring(",");
+            buf.writestring(`{"location":{"uri":"`);
+            writeFileUri(buf, r.filename);
+            buf.writestring(`","range":`);
+            writeRange(buf, lsp, r.filename, r.line, r.column, 1);
+            buf.writestring(`},"message":"`);
+            buf.writeJsonString(r.message);
+            buf.writestring(`"}`);
+        }
+        buf.writestring(`]`);
+    }
+    buf.writestring(`}`);
+}
 
+private void sendDiagnostics(ref Lsp lsp, string uri, Diagnostic[] diagnostics, bool delegate(ref Diagnostic) include)
+{
     OutBuffer buf;
     buf.writestring(`{"jsonrpc":"2.0","method":"textDocument/publishDiagnostics","params":{"uri":"`);
     buf.writeJsonString(uri);
     buf.writestring(`","diagnostics":[`);
     bool first = true;
-    foreach (d; lsp.eSink.diagnostics)
+    foreach (ref d; diagnostics)
     {
+        if (!include(d))
+            continue;
         if (!first)
             buf.writestring(",");
         first = false;
-        // LSP positions are 0-based; SourceLoc is 1-based, 0 means unknown
-        const line = d.line > 0 ? d.line - 1 : 0;
-        const col = d.column > 0 ? d.column - 1 : 0;
-        buf.printf(`{"range":{"start":{"line":%d,"character":%d},"end":{"line":%d,"character":%d}},"severity":%d,"message":"`,
-            line, col, line, col + 1, d.severity);
-        buf.writeJsonString(d.message);
-        buf.writestring(`"}`);
+        writeDiagnostic(buf, lsp, d);
         if (buf.length > maxPayloadLength)
             break;
     }
     buf.writestring(`]}}`);
     sendMessage(buf);
+}
+
+/// Publish the diagnostics of analyzing `uri`; those in other files go to
+/// their own URIs and are cleared again next time
+void publishDiagnostics(ref Lsp lsp, string uri)
+{
+    analyzeModule(lsp, uri);
+    auto diagnostics = lsp.eSink.diagnostics;
+    const rootFile = uriFilename(uri);
+
+    bool isRoot(ref Diagnostic d)
+    {
+        return d.line == 0 || d.filename.length == 0 || sameFile(d.filename, rootFile);
+    }
+    sendDiagnostics(lsp, uri, diagnostics, &isRoot);
+
+    string[] published;
+    foreach (ref d; diagnostics)
+    {
+        if (isRoot(d))
+            continue;
+        OutBuffer uriBuf;
+        writeFileUri(uriBuf, d.filename);
+        string otherUri = uriBuf.extractSlice().idup;
+        bool seen = false;
+        foreach (u; published)
+            if (u == otherUri)
+                seen = true;
+        if (seen)
+            continue;
+        published ~= otherUri;
+        const(char)[] file = d.filename;
+        sendDiagnostics(lsp, otherUri, diagnostics, (ref Diagnostic x) => x.line > 0 && x.filename == file);
+    }
+    foreach (old; lsp.publishedUris)
+    {
+        bool still = false;
+        foreach (u; published)
+            if (u == old)
+                still = true;
+        if (!still && old != uri)
+            sendDiagnostics(lsp, old, null, (ref Diagnostic x) => false);
+    }
+    lsp.publishedUris = published;
+}
+
+/// The byte offset of the 0-based, byte column `pos` in `content`
+size_t byteOffset(const(char)[] content, Position pos)
+{
+    size_t off = 0;
+    for (int line = 0; line < pos.line && off < content.length; off++)
+    {
+        if (content[off] == '\n')
+            line++;
+    }
+    off += pos.character;
+    if (off > content.length)
+        off = content.length;
+    return off;
+}
+
+/// Apply the content changes of a didChange notification to the document
+/// text `content`
+string applyContentChanges(ref Lsp lsp, string content, ContentChange[] changes)
+{
+    foreach (ref change; changes)
+    {
+        if (change.range.start.line < 0)
+        {
+            content = change.text;
+            continue;
+        }
+        Position start = change.range.start;
+        Position end = change.range.end;
+        start.character = byteColumn(lsp, content, start.line, start.character);
+        end.character = byteColumn(lsp, content, end.line, end.character);
+        const startOff = byteOffset(content, start);
+        size_t endOff = byteOffset(content, end);
+        if (endOff < startOff)
+            endOff = startOff;
+        content = content[0 .. startOff] ~ change.text ~ content[endOff .. $];
+    }
+    return content;
 }
 
 int lspMain()
@@ -1722,7 +1897,9 @@ int lspMain()
 
     Lsp lsp;
     lsp.eSink = new ErrorSinkLsp();
-    auto eSink = lsp.eSink;
+    if (auto sink = cast(ErrorSinkCompiler) global.errorSink)
+        lsp.eSink.useDeprecated = sink.useDeprecated;
+    scope jsonSink = new ErrorSinkNull();
 
     // Keep a compiler fatal() from taking the whole server down. dmd signals
     // many unrecoverable conditions - a failed `static assert`, an unresolvable
@@ -1790,7 +1967,7 @@ int lspMain()
                 if (ferror(stdin))
                 {
                     import core.stdc.errno;
-                    eSink.error(Loc.initial, "errno = %d", errno);
+                    fprintf(stderr, "[!] read error, errno = %d\n", errno);
                     return errno;
                 }
                 break; // EOF mid-message
@@ -1798,7 +1975,6 @@ int lspMain()
             totalRead += n;
         }
 
-        // fprintf(stderr, "[!] Content length = %d\n", cast(int) contentLength);
         if (totalRead < json.length)
         {
             fprintf(stderr, "[!] truncated message: got %d of %d bytes\n",
@@ -1810,171 +1986,167 @@ int lspMain()
         fprintf(stderr, "[!] Content = %.*s\n",
             cast(int) utf8Trim(json, maxEcho), json.ptr);
         JsonRpc result;
-        jsonParse(result, json, eSink);
+        jsonParse(result, json, jsonSink);
+        if (result.method.length == 0)
+            continue;
         fprintf(stderr, "[!] Responding to %.*s\n", cast(int) result.method.length, result.method.ptr);
+        if (result.method == "exit")
+            return lsp.shutdownRequested ? 0 : 1;
         lspRespond(lsp, result);
     }
     return 0;
 }
 
-void lspRespond(ref Lsp lsp, JsonRpc result)
+/// Handle a notification: returns false when the method is unknown
+private bool handleNotification(ref Lsp lsp, ref JsonRpc msg)
 {
-    OutBuffer buf;
-    buf.printf(`{"jsonrpc":"2.0","id":%d,"result":`, result.id);
-
-    if (result.method == "initialize")
+    auto params = &msg.params;
+    switch (msg.method)
     {
+    case "initialized", "$/cancelRequest", "$/setTrace", "workspace/didChangeConfiguration":
+        return true;
+    case "textDocument/didOpen":
+        lsp.openDocuments[params.textDocument.uri] = params.textDocument.text;
+        deinitializeModule(lsp);
+        publishDiagnostics(lsp, params.textDocument.uri);
+        return true;
+    case "textDocument/didChange":
+        string content;
+        if (auto p = params.textDocument.uri in lsp.openDocuments)
+            content = *p;
+        lsp.openDocuments[params.textDocument.uri] = applyContentChanges(lsp, content, params.contentChanges);
+        deinitializeModule(lsp);
+        publishDiagnostics(lsp, params.textDocument.uri);
+        return true;
+    case "textDocument/didClose":
+        lsp.openDocuments.remove(params.textDocument.uri);
+        deinitializeModule(lsp);
+        return true;
+    case "textDocument/didSave":
+        deinitializeModule(lsp);
+        return true;
+    default:
+        return false;
+    }
+}
+
+void lspRespond(ref Lsp lsp, JsonRpc msg)
+{
+    if (msg.id < 0)
+    {
+        if (!handleNotification(lsp, msg))
+            fprintf(stderr, "[!] unknown notification %.*s\n", msg.method.fTuple.expand);
+        return;
+    }
+
+    OutBuffer buf;
+    string error;
+    int errorCode = -32803;
+    auto params = msg.params;
+    if (msg.method != "initialize")
+        params.position = toBytePosition(lsp, params.textDocument.uri, params.position);
+
+    switch (msg.method)
+    {
+    case "initialize":
+        lsp.utf16 = true;
+        foreach (enc; params.capabilities.general.positionEncodings)
+            if (enc == "utf-8")
+                lsp.utf16 = false;
         // The semanticTokens legend must match SemanticTokenType / SemanticTokenModifier
-        buf.writestring(`{"capabilities":{
-            "positionEncoding":"utf-8",
+        buf.printf(`{"capabilities":{
+            "positionEncoding":"%s",
             "definitionProvider":true,
             "hoverProvider":true,
             "completionProvider":{"triggerCharacters":["."]},
             "signatureHelpProvider":{"triggerCharacters":["(",","]},
             "documentSymbolProvider":true,
             "referencesProvider":true,
-            "semanticTokensProvider":{"legend":{"tokenTypes":["keyword","comment","string","number","type"],"tokenModifiers":["documentation"]},"full":true},
+            "documentHighlightProvider":true,
+            "renameProvider":true,
+            "semanticTokensProvider":{"legend":{"tokenTypes":["type","namespace","class","enum","interface","struct","parameter","variable","property","enumMember","function","method"],"tokenModifiers":["declaration","static","deprecated","readonly","defaultLibrary"]},"full":true},
             "textDocumentSync":1
-            }}`);
-    }
-    else if (result.method == "textDocument/definition")
-    {
-        Dsymbol target;
-        if (auto obj = findCursorObject(lsp, result.params))
-            target = definitionTarget(obj);
-        if (!target || !writeLocation(buf, target))
-            buf.printf("null");
-    }
-    else if (result.method == "textDocument/hover")
-    {
-        // fprintf(stderr, "[!] found! %s", v.toChars);
-        if (auto obj = findCursorObject(lsp, result.params))
+            }}`, lsp.utf16 ? "utf-16".ptr : "utf-8".ptr);
+        break;
+    case "shutdown":
+        lsp.shutdownRequested = true;
+        buf.writestring("null");
+        break;
+    case "textDocument/definition":
+        Dsymbol target = symbolAt(lsp, params);
+        if (!target || !writeLocation(buf, lsp, target))
+            buf.writestring("null");
+        break;
+    case "textDocument/hover":
+        Dsymbol target = symbolAt(lsp, params);
+        if (!target)
         {
-            buf.printf(`{"contents":{"kind":"markdown","value":"`);
-
-            OutBuffer hover;
-            if (auto e = isExpression(obj))
-            {
-                if (auto ve = e.isVarExp())
-                {
-                    if (auto vd = ve.var)
-                    {
-                        if (auto comment = vd.comment)
-                            hover.printf("%s\n\n", vd.comment);
-                    }
-                }
-                if (e.type)
-                    hover.printf("**type**: %s\n", e.type.toChars);
-            }
-            else if (auto d = isDsymbol(obj))
-            {
-                if (auto sd = d.isStructDeclaration())
-                {
-                    // hover.printf(`type: %s`, d.type.toChars);
-                    hover.printf("**sizeof**: %d\n", cast(int) sd.size(Loc.initial));
-                }
-                if (auto cd = d.isClassDeclaration())
-                {
-                    hover.printf("**classInstanceSize**: %d\n", cast(int) cd.size(Loc.initial));
-                }
-                if (auto fd = d.isFuncDeclaration())
-                {
-                    if (fd.type)
-                        hover.printf("**type**: %s\n", fd.type.toChars);
-                }
-                if (auto vd = d.isVarDeclaration())
-                {
-                    if (vd.type)
-                        hover.printf("**type**: %s\n\n", vd.type.toChars);
-                    if (auto ei = vd._init ? vd._init.isExpInitializer() : null)
-                    {
-                        if (ei.exp)
-                            hover.printf("**init**: %s\n", ei.exp.toChars);
-                    }
-                }
-            }
-
-            // buf.printf(`{"contents":{"kind":"markdown","value":"**int**\n\nEH?."},`
-            //     ~`"range": {"start": { "line": 0, "character": 1 },"end": { "line": 0, "character": 3 }}}`, );
-            buf.writeJsonString(hover.extractSlice);
-            buf.printf(`"}}`);
+            buf.writestring("null");
+            break;
         }
-        else
-        {
-            buf.printf("null");
-        }
-    }
-    else if (result.method == "textDocument/completion")
-    {
+        buf.writestring(`{"contents":{"kind":"markdown","value":"`);
+        buf.writeJsonString(hoverText(target));
+        buf.writestring(`"}}`);
+        break;
+    case "textDocument/completion":
         buf.writestring(`{"isIncomplete":false,"items":[`);
-        completionItems(lsp, result.params, buf);
+        completionItems(lsp, params, buf);
         buf.writestring(`]}`);
-    }
-    else if (result.method == "textDocument/signatureHelp")
-    {
-        signatureHelp(lsp, result.params, buf);
-    }
-    else if (result.method == "textDocument/semanticTokens/full")
-    {
+        break;
+    case "textDocument/signatureHelp":
+        signatureHelp(lsp, params, buf);
+        break;
+    case "textDocument/semanticTokens/full":
         buf.writestring(`{"data":[`);
-        semanticTokens(lsp, result.params, buf);
+        semanticTokens(lsp, params, buf);
         buf.writestring(`]}`);
+        break;
+    case "textDocument/documentSymbol":
+        documentSymbols(lsp, params, buf);
+        break;
+    case "textDocument/references":
+        references(lsp, params, buf);
+        break;
+    case "textDocument/documentHighlight":
+        documentHighlight(lsp, params, buf);
+        break;
+    case "textDocument/rename":
+        error = rename(lsp, params, buf);
+        break;
+    default:
+        fprintf(stderr, "[!] unknown method %.*s\n", msg.method.fTuple.expand);
+        error = "method not found: " ~ msg.method;
+        errorCode = -32601;
+        break;
     }
-    else if (result.method == "textDocument/documentSymbol")
+
+    OutBuffer response;
+    if (error.length)
     {
-        documentSymbols(lsp, result.params, buf);
-    }
-    else if (result.method == "textDocument/references")
-    {
-        references(lsp, result.params, buf);
-    }
-    else if (result.method == "textDocument/didOpen")
-    {
-        lsp.openDocuments[result.params.textDocument.uri] = result.params.textDocument.text;
-        publishDiagnostics(lsp, result.params.textDocument.uri);
-        return; // notification, no response
-    }
-    else if (result.method == "textDocument/didChange")
-    {
-        // textDocumentSync: Full (1) — contentChanges[0].text is the complete new content
-        lsp.openDocuments[result.params.textDocument.uri] = result.params.contentChanges.text;
-        publishDiagnostics(lsp, result.params.textDocument.uri);
-        return; // notification, no response
-    }
-    else if (result.method == "textDocument/didClose")
-    {
-        lsp.openDocuments.remove(result.params.textDocument.uri);
-        return; // notification, no response
-    }
-    else if (result.method == "textDocument/didSave")
-    {
-        return; // content already up to date from didChange; no response needed
-    }
-    else if (result.method == "initialized")
-    {
-        return; // Not required to respond
+        response.printf(`{"jsonrpc":"2.0","id":%d,"error":{"code":%d,"message":"`, msg.id, errorCode);
+        response.writeJsonString(error);
+        response.writestring(`"}}`);
     }
     else
     {
-        fprintf(stderr, "[!] unknown method %.*s\n", result.method.fTuple.expand);
-        buf.printf("null");
+        response.printf(`{"jsonrpc":"2.0","id":%d,"result":`, msg.id);
+        response.write(buf.peekSlice());
+        response.writestring(`}`);
     }
-
-    buf.printf(`}`);
-    if (buf.length > maxPayloadLength)
+    if (response.length > maxPayloadLength)
     {
         fprintf(stderr, "[!] response of %d bytes exceeds the payload limit, replaced by null\n",
-            cast(int) buf.length);
-        buf.reset();
-        buf.printf(`{"jsonrpc":"2.0","id":%d,"result":null}`, result.id);
+            cast(int) response.length);
+        response.reset();
+        response.printf(`{"jsonrpc":"2.0","id":%d,"result":null}`, msg.id);
     }
-    sendMessage(buf);
+    sendMessage(response);
 }
 
 // struct and field names match JsonRPC / LSP protocol
 struct JsonRpc
 {
-    int id;
+    int id = -1;
     string method;
     Params params;
 }
@@ -1984,14 +2156,19 @@ struct Params
     Uri textDocument;
     Position position;
     string rootPath; // main folder that is open in editor
-    ContentChange contentChanges; // maps contentChanges[0].text for textDocument/didChange
+    ContentChange[] contentChanges; // textDocument/didChange
+    Capabilities capabilities; // initialize
+    string newName; // textDocument/rename
+}
 
-    // struct Capabilities
-    // {
-    //     struct TextDocument {}
-    //     TextDocument textDocument;
-    // }
-    // Capabilities capabilities;
+struct Capabilities
+{
+    General general;
+}
+
+struct General
+{
+    string[] positionEncodings;
 }
 
 struct Uri
@@ -2002,8 +2179,8 @@ struct Uri
 
 struct ContentChange
 {
-    Range range; // changed range (for textDocumentSync Incremental mode)
-    string text; // full new content (textDocumentSync Full mode)
+    Range range = Range(Position(-1, -1), Position(-1, -1));
+    string text;
 }
 
 struct Position
@@ -2021,9 +2198,7 @@ struct Range
 SourceLoc toSourceLoc(string uri, Position position)
 {
     SourceLoc result;
-    if (uri.startsWith("file://"))
-        result.filename = uri["file://".length .. $];
-
+    result.filename = uriFilename(uri);
     result.line = position.line + 1; // 0-based
     result.column = position.character + 1; // 0-based
     return result;
@@ -2051,12 +2226,14 @@ unittest
     assert(result.params.position.line == 10);
     assert(result.params.position.character == 5);
 
-    string initialize = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":20036,"clientInfo":{"name":"Sublime Text LSP","version":"2.3.0"},"rootUri":"file:///home/dennis/repos/dmd","rootPath":"/home/dennis/repos/dmd","workspaceFolders":[{"name":"dmd","uri":"file:///home/dennis/repos/dmd"}],"capabilities":{"general":{"regularExpressions":{"engine":"ECMAScript"},"markdown":{"parser":"Python-Markdown","version":"3.2.2"}},"textDocument":{"synchronization":{"dynamicRegistration":true,"didSave":true,"willSave":true,"willSaveWaitUntil":true},"hover":{"dynamicRegistration":true,"contentFormat":["markdown","plaintext"]},"completion":{"dynamicRegistration":true,"completionItem":{"snippetSupport":true,"deprecatedSupport":true,"documentationFormat":["markdown","plaintext"],"tagSupport":{"valueSet":[1]},"resolveSupport":{"properties":["detail","documentation","additionalTextEdits"]},"insertReplaceSupport":true,"insertTextModeSupport":{"valueSet":[2]},"labelDetailsSupport":true},"completionItemKind":{"valueSet":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25]},"insertTextMode":2,"completionList":{"itemDefaults":["editRange","insertTextFormat","data"]}},"signatureHelp":{"dynamicRegistration":true,"contextSupport":true,"signatureInformation":{"activeParameterSupport":true,"documentationFormat":["markdown","plaintext"],"parameterInformation":{"labelOffsetSupport":true}}},"references":{"dynamicRegistration":true},"documentHighlight":{"dynamicRegistration":true},"documentSymbol":{"dynamicRegistration":true,"hierarchicalDocumentSymbolSupport":true,"symbolKind":{"valueSet":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26]},"tagSupport":{"valueSet":[1]}},"documentLink":{"dynamicRegistration":true,"tooltipSupport":true},"formatting":{"dynamicRegistration":true},"rangeFormatting":{"dynamicRegistration":true,"rangesSupport":true},"declaration":{"dynamicRegistration":true,"linkSupport":true},"definition":{"dynamicRegistration":true,"linkSupport":true},"typeDefinition":{"dynamicRegistration":true,"linkSupport":true},"implementation":{"dynamicRegistration":true,"linkSupport":true},"codeAction":{"dynamicRegistration":true,"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["quickfix","refactor","refactor.extract","refactor.inline","refactor.rewrite","source.fixAll","source.organizeImports"]}},"dataSupport":true,"isPreferredSupport":true,"resolveSupport":{"properties":["edit"]}},"rename":{"dynamicRegistration":true,"prepareSupport":true,"prepareSupportDefaultBehavior":1},"colorProvider":{"dynamicRegistration":true},"publishDiagnostics":{"relatedInformation":true,"tagSupport":{"valueSet":[1,2]},"versionSupport":true,"codeDescriptionSupport":true,"dataSupport":true},"diagnostic":{"dynamicRegistration":true,"relatedDocumentSupport":true},"selectionRange":{"dynamicRegistration":true},"foldingRange":{"dynamicRegistration":true,"foldingRangeKind":{"valueSet":["comment","imports","region"]}},"codeLens":{"dynamicRegistration":true},"inlayHint":{"dynamicRegistration":true,"resolveSupport":{"properties":["textEdits","label.command"]}},"semanticTokens":{"dynamicRegistration":true,"requests":{"range":true,"full":{"delta":true}},"tokenTypes":["namespace","type","class","enum","interface","struct","typeParameter","parameter","variable","property","enumMember","event","function","method","macro","keyword","modifier","comment","string","number","regexp","operator","decorator","label"],"tokenModifiers":["declaration","definition","readonly","static","deprecated","abstract","async","modification","documentation","defaultLibrary"],"formats":["relative"],"overlappingTokenSupport":false,"multilineTokenSupport":true,"augmentsSyntaxTokens":true},"callHierarchy":{"dynamicRegistration":true},"typeHierarchy":{"dynamicRegistration":true}},"workspace":{"applyEdit":true,"didChangeConfiguration":{"dynamicRegistration":true},"executeCommand":{},"workspaceEdit":{"documentChanges":true,"failureHandling":"abort"},"workspaceFolders":true,"symbol":{"dynamicRegistration":true,"resolveSupport":{"properties":["location.range"]},"symbolKind":{"valueSet":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26]},"tagSupport":{"valueSet":[1]}},"configuration":true,"codeLens":{"refreshSupport":true},"inlayHint":{"refreshSupport":true},"semanticTokens":{"refreshSupport":true},"diagnostics":{"refreshSupport":true}},"window":{"showDocument":{"support":true},"showMessage":{"messageActionItem":{"additionalPropertiesSupport":true}},"workDoneProgress":true}},"initializationOptions":{}}}`;
+    string initialize = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":20036,"clientInfo":{"name":"Sublime Text LSP","version":"2.3.0"},"rootUri":"file:///home/dennis/repos/dmd","rootPath":"/home/dennis/repos/dmd","workspaceFolders":[{"name":"dmd","uri":"file:///home/dennis/repos/dmd"}],"capabilities":{"general":{"regularExpressions":{"engine":"ECMAScript"},"markdown":{"parser":"Python-Markdown","version":"3.2.2"},"positionEncodings":["utf-16","utf-8"]},"textDocument":{"synchronization":{"dynamicRegistration":true,"didSave":true,"willSave":true,"willSaveWaitUntil":true},"hover":{"dynamicRegistration":true,"contentFormat":["markdown","plaintext"]},"completion":{"dynamicRegistration":true,"completionItem":{"snippetSupport":true,"deprecatedSupport":true,"documentationFormat":["markdown","plaintext"],"tagSupport":{"valueSet":[1]},"resolveSupport":{"properties":["detail","documentation","additionalTextEdits"]},"insertReplaceSupport":true,"insertTextModeSupport":{"valueSet":[2]},"labelDetailsSupport":true},"completionItemKind":{"valueSet":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25]},"insertTextMode":2,"completionList":{"itemDefaults":["editRange","insertTextFormat","data"]}},"signatureHelp":{"dynamicRegistration":true,"contextSupport":true,"signatureInformation":{"activeParameterSupport":true,"documentationFormat":["markdown","plaintext"],"parameterInformation":{"labelOffsetSupport":true}}},"references":{"dynamicRegistration":true},"documentHighlight":{"dynamicRegistration":true},"documentSymbol":{"dynamicRegistration":true,"hierarchicalDocumentSymbolSupport":true,"symbolKind":{"valueSet":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26]},"tagSupport":{"valueSet":[1]}},"semanticTokens":{"dynamicRegistration":true,"requests":{"range":true,"full":{"delta":true}},"tokenTypes":["namespace","type"],"tokenModifiers":["declaration"],"formats":["relative"],"overlappingTokenSupport":false,"multilineTokenSupport":true,"augmentsSyntaxTokens":true}},"workspace":{"applyEdit":true,"workspaceEdit":{"documentChanges":true,"failureHandling":"abort"},"workspaceFolders":true,"configuration":true},"window":{"showDocument":{"support":true},"workDoneProgress":true}},"initializationOptions":{}}}`;
     jsonParse(result, initialize, eSink);
+    assert(result.params.capabilities.general.positionEncodings == ["utf-16", "utf-8"]);
 
     // textDocument/didOpen: params.textDocument.text contains the full file content
     JsonRpc didOpen;
     jsonParse(didOpen, `{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///foo.d","languageId":"d","version":1,"text":"module foo;\nint x = 5;\n"}}}`, eSink);
+    assert(didOpen.id == -1);
     assert(didOpen.method == "textDocument/didOpen");
     assert(didOpen.params.textDocument.uri == "file:///foo.d");
     assert(didOpen.params.textDocument.text == "module foo;\nint x = 5;\n");
@@ -2066,35 +2243,39 @@ unittest
     jsonParse(didChange, `{"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"file:///foo.d","version":2},"contentChanges":[{"text":"module foo;\nint x = 42;\n"}]}}`, eSink);
     assert(didChange.method == "textDocument/didChange");
     assert(didChange.params.textDocument.uri == "file:///foo.d");
-    assert(didChange.params.contentChanges.text == "module foo;\nint x = 42;\n");
+    assert(didChange.params.contentChanges.length == 1);
+    assert(didChange.params.contentChanges[0].text == "module foo;\nint x = 42;\n");
+    assert(didChange.params.contentChanges[0].range.start.line == -1);
+
+    JsonRpc ranged;
+    jsonParse(ranged, `{"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"file:///foo.d","version":3},"contentChanges":[{"range":{"start":{"line":1,"character":8},"end":{"line":1,"character":9}},"rangeLength":1,"text":"7"},{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":0}},"text":"// c\n"}]}}`, eSink);
+    assert(ranged.params.contentChanges.length == 2);
+    assert(ranged.params.contentChanges[0].range.start == Position(1, 8));
+    Lsp lsp;
+    assert(applyContentChanges(lsp, "module foo;\nint x = 5;\n", ranged.params.contentChanges) == "// c\nmodule foo;\nint x = 7;\n");
+
+    assert(applyContentChanges(lsp, "auto s = \"\U0001F600\"; int y;\n", [ContentChange(Range(Position(0, 15), Position(0, 16)), "z")])
+        == "auto s = \"\U0001F600\"; znt y;\n");
+    lsp.utf16 = false;
+    assert(applyContentChanges(lsp, "auto s = \"\U0001F600\"; int y;\n", [ContentChange(Range(Position(0, 15), Position(0, 16)), "z")])
+        == "auto s = \"\U0001F600\"z int y;\n");
+
+    assert(uriFilename("file:///home/a%20b/c%C3%A9.d") == "/home/a b/cé.d");
+    assert(uriFilename("untitled:x") is null);
+    OutBuffer uri;
+    writeFileUri(uri, "/home/a b/cé.d");
+    assert(uri.peekChars().toDString() == "file:///home/a%20b/c%C3%A9.d");
 }
 
 unittest
 {
-    const src = "void main() { foo(1, bar(2, 3), 4); }";
-
-    auto outer = findEnclosingCall(src, 33);
-    assert(outer.found);
-    assert(outer.openParen == 17);
-    assert(outer.activeParameter == 2);
-
-    auto inner = findEnclosingCall(src, 29);
-    assert(inner.found);
-    assert(inner.openParen == 24);
-    assert(inner.activeParameter == 1);
-
-    auto none = findEnclosingCall(src, 12);
-    assert(!none.found);
-
-    const idx = "g(a[b,c], d";
-    auto call = findEnclosingCall(idx, idx.length);
-    assert(call.found);
-    assert(call.openParen == 1);
-    assert(call.activeParameter == 1);
-
     const text = "abc\ndef\n";
     assert(byteOffset(text, Position(1, 2)) == 6);
-    assert(offsetPosition(text, 6) == Position(1, 2));
-    assert(offsetPosition(text, 3) == Position(0, 3));
-    assert(offsetPosition(text, 4) == Position(1, 0));
+    assert(lineSlice("ab\ncd\r\nef", 1) == "cd");
+    assert(lineSlice("ab\ncd\r\nef", 2) == "ef");
+    assert(lineSlice("ab", 3) == "");
+    assert(utf16Length("aé😀b") == 5);
+    assert(utf16ToByteOffset("aé😀b", 2) == 3);
+    assert(utf16ToByteOffset("aé😀b", 4) == 7);
+    assert(utf16ToByteOffset("aé😀b", 9) == 8);
 }

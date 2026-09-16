@@ -473,6 +473,7 @@ public:
      */
     Expression *thisexp;        // if !NULL, 'this' for class being allocated
     Type *newtype;
+    Loc typeLoc;
     Expressions *arguments;     // Array of Expression's
     ArgumentLabels *names;      // Array of argument Labels (name and location of name) corresponding to expressions
     Expression *placement;      // if !NULL, placement expression
@@ -685,6 +686,7 @@ class DotIdExp final : public UnaExp
 {
 public:
     Identifier *ident;
+    Loc identLoc;
     d_bool noderef;       // true if the result of the expression will never be dereferenced
     d_bool wantsym;       // do not replace Symbol with its initializer during semantic()
     d_bool arrow;         // ImportC: if -> instead of .
@@ -705,6 +707,7 @@ class DotVarExp final : public UnaExp
 {
 public:
     Declaration *var;
+    Loc identLoc;
     d_bool hasOverloads;
 
     void accept(Visitor *v) override { v->visit(this); }

@@ -213,6 +213,7 @@ private int tryMain(const(char)[][] argv, out Param params)
     global.compileEnv.previewIn        = params.previewIn;
     global.compileEnv.transitionIn     = params.v.vin;
     global.compileEnv.ddocOutput       = params.ddoc.doOutput;
+    global.compileEnv.lsp              = params.lsp;
 
     final switch(global.params.cIdentifierTable)
     {

@@ -115,7 +115,7 @@
                 "protection": "public"
             },
             {
-                "char": 1,
+                "char": 7,
                 "kind": "alias",
                 "line": 21,
                 "name": "SSCDX",
@@ -184,7 +184,7 @@
                 "protection": "public"
             },
             {
-                "char": 1,
+                "char": 11,
                 "deco": "VALUE_REMOVED_FOR_TEST",
                 "kind": "alias",
                 "line": 18,
@@ -870,7 +870,7 @@
                 "line": 141,
                 "members": [
                     {
-                        "char": 1,
+                        "char": 7,
                         "kind": "alias",
                         "line": 141,
                         "name": "Seq",
@@ -888,7 +888,7 @@
             },
             {},
             {
-                "char": 1,
+                "char": 7,
                 "file": "VALUE_REMOVED_FOR_TEST",
                 "kind": "alias",
                 "line": 145,
@@ -898,7 +898,7 @@
             },
             {},
             {
-                "char": 1,
+                "char": 7,
                 "kind": "alias",
                 "line": 145,
                 "name": "b1",
@@ -907,7 +907,7 @@
             },
             {},
             {
-                "char": 1,
+                "char": 7,
                 "kind": "alias",
                 "line": 145,
                 "name": "b2",
@@ -1175,7 +1175,7 @@
                 "protection": "public"
             },
             {
-                "char": 1,
+                "char": 7,
                 "deco": "VALUE_REMOVED_FOR_TEST",
                 "kind": "alias",
                 "line": 208,

@@ -51,6 +51,7 @@ struct CompileEnv
     bool transitionIn;       /// `-transition=in` is active, `in` parameters are listed
     bool ddocOutput;         /// collect embedded documentation comments
     bool masm;               /// use MASM inline asm syntax
+    bool lsp;
     const(char)[] switchPrefix;
 
     // these need a default otherwise tests won't work.

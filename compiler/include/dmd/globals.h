@@ -188,6 +188,7 @@ struct Param
     d_bool trace;         // insert profiling hooks
     d_bool tracegc;       // instrument calls to 'new'
     d_bool vcg_ast;       // write-out codegen-ast
+    d_bool lsp;           // Language Server Protocol
     d_bool useUnitTests;  // generate unittest code
     d_bool useUnitTestsRootOnly; // generate unittest code for root modules only
     d_bool useInline;     // inline expand functions
@@ -339,6 +340,7 @@ struct CompileEnv
     d_bool transitionIn;
     d_bool ddocOutput;
     d_bool masm;
+    d_bool lsp;
     DString switchPrefix;
     IdentifierCharLookup cCharLookupTable;
     IdentifierCharLookup dCharLookupTable;

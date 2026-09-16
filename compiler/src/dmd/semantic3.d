@@ -572,6 +572,9 @@ private extern(C++) final class Semantic3Visitor : Visitor
                 v.parent = funcdecl;
             }
 
+            if (onScopeEntered)
+                onScopeEntered(funcdecl.loc, funcdecl.endloc, sc2);
+
             // Precondition invariant
             Statement fpreinv = null;
             if (funcdecl.addPreInvariant())

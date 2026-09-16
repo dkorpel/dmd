@@ -16,6 +16,7 @@ import core.stdc.stdio;
 import dmd.aggregate;
 import dmd.arraytypes;
 import dmd.astenums;
+import dmd.dscope;
 import dmd.dsymbol;
 import dmd.dtemplate;
 import dmd.errors : fatal;
@@ -58,6 +59,10 @@ __gshared void function(Dsymbol d, Loc loc) onConstantFold;
 /// resolves to `t`, since the written type's location is discarded after
 /// semantic (types are interned).
 __gshared void function(Type t, Dsymbol s, Identifier ident, Loc loc) onTypeResolved;
+
+__gshared void function(Expression e1, Identifier ident, Loc loc, Loc identLoc) onMemberLookup;
+
+__gshared void function(Loc loc, Loc endloc, Scope* sc) onScopeEntered;
 
 /* Accumulator for successive matches.
  */
