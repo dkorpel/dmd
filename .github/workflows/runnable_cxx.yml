@@ -150,7 +150,7 @@ jobs:
       if: runner.os == 'Linux'
       run: |
         set -eux
-        sudo apt-get update
+        sudo apt-get -o Acquire::Retries=5 update
         apt_packages='${{ matrix.compiler }}'
         if [[ "$MODEL" == 32 ]]; then
           if [[ '${{ matrix.compiler }}' =~ ^g\+\+ ]]; then
@@ -159,7 +159,7 @@ jobs:
             apt_packages+=" g++-multilib"
           fi
         fi
-        sudo apt-get install -y $apt_packages
+        sudo apt-get -o Acquire::Retries=5 install -y $apt_packages
 
     - name: 'Windows: Set up MSVC environment' # puts cl.exe in PATH etc.
       if: runner.os == 'Windows'

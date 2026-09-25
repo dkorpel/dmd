@@ -19,6 +19,8 @@ if [ -z ${HOST_DMD+x} ] ; then echo "Variable 'HOST_DMD' needs to be set."; exit
 # CI_DFLAGS: Optional flags to pass to the build
 if [ -z ${CI_DFLAGS+x} ] ; then CI_DFLAGS=""; fi
 
+source "$(dirname "${BASH_SOURCE[0]}")/retry.sh"
+
 CURL_USER_AGENT="DMD-CI $(curl --version | head -n 1)"
 build_path=generated/$OS_NAME/release/$MODEL
 
@@ -45,16 +47,21 @@ clone() {
     local url="$1"
     local path="$2"
     local branch="$3"
-    for i in {0..4}; do
-        if git clone --depth=1 --branch "$branch" "$url" "$path" --quiet; then
-            break
-        elif [ $i -lt 4 ]; then
-            sleep $((1 << $i))
-        else
-            echo "Failed to clone: ${url}"
-            exit 1
+    retry git clone --depth=1 --branch "$branch" "$url" "$path" --quiet
+}
+
+remote_branch_exists() {
+    local status
+    for i in {1..5}; do
+        status=0
+        git ls-remote --exit-code --heads "$1" "$2" > /dev/null || status=$?
+        if [ $status -eq 0 ] || [ $status -eq 2 ]; then
+            return $status
         fi
+        sleep $((1 << i))
     done
+    infra_error "git ls-remote $1 failed after 5 attempts."
+    exit 1
 }
 
 # build dmd (incl. building and running the unittests), druntime, phobos
@@ -212,7 +219,7 @@ setup_repos() {
     for proj in phobos; do
         if [ ! -d ../$proj ]; then
             if [ $branch != master ] && [ $branch != stable ] &&
-                   ! git ls-remote --exit-code --heads https://github.com/dlang/$proj.git $branch > /dev/null; then
+                   ! remote_branch_exists https://github.com/dlang/$proj.git $branch; then
                 # use master as fallback for other repos to test feature branches
                 clone https://github.com/dlang/$proj.git ../$proj master
             else
@@ -261,6 +268,10 @@ download_install_sh() {
     done
     sleep $((1 << i))
   done
+  if [ ! -f "$location" ] ; then
+    infra_error "Downloading install.sh failed from all mirrors."
+    exit 1
+  fi
 }
 
 # install D host compiler
@@ -268,11 +279,14 @@ install_host_compiler() {
   if [ "${HOST_DMD:0:5}" == "gdmd-" ] ; then
     local gdc_version="${HOST_DMD:5}"
     if [ ! -e ~/dlang/gdc-$gdc_version/activate ] ; then
-        sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
-        sudo apt-get update
-        sudo apt-get install -y gdc-$gdc_version
+        retry sudo apt-get -o Acquire::Retries=5 update
+        if ! apt-cache show gdc-$gdc_version > /dev/null 2>&1; then
+            retry sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+            retry sudo apt-get -o Acquire::Retries=5 update
+        fi
+        retry sudo apt-get -o Acquire::Retries=5 install -y gdc-$gdc_version
         # fetch the gdmd wrapper for CLI compatibility with dmd
-        sudo curl -fsSL -A "$CURL_USER_AGENT" --connect-timeout 5 --speed-time 30 --speed-limit 1024 --retry 5 --retry-delay 5 https://raw.githubusercontent.com/D-Programming-GDC/GDMD/master/dmd-script -o /usr/bin/gdmd-$gdc_version
+        retry sudo curl -fsSL -A "$CURL_USER_AGENT" --connect-timeout 5 --speed-time 30 --speed-limit 1024 --retry 5 --retry-delay 5 https://raw.githubusercontent.com/D-Programming-GDC/GDMD/master/dmd-script -o /usr/bin/gdmd-$gdc_version
         sudo chmod +x /usr/bin/gdmd-$gdc_version
         # fake install script and create a fake 'activate' script
         mkdir -p ~/dlang/gdc-$gdc_version
@@ -287,7 +301,7 @@ install_host_compiler() {
   else
     local install_sh="install.sh"
     download_install_sh "$install_sh"
-    CURL_USER_AGENT="$CURL_USER_AGENT" bash "$install_sh" "$HOST_DMD"
+    CURL_USER_AGENT="$CURL_USER_AGENT" retry bash "$install_sh" "$HOST_DMD"
   fi
 }
 

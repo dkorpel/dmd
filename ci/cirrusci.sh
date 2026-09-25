@@ -14,10 +14,12 @@ if [ -z ${MODEL+x} ] ; then echo "Variable 'MODEL' needs to be set."; exit 1; fi
 if [ ! -z ${HOST_DC+x} ] ; then HOST_DMD=${HOST_DC}; fi
 if [ -z ${HOST_DMD+x} ] ; then echo "Variable 'HOST_DMD' needs to be set."; exit 1; fi
 
+source "$(dirname "${BASH_SOURCE[0]}")/retry.sh"
+
 if [ "$OS_NAME" == "linux" ]; then
   if type -P apk &>/dev/null; then
     # Alpine
-    apk add git make g++ ldc \
+    retry apk add git make g++ ldc \
       bash grep coreutils diffutils curl gdb linux-headers dub
   else
     export DEBIAN_FRONTEND=noninteractive
@@ -30,19 +32,19 @@ if [ "$OS_NAME" == "linux" ]; then
       # ci/run.sh uses `sudo add-apt-repository ...` to add a PPA repo
       packages="$packages sudo software-properties-common"
     fi
-    apt-get -q update
-    apt-get install -yq $packages
+    retry apt-get -o Acquire::Retries=5 -q update
+    retry apt-get -o Acquire::Retries=5 install -yq $packages
   fi
 elif [ "$OS_NAME" == "osx" ]; then
   # upgrade GNU make
-  brew install make
+  retry brew install make
   sudo ln -s /usr/local/opt/make/libexec/gnubin/make /usr/local/bin/make
 elif [ "$OS_NAME" == "freebsd" ]; then
   packages="git gmake binutils"
   if [ "$HOST_DMD" == "dmd-2.079.0" ] ; then
     packages="$packages lang/gcc9"
   fi
-  pkg install -y $packages
+  retry pkg install -y $packages
   # replace default make by GNU make
   rm /usr/bin/make
   ln -s /usr/local/bin/gmake /usr/bin/make

@@ -127,7 +127,7 @@ jobs:
       - name: 'Alpine container: Pre-install bash, git and sudo'
         if: startsWith(matrix.container_image, 'alpine')
         shell: sh
-        run: apk add bash git sudo
+        run: for i in 1 2 3 4 5; do apk add bash git sudo && exit 0; sleep $((i * i)); done; exit 1
 
       - uses: actions/checkout@v7
         with:
@@ -174,6 +174,7 @@ jobs:
 
           ci/run.sh setup_repos "$REPO_BRANCH"
       - name: Build
+        id: build
         run: ${{ matrix.disable_debug_for_dmd_unittests && 'ENABLE_DEBUG=0' || '' }} ci/run.sh build
       - name: Rebuild dmd (with enabled coverage)
         if: matrix.coverage
@@ -186,13 +187,13 @@ jobs:
       - name: Test dmd
         run: ci/run.sh test_dmd
       - name: Test frontend subpackage
-        if: '!matrix.coverage && (success() || failure()) && (matrix.host_dmd == ''dmd'' || matrix.host_dmd == ''dmd-latest'')'
+        if: '!matrix.coverage && (success() || failure()) && steps.build.outcome == ''success'' && (matrix.host_dmd == ''dmd'' || matrix.host_dmd == ''dmd-latest'')'
         run: ci/run.sh test_frontend_subpackage
       - name: Test druntime
-        if: '!matrix.coverage && (success() || failure())'
+        if: '!matrix.coverage && (success() || failure()) && steps.build.outcome == ''success'''
         run: ci/run.sh test_druntime
       - name: 'Windows x86: Add 32-bit libcurl.dll to PATH (required for Phobos unittests)'
-        if: runner.os == 'Windows' && env.MODEL == '32' && !matrix.coverage && (success() || failure())
+        if: runner.os == 'Windows' && env.MODEL == '32' && !matrix.coverage && (success() || failure()) && steps.build.outcome == 'success'
         run: |
           set -uexo pipefail
           if [[ "$HOST_DMD" =~ ^ldc ]]; then
@@ -201,10 +202,10 @@ jobs:
             echo "$(dirname "$DC")/../bin" >> $GITHUB_PATH
           fi
       - name: Test phobos
-        if: '!matrix.coverage && (success() || failure())'
+        if: '!matrix.coverage && (success() || failure()) && steps.build.outcome == ''success'''
         run: ci/run.sh test_phobos
       - name: Test self-compile
-        if: '!matrix.coverage && (success() || failure())' # already re-built with enabled coverage
+        if: '!matrix.coverage && (success() || failure()) && steps.build.outcome == ''success''' # already re-built with enabled coverage
         run: ENABLE_RELEASE=0 ci/run.sh rebuild
       - name: Upload coverage report
         if: matrix.coverage
@@ -255,7 +256,7 @@ jobs:
         run: ci/run.sh build
 
       - name: Install AArch64 cross-compile tools
-        run: sudo apt-get install -y qemu-user clang lld gcc-aarch64-linux-gnu
+        run: sudo apt-get -o Acquire::Retries=5 install -y qemu-user clang lld gcc-aarch64-linux-gnu
 
       - name: Test AArch64 cross-compile and run via QEMU
         run: |

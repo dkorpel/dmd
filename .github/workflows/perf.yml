@@ -61,8 +61,8 @@ jobs:
 
       - name: Install prerequisites
         run: |
-          sudo apt-get update
-          sudo apt-get install -y valgrind time
+          sudo apt-get -o Acquire::Retries=5 update
+          sudo apt-get -o Acquire::Retries=5 install -y valgrind time
           valgrind --version
 
       - name: Install host compiler

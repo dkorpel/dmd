@@ -13,6 +13,10 @@ You can Ctrl+F search for a triple asterisk `***` to easily find failed commands
 
 Errors caused by the changes you made should be addressed by pushing new commits to your branch.
 
+Downloads and package installs in CI are retried automatically.
+If they still fail, the check shows a "CI infrastructure failure" annotation and the test steps are skipped.
+Such a failure is not caused by your PR: re-run the failed job, or ask a maintainer to.
+
 When it looks like the error is unrelated to your PR's changes, try rebasing your branch.
 First, ensure that you have a 'remote' pointing to both dlang/dmd and your own fork of dmd, for example:
 ```
