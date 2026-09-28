@@ -347,7 +347,7 @@ private type* wasmRtlsymType(RTLSYM i)
         case RTLSYM.MEMSET80:               return fn([ptrTo(tstypes[TYdouble]), tstypes[TYdouble], tsize], ptrTo(tstypes[TYdouble])); // D `real` is f64 on wasm32
         case RTLSYM.MEMSET128:              return fn([voidPtr(), voidPtr(), tsize], voidPtr());
         case RTLSYM.MEMSET128ii:            return fn([voidPtr(), voidArr(), tsize], voidPtr());
-        case RTLSYM.MEMSETN:                return fn([voidPtr(), voidPtr(), tint, tsize], voidPtr());
+        case RTLSYM.MEMSETN:                return fn([voidPtr(), voidPtr(), tsize, tsize], voidPtr());
         case RTLSYM.ALLOCMEMORY:            return fn([tsize], voidPtr());
 
         case RTLSYM.DCOVER2:                return fn([str(), type_dyn_array(tsize), type_dyn_array(tuint), tstypes[TYuchar]], tvoid);
