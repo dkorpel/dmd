@@ -935,10 +935,10 @@ bool renderArg(Expression arg, ref OutBuffer buf, ShimState* st)
     return false;
 }
 
-bool scanLegality(FuncDeclaration fd)
+bool scanLegality(FuncDeclaration fd, bool relaxed = false)
 {
     bool[void*] inProgress;
-    return scanLegalityImpl(fd, inProgress) == 1;
+    return scanLegalityImpl(fd, inProgress, relaxed) == 1;
 }
 
 bool insideTemplateInstance(Dsymbol s)
@@ -952,6 +952,7 @@ bool insideTemplateInstance(Dsymbol s)
 }
 
 __gshared byte[void*] legalityVerdicts;
+__gshared byte[void*] legalityVerdictsRelaxed;
 __gshared uint[void*] attemptBudget;
 __gshared bool[void*] forcedSem3Errors;
 
@@ -975,9 +976,10 @@ public bool wasmCtfeTakeForcedSem3Error(FuncDeclaration fd)
 }
 enum attemptBudgetMax = 16;
 
-int scanLegalityImpl(FuncDeclaration fd, ref bool[void*] inProgress)
+int scanLegalityImpl(FuncDeclaration fd, ref bool[void*] inProgress, bool relaxed = false)
 {
-    if (auto p = cast(void*) fd in legalityVerdicts)
+    auto verdicts = relaxed ? &legalityVerdictsRelaxed : &legalityVerdicts;
+    if (auto p = cast(void*) fd in *verdicts)
         return *p == 1 ? 1 : 0;
     if (cast(void*) fd in inProgress)
         return 1;
@@ -985,13 +987,13 @@ int scanLegalityImpl(FuncDeclaration fd, ref bool[void*] inProgress)
 
     if (trustedModule(fd))
     {
-        legalityVerdicts[cast(void*) fd] = 1;
+        (*verdicts)[cast(void*) fd] = 1;
         return 1;
     }
     if (!fd.fbody || fd.errors)
     {
         const ok = isBuiltin(fd) != BUILTIN.unimp;
-        legalityVerdicts[cast(void*) fd] = ok ? 1 : 0;
+        (*verdicts)[cast(void*) fd] = ok ? 1 : 0;
         return ok ? 1 : 0;
     }
     if (fd.semanticRun < PASS.semantic3done && !insideTemplateInstance(fd))
@@ -1004,18 +1006,19 @@ int scanLegalityImpl(FuncDeclaration fd, ref bool[void*] inProgress)
     Module mod = fd.getModule();
     if (!mod || !mod.srcfile.toChars() || mod.filetype == FileType.c)
     {
-        legalityVerdicts[cast(void*) fd] = 0;
+        (*verdicts)[cast(void*) fd] = 0;
         return 0;
     }
 
     scope scanner = new LegalityScanner();
+    scanner.relaxed = relaxed;
     fd.fbody.accept(scanner);
     int verdict = scanner.bad ? 0 : 1;
     if (verdict == 1)
     {
         foreach (callee; scanner.callees)
         {
-            const cv = scanLegalityImpl(callee, inProgress);
+            const cv = scanLegalityImpl(callee, inProgress, relaxed);
             if (cv != 1)
             {
                 verdict = cv;
@@ -1028,7 +1031,7 @@ int scanLegalityImpl(FuncDeclaration fd, ref bool[void*] inProgress)
     else if (verbose && scanner.why)
         fprintf(stderr, "wasm-ctfe: reject %s: %s\n", fd.toPrettyChars(), scanner.why);
     if (verdict != 2)
-        legalityVerdicts[cast(void*) fd] = verdict == 1 ? 1 : 0;
+        (*verdicts)[cast(void*) fd] = verdict == 1 ? 1 : 0;
     else
         inProgress.remove(cast(void*) fd);
     return verdict;
@@ -1093,6 +1096,7 @@ extern (C++) final class LegalityScanner : SemanticTimeTransitiveVisitor
     alias visit = SemanticTimeTransitiveVisitor.visit;
 
     bool bad;
+    bool relaxed;
     const(char)* why;
     FuncDeclarations callees;
 
@@ -1112,6 +1116,12 @@ extern (C++) final class LegalityScanner : SemanticTimeTransitiveVisitor
         if (!t)
             return false;
         auto tb = t.toBasetype();
+        if (relaxed)
+        {
+            if (auto ts = tb.isTypeStruct())
+                return hasOverlaps(ts.sym);
+            return false;
+        }
         switch (tb.ty)
         {
         case Tpointer:
@@ -1156,15 +1166,19 @@ extern (C++) final class LegalityScanner : SemanticTimeTransitiveVisitor
         }
         if (!f)
         {
-            reject("indirect call");
-            return;
+            if (!relaxed)
+            {
+                reject("indirect call");
+                return;
+            }
         }
-        if (f.isVirtualMethod())
+        else if (f.isVirtualMethod() && !relaxed)
         {
             reject("virtual call");
             return;
         }
-        callees.push(f);
+        if (f)
+            callees.push(f);
         if (e.e1)
             e.e1.accept(this);
         if (e.arguments)
@@ -1221,16 +1235,33 @@ extern (C++) final class LegalityScanner : SemanticTimeTransitiveVisitor
 
     override void visit(SymOffExp e)
     {
+        if (relaxed)
+        {
+            if (auto v = e.var ? e.var.isVarDeclaration() : null)
+                if (v.isDataseg() && !(v.storage_class & STC.manifest))
+                    reject("address of global");
+            return;
+        }
         reject("address of symbol");
     }
 
     override void visit(AddrExp e)
     {
+        if (relaxed)
+        {
+            super.visit(e);
+            return;
+        }
         reject("address taken");
     }
 
     override void visit(PtrExp e)
     {
+        if (relaxed)
+        {
+            super.visit(e);
+            return;
+        }
         reject("pointer dereference");
     }
 
@@ -1243,7 +1274,7 @@ extern (C++) final class LegalityScanner : SemanticTimeTransitiveVisitor
     {
         if (bad)
             return;
-        if (e.type && e.type.toBasetype().ty == Tclass)
+        if (!relaxed && e.type && e.type.toBasetype().ty == Tclass)
         {
             reject("class new");
             return;
@@ -2173,6 +2204,8 @@ Expression tryWasmCtfeInproc(FuncDeclaration fd, Expression thisExp, Expression[
     if (auto m = fd.getModule())
         if (m.filetype == FileType.c)
             return bail(fd, "importc");
+    if (!scanLegality(fd, true))
+        return bail(fd, "legality scan");
     auto tf = fd.type ? fd.type.isTypeFunction() : null;
     const bool isCtor = fd.isCtorDeclaration() !is null;
     if (!tf || (tf.isRef && !isCtor) || tf.parameterList.varargs != VarArg.none)
