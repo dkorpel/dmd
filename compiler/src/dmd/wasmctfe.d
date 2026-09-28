@@ -2246,6 +2246,15 @@ private IpModule* ipGetModule(FuncDeclaration fd)
         return *p;
     if (cast(void*) fd in ipModuleFailed)
         return null;
+    {
+        import dmd.glue : wasmCtfeBuildInProgress;
+        if (wasmCtfeBuildInProgress())
+        {
+            if (verbose)
+                fprintf(stderr, "wasm-ctfe inproc: nested build for %s deferred\n", fd.toPrettyChars());
+            return null;
+        }
+    }
 
     OutBuffer buf;
     const(char)[][] unresolved;

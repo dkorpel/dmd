@@ -1415,7 +1415,11 @@ public bool wasmCtfeGenerate(FuncDeclaration root, ref OutBuffer objbuf, out con
             }
             {
                 import dmd.wasmctfe : ipForceSemantic3;
+                const errsB = global.errors;
                 ipForceSemantic3(fd);
+                if (getenv("DMD_CTFE_TRACEGEN") && global.errors != errsB)
+                    fprintf(stderr, "wasm-ctfe sem3: %s raised %u errors\n",
+                        fd.toPrettyChars(), global.errors - errsB);
             }
             if (fd.semanticRun < PASS.semantic3done)
                 continue;
@@ -1450,7 +1454,11 @@ public bool wasmCtfeGenerate(FuncDeclaration root, ref OutBuffer objbuf, out con
         }
         if (getenv("DMD_CTFE_TRACEGEN"))
             fprintf(stderr, "wasm-ctfe gen: %s\n", d.toPrettyChars());
+        const errsBefore = global.errors;
         toObjFile(d, false);
+        if (getenv("DMD_CTFE_TRACEGEN") && global.errors != errsBefore)
+            fprintf(stderr, "wasm-ctfe gen: %s raised %u errors\n",
+                d.toPrettyChars(), global.errors - errsBefore);
     }
     if (global.errors == startErrors)
         objmod.term("__wasmctfe.wasm");

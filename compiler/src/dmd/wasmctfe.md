@@ -311,3 +311,43 @@ ArrayInitializer. The worklist now poisons the build when it meets a
 variable whose ArrayInitializer has no type yet (or a StructInitializer).
 Natively the test errors out ("static variable `mh` cannot be read at
 compile time") before ever touching the initializer.
+
+### Expr wrappers must not capture their enclosing frame
+`static assert`/`enum` expressions inside function or method bodies can
+reference nested functions or frame temps (the `$` of `(f())[0 .. $]`
+lives in the enclosing method). A synthetic module-level wrapper cannot
+access those; compiling one produced "`test1` is a nested function and
+cannot be accessed" as a gagged error and poisoned the build. The
+expr-support scan now bails when the expression calls a nested function
+or references a function-parented variable that is not declared inside
+the expression itself.
+
+### CTFE re-entered during an engine build must defer
+Semantic3 of a worklist function can instantiate templates whose members
+run their own CTFE (druntime's `newCapacity` table, `enum attr` in the
+array hooks). `wasmCtfeGenerate` is not reentrant and refused the nested
+call — but `ipGetModule` then cached that function as permanently failed
+and reported it as "errors" (no message, since nothing was actually
+raised). Nested requests now return null before touching the failure
+cache; the same evaluation succeeds later at top level.
+
+### Array literals allocate through the host bump allocator
+The `_d_arrayliteralTX` lowering never runs for ctfe-scope expressions,
+so engine builds lower a heap array literal to a
+`_d_allocmemory(dim * elemsize)` call (bound to the wasmtime host bump
+allocator, same as `gc_malloc`) followed by inline element stores —
+the same shape the native lowering produces.
+
+### `~= dchar` runs host-side
+`_d_arrayappendcd`/`_d_arrayappendcw` are implemented as host functions:
+decode the slice at the ref address, UTF-8/UTF-16-encode the code point,
+reallocate via the bump allocator and write the new slice back through
+both the ref and the sret pointer. Signature on wasm64 is
+`(i64 sret, i64 ref, i32 dchar) -> ()`.
+
+### Array identity semantics diverge by design
+The AST interpreter treats structurally equal literals as identical:
+`static assert({ return [1] is [1]; }())` passes natively. The engine
+has real pointer semantics — two literals materialize at two addresses
+and `is` would be false. Non-null array identity compares stay poisoned
+until a decision is made on emulating interpreter identity.
