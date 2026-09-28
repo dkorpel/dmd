@@ -1976,7 +1976,7 @@ Expression tryWasmCtfeInproc(FuncDeclaration fd, Expression thisExp, Expression[
     {
         if (p.storageClass & (STC.ref_ | STC.out_ | STC.lazy_))
             return bail(fd, "param storage class");
-        if (!ipScalarType(p.type) && !ipArgType(p.type))
+        if (!ipScalarType(p.type) && !ipArgType(p.type) && !ipPtrArgType(p.type))
             return bail(fd, "param type");
     }
 
@@ -1987,6 +1987,7 @@ Expression tryWasmCtfeInproc(FuncDeclaration fd, Expression thisExp, Expression[
     size_t memArgCount = 0;
     ulong memArgBytes = 0;
     auto memArgVal = new size_t[](args.length);
+    auto ptrArg = new bool[](args.length);
     foreach (i, arg; args)
     {
         Parameter p = tf.parameterList[i];
@@ -1999,6 +2000,16 @@ Expression tryWasmCtfeInproc(FuncDeclaration fd, Expression thisExp, Expression[
             memArgVal[i] = nvals;
             memArgCount++;
             nvals += 2;
+        }
+        else if (ipPtrArgType(p.type))
+        {
+            if (!arg.isStructLiteralExp() && !arg.isArrayLiteralExp() && !arg.isStringExp())
+                return bail(fd, "arg not literal");
+            memArgBytes += (cast(ulong) p.type.size() + 15) & ~15UL;
+            memArgVal[i] = nvals;
+            ptrArg[i] = true;
+            memArgCount++;
+            nvals += 1;
         }
         else
         {
@@ -2173,6 +2184,16 @@ Expression tryWasmCtfeInproc(FuncDeclaration fd, Expression thisExp, Expression[
         {
             if (memArgVal[i] == size_t.max)
                 continue;
+            if (ptrArg[i])
+            {
+                auto pt = tf.parameterList[i].type;
+                if (!ipEncodeVal(data[0 .. dataLen], cur, pt, arg))
+                    return bail(fd, "arg encode");
+                vals[memArgVal[i]].kind = WASMTIME_I64;
+                vals[memArgVal[i]].of.i64 = cast(long) cur;
+                cur += (cast(ulong) pt.size() + 15) & ~15UL;
+                continue;
+            }
             ulong alen, aptr;
             if (!ipEncodeArg(data[0 .. dataLen], cur, arg, alen, aptr))
                 return bail(fd, "arg encode");
@@ -2300,6 +2321,25 @@ private bool ipArgType(Type t)
 {
     auto tb = t.toBasetype();
     return tb.ty == Tarray && ipScalarType(tb.nextOf());
+}
+
+private bool ipPtrArgType(Type t, int depth = 0)
+{
+    if (depth > 8)
+        return false;
+    auto tb = t.toBasetype();
+    if (auto ts = tb.isTypeStruct())
+    {
+        if (!ts.sym.isPOD())
+            return false;
+        return ipMemType(tb);
+    }
+    if (tb.ty == Tsarray)
+    {
+        auto n = tb.nextOf();
+        return ipScalarType(n) || ipPtrArgType(n, depth + 1);
+    }
+    return false;
 }
 
 private ulong ipRead(const(ubyte)[] mem, ulong addr, size_t sz)
