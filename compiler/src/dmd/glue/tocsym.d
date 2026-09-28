@@ -184,6 +184,14 @@ void wasmCtfeQueueDefinition(Dsymbol d)
     {
         if (!vd.isDataseg())
             return;
+        if (auto pcd = vd.parent ? vd.parent.isClassDeclaration() : null)
+        {
+            if (pcd.vtblsym is vd)
+            {
+                wasmCtfeQueueDefinition(pcd);
+                return;
+            }
+        }
         if (auto tid = vd.isTypeInfoDeclaration())
         {
             import dmd.mtype : TypeClass;

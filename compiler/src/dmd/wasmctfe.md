@@ -403,3 +403,28 @@ Two prerequisites surfaced here: a class only referenced through the
 the aggregate-readiness gate must not require `semantic2done` on fields
 *without* initializers (a `pragma(msg)` in the middle of semantic2
 evaluates before the class's own semantic2 has run).
+
+### Method calls on class constants go through the expression wrapper
+A CTFE entry like `sc.get()` on a `static immutable C sc` compiles as
+an expression wrapper: e2ir emits the receiver's `ClassReferenceExp` as
+a static data symbol whose vtbl/classinfo pointers are ordinary data
+relocations, so virtual dispatch works in-engine. Direct-call
+marshalling of class `this` stays unimplemented (the wrapper covers
+these entries). Two blockers had to fall first:
+
+- **TypeInfo_Class sizing**: `genClassInfoForClass` compares
+  `Type.typeinfoclass.structsize` against the compiler's layout and
+  calls `fatal()` on mismatch. Early in semantic2, TypeInfo_Class may
+  not be sized yet (structsize 0), and native `-o-` compiles never
+  reach this check — so an engine build hitting it would kill
+  compilation that should succeed. The worklist forces `determineSize`
+  on `Type.typeinfoclass` before emitting any class and poisons the
+  build (instead of proceeding into `fatal()`) if it still has no size.
+- **Silent-zero vtbl**: a class reached *only* through a
+  `ClassReferenceExp` (no `new`, no TypeInfo reference) queued just its
+  `__vtbl` VarDeclaration — a synthetic var with no initializer, which
+  `toObjFile` emits as zeros. Every virtual call then trapped
+  "uninitialized element" (table index 0). The worklist now redirects a
+  class's `vtblsym` to the `ClassDeclaration` itself, whose `toObjFile`
+  emits the real vtbl (with function-table relocations), the classinfo
+  and the init symbol.

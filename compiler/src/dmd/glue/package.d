@@ -1426,6 +1426,17 @@ public bool wasmCtfeGenerate(FuncDeclaration root, ref OutBuffer objbuf, out con
         }
         else if (auto ad = d.isAggregateDeclaration())
         {
+            if (ad.isClassDeclaration() && Type.typeinfoclass)
+            {
+                import dmd.dsymbolsem : determineSize;
+                if (Type.typeinfoclass.sizeok != Sizeok.done)
+                    determineSize(Type.typeinfoclass, ad.loc);
+                if (Type.typeinfoclass.structsize == 0)
+                {
+                    wasmCtfePoison("TypeInfo_Class not sized");
+                    continue;
+                }
+            }
             if (!wasmCtfeAggReady(ad))
             {
                 if (getenv("DMD_CTFE_TRACEGEN"))
