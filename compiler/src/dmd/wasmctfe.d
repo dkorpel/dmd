@@ -1530,6 +1530,9 @@ private IpModule* ipGetModule(FuncDeclaration fd)
     const(char)[][] unresolved;
     if (!wasmCtfeGenerate(fd, buf, unresolved))
     {
+        if (verbose)
+            fprintf(stderr, "wasm-ctfe inproc: codegen failed for %s\n", fd.toPrettyChars());
+        wasmCtfeStats.compileFailures++;
         ipModuleFailed[cast(void*) fd] = true;
         return null;
     }
@@ -1685,7 +1688,12 @@ Expression tryWasmCtfeInproc(FuncDeclaration fd, Expression[] args, Type resultT
     wasmtime_extern_t fnExt;
     if (!wasmtime_instance_export_get(ctx, &inst, im.exportName.ptr, im.exportName.length, &fnExt)
         || fnExt.kind != WASMTIME_EXTERN_FUNC)
+    {
+        if (verbose)
+            fprintf(stderr, "wasm-ctfe inproc: export %.*s not found for %s\n",
+                cast(int) im.exportName.length, im.exportName.ptr, fd.toPrettyChars());
         return null;
+    }
 
     wasmtime_val_t[1] results;
     const nresults = resultType.toBasetype().ty == Tvoid ? 0 : 1;
@@ -1717,8 +1725,17 @@ Expression tryWasmCtfeInproc(FuncDeclaration fd, Expression[] args, Type resultT
         return null;
     }
 
+    auto resultExp = ipDecodeScalar(results[0], resultType, loc);
+    if (!resultExp)
+    {
+        if (verbose)
+            fprintf(stderr, "wasm-ctfe inproc: result decode failed for %s\n", fd.toPrettyChars());
+        return null;
+    }
     wasmCtfeStats.successes++;
-    return ipDecodeScalar(results[0], resultType, loc);
+    if (verbose)
+        fprintf(stderr, "wasm-ctfe inproc: ok %s -> %s\n", fd.toPrettyChars(), resultExp.toChars());
+    return resultExp;
 }
 
 private bool ipScalarType(Type t)
