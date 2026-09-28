@@ -1369,6 +1369,11 @@ public bool wasmCtfeBuildInProgress()
     return wasmCtfeBuildActive;
 }
 
+public const(char)* wasmCtfeLastPoison()
+{
+    return wasmCtfePoisoned;
+}
+
 public bool wasmCtfeGenerate(FuncDeclaration root, ref OutBuffer objbuf, out const(char)[][] unresolved)
 {
     import dmd.dmsc : backend_init_wasm_ctfe, backend_reinit_host;
@@ -1393,7 +1398,8 @@ public bool wasmCtfeGenerate(FuncDeclaration root, ref OutBuffer objbuf, out con
         wasmCGTolerateUnsupported = true;
     }
 
-    const oldGag = global.startGagging();
+    const showGag = getenv("DMD_CTFE_SHOWGAG") !is null;
+    const oldGag = showGag ? global.gag : global.startGagging();
     obj_start(objbuf, "__wasmctfe.d");
     const id = mangleExact(root);
     WasmObj_registerExportName(id[0 .. strlen(id)], id[0 .. strlen(id)]);
@@ -1449,7 +1455,12 @@ public bool wasmCtfeGenerate(FuncDeclaration root, ref OutBuffer objbuf, out con
     if (global.errors == startErrors)
         objmod.term("__wasmctfe.wasm");
     objmod = null;
-    if (global.endGagging(oldGag))
+    if (showGag)
+    {
+        if (global.errors != startErrors)
+            wasmCtfePoison("gagged errors");
+    }
+    else if (global.endGagging(oldGag))
         wasmCtfePoison("gagged errors");
     unresolved = wasmSelfLinkUnresolved;
 
