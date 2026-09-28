@@ -243,6 +243,11 @@ void toObjFile(Dsymbol ds, bool multiobj)
             if (!cd.members)
                 return;
 
+            {
+                import dmd.glue.tocsym : wasmCtfeRecordClass;
+                wasmCtfeRecordClass(cd);
+            }
+
             if (multiobj && !cd.hasStaticCtorOrDtor())
             {
                 obj_append(cd);

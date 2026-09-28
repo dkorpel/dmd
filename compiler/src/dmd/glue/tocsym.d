@@ -120,6 +120,31 @@ void resetCtfeSymbolCache()
 
 package(dmd.glue) __gshared bool wasmCtfeBuildActive;
 
+private __gshared Array!ClassDeclaration wasmCtfeClasses;
+
+package(dmd.glue)
+void wasmCtfeRecordClass(ClassDeclaration cd)
+{
+    if (!wasmCtfeBuildActive || cd is null)
+        return;
+    foreach (c; wasmCtfeClasses[])
+        if (c is cd)
+            return;
+    wasmCtfeClasses.push(cd);
+}
+
+public ClassDeclaration wasmCtfeFindClass(const(char)[] name)
+{
+    import core.stdc.string : strlen;
+    foreach (cd; wasmCtfeClasses[])
+    {
+        const p = cd.toPrettyChars();
+        if (name == p[0 .. strlen(p)])
+            return cd;
+    }
+    return null;
+}
+
 package(dmd.glue)
 bool wasmGlue()
 {

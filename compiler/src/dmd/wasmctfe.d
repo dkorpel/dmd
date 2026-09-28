@@ -1963,6 +1963,25 @@ private extern (C) wasm_trap_t* ipHostGcMalloc(void* env, wasmtime_caller_t* cal
 }
 
 private __gshared ulong ipTIBaseOffset;
+private __gshared ulong ipTINameOffset;
+
+private void ipComputeTIOffsets() nothrow
+{
+    if (ipTIBaseOffset || ipTINameOffset)
+        return;
+    auto cd = Type.typeinfoclass;
+    if (!cd)
+        return;
+    foreach (v; cd.fields)
+    {
+        if (!v.ident)
+            continue;
+        if (strcmp(v.ident.toChars(), "base") == 0)
+            ipTIBaseOffset = v.offset;
+        else if (strcmp(v.ident.toChars(), "name") == 0)
+            ipTINameOffset = v.offset;
+    }
+}
 
 private extern (C) wasm_trap_t* ipHostEhMatch(void* env, wasmtime_caller_t* caller,
     const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
@@ -2436,12 +2455,14 @@ Expression tryWasmCtfeInproc(FuncDeclaration fd, Expression thisExp, Expression[
     if (args.length != tf.parameterList.length)
         return bail(fd, "arg count");
     const bool sret = !isCtor && !ipScalarType(resultType) && ipMemType(resultType);
+    const bool classResult = !isCtor && !sret && resultType.toBasetype().ty == Tclass
+        && !resultType.toBasetype().isTypeClass().sym.isInterfaceDeclaration();
     if (isCtor)
     {
         if (!ipMemType(resultType))
             return bail(fd, "result type");
     }
-    else if (!sret && !ipScalarType(resultType))
+    else if (!sret && !classResult && !ipScalarType(resultType))
         return bail(fd, "result type");
     foreach (size_t i, Parameter p; tf.parameterList)
     {
@@ -2598,16 +2619,7 @@ Expression tryWasmCtfeInproc(FuncDeclaration fd, Expression thisExp, Expression[
             else if (nm == "_d_eh_wasm_match")
             {
                 cb = &ipHostEhMatch;
-                if (!ipTIBaseOffset)
-                {
-                    if (auto cd = Type.typeinfoclass)
-                        foreach (v; cd.fields)
-                            if (v.ident && strcmp(v.ident.toChars(), "base") == 0)
-                            {
-                                ipTIBaseOffset = v.offset;
-                                break;
-                            }
-                }
+                ipComputeTIOffsets();
             }
             auto err = wasmtime_linker_define_func(linker,
                 modName.data, modName.size, name.data, name.size,
@@ -2655,7 +2667,7 @@ Expression tryWasmCtfeInproc(FuncDeclaration fd, Expression thisExp, Expression[
     wasmtime_memory_t mem;
     ulong sretAddr;
     const ulong thisSize = thisExp ? cast(ulong) thisSd.type.size() : 0;
-    if (sret || memArgCount || thisExp)
+    if (sret || memArgCount || thisExp || classResult)
     {
         wasmtime_extern_t memExt, spExt;
         if (!wasmtime_instance_export_get(ctx, &inst, "memory".ptr, "memory".length, &memExt)
@@ -2772,6 +2784,13 @@ Expression tryWasmCtfeInproc(FuncDeclaration fd, Expression thisExp, Expression[
         const dataLen = wasmtime_memory_data_size(ctx, &mem);
         resultExp = ipDecodeMem(data[0 .. dataLen], sretAddr, resultType, loc);
     }
+    else if (classResult)
+    {
+        const data = wasmtime_memory_data(ctx, &mem);
+        const dataLen = wasmtime_memory_data_size(ctx, &mem);
+        if (results[0].kind == WASMTIME_I64)
+            resultExp = ipDecodeClassRef(data[0 .. dataLen], cast(ulong) results[0].of.i64, resultType, loc, 0);
+    }
     else
         resultExp = ipDecodeScalar(results[0], resultType, loc);
     if (!resultExp)
@@ -2865,6 +2884,84 @@ private ulong ipRead(const(ubyte)[] mem, ulong addr, size_t sz)
     return v;
 }
 
+private Expression ipDecodeClassRef(const(ubyte)[] mem, ulong objAddr, Type type, Loc loc, int depth)
+{
+    import dmd.glue.tocsym : wasmCtfeFindClass;
+
+    const dbg = getenv("DMD_CTFE_TRACEGEN") !is null;
+    if (dbg) fprintf(stderr, "wasm-ctfe classref: enter obj=%llx type=%s\n", objAddr, type.toChars());
+    if (depth > 64)
+        return null;
+    if (objAddr == 0)
+        return new NullExp(loc, type);
+    ipComputeTIOffsets();
+    if (!ipTINameOffset)
+    {
+        if (dbg) fprintf(stderr, "wasm-ctfe classref: no name offset\n");
+        return null;
+    }
+    auto tc = type.toBasetype().isTypeClass();
+    if (!tc || tc.sym.isInterfaceDeclaration())
+    {
+        if (dbg) fprintf(stderr, "wasm-ctfe classref: not class type\n");
+        return null;
+    }
+    bool rd(ulong a, out ulong v)
+    {
+        if (a > mem.length || 8 > mem.length - a)
+            return false;
+        v = ipRead(mem, a, 8);
+        return true;
+    }
+    ulong vtbl, ci, nlen, nptr;
+    if (!rd(objAddr, vtbl) || !rd(vtbl, ci)
+        || !rd(ci + ipTINameOffset, nlen) || !rd(ci + ipTINameOffset + 8, nptr))
+    {
+        if (dbg) fprintf(stderr, "wasm-ctfe classref: read fail obj=%llx vtbl=%llx ci=%llx\n", objAddr, vtbl, ci);
+        return null;
+    }
+    if (nlen > 1024 || nptr > mem.length || nlen > mem.length - nptr)
+    {
+        if (dbg) fprintf(stderr, "wasm-ctfe classref: bad name slice len=%llx ptr=%llx\n", nlen, nptr);
+        return null;
+    }
+    auto cd = wasmCtfeFindClass(cast(const(char)[]) mem[cast(size_t) nptr .. cast(size_t)(nptr + nlen)]);
+    if (!cd)
+    {
+        if (dbg) fprintf(stderr, "wasm-ctfe classref: no class for '%.*s'\n", cast(int) nlen, mem.ptr + nptr);
+        return null;
+    }
+    size_t total = 0;
+    for (auto c = cd; c; c = c.baseClass)
+        total += c.fields.length;
+    if (total)
+        total -= cd.hasMonitor();
+    auto elems = new Expressions(total);
+    ptrdiff_t soFar = total;
+    for (auto c = cd; c; c = c.baseClass)
+    {
+        soFar -= c.fields.length;
+        foreach (i, v; c.fields)
+        {
+            if (soFar + cast(ptrdiff_t) i < 0)
+                break;
+            auto el = ipDecodeMem(mem, objAddr + v.offset, v.type, loc, depth + 1);
+            if (!el)
+            {
+                if (dbg) fprintf(stderr, "wasm-ctfe classref: field %s decode fail\n", v.toChars());
+                return null;
+            }
+            (*elems)[soFar + i] = el;
+        }
+    }
+    auto se = new StructLiteralExp(loc, cast(StructDeclaration) cd, elems, cd.type);
+    se.type = cd.type;
+    se.origin = se;
+    se.ownedByCtfe = OwnedBy.ctfe;
+    auto cre = new ClassReferenceExp(loc, se, type);
+    return cre;
+}
+
 private Expression ipDecodeMem(const(ubyte)[] mem, ulong addr, Type type, Loc loc, int depth = 0)
 {
     if (depth > 64)
@@ -2873,6 +2970,10 @@ private Expression ipDecodeMem(const(ubyte)[] mem, ulong addr, Type type, Loc lo
     const sz = cast(size_t) tb.size();
     if (addr > mem.length || sz > mem.length - addr)
         return null;
+    if (tb.ty == Tclass)
+        return ipDecodeClassRef(mem, ipRead(mem, addr, 8), type, loc, depth + 1);
+    if (tb.ty == Tpointer && ipRead(mem, addr, 8) == 0)
+        return new NullExp(loc, type);
     if (tb.ty == Tarray)
     {
         const len = ipRead(mem, addr, 8);

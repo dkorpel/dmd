@@ -380,5 +380,26 @@ exception" diagnostic stands.
 compile and run in-engine (vtables and classinfo are emitted by the
 regular wasm pipeline; `gc_malloc` binds to the host bump allocator).
 The remaining class gaps are at the boundary: class-typed CTFE
-*results* and *arguments* have no marshalling, and expression wrappers
-bail when the expression itself contains a class-typed subexpression.
+*arguments* (including `this` for methods) have no marshalling, and
+expression wrappers bail on implicit `this`.
+
+### Class-typed results marshal back by classinfo name
+A direct call returning a class decodes the returned i64 object address
+into a `ClassReferenceExp` (the same shape dinterpret builds: a
+`StructLiteralExp` over all hierarchy fields, root base first, with the
+`__monitor` field skipped exactly like dinterpret's `hasMonitor()`
+logic). The *dynamic* type is recovered by reading
+`TypeInfo_Class.name` from guest memory (`obj → vtbl[0] → classinfo →
+name`, offsets from `Type.typeinfoclass`'s layout) and looking the
+fully-qualified name up in a registry of `ClassDeclaration`s recorded
+as `toObjFile` emits them during engine builds — so downcasts like
+`cast(Derived) make()` see the right runtime type. Interface-typed
+results stay unsupported. Null pointer fields decode to `null`;
+non-null raw pointers in a result still fail the decode.
+
+Two prerequisites surfaced here: a class only referenced through the
+`_d_newclassT` lowering reaches the worklist via
+`__traits(initSymbol)`'s `SymbolDeclaration → toInitializer` path, and
+the aggregate-readiness gate must not require `semantic2done` on fields
+*without* initializers (a `pragma(msg)` in the middle of semantic2
+evaluates before the class's own semantic2 has run).

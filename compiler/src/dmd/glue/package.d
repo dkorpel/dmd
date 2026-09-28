@@ -1359,7 +1359,7 @@ private bool wasmCtfeAggReady(AggregateDeclaration ad)
     if (ad.sizeok != Sizeok.done)
         return false;
     foreach (v; ad.fields)
-        if (v.semanticRun < PASS.semantic2done)
+        if (v.semanticRun < PASS.semantic2done && v._init)
             return false;
     return true;
 }
@@ -1427,7 +1427,11 @@ public bool wasmCtfeGenerate(FuncDeclaration root, ref OutBuffer objbuf, out con
         else if (auto ad = d.isAggregateDeclaration())
         {
             if (!wasmCtfeAggReady(ad))
+            {
+                if (getenv("DMD_CTFE_TRACEGEN"))
+                    fprintf(stderr, "wasm-ctfe skip agg not ready: %s\n", ad.toPrettyChars());
                 continue;
+            }
         }
         else if (auto vd = d.isVarDeclaration())
         {
