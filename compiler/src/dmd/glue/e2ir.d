@@ -4102,8 +4102,12 @@ elem* toElem(Expression e, ref IRState irs)
 
                 if (!ale.lowering && wasmCtfeBuildActive)
                 {
-                    wasmCtfePoison("unlowered array literal");
-                    e = el_long(TYnptr, 0);
+                    elem* ev = el_bin(OPcall, TYnptr, el_var(getRtlsym(RTLSYM.ALLOCMEMORY)),
+                        el_long(TYsize_t, dim * tb.nextOf().size()));
+                    Symbol* stmp = symbol_genauto(Type_toCtype(Type.tvoid.pointerTo()));
+                    e = el_bin(OPeq, TYnptr, el_var(stmp), ev);
+                    e = el_combine(e, ExpressionsToStaticArray(irs, ale.loc, ale.elements, &stmp, 0, ale.basis));
+                    e = el_combine(e, el_var(stmp));
                 }
                 else
                 {
