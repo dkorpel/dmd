@@ -217,3 +217,14 @@ A function whose CTFE result depends on such blocks silently gets the
 wasm-flavored answer. Conservative fallback does not catch this; `verify` mode
 does.
 
+
+### AST interpreter broadcasts pointer stores into static-array fields
+Found by `verify` mode on `interpret3.d` bug 13630: a constructor doing
+`auto p = arr.ptr; *p = 0;` on a `float[3]` field. Runtime semantics (and the
+wasm engine) give `[0, nan, nan]`. The AST interpreter instead records the
+struct field as the scalar `0.0F`, which later indexing treats as a broadcast:
+`s.arr[1] == 0` under AST CTFE but is `nan` at runtime. The wasm engine's
+byte-accurate memory model is *more* correct than the AST interpreter here.
+The verify comparator accepts an AST scalar against a wasm array literal when
+the first wasm element matches, to keep this known divergence from drowning
+out real mismatches.

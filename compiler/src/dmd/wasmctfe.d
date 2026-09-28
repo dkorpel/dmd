@@ -27,7 +27,7 @@ import dmd.root.rmem;
 import dmd.root.string : toDString;
 import dmd.root.stringtable;
 import dmd.statement;
-import dmd.typesem : toBasetype, size, nextOf;
+import dmd.typesem : toBasetype, size, nextOf, defaultInitLiteral;
 import dmd.expressionsem : toInteger, toUInteger;
 import dmd.funcsem : functionSemantic3, isVirtual, isVirtualMethod;
 import dmd.dsymbolsem : isPOD;
@@ -188,6 +188,12 @@ private bool ipResultEqual(Expression astResult, Expression wasmResult)
     }
     if (auto wal = wasmResult.isArrayLiteralExp())
     {
+        if (astResult.isIntegerExp() || astResult.isRealExp())
+        {
+            const n = wal.elements ? wal.elements.length : 0;
+            if (n && wal[0] && ipResultEqual(astResult, wal[0]))
+                return true;
+        }
         if (auto aal = astResult.isArrayLiteralExp())
         {
             const n = wal.elements ? wal.elements.length : 0;
@@ -235,7 +241,10 @@ Expression tryWasmCtfe(Expression e)
     if (mode == WasmCtfeMode.inproc || mode == WasmCtfeMode.verify)
     {
         wasmCtfeStats.calls++;
-        return tryWasmCtfeInproc(ce.f, ce.arguments ? (*ce.arguments)[] : null, e.type, e.loc);
+        Expression thisExp;
+        if (auto dve = ce.e1.isDotVarExp())
+            thisExp = dve.e1;
+        return tryWasmCtfeInproc(ce.f, thisExp, ce.arguments ? (*ce.arguments)[] : null, e.type, e.loc);
     }
     return tryWasmCtfeCall(ce.f, ce.arguments ? (*ce.arguments)[] : null, e.type, e.loc);
 }
@@ -1914,7 +1923,7 @@ private IpModule* ipGetModule(FuncDeclaration fd)
     return im;
 }
 
-Expression tryWasmCtfeInproc(FuncDeclaration fd, Expression[] args, Type resultType, Loc loc)
+Expression tryWasmCtfeInproc(FuncDeclaration fd, Expression thisExp, Expression[] args, Type resultType, Loc loc)
 {
     import dmd.wasmtimec;
 
@@ -1932,14 +1941,36 @@ Expression tryWasmCtfeInproc(FuncDeclaration fd, Expression[] args, Type resultT
     if (fd.semanticRun < PASS.semantic3done || !fd.fbody || fd.errors)
         return bail(fd, "not semantic3done");
     auto tf = fd.type ? fd.type.isTypeFunction() : null;
-    if (!tf || tf.isRef || tf.parameterList.varargs != VarArg.none)
+    const bool isCtor = fd.isCtorDeclaration() !is null;
+    if (!tf || (tf.isRef && !isCtor) || tf.parameterList.varargs != VarArg.none)
         return bail(fd, "func type shape");
-    if (fd.isNested() || fd.needThis())
+    if (fd.isNested())
         return bail(fd, "nested/this");
+    StructDeclaration thisSd;
+    if (fd.needThis())
+    {
+        auto ad = fd.isThis();
+        thisSd = ad ? ad.isStructDeclaration() : null;
+        if (!thisSd || !thisExp)
+            return bail(fd, "nested/this");
+        if (!ipMemType(thisSd.type))
+            return bail(fd, "this type");
+        if (isCtor)
+            thisExp = thisSd.type.defaultInitLiteral(loc);
+        if (!thisExp || !thisExp.isStructLiteralExp())
+            return bail(fd, "this not literal");
+    }
+    else
+        thisExp = null;
     if (args.length != tf.parameterList.length)
         return bail(fd, "arg count");
-    const bool sret = !ipScalarType(resultType) && ipMemType(resultType);
-    if (!sret && !ipScalarType(resultType))
+    const bool sret = !isCtor && !ipScalarType(resultType) && ipMemType(resultType);
+    if (isCtor)
+    {
+        if (!ipMemType(resultType))
+            return bail(fd, "result type");
+    }
+    else if (!sret && !ipScalarType(resultType))
         return bail(fd, "result type");
     foreach (size_t i, Parameter p; tf.parameterList)
     {
@@ -1950,7 +1981,8 @@ Expression tryWasmCtfeInproc(FuncDeclaration fd, Expression[] args, Type resultT
     }
 
     wasmtime_val_t[32] vals;
-    const size_t argBase = sret ? 1 : 0;
+    const size_t sretSlot = thisExp ? 1 : 0;
+    const size_t argBase = sretSlot + (sret ? 1 : 0);
     size_t nvals = argBase;
     size_t memArgCount = 0;
     ulong memArgBytes = 0;
@@ -2098,7 +2130,8 @@ Expression tryWasmCtfeInproc(FuncDeclaration fd, Expression[] args, Type resultT
 
     wasmtime_memory_t mem;
     ulong sretAddr;
-    if (sret || memArgCount)
+    const ulong thisSize = thisExp ? cast(ulong) thisSd.type.size() : 0;
+    if (sret || memArgCount || thisExp)
     {
         wasmtime_extern_t memExt, spExt;
         if (!wasmtime_instance_export_get(ctx, &inst, "memory".ptr, "memory".length, &memExt)
@@ -2115,6 +2148,7 @@ Expression tryWasmCtfeInproc(FuncDeclaration fd, Expression[] args, Type resultT
         const size_t rsz = sret ? cast(size_t) resultType.size() : 0;
         ulong need = (rsz + 15) & ~15UL;
         need += (memArgBytes + 15) & ~15UL;
+        need += (thisSize + 15) & ~15UL;
         const base = (cast(ulong) spVal.of.i64 - need) & ~15UL;
         spVal.of.i64 = cast(long) base;
         if (auto err = wasmtime_global_set(ctx, &spExt.of.global, &spVal))
@@ -2127,6 +2161,14 @@ Expression tryWasmCtfeInproc(FuncDeclaration fd, Expression[] args, Type resultT
         if (base + need > dataLen)
             return bail(fd, "stack overflow");
         ulong cur = base;
+        if (thisExp)
+        {
+            if (!ipEncodeVal(data[0 .. dataLen], base, thisExp.type, thisExp))
+                return bail(fd, "this encode");
+            cur = base + ((thisSize + 15) & ~15UL);
+            vals[0].kind = WASMTIME_I64;
+            vals[0].of.i64 = cast(long) base;
+        }
         foreach (i, arg; args)
         {
             if (memArgVal[i] == size_t.max)
@@ -2142,9 +2184,9 @@ Expression tryWasmCtfeInproc(FuncDeclaration fd, Expression[] args, Type resultT
         }
         if (sret)
         {
-            sretAddr = base + ((memArgBytes + 15) & ~15UL);
-            vals[0].kind = WASMTIME_I64;
-            vals[0].of.i64 = cast(long) sretAddr;
+            sretAddr = base + ((thisSize + 15) & ~15UL) + ((memArgBytes + 15) & ~15UL);
+            vals[sretSlot].kind = WASMTIME_I64;
+            vals[sretSlot].of.i64 = cast(long) sretAddr;
         }
     }
 
@@ -2183,7 +2225,14 @@ Expression tryWasmCtfeInproc(FuncDeclaration fd, Expression[] args, Type resultT
     }
 
     Expression resultExp;
-    if (sret)
+    if (isCtor)
+    {
+        const data = wasmtime_memory_data(ctx, &mem);
+        const dataLen = wasmtime_memory_data_size(ctx, &mem);
+        if (results[0].kind == WASMTIME_I64)
+            resultExp = ipDecodeMem(data[0 .. dataLen], cast(ulong) results[0].of.i64, resultType, loc);
+    }
+    else if (sret)
     {
         const data = wasmtime_memory_data(ctx, &mem);
         const dataLen = wasmtime_memory_data_size(ctx, &mem);
@@ -2450,6 +2499,93 @@ private bool ipEncodeArg(ubyte[] mem, ref ulong cur, Expression arg, out ulong l
                 return false;
         }
         cur += n * esz;
+        return true;
+    }
+    return false;
+}
+
+private bool ipEncodeVal(ubyte[] mem, ulong addr, Type t, Expression e, int depth = 0)
+{
+    if (depth > 64)
+        return false;
+    auto tb = t.toBasetype();
+    const sz = cast(size_t) tb.size();
+    if (addr > mem.length || sz > mem.length - addr)
+        return false;
+    if (e.isNullExp())
+    {
+        mem[cast(size_t) addr .. cast(size_t) addr + sz] = 0;
+        return true;
+    }
+    if (auto ie = e.isIntegerExp())
+    {
+        ipWrite(mem, addr, ie.toInteger(), sz);
+        return true;
+    }
+    if (auto re = e.isRealExp())
+    {
+        if (sz == 4)
+        {
+            const f = cast(float) re.value;
+            uint u;
+            memcpy(&u, &f, 4);
+            ipWrite(mem, addr, u, 4);
+            return true;
+        }
+        if (sz == 8)
+        {
+            const d = cast(double) re.value;
+            ulong u;
+            memcpy(&u, &d, 8);
+            ipWrite(mem, addr, u, 8);
+            return true;
+        }
+        return false;
+    }
+    if (auto sle = e.isStructLiteralExp())
+    {
+        auto ts = tb.isTypeStruct();
+        if (!ts)
+            return false;
+        auto sd = ts.sym;
+        mem[cast(size_t) addr .. cast(size_t) addr + sz] = 0;
+        const n = sle.elements ? sle.elements.length : 0;
+        foreach (i, v; sd.fields)
+        {
+            auto el = i < n ? (*sle.elements)[i] : null;
+            if (!el)
+                continue;
+            if (!ipEncodeVal(mem, addr + v.offset, v.type, el, depth + 1))
+                return false;
+        }
+        return true;
+    }
+    if (auto se = e.isStringExp())
+    {
+        if (!tb.isTypeSArray())
+            return false;
+        const esz = se.sz;
+        if (se.len * esz > sz)
+            return false;
+        foreach (i; 0 .. se.len)
+            ipWrite(mem, addr + i * esz, se.getCodeUnit(i), esz);
+        return true;
+    }
+    if (auto ale = e.isArrayLiteralExp())
+    {
+        if (!tb.isTypeSArray())
+            return false;
+        auto et = tb.nextOf();
+        const esz = cast(size_t) et.toBasetype().size();
+        const n = ale.elements ? ale.elements.length : 0;
+        if (n * esz > sz)
+            return false;
+        foreach (i; 0 .. n)
+        {
+            auto el = ale[i];
+            if (!el || !ipEncodeVal(mem, addr + i * esz, et, el, depth + 1))
+                return false;
+        }
         return true;
     }
     return false;
