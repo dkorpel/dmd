@@ -105,7 +105,7 @@ public Expression ctfeInterpret(Expression e)
     if (wmode != WasmCtfeMode.off && !global.gag)
     {
         wasmResult = tryWasmCtfe(e);
-        if (wmode == WasmCtfeMode.wasm && wasmResult !is null)
+        if ((wmode == WasmCtfeMode.wasm || wmode == WasmCtfeMode.inproc) && wasmResult !is null)
             return scrubReturnValue(e.loc, wasmResult);
     }
 

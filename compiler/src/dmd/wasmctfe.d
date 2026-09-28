@@ -39,6 +39,7 @@ enum WasmCtfeMode
     wasm,
     verify,
     codegen,
+    inproc,
 }
 
 struct WasmCtfeStats
@@ -84,6 +85,8 @@ WasmCtfeMode wasmCtfeMode()
                 mode = WasmCtfeMode.verify;
             else if (strcmp(p, "codegen") == 0)
                 mode = WasmCtfeMode.codegen;
+            else if (strcmp(p, "inproc") == 0)
+                mode = WasmCtfeMode.inproc;
         }
         verbose = getenv("DMD_CTFE_VERBOSE") !is null;
         if (mode != WasmCtfeMode.off)
@@ -136,6 +139,11 @@ Expression tryWasmCtfe(Expression e)
     {
         wasmCtfeCodegenTest(ce.f);
         return null;
+    }
+    if (mode == WasmCtfeMode.inproc)
+    {
+        wasmCtfeStats.calls++;
+        return tryWasmCtfeInproc(ce.f, ce.arguments ? (*ce.arguments)[] : null, e.type, e.loc);
     }
     return tryWasmCtfeCall(ce.f, ce.arguments ? (*ce.arguments)[] : null, e.type, e.loc);
 }
@@ -1459,4 +1467,349 @@ Expression decodeValue(ref const(char)[] s, Type type, Loc loc)
         return new IntegerExp(loc, v, type);
     }
     return null;
+}
+
+private __gshared
+{
+    import dmd.wasmtimec;
+
+    wasm_engine_t* ipEngine;
+
+    struct IpModule
+    {
+        wasmtime_module_t* mod;
+        const(char)[] exportName;
+        HostImport*[] hostImports;
+    }
+
+    IpModule*[void*] ipModuleCache;
+    bool[void*] ipModuleFailed;
+
+    char[512] ipTrapBuf;
+}
+
+private struct HostImport
+{
+    char[128] name;
+    size_t nameLen;
+}
+
+private extern (C) wasm_trap_t* ipHostStub(void* env, wasmtime_caller_t* caller,
+    const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
+{
+    auto hi = cast(HostImport*) env;
+    const n = snprintf(ipTrapBuf.ptr, ipTrapBuf.length,
+        "wasm-ctfe: unimplemented runtime call %.*s",
+        cast(int) hi.nameLen, hi.name.ptr);
+    return wasmtime_trap_new(ipTrapBuf.ptr, n);
+}
+
+private wasm_engine_t* ipGetEngine()
+{
+    import dmd.wasmtimec;
+    if (ipEngine)
+        return ipEngine;
+    auto cfg = wasm_config_new();
+    wasmtime_config_wasm_memory64_set(cfg, true);
+    wasmtime_config_wasm_exceptions_set(cfg, true);
+    ipEngine = wasm_engine_new_with_config(cfg);
+    return ipEngine;
+}
+
+private IpModule* ipGetModule(FuncDeclaration fd)
+{
+    import dmd.wasmtimec;
+    import dmd.glue : wasmCtfeGenerate;
+
+    if (auto p = cast(void*) fd in ipModuleCache)
+        return *p;
+    if (cast(void*) fd in ipModuleFailed)
+        return null;
+
+    OutBuffer buf;
+    const(char)[][] unresolved;
+    if (!wasmCtfeGenerate(fd, buf, unresolved))
+    {
+        ipModuleFailed[cast(void*) fd] = true;
+        return null;
+    }
+
+    wasmtime_module_t* mod;
+    if (auto err = wasmtime_module_new(ipGetEngine(), cast(const(ubyte)*) buf[].ptr, buf.length, &mod))
+    {
+        if (verbose)
+        {
+            wasm_name_t msg;
+            wasmtime_error_message(err, &msg);
+            fprintf(stderr, "wasm-ctfe inproc: module error for %s: %.*s\n",
+                fd.toPrettyChars(), cast(int) msg.size, msg.data);
+            wasm_byte_vec_delete(&msg);
+        }
+        wasmtime_error_delete(err);
+        ipModuleFailed[cast(void*) fd] = true;
+        return null;
+    }
+
+    auto im = new IpModule;
+    im.mod = mod;
+    const mangled = mangleExact(fd);
+    im.exportName = mangled[0 .. strlen(mangled)];
+    ipModuleCache[cast(void*) fd] = im;
+    return im;
+}
+
+Expression tryWasmCtfeInproc(FuncDeclaration fd, Expression[] args, Type resultType, Loc loc)
+{
+    import dmd.wasmtimec;
+
+    static Expression bail(FuncDeclaration fd, const(char)* why)
+    {
+        if (verbose)
+            fprintf(stderr, "wasm-ctfe inproc: skip %s: %s\n", fd ? fd.toPrettyChars() : "?".ptr, why);
+        return null;
+    }
+
+    if (!fd || !resultType)
+        return bail(fd, "no fd/result type");
+    if (fd.semanticRun < PASS.semantic3done)
+        fd.functionSemantic3();
+    if (fd.semanticRun < PASS.semantic3done || !fd.fbody || fd.errors)
+        return bail(fd, "not semantic3done");
+    auto tf = fd.type ? fd.type.isTypeFunction() : null;
+    if (!tf || tf.isRef || tf.parameterList.varargs != VarArg.none)
+        return bail(fd, "func type shape");
+    if (fd.isNested() || fd.needThis())
+        return bail(fd, "nested/this");
+    if (args.length != tf.parameterList.length)
+        return bail(fd, "arg count");
+    if (!ipScalarType(resultType))
+        return bail(fd, "result type");
+    foreach (size_t i, Parameter p; tf.parameterList)
+    {
+        if (p.storageClass & (STC.ref_ | STC.out_ | STC.lazy_))
+            return bail(fd, "param storage class");
+        if (!ipScalarType(p.type))
+            return bail(fd, "param type");
+    }
+
+    wasmtime_val_t[16] vals;
+    if (args.length > vals.length)
+        return bail(fd, "too many args");
+    foreach (i, arg; args)
+    {
+        if (!ipMarshalScalar(arg, vals[i]))
+            return bail(fd, "arg not literal scalar");
+    }
+
+    wasmCtfeStats.attempts++;
+    auto im = ipGetModule(fd);
+    if (!im)
+        return null;
+
+    auto store = wasmtime_store_new(ipGetEngine(), null, null);
+    scope (exit) wasmtime_store_delete(store);
+    auto ctx = wasmtime_store_context(store);
+
+    auto linker = wasmtime_linker_new(ipGetEngine());
+    scope (exit) wasmtime_linker_delete(linker);
+
+    {
+        wasm_importtype_vec_t imports;
+        wasmtime_module_imports(im.mod, &imports);
+        scope (exit) wasm_importtype_vec_delete(&imports);
+        foreach (i; 0 .. imports.size)
+        {
+            auto it = imports.data[i];
+            const modName = wasm_importtype_module(it);
+            const name = wasm_importtype_name(it);
+            const ftc = wasm_externtype_as_functype_const(wasm_importtype_type(it));
+            if (!ftc)
+                return null;
+
+            auto hi = new HostImport;
+            const nl = name.size < hi.name.length ? name.size : hi.name.length;
+            hi.name[0 .. nl] = name.data[0 .. nl];
+            hi.nameLen = nl;
+            im.hostImports ~= hi;
+
+            const pv = wasm_functype_params(ftc);
+            const rv = wasm_functype_results(ftc);
+            wasm_valtype_t*[16] pk;
+            if (pv.size > pk.length || rv.size > 1)
+                return null;
+            foreach (j; 0 .. pv.size)
+                pk[j] = wasm_valtype_new(wasm_valtype_kind(pv.data[j]));
+            wasm_valtype_vec_t pvec, rvec;
+            wasm_valtype_vec_new(&pvec, pv.size, pk.ptr);
+            if (rv.size == 1)
+            {
+                wasm_valtype_t*[1] rk = [wasm_valtype_new(wasm_valtype_kind(rv.data[0]))];
+                wasm_valtype_vec_new(&rvec, 1, rk.ptr);
+            }
+            else
+                wasm_valtype_vec_new_empty(&rvec);
+            auto ft = wasm_functype_new(&pvec, &rvec);
+            auto err = wasmtime_linker_define_func(linker,
+                modName.data, modName.size, name.data, name.size,
+                ft, &ipHostStub, cast(void*) hi, null);
+            wasm_functype_delete(ft);
+            if (err)
+            {
+                wasmtime_error_delete(err);
+                return null;
+            }
+        }
+    }
+
+    wasmtime_instance_t inst;
+    wasm_trap_t* trap;
+    if (auto err = wasmtime_linker_instantiate(linker, ctx, im.mod, &inst, &trap))
+    {
+        if (verbose)
+        {
+            wasm_name_t msg;
+            wasmtime_error_message(err, &msg);
+            fprintf(stderr, "wasm-ctfe inproc: instantiate %s: %.*s\n",
+                fd.toPrettyChars(), cast(int) msg.size, msg.data);
+            wasm_byte_vec_delete(&msg);
+        }
+        wasmtime_error_delete(err);
+        return null;
+    }
+    if (trap)
+    {
+        wasm_trap_delete(trap);
+        return null;
+    }
+
+    wasmtime_extern_t fnExt;
+    if (!wasmtime_instance_export_get(ctx, &inst, im.exportName.ptr, im.exportName.length, &fnExt)
+        || fnExt.kind != WASMTIME_EXTERN_FUNC)
+        return null;
+
+    wasmtime_val_t[1] results;
+    const nresults = resultType.toBasetype().ty == Tvoid ? 0 : 1;
+    if (auto err = wasmtime_func_call(ctx, &fnExt.of.func, vals.ptr, args.length,
+        results.ptr, nresults, &trap))
+    {
+        if (verbose)
+        {
+            wasm_name_t msg;
+            wasmtime_error_message(err, &msg);
+            fprintf(stderr, "wasm-ctfe inproc: call %s: %.*s\n",
+                fd.toPrettyChars(), cast(int) msg.size, msg.data);
+            wasm_byte_vec_delete(&msg);
+        }
+        wasmtime_error_delete(err);
+        return null;
+    }
+    if (trap)
+    {
+        if (verbose)
+        {
+            wasm_message_t msg;
+            wasm_trap_message(trap, &msg);
+            fprintf(stderr, "wasm-ctfe inproc: trap in %s: %.*s\n",
+                fd.toPrettyChars(), cast(int) msg.size, msg.data);
+            wasm_byte_vec_delete(&msg);
+        }
+        wasm_trap_delete(trap);
+        return null;
+    }
+
+    wasmCtfeStats.successes++;
+    return ipDecodeScalar(results[0], resultType, loc);
+}
+
+private bool ipScalarType(Type t)
+{
+    auto tb = t.toBasetype();
+    if (tb.isTypeEnum())
+        return false;
+    switch (tb.ty)
+    {
+        case Tint8, Tuns8, Tint16, Tuns16, Tint32, Tuns32, Tint64, Tuns64,
+             Tbool, Tchar, Twchar, Tdchar:
+            return true;
+        case Tfloat32, Tfloat64:
+            return true;
+        default:
+            return false;
+    }
+}
+
+private bool ipMarshalScalar(Expression arg, ref wasmtime_val_t val)
+{
+    import dmd.wasmtimec;
+    auto tb = arg.type ? arg.type.toBasetype() : null;
+    if (!tb)
+        return false;
+    if (auto ie = arg.isIntegerExp())
+    {
+        if (tb.size() <= 4)
+        {
+            val.kind = WASMTIME_I32;
+            val.of.i32 = cast(int) ie.toInteger();
+        }
+        else
+        {
+            val.kind = WASMTIME_I64;
+            val.of.i64 = cast(long) ie.toInteger();
+        }
+        return true;
+    }
+    if (auto re = arg.isRealExp())
+    {
+        if (tb.ty == Tfloat32)
+        {
+            val.kind = WASMTIME_F32;
+            val.of.f32 = cast(float) re.value;
+        }
+        else if (tb.ty == Tfloat64)
+        {
+            val.kind = WASMTIME_F64;
+            val.of.f64 = cast(double) re.value;
+        }
+        else
+            return false;
+        return true;
+    }
+    return false;
+}
+
+private Expression ipDecodeScalar(ref wasmtime_val_t val, Type type, Loc loc)
+{
+    import dmd.wasmtimec;
+    auto tb = type.toBasetype();
+    switch (tb.ty)
+    {
+        case Tint8, Tuns8, Tint16, Tuns16, Tint32, Tuns32, Tbool, Tchar, Twchar, Tdchar:
+            if (val.kind != WASMTIME_I32)
+                return null;
+            ulong v = cast(uint) val.of.i32;
+            switch (tb.ty)
+            {
+                case Tint8: v = cast(ulong) cast(byte) v; break;
+                case Tint16: v = cast(ulong) cast(short) v; break;
+                case Tint32: v = cast(ulong) cast(int) v; break;
+                case Tuns8, Tbool, Tchar: v &= 0xFF; break;
+                case Tuns16, Twchar: v &= 0xFFFF; break;
+                default: v &= 0xFFFF_FFFF; break;
+            }
+            return new IntegerExp(loc, v, type);
+        case Tint64, Tuns64:
+            if (val.kind != WASMTIME_I64)
+                return null;
+            return new IntegerExp(loc, cast(ulong) val.of.i64, type);
+        case Tfloat32:
+            if (val.kind != WASMTIME_F32)
+                return null;
+            return new RealExp(loc, real_t(val.of.f32), type);
+        case Tfloat64:
+            if (val.kind != WASMTIME_F64)
+                return null;
+            return new RealExp(loc, real_t(val.of.f64), type);
+        default:
+            return null;
+    }
 }
