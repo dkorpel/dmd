@@ -75,6 +75,8 @@ private __gshared
     StringTable!(const(char)[]) resultCache;
     StringTable!(bool) failCache;
     bool cachesInit = false;
+    StringTable!(Expression) ipResultCache;
+    bool ipCacheInit = false;
 }
 
 WasmCtfeMode wasmCtfeMode()
@@ -2020,6 +2022,30 @@ Expression tryWasmCtfeInproc(FuncDeclaration fd, Expression thisExp, Expression[
         }
     }
 
+    OutBuffer keyBuf;
+    keyBuf.writestring(mangleExact(fd));
+    keyBuf.writeByte(0);
+    if (thisExp)
+    {
+        keyBuf.writestring(thisExp.toChars());
+        keyBuf.writeByte(0);
+    }
+    foreach (arg; args)
+    {
+        keyBuf.writestring(arg.toChars());
+        keyBuf.writeByte(0);
+    }
+    if (!ipCacheInit)
+    {
+        ipResultCache._init(64);
+        ipCacheInit = true;
+    }
+    if (auto sv = ipResultCache.lookup(keyBuf[]))
+    {
+        wasmCtfeStats.cacheHits++;
+        return sv.value;
+    }
+
     wasmCtfeStats.attempts++;
     auto im = ipGetModule(fd);
     if (!im)
@@ -2268,6 +2294,8 @@ Expression tryWasmCtfeInproc(FuncDeclaration fd, Expression thisExp, Expression[
         return null;
     }
     wasmCtfeStats.successes++;
+    if (auto sv = ipResultCache.insert(keyBuf[], null))
+        sv.value = resultExp;
     if (verbose)
         fprintf(stderr, "wasm-ctfe inproc: ok %s -> %s\n", fd.toPrettyChars(), resultExp.toChars());
     return resultExp;
