@@ -2292,6 +2292,24 @@ private extern (C) wasm_trap_t* ipHostAssert(void* env, wasmtime_caller_t* calle
     return wasmtime_trap_new(ipTrapBuf.ptr, n);
 }
 
+private extern (C) wasm_trap_t* ipHostBounds(void* env, wasmtime_caller_t* caller,
+    const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
+{
+    wasmtime_memory_t m;
+    ubyte[] mem;
+    if (ipCallerMemory(caller, m))
+        mem = ipMemSlice(caller, m);
+    const(char)[] file = "?";
+    const flen = cast(ulong) args[0].of.i64;
+    const fptr = cast(ulong) args[1].of.i64;
+    if (fptr < mem.length && flen <= mem.length - fptr && flen <= 512)
+        file = cast(const(char)[])(mem.ptr[cast(size_t) fptr .. cast(size_t)(fptr + flen)]);
+    const n = snprintf(ipTrapBuf.ptr, ipTrapBuf.length,
+        "$bounds$%.*s(%d): array index out of bounds",
+        cast(int) file.length, file.ptr, args[2].of.i32);
+    return wasmtime_trap_new(ipTrapBuf.ptr, n);
+}
+
 private extern (C) wasm_trap_t* ipHostAssertMsg(void* env, wasmtime_caller_t* caller,
     const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
 {
@@ -2612,6 +2630,8 @@ Expression tryWasmCtfeInproc(FuncDeclaration fd, Expression thisExp, Expression[
                 cb = &ipHostBoundsSlice;
             else if (nm == "_d_assertp" || nm == "_d_arrayboundsp")
                 cb = &ipHostAssert;
+            else if (nm == "_d_arraybounds")
+                cb = &ipHostBounds;
             else if (nm == "_d_assert_msg")
                 cb = &ipHostAssertMsg;
             else if (nm == "_d_arrayappendcd" || nm == "_d_arrayappendcw")
