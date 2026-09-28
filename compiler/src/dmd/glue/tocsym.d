@@ -177,8 +177,15 @@ void wasmCtfeQueueDefinition(Dsymbol d)
         return;
     if (auto fd = d.isFuncDeclaration())
     {
-        if (!fd.fbody)
+        if (!fd.fbody && fd.semanticRun >= PASS.semantic3done)
+        {
+            import core.stdc.stdlib : getenv;
+            import core.stdc.stdio : fprintf, stderr;
+            if (getenv("DMD_CTFE_TRACEGEN"))
+                fprintf(stderr, "wasm-ctfe queue reject bodyless: %s (run=%d)\n",
+                    fd.toPrettyChars(), cast(int) fd.semanticRun);
             return;
+        }
     }
     else if (auto vd = d.isVarDeclaration())
     {
@@ -200,8 +207,6 @@ void wasmCtfeQueueDefinition(Dsymbol d)
                 wasmCtfeQueueDefinition(tc.sym);
                 return;
             }
-            if (tid.tinfo.isTypeAArray())
-                return;
         }
     }
     else if (!d.isStructDeclaration() && !d.isClassDeclaration() && !d.isEnumDeclaration())

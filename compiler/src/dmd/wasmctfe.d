@@ -330,8 +330,7 @@ private bool ipExprSupported(Expression e)
             if (!e.type)
                 return;
             const ty = e.type.toBasetype().ty;
-            if (ty == Taarray || ty == Tfloat80
-                || ty == Timaginary80 || ty == Tcomplex80)
+            if (ty == Tfloat80 || ty == Timaginary80 || ty == Tcomplex80)
                 stop = true;
         }
         override void visit(ArrayLiteralExp e)
@@ -1001,7 +1000,13 @@ public void ipForceSemantic3(FuncDeclaration fd)
 {
     if (fd.semanticRun >= PASS.semantic3done)
         return;
-    fd.functionSemantic3();
+    if (fd.deferred3 && fd._scope && fd.semanticRun < PASS.semantic3)
+    {
+        import dmd.semantic3 : semantic3;
+        semantic3(fd, fd._scope);
+    }
+    else
+        fd.functionSemantic3();
     if (fd.errors || fd.hasSemantic3Errors)
         forcedSem3Errors[cast(void*) fd] = true;
 }
@@ -2909,7 +2914,6 @@ private Expression ipDecodeClassRef(const(ubyte)[] mem, ulong objAddr, Type type
     import dmd.glue.tocsym : wasmCtfeFindClass;
 
     const dbg = getenv("DMD_CTFE_TRACEGEN") !is null;
-    if (dbg) fprintf(stderr, "wasm-ctfe classref: enter obj=%llx type=%s\n", objAddr, type.toChars());
     if (depth > 64)
         return null;
     if (objAddr == 0)

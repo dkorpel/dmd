@@ -1069,7 +1069,7 @@ private void membersToDt(AggregateDeclaration ad, ref DtBuilder dtb,
                 if (init.isVoidInitializer())
                     continue;
 
-                assert(vd.semanticRun >= PASS.semantic2done);
+                assert(vd.semanticRun >= PASS.semantic2done || wasmCtfeBuildActive);
                 auto ei = init.isExpInitializer();
                 assert(ei);
                 auto ie = ei.exp.isIntegerExp();
@@ -1089,7 +1089,7 @@ private void membersToDt(AggregateDeclaration ad, ref DtBuilder dtb,
                 if (init.isVoidInitializer())
                     continue;
 
-                assert(vd.semanticRun >= PASS.semantic2done);
+                assert(vd.semanticRun >= PASS.semantic2done || wasmCtfeBuildActive);
 
                 auto ei = init.isExpInitializer();
                 auto tsa = vd.type.toBasetype().isTypeSArray();
@@ -1414,6 +1414,21 @@ private extern (C++) class TypeInfoDtVisitor : Visitor
         auto tc = d.tinfo.isTypeAArray();
         TypeInfo_toObjFile(null, d.loc, tc.next);
         TypeInfo_toObjFile(null, d.loc, tc.index);
+        if (wasmCtfeBuildActive && (!d.entry || !d.xopEqual || !d.xtoHash))
+        {
+            Expression sym(Declaration s)
+            {
+                return s ? cast(Expression) new SymOffExp(d.loc, s, 0)
+                    : new NullExp(d.loc, Type.tvoidptr);
+            }
+            classFieldsToDt(Type.typeinfoassociativearray, new Expressions(
+                new SymOffExp(d.loc, tc.next.vtinfo, 0),
+                new SymOffExp(d.loc, tc.index.vtinfo, 0),
+                d.entry ? sym(d.entry.vtinfo) : new NullExp(d.loc, Type.tvoidptr),
+                sym(d.xopEqual),
+                sym(d.xtoHash)), *dtb);
+            return;
+        }
         TypeInfo_toObjFile(null, d.loc, d.entry);
         classFieldsToDt(Type.typeinfoassociativearray, new Expressions(
             new SymOffExp(d.loc, tc.next.vtinfo, 0),

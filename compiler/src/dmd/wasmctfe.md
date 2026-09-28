@@ -428,3 +428,40 @@ these entries). Two blockers had to fall first:
   class's `vtblsym` to the `ClassDeclaration` itself, whose `toObjFile`
   emits the real vtbl (with function-table relocations), the classinfo
   and the init symbol.
+
+### Associative arrays run in-guest via core.internal.newaa
+The frontend already lowers AA operations (`aa[k]`, `aa[k] = v`, `k in
+aa`, `aa == bb`, `new V[K]`) to template hooks in
+`core.internal.newaa` — plain D code in the import path. Engine builds
+compile those instances to wasm like any other function, with
+`gc_malloc` bound to the host bump allocator, so AAs work with no
+host-side AA implementation at all. Four blockers fell:
+
+- the old `getTypeInfo` poison for `Taarray` (a pre-classes-era guard)
+  and the worklist's skip of `TypeInfoAssociativeArrayDeclaration`
+  vars;
+- `TypeInfo_AssociativeArray` instances created at codegen time have
+  null `entry`/`xopEqual`/`xtoHash` (those are filled by a
+  scope-carrying semantic3 the lowering defers). `newaa`'s templated
+  code never reads them at runtime, so engine builds emit those three
+  slots as null instead of crashing;
+- `_d_aaEqual!(K,V)` never reaches semantic3 through
+  `functionSemantic3` because the lowering registers it via
+  `addDeferredSemantic3` (the `deferred3` flag makes
+  `functionSemantic3` a no-op), and native CTFE interprets AA equality
+  itself so nothing else forces it. `ipForceSemantic3` now runs
+  `semantic3(fd, fd._scope)` directly for deferred-3 functions. The
+  queue also keeps bodyless functions whose semantic3 hasn't run yet
+  (a template instance grows its body in semantic3);
+- a class field initializer not yet `semantic2done` (bug 10782's
+  scenario) resolves on demand: the readiness gate runs
+  `initializerSemantic` from the field's saved `_scope` under the
+  engine build's gag (using `getConstInitializer` here would ungag and
+  double-report errors, seen as a duplicated circular-reference error
+  in ice10259). On error the class is just "not ready" and the native
+  path reports once. `membersToDt`'s `semantic2done` assert admits
+  engine builds since the initializer is resolved by then.
+
+With this, interpret3 under `DMD_CTFE=verify` reports **zero compile
+failures, zero runtime failures and zero mismatches** for every
+attempted engine evaluation.

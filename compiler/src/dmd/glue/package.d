@@ -1359,8 +1359,22 @@ private bool wasmCtfeAggReady(AggregateDeclaration ad)
     if (ad.sizeok != Sizeok.done)
         return false;
     foreach (v; ad.fields)
+    {
         if (v.semanticRun < PASS.semantic2done && v._init)
-            return false;
+        {
+            if (!v._scope || v.inuse)
+                return false;
+            import dmd.initsem : initializerSemantic;
+            import dmd.init : NeedInterpret;
+            const errs = global.errors;
+            v.inuse++;
+            v._init = v._init.initializerSemantic(v._scope, v.type, NeedInterpret.INITinterpret, global.errorSink);
+            v.inuse--;
+            if (global.errors != errs)
+                return false;
+            v._scope = null;
+        }
+    }
     return true;
 }
 
@@ -1422,7 +1436,12 @@ public bool wasmCtfeGenerate(FuncDeclaration root, ref OutBuffer objbuf, out con
                         fd.toPrettyChars(), global.errors - errsB);
             }
             if (fd.semanticRun < PASS.semantic3done)
+            {
+                if (getenv("DMD_CTFE_TRACEGEN"))
+                    fprintf(stderr, "wasm-ctfe skip func not sem3: %s (run=%d body=%d)\n",
+                        fd.toPrettyChars(), cast(int) fd.semanticRun, fd.fbody !is null);
                 continue;
+            }
         }
         else if (auto ad = d.isAggregateDeclaration())
         {

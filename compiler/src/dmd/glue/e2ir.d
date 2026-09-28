@@ -6615,8 +6615,6 @@ elem* sarray_toDarray(Loc loc, Type tfrom, Type tto, elem* e)
 elem* getTypeInfo(Expression e, Type t, ref IRState irs)
 {
     assert(t.ty != Terror);
-    if (wasmCtfeBuildActive && t.toBasetype().ty == Taarray)
-        wasmCtfePoison("associative array");
     TypeInfo_toObjFile(e, e.loc, t);
     elem* result = el_ptr(toExtSymbol(t.vtinfo));
     return result;
