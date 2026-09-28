@@ -138,6 +138,29 @@ void wasmCtfeCompare(Expression e, Expression astResult, Expression wasmResult)
             if (se.len == 0)
                 return;
     }
+    if (auto wse = wasmResult.isStringExp())
+    {
+        if (auto ale = astResult.isArrayLiteralExp())
+        {
+            const n = ale.elements ? ale.elements.length : 0;
+            if (n == wse.len)
+            {
+                bool same = true;
+                foreach (i; 0 .. n)
+                {
+                    auto el = ale[i];
+                    auto ie = el ? el.isIntegerExp() : null;
+                    if (!ie || cast(dchar) ie.toInteger() != wse.getCodeUnit(i))
+                    {
+                        same = false;
+                        break;
+                    }
+                }
+                if (same)
+                    return;
+            }
+        }
+    }
     const a = astResult.toChars();
     const w = wasmResult.toChars();
     if (strcmp(a, w) != 0)
@@ -1821,18 +1844,36 @@ Expression tryWasmCtfeInproc(FuncDeclaration fd, Expression[] args, Type resultT
     {
         if (p.storageClass & (STC.ref_ | STC.out_ | STC.lazy_))
             return bail(fd, "param storage class");
-        if (!ipScalarType(p.type))
+        if (!ipScalarType(p.type) && !ipMemType(p.type))
             return bail(fd, "param type");
     }
 
-    wasmtime_val_t[16] vals;
+    wasmtime_val_t[32] vals;
     const size_t argBase = sret ? 1 : 0;
-    if (args.length + argBase > vals.length)
-        return bail(fd, "too many args");
+    size_t nvals = argBase;
+    size_t memArgCount = 0;
+    ulong memArgBytes = 0;
+    auto memArgVal = new size_t[](args.length);
     foreach (i, arg; args)
     {
-        if (!ipMarshalScalar(arg, vals[argBase + i]))
-            return bail(fd, "arg not literal scalar");
+        Parameter p = tf.parameterList[i];
+        if (nvals + 2 > vals.length)
+            return bail(fd, "too many args");
+        if (ipMemType(p.type))
+        {
+            if (!ipArgMemSize(arg, memArgBytes))
+                return bail(fd, "arg not literal");
+            memArgVal[i] = nvals;
+            memArgCount++;
+            nvals += 2;
+        }
+        else
+        {
+            memArgVal[i] = size_t.max;
+            if (!ipMarshalScalar(arg, vals[nvals]))
+                return bail(fd, "arg not literal scalar");
+            nvals++;
+        }
     }
 
     wasmCtfeStats.attempts++;
@@ -1950,7 +1991,7 @@ Expression tryWasmCtfeInproc(FuncDeclaration fd, Expression[] args, Type resultT
 
     wasmtime_memory_t mem;
     ulong sretAddr;
-    if (sret)
+    if (sret || memArgCount)
     {
         wasmtime_extern_t memExt, spExt;
         if (!wasmtime_instance_export_get(ctx, &inst, "memory".ptr, "memory".length, &memExt)
@@ -1964,16 +2005,40 @@ Expression tryWasmCtfeInproc(FuncDeclaration fd, Expression[] args, Type resultT
         wasmtime_global_get(ctx, &spExt.of.global, &spVal);
         if (spVal.kind != WASMTIME_I64)
             return bail(fd, "stack pointer kind");
-        const size_t rsz = cast(size_t) resultType.size();
-        sretAddr = (cast(ulong) spVal.of.i64 - rsz) & ~15UL;
-        spVal.of.i64 = cast(long) sretAddr;
+        const size_t rsz = sret ? cast(size_t) resultType.size() : 0;
+        ulong need = (rsz + 15) & ~15UL;
+        need += (memArgBytes + 15) & ~15UL;
+        const base = (cast(ulong) spVal.of.i64 - need) & ~15UL;
+        spVal.of.i64 = cast(long) base;
         if (auto err = wasmtime_global_set(ctx, &spExt.of.global, &spVal))
         {
             wasmtime_error_delete(err);
             return bail(fd, "stack pointer set");
         }
-        vals[0].kind = WASMTIME_I64;
-        vals[0].of.i64 = cast(long) sretAddr;
+        auto data = wasmtime_memory_data(ctx, &mem);
+        const dataLen = wasmtime_memory_data_size(ctx, &mem);
+        if (base + need > dataLen)
+            return bail(fd, "stack overflow");
+        ulong cur = base;
+        foreach (i, arg; args)
+        {
+            if (memArgVal[i] == size_t.max)
+                continue;
+            ulong alen, aptr;
+            if (!ipEncodeArg(data[0 .. dataLen], cur, arg, alen, aptr))
+                return bail(fd, "arg encode");
+            cur = (cur + 15) & ~15UL;
+            vals[memArgVal[i]].kind = WASMTIME_I64;
+            vals[memArgVal[i]].of.i64 = cast(long) alen;
+            vals[memArgVal[i] + 1].kind = WASMTIME_I64;
+            vals[memArgVal[i] + 1].of.i64 = cast(long) aptr;
+        }
+        if (sret)
+        {
+            sretAddr = base + ((memArgBytes + 15) & ~15UL);
+            vals[0].kind = WASMTIME_I64;
+            vals[0].of.i64 = cast(long) sretAddr;
+        }
     }
 
     ipHeapPtr = 0;
@@ -1982,7 +2047,7 @@ Expression tryWasmCtfeInproc(FuncDeclaration fd, Expression[] args, Type resultT
         wasmtime_error_delete(err);
     wasmtime_val_t[1] results;
     const nresults = (sret || resultType.toBasetype().ty == Tvoid) ? 0 : 1;
-    if (auto err = wasmtime_func_call(ctx, &fnExt.of.func, vals.ptr, argBase + args.length,
+    if (auto err = wasmtime_func_call(ctx, &fnExt.of.func, vals.ptr, nvals,
         results.ptr, nresults, &trap))
     {
         if (verbose)
@@ -2133,6 +2198,94 @@ private Expression ipDecodeMem(const(ubyte)[] mem, ulong addr, Type type, Loc lo
         default: break;
     }
     return new IntegerExp(loc, v, type);
+}
+
+private bool ipArgMemSize(Expression arg, ref ulong total)
+{
+    if (arg.isNullExp())
+        return true;
+    if (auto se = arg.isStringExp())
+    {
+        total += ((cast(ulong) se.len * se.sz) + 15) & ~15UL;
+        return true;
+    }
+    if (auto ale = arg.isArrayLiteralExp())
+    {
+        auto etb = arg.type.toBasetype().nextOf().toBasetype();
+        const esz = cast(ulong) etb.size();
+        const n = ale.elements ? ale.elements.length : 0;
+        foreach (i; 0 .. n)
+        {
+            auto el = ale[i];
+            if (!el || (!el.isIntegerExp() && !el.isRealExp()))
+                return false;
+        }
+        total += ((n * esz) + 15) & ~15UL;
+        return true;
+    }
+    return false;
+}
+
+private void ipWrite(ubyte[] mem, ulong addr, ulong v, size_t sz)
+{
+    foreach (i; 0 .. sz)
+        mem[cast(size_t) addr + i] = cast(ubyte)(v >> (8 * i));
+}
+
+private bool ipEncodeArg(ubyte[] mem, ref ulong cur, Expression arg, out ulong len, out ulong ptr)
+{
+    if (arg.isNullExp())
+        return true;
+    if (auto se = arg.isStringExp())
+    {
+        len = se.len;
+        ptr = cur;
+        const sz = se.sz;
+        if (cur + len * sz > mem.length)
+            return false;
+        foreach (i; 0 .. se.len)
+            ipWrite(mem, cur + i * sz, se.getCodeUnit(i), sz);
+        cur += len * sz;
+        return true;
+    }
+    if (auto ale = arg.isArrayLiteralExp())
+    {
+        auto etb = arg.type.toBasetype().nextOf().toBasetype();
+        const esz = cast(size_t) etb.size();
+        const n = ale.elements ? ale.elements.length : 0;
+        len = n;
+        ptr = cur;
+        if (cur + n * esz > mem.length)
+            return false;
+        foreach (i; 0 .. n)
+        {
+            auto el = ale[i];
+            if (auto ie = el.isIntegerExp())
+                ipWrite(mem, cur + i * esz, ie.toInteger(), esz);
+            else if (auto re = el.isRealExp())
+            {
+                if (esz == 4)
+                {
+                    const f = cast(float) re.value;
+                    uint u;
+                    memcpy(&u, &f, 4);
+                    ipWrite(mem, cur + i * esz, u, 4);
+                }
+                else
+                {
+                    const d = cast(double) re.value;
+                    ulong u;
+                    memcpy(&u, &d, 8);
+                    ipWrite(mem, cur + i * esz, u, 8);
+                }
+            }
+            else
+                return false;
+        }
+        cur += n * esz;
+        return true;
+    }
+    return false;
 }
 
 private bool ipMarshalScalar(Expression arg, ref wasmtime_val_t val)
