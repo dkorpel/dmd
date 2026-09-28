@@ -22,6 +22,7 @@ $r:.*$
   -m64              generate 64 bit code
   -marm64           generate Arm 64 bit code
   -mwasm32          generate WebAssembly 32 bit code
+  -mwasm-selflink   emit a complete WebAssembly module instead of a relocatable object
   -main             add default main() if not present already (e.g. for unittesting)
 $r:.*$
 ----

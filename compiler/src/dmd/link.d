@@ -275,7 +275,51 @@ private void splitWords(ref Strings argv, const(char)* cmd) nothrow
 }
 
 /***********************************
- * Link WebAssembly object files.
+ * Finish a `-mwasm-selflink` build: the object file already is a complete
+ * module, so there is nothing to link. Move it to the output name and hand it
+ * to wasm-opt if `-O` asked for optimized output.
+ *
+ * Params:
+ *   verbose = print the wasm-opt command before executing
+ *   params  = compiler parameters (objfiles, exefile, ...)
+ *   eSink   = sink for error messages
+ * Returns: 0 on success, non-zero on failure
+ */
+private int finishWasmSelfLink(bool verbose, ref Param params, ErrorSink eSink)
+{
+    if (params.objfiles.length != 1)
+    {
+        eSink.error(Loc.initial, "`-mwasm-selflink` produces one module, but %d object files were given; compile the program as a whole with `-i`",
+            cast(int) params.objfiles.length);
+        return STATUS_FAILED;
+    }
+    {
+        import dmd.backend.wasm.selflink : wasmSelfLinkUnresolved;
+        foreach (name; wasmSelfLinkUnresolved)
+            eSink.error(Loc.initial, "undefined symbol `%.*s`", cast(int) name.length, name.ptr);
+        if (wasmSelfLinkUnresolved.length)
+            return STATUS_FAILED;
+    }
+    const(char)[] obj = params.objfiles[0].toDString;
+    if (!params.exefile)
+        params.exefile = FileName.forceExt(FileName.name(obj), "wasm");
+    if (!ensurePathToNameExists(Loc.initial, params.exefile))
+        return STATUS_FAILED;
+    if (FileName.equals(obj, params.exefile))
+        return 0;
+    OutBuffer buf;
+    if (File.read(obj, buf) || !File.update(params.exefile, buf.peekSlice()))
+    {
+        eSink.error(Loc.initial, "cannot write `%.*s`", cast(int) params.exefile.length, params.exefile.ptr);
+        return STATUS_FAILED;
+    }
+    File.remove(obj.xarraydup.ptr);
+    return 0;
+}
+
+/***********************************
+ * Link WebAssembly object files with wasm-ld.
+>>>>>>> a3372b503c (wasm: -mwasm-selflink, a final-link mode in the backend)
  *
  * By default wasm-ld is invoked directly with the WASI libc from the dmd
  * installation. When `WASM_CC` is set, or when targeting Emscripten (`emcc`),
@@ -290,6 +334,10 @@ private void splitWords(ref Strings argv, const(char)* cmd) nothrow
  */
 private int runWasmLINK(bool verbose, ref Param params, ErrorSink eSink)
 {
+    import dmd.backend.wasm.selflink : wasmSelfLink;
+    if (wasmSelfLink)
+        return finishWasmSelfLink(verbose, params, eSink);
+
     if (target.os == Target.OS.WASI && target.osMajor == 2)
     {
         eSink.error(Loc.initial, "linking for WASI preview 2 is not supported yet");
