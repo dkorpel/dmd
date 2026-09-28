@@ -132,6 +132,17 @@ interpreter refuses to mutate them in place when the surrounding evaluation
 continues (`f()[i] = x` on a fresh result); the top-level entry then scrubs
 them back to code ownership like any other CTFE result.
 
+### Empty arrays and `null` are indistinguishable at runtime
+Found by `verify` mode on compilable/test21432.d: a function returning
+`enum int[] a = []; return a;` yields the empty array literal `[]` from the
+AST interpreter, but at runtime `[]` is `(null, 0)`, so the wasm-side
+serializer sees a null pointer and reports `null`. The distinction (visible
+via `is null` in later CTFE) cannot be recovered after execution, in either
+direction. The engine now treats a serialized null array as a decode failure
+and falls back to the AST interpreter — null/empty results are cheap to
+interpret anyway. Length-0 arrays with a non-null pointer (empty slices of
+allocated arrays) still decode as `[]`, matching the AST result.
+
 ### The engine must not touch the process environment
 `dshell/sameenv.d` compares the environment of `dmd -run` against a directly
 executed binary. The engine originally did `unsetenv("DMD_CTFE")` in the

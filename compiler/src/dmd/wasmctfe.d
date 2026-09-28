@@ -1256,7 +1256,7 @@ Expression decodeValue(ref const(char)[] s, Type type, Loc loc)
     if (tb.ty == Tarray)
     {
         if (eat(s, "N\n"))
-            return new NullExp(loc, type);
+            return null;
         const(char)[] line;
         if (!eat(s, "A "))
             return null;
