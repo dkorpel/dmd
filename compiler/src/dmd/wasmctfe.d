@@ -330,7 +330,7 @@ private bool ipExprSupported(Expression e)
             if (!e.type)
                 return;
             const ty = e.type.toBasetype().ty;
-            if (ty == Taarray || ty == Tclass || ty == Tfloat80
+            if (ty == Taarray || ty == Tfloat80
                 || ty == Timaginary80 || ty == Tcomplex80)
                 stop = true;
         }
@@ -355,7 +355,7 @@ private bool ipExprSupported(Expression e)
         }
         override void visit(NewExp e)
         {
-            if (!e.lowering)
+            if (!e.lowering && !(e.type && e.type.toBasetype().ty == Tclass))
                 stop = true;
         }
         override void visit(AssignExp e)
@@ -364,6 +364,14 @@ private bool ipExprSupported(Expression e)
                 stop = true;
         }
         override void visit(FuncExp)
+        {
+            stop = true;
+        }
+        override void visit(ThisExp)
+        {
+            stop = true;
+        }
+        override void visit(SuperExp)
         {
             stop = true;
         }
@@ -2265,6 +2273,28 @@ private extern (C) wasm_trap_t* ipHostAssert(void* env, wasmtime_caller_t* calle
     return wasmtime_trap_new(ipTrapBuf.ptr, n);
 }
 
+private extern (C) wasm_trap_t* ipHostAssertMsg(void* env, wasmtime_caller_t* caller,
+    const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
+{
+    wasmtime_memory_t m;
+    ubyte[] mem;
+    if (ipCallerMemory(caller, m))
+        mem = ipMemSlice(caller, m);
+    const(char)[] str(ulong len, ulong ptr) nothrow @nogc
+    {
+        if (ptr > mem.length || len > mem.length - ptr || len > 512)
+            return "?";
+        return cast(const(char)[])(mem.ptr[cast(size_t) ptr .. cast(size_t)(ptr + len)]);
+    }
+    const msg = str(cast(ulong) args[0].of.i64, cast(ulong) args[1].of.i64);
+    const file = str(cast(ulong) args[2].of.i64, cast(ulong) args[3].of.i64);
+    const n = snprintf(ipTrapBuf.ptr, ipTrapBuf.length,
+        "$assert$%.*s(%d): %.*s",
+        cast(int) file.length, file.ptr, args[4].of.i32,
+        cast(int) msg.length, msg.ptr);
+    return wasmtime_trap_new(ipTrapBuf.ptr, n);
+}
+
 private wasm_engine_t* ipGetEngine()
 {
     import dmd.wasmtimec;
@@ -2561,6 +2591,8 @@ Expression tryWasmCtfeInproc(FuncDeclaration fd, Expression thisExp, Expression[
                 cb = &ipHostBoundsSlice;
             else if (nm == "_d_assertp" || nm == "_d_arrayboundsp")
                 cb = &ipHostAssert;
+            else if (nm == "_d_assert_msg")
+                cb = &ipHostAssertMsg;
             else if (nm == "_d_arrayappendcd" || nm == "_d_arrayappendcw")
                 cb = &ipHostArrayAppendC;
             else if (nm == "_d_eh_wasm_match")

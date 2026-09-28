@@ -1317,6 +1317,28 @@ elem* toElem(Expression e, ref IRState irs)
                 ex = el_una(OPaddr, TYnptr, ex);
                 ectype = tclass;
             }
+            else if (!ne.lowering && wasmCtfeBuildActive)
+            {
+                ex = el_bin(OPcall, TYnptr, el_var(getRtlsym(RTLSYM.ALLOCMEMORY)),
+                    el_long(TYsize_t, tclass.sym.structsize));
+                Symbol* si = toInitializer(tclass.sym);
+                elem* ei = el_var(si);
+
+                if (cd.isNested())
+                {
+                    ey = el_same(ex);
+                    ez = el_copytree(ey);
+                    if (cd.vthis2)
+                        ew = el_copytree(ey);
+                }
+                else if (ne.member)
+                    ez = el_same(ex);
+
+                ex = el_una(OPind, TYstruct, ex);
+                ex = elAssign(ex, ei, null, Type_toCtype(tclass).Tnext);
+                ex = el_una(OPaddr, TYnptr, ex);
+                ectype = tclass;
+            }
             else
             {
                 // assert(!(irs.params.ehnogc && ne.thrownew),
