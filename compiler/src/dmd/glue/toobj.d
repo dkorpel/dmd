@@ -718,6 +718,7 @@ void toObjFile(Dsymbol ds, bool multiobj)
                 sinit.Sdt = dtb.finish();
                 outdata(sinit);
             }
+            wasmCtfeRecordObjPass(ed, ed.semanticRun);
             ed.semanticRun = PASS.obj;
         }
 

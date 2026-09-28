@@ -242,7 +242,7 @@ Symbol* getBzeroSymbol()
 
 void checkWasmComplex(Loc loc, Type t)
 {
-    if (!target.isWasm || !t)
+    if (!wasmGlue() || !t)
         return;
 
     Type tb = t.toBasetype();
@@ -329,11 +329,11 @@ tym_t totym(Type tx)
                 t = tb.ty == Tuns32 ? TYulong : TYullong;
             else if (id == Id.__c_long_double)
                 t = tb.size() == 8 ? TYdouble : TYreal;
-            else if (!target.isWasm && id == Id.__c_complex_float)
+            else if (!wasmGlue() && id == Id.__c_complex_float)
                 t = TYcfloat;
-            else if (!target.isWasm && id == Id.__c_complex_double)
+            else if (!wasmGlue() && id == Id.__c_complex_double)
                 t = TYcdouble;
-            else if (!target.isWasm && id == Id.__c_complex_real)
+            else if (!wasmGlue() && id == Id.__c_complex_real)
                 t = tb.size() == 16 ? TYcdouble : TYcreal;
             else
                 t = totym(tb);
@@ -402,7 +402,7 @@ tym_t totym(Type tx)
 
                 case LINK.d:
                     t = (tf.parameterList.varargs == VarArg.variadic) ? TYnfunc : TYjfunc;
-                    if (target.isWasm)
+                    if (wasmGlue())
                     {
                         t = TYnfunc; // No need for wasm to inherit the reversed param nonsense
                     }
@@ -550,6 +550,7 @@ void FuncDeclaration_toObjFile(FuncDeclaration fd, bool multiobj)
         return;
 
     // start code generation
+    wasmCtfeRecordObjPass(fd, fd.semanticRun);
     fd.semanticRun = PASS.obj;
 
     if (global.params.v.verbose)
@@ -1351,6 +1352,46 @@ private void obj_end(ref OutBuffer objbuf, Library library, const(char)[] objfil
         // avoid repetitions.
         objbuf.destroy();
     }
+}
+
+public bool wasmCtfeGenerate(FuncDeclaration root, ref OutBuffer objbuf, out const(char)[][] unresolved)
+{
+    import dmd.dmsc : backend_init_wasm_ctfe, backend_reinit_host;
+    import dmd.backend.wasm.selflink : wasmSelfLink, wasmSelfLinkUnresolved;
+    import dmd.backend.wasm.obj : WasmObj_registerExportName;
+    import dmd.funcsem : functionSemantic3;
+    import dmd.mangle : mangleExact;
+
+    const startErrors = global.errors;
+    ObjcGlue_initialize();
+    backend_init_wasm_ctfe();
+    const selfLinkSave = wasmSelfLink;
+    wasmSelfLink = true;
+    wasmSelfLinkUnresolved = null;
+    wasmCtfeBuildActive = true;
+
+    obj_start(objbuf, "__wasmctfe.d");
+    const id = mangleExact(root);
+    WasmObj_registerExportName(id[0 .. strlen(id)], id[0 .. strlen(id)]);
+    wasmCtfeQueueDefinition(root);
+    while (auto d = wasmCtfePopWork())
+    {
+        if (auto fd = d.isFuncDeclaration())
+            fd.functionSemantic3();
+        toObjFile(d, false);
+    }
+    if (global.errors == startErrors)
+        objmod.term("__wasmctfe.wasm");
+    objmod = null;
+    unresolved = wasmSelfLinkUnresolved;
+
+    wasmCtfeBuildActive = false;
+    wasmCtfeWipeCaches();
+    wasmCtfeWipeCtypes();
+    wasmSelfLink = selfLinkSave;
+    wasmSelfLinkUnresolved = null;
+    backend_reinit_host();
+    return global.errors == startErrors;
 }
 
 /**************************************

@@ -38,6 +38,7 @@ enum WasmCtfeMode
     off,
     wasm,
     verify,
+    codegen,
 }
 
 struct WasmCtfeStats
@@ -81,6 +82,8 @@ WasmCtfeMode wasmCtfeMode()
                 mode = WasmCtfeMode.wasm;
             else if (strcmp(p, "verify") == 0)
                 mode = WasmCtfeMode.verify;
+            else if (strcmp(p, "codegen") == 0)
+                mode = WasmCtfeMode.codegen;
         }
         verbose = getenv("DMD_CTFE_VERBOSE") !is null;
         if (mode != WasmCtfeMode.off)
@@ -129,7 +132,40 @@ Expression tryWasmCtfe(Expression e)
     auto ce = e.isCallExp();
     if (!ce || !ce.f)
         return null;
+    if (mode == WasmCtfeMode.codegen)
+    {
+        wasmCtfeCodegenTest(ce.f);
+        return null;
+    }
     return tryWasmCtfeCall(ce.f, ce.arguments ? (*ce.arguments)[] : null, e.type, e.loc);
+}
+
+void wasmCtfeCodegenTest(FuncDeclaration fd)
+{
+    import dmd.common.outbuffer : OutBuffer;
+    import dmd.glue : wasmCtfeGenerate;
+
+    __gshared bool[void*] done;
+    if (cast(void*) fd in done)
+        return;
+    done[cast(void*) fd] = true;
+
+    OutBuffer buf;
+    const(char)[][] unresolved;
+    const ok = wasmCtfeGenerate(fd, buf, unresolved);
+    char[256] name = void;
+    snprintf(name.ptr, name.length, "wasmctfe_%u.wasm", seq);
+    seq++;
+    if (ok)
+    {
+        import dmd.utils : writeFile;
+        import dmd.location : Loc;
+        writeFile(Loc.initial, name[0 .. strlen(name.ptr)], buf[]);
+    }
+    fprintf(stderr, "wasm-ctfe codegen %s: fn=%s size=%zu unresolved=%zu\n",
+        ok ? name.ptr : "FAILED".ptr, fd.toPrettyChars(), buf.length, unresolved.length);
+    foreach (u; unresolved)
+        fprintf(stderr, "  undefined: %.*s\n", cast(int) u.length, u.ptr);
 }
 
 Expression tryWasmCtfeCall(FuncDeclaration fd, Expression[] args, Type resultType, Loc loc)

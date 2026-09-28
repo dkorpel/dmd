@@ -137,3 +137,49 @@ void backend_init(const ref Param params, const ref DMDparams driverParams, cons
 void backend_term() @safe
 {
 }
+
+void backend_init_wasm_ctfe()
+{
+    import dmd.backend.cc : config;
+    import dmd.backend.cdef : Config;
+
+    config = Config.init;
+    out_config_init(
+        false,
+        64,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        0,
+        false,
+        false,
+        false,
+        0,
+        0,
+        false,
+        global.params.useTypeInfo && Type.dtypeinfo,
+        true,
+        0,
+        global.versionString(),
+        EX_WASM,
+        false,
+        false,
+        go,
+        cast(ErrorCallbackBackend) &errorBackend,
+        cast(GetFileContentsCallback) &getFileContentsBackend,
+    );
+}
+
+void backend_reinit_host()
+{
+    import dmd.backend.cc : config;
+    import dmd.backend.cdef : Config;
+    import dmd.target : target;
+    import dmd.dmdparams : driverParams;
+
+    config = Config.init;
+    backend_init(global.params, driverParams, target);
+}

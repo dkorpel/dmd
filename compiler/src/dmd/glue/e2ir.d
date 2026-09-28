@@ -4318,7 +4318,7 @@ elem* toElemRVO(Expression e, elem* ehidden, ref IRState irs, Type forceType = n
     Type basetype = forceType ? forceType.toBasetype() : e.type.toBasetype();
     // int[] f(); void g() { int[] a = f(); } // wasm returns slices by hidden pointer
     import dmd.target : target;
-    const wasmNonAgg = target.isWasm && basetype.ty != Tstruct && basetype.ty != Tsarray;
+    const wasmNonAgg = wasmGlue() && basetype.ty != Tstruct && basetype.ty != Tsarray;
     if (wasmNonAgg && !ehidden)
         return toElem(e, irs);
     assert(wasmNonAgg || basetype.ty == Tstruct || basetype.ty == Tsarray);
@@ -6066,7 +6066,7 @@ elem* callfunc(Loc loc,
                  */
                 e.E1 = el_una(OPind, e.E2.Ety | mTYvolatile, e.E1);
             }
-            if (op == OPscale && !target.isWasm)
+            if (op == OPscale && !wasmGlue())
             {
                 elem* et = e.E1;
                 e.E1 = el_una(OPs32_d, TYdouble, e.E2);
@@ -6192,7 +6192,7 @@ elem* callfunc(Loc loc,
 
             // The wasm backend needs to know the exact number of hidden parameters for e.g.:
             // void foo2(void delegate(int, ...) dg) { dg(20, 3.14); }
-            if (target.isWasm)
+            if (wasmGlue())
                 e.numParams = cast(ubyte)(1 + ((ethis2 !is null || ethis !is null) ? 1 : 0));
         }
     }
@@ -6207,7 +6207,7 @@ elem* callfunc(Loc loc,
     }
     else if (retmethod == RET.stack)
     {
-        if ((irs.target.os == Target.OS.OSX || irs.target.isWasm) && eresult)
+        if ((irs.target.os == Target.OS.OSX || wasmGlue()) && eresult)
         {
             /* ABI quirk: hidden pointer is not returned in registers
              */
@@ -6625,7 +6625,7 @@ Lagain:
         case Tstruct:
         {
             // struct S { int a, b, c, d; } // argtypes turns this into Tcomplex64
-            if (target.isX86 || target.isWasm)
+            if (target.isX86 || wasmGlue())
                 goto default;
 
             TypeStruct tc = cast(TypeStruct)tb2;
@@ -6650,7 +6650,7 @@ Lagain:
                 case 4:      r = RTLSYM.MEMSET32;   break;
                 case 8:      r = RTLSYM.MEMSET64;   break;
                 case 16:
-                    if (target.isWasm)
+                    if (wasmGlue())
                         r = RTLSYM.MEMSETN;
                     else
                         r = (target.isX86_64 || target.isAArch64) ? RTLSYM.MEMSET128ii : RTLSYM.MEMSET128;
@@ -7073,7 +7073,7 @@ elem* toElemStructLit(StructLiteralExp sle, ref IRState irs, EXP op, Symbol* sym
         if (TypeEnum te = sle.stype.isTypeEnum())
         {
             // Reinterpret the struct literal as a complex type.
-            if (te.sym.isSpecial() && !target.isWasm &&
+            if (te.sym.isSpecial() && !wasmGlue() &&
                 (te.sym.ident == Id.__c_complex_float ||
                  te.sym.ident == Id.__c_complex_double ||
                  te.sym.ident == Id.__c_complex_real))

@@ -303,7 +303,7 @@ private type* wasmRtlsymType(RTLSYM i)
     type* tvoid = tstypes[TYvoid];
     type* tint  = tstypes[TYint];
     type* tuint = tstypes[TYuint];
-    type* tsize = tstypes[TYuint];   // size_t on wasm32
+    type* tsize = tstypes[I64() ? TYullong : TYuint];
     type* tdchar = tstypes[TYdchar];
     type* tshort = tstypes[TYshort];
     type* tfloat = tstypes[TYfloat];

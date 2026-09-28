@@ -118,6 +118,95 @@ void resetCtfeSymbolCache()
     ctfeSymbolLiterals.setDim(0);
 }
 
+package(dmd.glue) __gshared bool wasmCtfeBuildActive;
+
+package(dmd.glue)
+bool wasmGlue()
+{
+    return target.isWasm || wasmCtfeBuildActive;
+}
+private __gshared Array!Dsymbol wasmCtfeTouched;
+private __gshared bool[void*] wasmCtfeSeenTouched;
+private __gshared Array!Dsymbol wasmCtfeWork;
+private __gshared bool[void*] wasmCtfeQueued;
+
+package(dmd.glue)
+void wasmCtfeRecord(Dsymbol d)
+{
+    if (!wasmCtfeBuildActive || d is null)
+        return;
+    if (cast(void*) d !in wasmCtfeSeenTouched)
+    {
+        wasmCtfeSeenTouched[cast(void*) d] = true;
+        wasmCtfeTouched.push(d);
+    }
+    wasmCtfeQueueDefinition(d);
+}
+
+package(dmd.glue)
+void wasmCtfeQueueDefinition(Dsymbol d)
+{
+    if (!wasmCtfeBuildActive || d is null)
+        return;
+    if (cast(void*) d in wasmCtfeQueued)
+        return;
+    if (auto fd = d.isFuncDeclaration())
+    {
+        if (!fd.fbody)
+            return;
+    }
+    else if (auto vd = d.isVarDeclaration())
+    {
+        if (!vd.isDataseg())
+            return;
+    }
+    else
+        return;
+    wasmCtfeQueued[cast(void*) d] = true;
+    wasmCtfeWork.push(d);
+}
+
+package(dmd.glue)
+Dsymbol wasmCtfePopWork()
+{
+    if (wasmCtfeWork.length == 0)
+        return null;
+    return wasmCtfeWork.pop();
+}
+
+package(dmd.glue)
+void wasmCtfeRecordObjPass(Dsymbol d, PASS oldPass)
+{
+    if (!wasmCtfeBuildActive)
+        return;
+    wasmCtfeObjMarked.push(d);
+    wasmCtfeObjMarkedPass.push(oldPass);
+}
+
+private __gshared Array!Dsymbol wasmCtfeObjMarked;
+private __gshared Array!PASS wasmCtfeObjMarkedPass;
+
+package(dmd.glue)
+void wasmCtfeWipeCaches()
+{
+    foreach (i, d; wasmCtfeObjMarked[])
+        d.semanticRun = wasmCtfeObjMarkedPass[i];
+    wasmCtfeObjMarked.setDim(0);
+    wasmCtfeObjMarkedPass.setDim(0);
+    foreach (d; wasmCtfeTouched[])
+    {
+        d.csym = null;
+        if (auto ad = d.isAggregateDeclaration())
+            ad.sinit = null;
+        if (auto ed = d.isEnumDeclaration())
+            ed.sinit = null;
+    }
+    wasmCtfeTouched.setDim(0);
+    wasmCtfeSeenTouched.clear();
+    wasmCtfeWork.setDim(0);
+    wasmCtfeQueued.clear();
+}
+
 package(dmd.glue)
 Symbol* toSymbol(StructLiteralExp sle)
 {
@@ -262,7 +351,7 @@ Symbol* toSymbol(Dsymbol s)
             {
                 if (target.os == Target.OS.Windows && target.isX86_64 && vd.isParameter())
                     t = type_fake(TYnptr);
-                else if (target.isWasm)
+                else if (wasmGlue())
                 {
                     // `lazy T` parameters mangle as `T delegate()` but WASM validator
                     // requires precise delegate type
@@ -463,7 +552,7 @@ Symbol* toSymbol(Dsymbol s)
              * They get compiled into one .obj file with the `oneobj` setting.
              * https://issues.dlang.org/show_bug.cgi?id=24129
              */
-            if (driverParams.oneobj)
+            if (driverParams.oneobj && !wasmCtfeBuildActive)
             {
                 auto mod = fd.getModule();
                 if (mod &&
@@ -520,7 +609,7 @@ Symbol* toSymbol(Dsymbol s)
 
             // WASM validator requires correct type. toObjFile sets them only when a body is emitted,
             // so external member/nested declarations would miss the hidden this pointer
-            if (target.isWasm)
+            if (wasmGlue())
             {
                 if (fd.isNested())
                     f.Fflags |= Fnested;
@@ -669,11 +758,15 @@ Symbol* toSymbol(Dsymbol s)
     }
 
     if (auto csym = cast(Symbol*)s.csym)
+    {
+        wasmCtfeRecord(s);
         return csym;
+    }
 
     scope ToSymbol v = new ToSymbol();
     s.accept(v);
     s.csym = v.result;
+    wasmCtfeRecord(s);
 
     if (isDllImported(s))
     {
@@ -783,6 +876,7 @@ Symbol* toVtblSymbol(ClassDeclaration cd, bool genCsymbol = true)
 
         auto vtbl = cd.vtblSymbol();
         vtbl.csym = s;
+        wasmCtfeRecord(vtbl);
     }
     return cast(Symbol*)cd.vtblsym.csym;
 }
@@ -802,6 +896,7 @@ Symbol* toInitializer(EnumDeclaration ed)
         if (isDllImported(ed))
             s.Sisym = createImport(s, ed.loc);
         ed.sinit = s;
+        wasmCtfeRecord(ed);
     }
     return cast(Symbol*)ed.sinit;
 }
@@ -837,6 +932,7 @@ Symbol* toInitializer(AggregateDeclaration ad)
         {
             auto bzsave = bzeroSymbol;
             ad.sinit = getBzeroSymbol();
+            wasmCtfeRecord(ad);
 
             // Ensure emitted only once per object file
             if (bzsave && bzeroSymbol != bzsave)
@@ -870,6 +966,7 @@ Symbol* toInitializer(AggregateDeclaration ad)
             if (isDllImported(ad))
                 s.Sisym = createImport(s, ad.loc);
             ad.sinit = s;
+            wasmCtfeRecord(ad);
         }
     }
     return cast(Symbol*)ad.sinit;

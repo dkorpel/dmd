@@ -19,9 +19,11 @@ import dmd.backend.symbol;
 import dmd.backend.ty;
 import dmd.backend.type;
 
+import dmd.root.array;
 import dmd.root.rmem;
 
 import dmd.glue;
+import dmd.glue.tocsym : wasmGlue;
 import dmd.glue.tocvdebug;
 
 import dmd.astenums;
@@ -88,6 +90,17 @@ tym_t modToTym(MOD mod) pure @safe
 package(dmd.glue)
 type* Type_toCtype(Type t)
 {
+    import dmd.glue.tocsym : wasmCtfeBuildActive;
+    if (wasmCtfeBuildActive && cast(void*) t !in wasmCtfeCtypeSeen)
+    {
+        wasmCtfeCtypeSeen[cast(void*) t] = true;
+        wasmCtfeCtypeTouched.push(t);
+        if (t.ctype)
+        {
+            wasmCtfeCtypeSave[cast(void*) t] = cast(type*) t.ctype;
+            t.ctype = null;
+        }
+    }
     if (t.ctype)
         return cast(type*)t.ctype;
 
@@ -255,7 +268,7 @@ type* Type_toCtype(Type t)
                 t.ctype = Type_toCtype(Type.tvoid);
             }
             else if (sym.ident == Id.__c_long ||
-                     (!target.isWasm &&
+                     (!wasmGlue() &&
                       (sym.ident == Id.__c_complex_float ||
                        sym.ident == Id.__c_complex_double ||
                        sym.ident == Id.__c_complex_real)))
@@ -363,4 +376,23 @@ type* Type_toCtype(Type t)
 
     t.ctype = tr;
     return tr;
+}
+
+private __gshared Array!Type wasmCtfeCtypeTouched;
+private __gshared bool[void*] wasmCtfeCtypeSeen;
+private __gshared type*[void*] wasmCtfeCtypeSave;
+
+package(dmd.glue)
+void wasmCtfeWipeCtypes()
+{
+    foreach (t; wasmCtfeCtypeTouched[])
+    {
+        if (auto p = cast(void*) t in wasmCtfeCtypeSave)
+            t.ctype = *p;
+        else
+            t.ctype = null;
+    }
+    wasmCtfeCtypeTouched.setDim(0);
+    wasmCtfeCtypeSeen.clear();
+    wasmCtfeCtypeSave.clear();
 }
