@@ -206,6 +206,15 @@ void wasmCtfeRecordTypeInfo(TypeInfoDeclaration tid)
     wasmCtfeTypeInfos.push(tid);
 }
 
+package(dmd.glue) __gshared const(char)* wasmCtfePoisoned;
+
+package(dmd.glue)
+void wasmCtfePoison(const(char)* why)
+{
+    if (wasmCtfeBuildActive && !wasmCtfePoisoned)
+        wasmCtfePoisoned = why;
+}
+
 package(dmd.glue)
 void wasmCtfeWipeCaches()
 {
@@ -556,7 +565,7 @@ Symbol* toSymbol(Dsymbol s)
         {
             /* @__ctfe functions cannot be used at runtime
              */
-            if (fd.storage_class & STC.ctfeOnly)
+            if (fd.storage_class & STC.ctfeOnly && !wasmCtfeBuildActive)
             {
                 auto eSink = global.errorSink;
                 eSink.error(fd.loc, "function `%s` is `@__ctfe` and cannot be used at runtime", fd.toPrettyChars());

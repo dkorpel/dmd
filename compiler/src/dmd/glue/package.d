@@ -1354,6 +1354,16 @@ private void obj_end(ref OutBuffer objbuf, Library library, const(char)[] objfil
     }
 }
 
+private bool wasmCtfeAggReady(AggregateDeclaration ad)
+{
+    if (ad.sizeok != Sizeok.done)
+        return false;
+    foreach (v; ad.fields)
+        if (v.semanticRun < PASS.semantic2done)
+            return false;
+    return true;
+}
+
 public bool wasmCtfeGenerate(FuncDeclaration root, ref OutBuffer objbuf, out const(char)[][] unresolved)
 {
     import dmd.dmsc : backend_init_wasm_ctfe, backend_reinit_host;
@@ -1372,7 +1382,9 @@ public bool wasmCtfeGenerate(FuncDeclaration root, ref OutBuffer objbuf, out con
     wasmSelfLink = true;
     wasmSelfLinkUnresolved = null;
     wasmCtfeBuildActive = true;
+    wasmCtfePoisoned = null;
 
+    const oldGag = global.startGagging();
     obj_start(objbuf, "__wasmctfe.d");
     const id = mangleExact(root);
     WasmObj_registerExportName(id[0 .. strlen(id)], id[0 .. strlen(id)]);
@@ -1381,15 +1393,43 @@ public bool wasmCtfeGenerate(FuncDeclaration root, ref OutBuffer objbuf, out con
     {
         if (auto fd = d.isFuncDeclaration())
         {
+            if (auto ad = fd.isMember())
+            {
+                if (ad.semanticRun < PASS.semanticdone)
+                    continue;
+            }
             fd.functionSemantic3();
             if (fd.semanticRun < PASS.semantic3done)
                 continue;
         }
+        else if (auto ad = d.isAggregateDeclaration())
+        {
+            if (!wasmCtfeAggReady(ad))
+                continue;
+        }
+        else if (auto vd = d.isVarDeclaration())
+        {
+            if (!vd.isTypeInfoDeclaration())
+            {
+                auto tbv = vd.type.toBasetype();
+                AggregateDeclaration tad = null;
+                if (auto ts = tbv.isTypeStruct())
+                    tad = ts.sym;
+                else if (auto tc = tbv.isTypeClass())
+                    tad = tc.sym;
+                if (tad && !wasmCtfeAggReady(tad))
+                    continue;
+            }
+        }
+        if (getenv("DMD_CTFE_TRACEGEN"))
+            fprintf(stderr, "wasm-ctfe gen: %s\n", d.toPrettyChars());
         toObjFile(d, false);
     }
     if (global.errors == startErrors)
         objmod.term("__wasmctfe.wasm");
     objmod = null;
+    if (global.endGagging(oldGag))
+        wasmCtfePoison("gagged errors");
     unresolved = wasmSelfLinkUnresolved;
 
     wasmCtfeBuildActive = false;
@@ -1398,6 +1438,11 @@ public bool wasmCtfeGenerate(FuncDeclaration root, ref OutBuffer objbuf, out con
     wasmSelfLink = selfLinkSave;
     wasmSelfLinkUnresolved = null;
     backend_reinit_host();
+    if (wasmCtfePoisoned)
+    {
+        unresolved = null;
+        return false;
+    }
     return global.errors == startErrors;
 }
 

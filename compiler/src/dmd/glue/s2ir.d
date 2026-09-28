@@ -146,6 +146,25 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
 
         //printf("IfStatement.toIR('%s')\n", s.condition.toChars());
 
+        if (wasmCtfeBuildActive)
+        {
+            int ctfeCond = s.isIfCtfeBlock() ? 1 : 0;
+            if (auto ne = s.condition.isNotExp())
+                if (auto cv = ne.e1.isVarExp())
+                    if (cv.var.ident == Id.ctfe)
+                        ctfeCond = -1;
+            if (ctfeCond)
+            {
+                Statement live = ctfeCond > 0 ? s.ifbody : s.elsebody;
+                if (live)
+                {
+                    StmtState ctfeState = StmtState(stmtstate, s);
+                    Statement_toIR(live, irs, &ctfeState);
+                }
+                return;
+            }
+        }
+
         StmtState mystate = StmtState(stmtstate, s);
 
         // bexit is the block that gets control after this IfStatement is done
@@ -1446,6 +1465,7 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
     void visitInlineAsm(InlineAsmStatement s)
 //    { .visit(irs, s); }
     {
+        wasmCtfePoison("inline assembly");
         block* bpre;
         block* basm;
         Symbol* sym;

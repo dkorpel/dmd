@@ -73,6 +73,7 @@ struct wasmtime_table_t
 {
     ulong store_id;
     uint __private1;
+    uint __pad;
     uint __private2;
 }
 
@@ -80,6 +81,7 @@ struct wasmtime_memory_t
 {
     ulong store_id;
     uint __private1;
+    uint __pad;
     uint __private2;
 }
 
@@ -88,6 +90,7 @@ struct wasmtime_global_t
     ulong store_id;
     uint __private1;
     uint __private2;
+    uint __private3;
 }
 
 struct wasmtime_instance_t
@@ -197,6 +200,11 @@ bool wasmtime_caller_export_get(wasmtime_caller_t*, const(char)* name, size_t na
 
 ubyte* wasmtime_memory_data(const(wasmtime_context_t)*, const(wasmtime_memory_t)*);
 size_t wasmtime_memory_data_size(const(wasmtime_context_t)*, const(wasmtime_memory_t)*);
+
+wasmtime_error_t* wasmtime_memory_grow(wasmtime_context_t*, const(wasmtime_memory_t)*, ulong delta, ulong* prev_size);
+
+void wasmtime_global_get(wasmtime_context_t*, const(wasmtime_global_t)*, wasmtime_val_t*);
+wasmtime_error_t* wasmtime_global_set(wasmtime_context_t*, const(wasmtime_global_t)*, const(wasmtime_val_t)*);
 
 wasm_trap_t* wasmtime_trap_new(const(char)* msg, size_t msg_len);
 void wasmtime_error_message(const(wasmtime_error_t)*, wasm_name_t*);

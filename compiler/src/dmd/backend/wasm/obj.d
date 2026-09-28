@@ -591,7 +591,7 @@ private bool emitExportSection(ref OutBuffer out_, ref WasmModule wmod)
         if (f.exported)
             ++count;
     if (wasmSelfLink)
-        count += wasmSelfLinkImportMemory ? 1 : 2;
+        count += wasmSelfLinkImportMemory ? 2 : 3;
     if (!count)
         return false;
     s.writeuLEB128(count);
@@ -613,6 +613,9 @@ private bool emitExportSection(ref OutBuffer out_, ref WasmModule wmod)
         }
         appendName(*s, "__indirect_function_table");
         s.writeByte(WASM_EXPORT.TABLE);
+        s.writeuLEB128(0);
+        appendName(*s, "__stack_pointer");
+        s.writeByte(WASM_EXPORT.GLOBAL);
         s.writeuLEB128(0);
     }
     writeSection(out_, WASM_SECTION.export_, s);

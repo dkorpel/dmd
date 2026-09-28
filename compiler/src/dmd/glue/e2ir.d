@@ -708,7 +708,7 @@ elem* toElem(Expression e, ref IRState irs)
          */
         if (se.op == EXP.variable && v && v.ident == Id.ctfe)
         {
-            return el_long(totym(se.type), 0);
+            return el_long(totym(se.type), wasmCtfeBuildActive ? 1 : 0);
         }
 
         if (FuncLiteralDeclaration fld = se.var.isFuncLiteralDeclaration())
@@ -732,21 +732,7 @@ elem* toElem(Expression e, ref IRState irs)
         {
             if (auto tf = fd.type.isTypeFunction())
             {
-                if (tf.isCtfeOnly)
-                {
-                    irs.eSink.error(se.loc, "function `%s` is `@__ctfe` and cannot be used at runtime", fd.toPrettyChars());
-                    return el_long(TYsize_t, 0);
-                }
-            }
-        }
-
-        /* Check for @__ctfe functions - they cannot be referenced at runtime
-         */
-        if (FuncDeclaration fd = se.var.isFuncDeclaration())
-        {
-            if (auto tf = fd.type.isTypeFunction())
-            {
-                if (tf.isCtfeOnly)
+                if (tf.isCtfeOnly && !wasmCtfeBuildActive)
                 {
                     irs.eSink.error(se.loc, "function `%s` is `@__ctfe` and cannot be used at runtime", fd.toPrettyChars());
                     return el_long(TYsize_t, 0);
@@ -2402,6 +2388,8 @@ elem* toElem(Expression e, ref IRState irs)
         }
         else if (t1.isStaticOrDynamicArray() && t2.isStaticOrDynamicArray())
         {
+            if (wasmCtfeBuildActive && !ie.e1.isNullExp() && !ie.e2.isNullExp())
+                wasmCtfePoison("array identity compare");
 
             elem* ea1 = toElem(ie.e1, irs);
             ea1 = array_toDarray(t1, ea1);
@@ -6540,6 +6528,8 @@ elem* sarray_toDarray(Loc loc, Type tfrom, Type tto, elem* e)
 elem* getTypeInfo(Expression e, Type t, ref IRState irs)
 {
     assert(t.ty != Terror);
+    if (wasmCtfeBuildActive && t.toBasetype().ty == Taarray)
+        wasmCtfePoison("associative array");
     TypeInfo_toObjFile(e, e.loc, t);
     elem* result = el_ptr(toExtSymbol(t.vtinfo));
     return result;
