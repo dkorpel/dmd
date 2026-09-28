@@ -134,7 +134,7 @@ public Expression ctfeInterpret(Expression e)
 
     ctfeGlobals.region.release(rgnpos);
 
-    if (wasmResult !is null)
+    if (wasmResult !is null && !result.isErrorExp())
         wasmCtfeCompare(e, result, wasmResult);
 
     return result;
@@ -4858,8 +4858,15 @@ public:
 
         if (fd && fd.semanticRun >= PASS.semantic3done && fd.hasSemantic3Errors)
         {
-            eSink.error(e.loc, "CTFE failed because of previous errors in `%s`", fd.toErrMsg());
+            import dmd.wasmctfe : wasmCtfeTakeForcedSem3Error;
             result = CTFEExp.cantexp;
+            if (wasmCtfeTakeForcedSem3Error(fd))
+            {
+                if (!global.gag)
+                    showCtfeBackTrace(e, fd);
+                return;
+            }
+            eSink.error(e.loc, "CTFE failed because of previous errors in `%s`", fd.toErrMsg());
             return;
         }
 

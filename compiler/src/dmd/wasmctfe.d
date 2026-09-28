@@ -16,6 +16,7 @@ import dmd.expression;
 import dmd.func;
 import dmd.globals;
 import dmd.id;
+import dmd.identifier;
 import dmd.location;
 import dmd.mangle : mangleExact;
 import dmd.mtype;
@@ -56,6 +57,14 @@ struct WasmCtfeStats
 }
 
 __gshared WasmCtfeStats wasmCtfeStats;
+
+bool wasmCtfeBuildActiveNow()
+{
+    if (wasmCtfeMode() == WasmCtfeMode.off)
+        return false;
+    import dmd.glue : wasmCtfeBuildInProgress;
+    return wasmCtfeBuildInProgress();
+}
 
 bool wasmCtfeLoweringActive() pure nothrow @nogc @trusted
 {
@@ -152,7 +161,30 @@ private bool ipResultEqual(Expression astResult, Expression wasmResult)
                 {
                     auto el = ale[i];
                     auto ie = el ? el.isIntegerExp() : null;
-                    if (!ie || cast(dchar) ie.toInteger() != wse.getCodeUnit(i))
+                    if (!ie || cast(ulong) ie.toInteger() != wse.getIndex(i))
+                    {
+                        same = false;
+                        break;
+                    }
+                }
+                if (same)
+                    return true;
+            }
+        }
+    }
+    if (auto ase = astResult.isStringExp())
+    {
+        if (auto wale = wasmResult.isArrayLiteralExp())
+        {
+            const n = wale.elements ? wale.elements.length : 0;
+            if (n == ase.len)
+            {
+                bool same = true;
+                foreach (i; 0 .. n)
+                {
+                    auto el = wale[i];
+                    auto ie = el ? el.isIntegerExp() : null;
+                    if (!ie || cast(ulong) ie.toInteger() != ase.getIndex(i))
                     {
                         same = false;
                         break;
@@ -233,22 +265,189 @@ void wasmCtfeCompare(Expression e, Expression astResult, Expression wasmResult)
 Expression tryWasmCtfe(Expression e)
 {
     auto ce = e.isCallExp();
-    if (!ce || !ce.f)
-        return null;
     if (mode == WasmCtfeMode.codegen)
     {
-        wasmCtfeCodegenTest(ce.f);
+        if (ce && ce.f)
+            wasmCtfeCodegenTest(ce.f);
         return null;
     }
     if (mode == WasmCtfeMode.inproc || mode == WasmCtfeMode.verify)
     {
         wasmCtfeStats.calls++;
-        Expression thisExp;
-        if (auto dve = ce.e1.isDotVarExp())
-            thisExp = dve.e1;
-        return tryWasmCtfeInproc(ce.f, thisExp, ce.arguments ? (*ce.arguments)[] : null, e.type, e.loc);
+        if (ce && ce.f)
+        {
+            Expression thisExp;
+            if (auto dve = ce.e1.isDotVarExp())
+                thisExp = dve.e1;
+            if (auto r = tryWasmCtfeInproc(ce.f, thisExp, ce.arguments ? (*ce.arguments)[] : null, e.type, e.loc))
+                return r;
+        }
+        return tryWasmCtfeExpr(e);
     }
+    if (!ce || !ce.f)
+        return null;
     return tryWasmCtfeCall(ce.f, ce.arguments ? (*ce.arguments)[] : null, e.type, e.loc);
+}
+
+private bool ipHasCall(Expression e)
+{
+    import dmd.visitor.postorder : walkPostorder;
+    extern (C++) final class HasCall : StoppableVisitor
+    {
+        alias visit = typeof(super).visit;
+        override void visit(Expression) {}
+        override void visit(CallExp) { stop = true; }
+    }
+    scope v = new HasCall();
+    return walkPostorder(e, v);
+}
+
+private bool ipExprSupported(Expression e)
+{
+    import dmd.visitor.postorder : walkPostorder;
+    extern (C++) final class Scan : StoppableVisitor
+    {
+        alias visit = typeof(super).visit;
+        override void visit(Expression e)
+        {
+            if (!e.type)
+                return;
+            const ty = e.type.toBasetype().ty;
+            if (ty == Taarray || ty == Tclass || ty == Tfloat80
+                || ty == Timaginary80 || ty == Tcomplex80)
+                stop = true;
+        }
+        override void visit(ArrayLiteralExp e)
+        {
+            visit(cast(Expression) e);
+            if (stop)
+                return;
+            auto tb = e.type ? e.type.toBasetype() : null;
+            if (tb && tb.ty == Tarray && e.elements && e.elements.length && !e.onstack && !e.lowering)
+                stop = true;
+        }
+        override void visit(CatExp e)
+        {
+            if (!e.lowering)
+                stop = true;
+        }
+        override void visit(CatAssignExp e)
+        {
+            if (!e.lowering)
+                stop = true;
+        }
+        override void visit(NewExp e)
+        {
+            if (!e.lowering)
+                stop = true;
+        }
+        override void visit(AssignExp e)
+        {
+            if (e.e1.isArrayLengthExp())
+                stop = true;
+        }
+        override void visit(FuncExp)
+        {
+            stop = true;
+        }
+        override void visit(CallExp e)
+        {
+            visit(cast(Expression) e);
+            if (stop || !e.f)
+                return;
+            if (auto m = e.f.getModule())
+                if (m.filetype == FileType.c)
+                    stop = true;
+        }
+        override void visit(DelegateExp)
+        {
+            stop = true;
+        }
+        override void visit(CastExp e)
+        {
+            visit(cast(Expression) e);
+            if (stop || e.lowering)
+                return;
+            auto tb = e.type ? e.type.toBasetype() : null;
+            auto fb = e.e1.type ? e.e1.type.toBasetype() : null;
+            if (!tb || !fb)
+                return;
+            if (tb.ty == Tclass || fb.ty == Tclass)
+                stop = true;
+            else if (tb.ty == Tarray && fb.ty == Tarray
+                && tb.nextOf().size() != fb.nextOf().size())
+                stop = true;
+        }
+    }
+    scope v = new Scan();
+    return !walkPostorder(e, v);
+}
+
+private void ipAppendSymKey(Expression e, ref OutBuffer kb)
+{
+    import dmd.visitor.postorder : walkPostorder;
+    extern (C++) final class SymKey : StoppableVisitor
+    {
+        OutBuffer* kb;
+        alias visit = typeof(super).visit;
+        override void visit(Expression) {}
+        override void visit(VarExp e) { put(e.var); }
+        override void visit(SymOffExp e) { put(e.var); }
+        override void visit(DotVarExp e) { put(e.var); }
+        override void visit(FuncExp e) { put(e.fd); }
+        override void visit(CallExp e) { if (e.f) put(e.f); }
+        extern (D) void put(Dsymbol s)
+        {
+            kb.writeByte(0);
+            kb.writestring(s.toPrettyChars());
+        }
+    }
+    scope v = new SymKey();
+    v.kb = &kb;
+    walkPostorder(e, v);
+}
+
+Expression tryWasmCtfeExpr(Expression e)
+{
+    if (!e.type || (!ipScalarType(e.type) && !ipMemType(e.type)))
+        return null;
+    if (e.isIntegerExp() || e.isRealExp() || e.isStringExp() || e.isNullExp()
+        || e.isArrayLiteralExp() || e.isStructLiteralExp() || e.isVarExp()
+        || e.isSymOffExp() || e.isFuncExp())
+        return null;
+    if (!ipHasCall(e))
+        return null;
+    if (!ipExprSupported(e))
+        return null;
+    auto mod = Module.rootModule;
+    if (!mod)
+        return null;
+    OutBuffer kb;
+    kb.writestring("expr:");
+    kb.writestring(e.loc.toChars());
+    kb.writeByte(0);
+    kb.writestring(e.toChars());
+    ipAppendSymKey(e, kb);
+    if (!ipCacheInit)
+    {
+        ipResultCache._init(64);
+        ipCacheInit = true;
+    }
+    if (auto sv = ipResultCache.lookup(kb[]))
+    {
+        wasmCtfeStats.cacheHits++;
+        return sv.value;
+    }
+    auto tf = new TypeFunction(ParameterList(), e.type, LINK.d);
+    auto fd = new FuncDeclaration(e.loc, e.loc, Identifier.generateId("__wasmctfe_expr"), STC.none, tf);
+    fd.parent = mod;
+    fd._linkage = LINK.d;
+    fd.fbody = new ReturnStatement(e.loc, e);
+    fd.semanticRun = PASS.semantic3done;
+    auto r = tryWasmCtfeInproc(fd, null, null, e.type, e.loc);
+    if (auto sv = ipResultCache.insert(kb[], null))
+        sv.value = r;
+    return r;
 }
 
 void wasmCtfeCodegenTest(FuncDeclaration fd)
@@ -754,6 +953,26 @@ bool insideTemplateInstance(Dsymbol s)
 
 __gshared byte[void*] legalityVerdicts;
 __gshared uint[void*] attemptBudget;
+__gshared bool[void*] forcedSem3Errors;
+
+public void ipForceSemantic3(FuncDeclaration fd)
+{
+    if (fd.semanticRun >= PASS.semantic3done)
+        return;
+    fd.functionSemantic3();
+    if (fd.errors || fd.hasSemantic3Errors)
+        forcedSem3Errors[cast(void*) fd] = true;
+}
+
+public bool wasmCtfeTakeForcedSem3Error(FuncDeclaration fd)
+{
+    if (cast(void*) fd in forcedSem3Errors)
+    {
+        forcedSem3Errors.remove(cast(void*) fd);
+        return true;
+    }
+    return false;
+}
 enum attemptBudgetMax = 16;
 
 int scanLegalityImpl(FuncDeclaration fd, ref bool[void*] inProgress)
@@ -776,7 +995,7 @@ int scanLegalityImpl(FuncDeclaration fd, ref bool[void*] inProgress)
         return ok ? 1 : 0;
     }
     if (fd.semanticRun < PASS.semantic3done && !insideTemplateInstance(fd))
-        fd.functionSemantic3();
+        ipForceSemantic3(fd);
     if (fd.semanticRun < PASS.semantic3done)
     {
         inProgress.remove(cast(void*) fd);
@@ -1887,6 +2106,15 @@ private IpModule* ipGetModule(FuncDeclaration fd)
         ipModuleFailed[cast(void*) fd] = true;
         return null;
     }
+    if (keepFiles)
+    {
+        import dmd.utils : writeFile;
+        char[256] name = void;
+        snprintf(name.ptr, name.length, "wasmctfe_ip_%u.wasm", seq);
+        seq++;
+        writeFile(Loc.initial, name[0 .. strlen(name.ptr)], buf[]);
+        fprintf(stderr, "wasm-ctfe inproc: kept %s = %s\n", name.ptr, fd.toPrettyChars());
+    }
     if (unresolved.length)
     {
         if (verbose)
@@ -1939,9 +2167,12 @@ Expression tryWasmCtfeInproc(FuncDeclaration fd, Expression thisExp, Expression[
     if (!fd || !resultType)
         return bail(fd, "no fd/result type");
     if (fd.semanticRun < PASS.semantic3done)
-        fd.functionSemantic3();
+        ipForceSemantic3(fd);
     if (fd.semanticRun < PASS.semantic3done || !fd.fbody || fd.errors)
         return bail(fd, "not semantic3done");
+    if (auto m = fd.getModule())
+        if (m.filetype == FileType.c)
+            return bail(fd, "importc");
     auto tf = fd.type ? fd.type.isTypeFunction() : null;
     const bool isCtor = fd.isCtorDeclaration() !is null;
     if (!tf || (tf.isRef && !isCtor) || tf.parameterList.varargs != VarArg.none)
@@ -2528,7 +2759,7 @@ private bool ipEncodeArg(ubyte[] mem, ref ulong cur, Expression arg, out ulong l
         if (cur + len * sz > mem.length)
             return false;
         foreach (i; 0 .. se.len)
-            ipWrite(mem, cur + i * sz, se.getCodeUnit(i), sz);
+            ipWrite(mem, cur + i * sz, se.getIndex(i), sz);
         cur += len * sz;
         return true;
     }
@@ -2636,7 +2867,7 @@ private bool ipEncodeVal(ubyte[] mem, ulong addr, Type t, Expression e, int dept
         if (se.len * esz > sz)
             return false;
         foreach (i; 0 .. se.len)
-            ipWrite(mem, addr + i * esz, se.getCodeUnit(i), esz);
+            ipWrite(mem, addr + i * esz, se.getIndex(i), esz);
         return true;
     }
     if (auto ale = e.isArrayLiteralExp())

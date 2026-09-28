@@ -4100,6 +4100,13 @@ elem* toElem(Expression e, ref IRState irs)
                 * Avoids the whole variadic arg mess.
                 */
 
+                if (!ale.lowering && wasmCtfeBuildActive)
+                {
+                    wasmCtfePoison("unlowered array literal");
+                    e = el_long(TYnptr, 0);
+                }
+                else
+                {
                 if (!ale.lowering)
                 {
                     fprintf(stderr, "Internal Error: array literal %s at %s should have been lowered to a _d_arrayliteralTX template\n",
@@ -4114,6 +4121,7 @@ elem* toElem(Expression e, ref IRState irs)
                 e = el_combine(e, ExpressionsToStaticArray(irs, ale.loc, ale.elements, &stmp, 0, ale.basis));
 
                 e = el_combine(e, el_var(stmp));
+                }
             }
         }
         else
@@ -4556,6 +4564,23 @@ elem* toElemRVO(Expression e, elem* ehidden, ref IRState irs, Type forceType = n
 /**************************************
  * Mirrors logic in Dsymbol_canThrow().
  */
+private bool wasmCtfeExpReferencesVar(Expression ex, VarDeclaration vd)
+{
+    import dmd.visitor.postorder : walkPostorder;
+    import dmd.visitor : StoppableVisitor;
+    extern (C++) final class RefScan : StoppableVisitor
+    {
+        alias visit = typeof(super).visit;
+        VarDeclaration v;
+        override void visit(Expression e) {}
+        override void visit(VarExp e) { if (e.var is v) stop = true; }
+        override void visit(SymOffExp e) { if (e.var is v) stop = true; }
+    }
+    scope rs = new RefScan();
+    rs.v = vd;
+    return walkPostorder(ex, rs);
+}
+
 elem* Dsymbol_toElem(Dsymbol s, ref IRState irs)
 {
     //printf("Dsymbol_toElem() %s\n", s.toChars());
@@ -4583,7 +4608,20 @@ elem* Dsymbol_toElem(Dsymbol s, ref IRState irs)
             if (vd._init)
             {
                 if (auto ie = vd._init.isExpInitializer())
+                {
                     e = toElem(ie.exp, irs);
+                    if (wasmCtfeBuildActive && ie.exp.type
+                        && ie.exp.type.toBasetype().ty != Tvoid
+                        && !wasmCtfeExpReferencesVar(ie.exp, vd))
+                    {
+                        const tym = tybasic(sp.Stype.Tty);
+                        elem* ev = el_una(OPind,
+                            (tym == TYarray || tym == TYstruct) ? TYstruct : tym, el_ptr(sp));
+                        if (tym == TYarray || tym == TYstruct)
+                            ev.ET = sp.Stype;
+                        e = elAssign(ev, e, vd.type, sp.Stype);
+                    }
+                }
             }
 
             /* Mark the point of construction of a variable that needs to be destructed.
@@ -6017,7 +6055,7 @@ elem* callfunc(Loc loc,
             assert(cast(int)vindex >= 0);
 
             // Build *(ev + vindex * 4)
-            if (target.isX86)
+            if (target.isX86 && !wasmCtfeBuildActive)
                 assert(tysize(TYnptr) == 4);
             ec = el_bin(OPadd,TYnptr,ev,el_long(TYsize_t, vindex * tysize(TYnptr)));
             ec = el_una(OPind,TYnptr,ec);

@@ -553,7 +553,7 @@ void FuncDeclaration_toObjFile(FuncDeclaration fd, bool multiobj)
     wasmCtfeRecordObjPass(fd, fd.semanticRun);
     fd.semanticRun = PASS.obj;
 
-    if (global.params.v.verbose)
+    if (global.params.v.verbose && !wasmCtfeBuildActive)
     {
         auto eSink = global.errorSink;
         eSink.message(Loc.init, "function  %s", fd.toPrettyChars());
@@ -1364,6 +1364,11 @@ private bool wasmCtfeAggReady(AggregateDeclaration ad)
     return true;
 }
 
+public bool wasmCtfeBuildInProgress()
+{
+    return wasmCtfeBuildActive;
+}
+
 public bool wasmCtfeGenerate(FuncDeclaration root, ref OutBuffer objbuf, out const(char)[][] unresolved)
 {
     import dmd.dmsc : backend_init_wasm_ctfe, backend_reinit_host;
@@ -1383,6 +1388,10 @@ public bool wasmCtfeGenerate(FuncDeclaration root, ref OutBuffer objbuf, out con
     wasmSelfLinkUnresolved = null;
     wasmCtfeBuildActive = true;
     wasmCtfePoisoned = null;
+    {
+        import dmd.backend.wasm.codgen : wasmCGTolerateUnsupported;
+        wasmCGTolerateUnsupported = true;
+    }
 
     const oldGag = global.startGagging();
     obj_start(objbuf, "__wasmctfe.d");
@@ -1398,7 +1407,10 @@ public bool wasmCtfeGenerate(FuncDeclaration root, ref OutBuffer objbuf, out con
                 if (ad.semanticRun < PASS.semanticdone)
                     continue;
             }
-            fd.functionSemantic3();
+            {
+                import dmd.wasmctfe : ipForceSemantic3;
+                ipForceSemantic3(fd);
+            }
             if (fd.semanticRun < PASS.semantic3done)
                 continue;
         }
@@ -1420,6 +1432,15 @@ public bool wasmCtfeGenerate(FuncDeclaration root, ref OutBuffer objbuf, out con
                 if (tad && !wasmCtfeAggReady(tad))
                     continue;
             }
+            if (vd._init)
+            {
+                auto ai = vd._init.isArrayInitializer();
+                if ((ai && !ai.type) || vd._init.isStructInitializer())
+                {
+                    wasmCtfePoison("unresolved initializer");
+                    continue;
+                }
+            }
         }
         if (getenv("DMD_CTFE_TRACEGEN"))
             fprintf(stderr, "wasm-ctfe gen: %s\n", d.toPrettyChars());
@@ -1433,6 +1454,10 @@ public bool wasmCtfeGenerate(FuncDeclaration root, ref OutBuffer objbuf, out con
     unresolved = wasmSelfLinkUnresolved;
 
     wasmCtfeBuildActive = false;
+    {
+        import dmd.backend.wasm.codgen : wasmCGTolerateUnsupported;
+        wasmCGTolerateUnsupported = false;
+    }
     wasmCtfeWipeCaches();
     wasmCtfeWipeCtypes();
     wasmSelfLink = selfLinkSave;

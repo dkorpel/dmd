@@ -63,6 +63,8 @@ import dmd.common.outbuffer;
 
 nothrow:
 
+__gshared bool wasmCGTolerateUnsupported;
+
 /// Returns: WASM type for element `e`
 WASM_TYPE wasmType(elem* e)
 {
@@ -2464,13 +2466,21 @@ bool genElem(ref WasmCG cg, elem* e)
     case OPnp_f16p:
     case OPf16p_np:
     case OPoffset:
+        if (wasmCGTolerateUnsupported)
+        {
+            cg.emit(OP.UNREACHABLE);
+            return true;
+        }
         printf("wasm codegen non-goal Eoper: %s\n", oper_str(e.Eoper));
         elem_print(e);
         assert(0);
 
     default:
         cg.emit(OP.UNREACHABLE);
-        debug { import core.stdc.stdio : printf; printf("unimplemented e.Eoper: %s\n", oper_str(e.Eoper)); elem_print(e); }
+        if (wasmCGTolerateUnsupported)
+            return true;
+        printf("unimplemented e.Eoper: %s\n", oper_str(e.Eoper));
+        elem_print(e);
         assert(0);
     }
 }

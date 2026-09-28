@@ -941,6 +941,11 @@ void templateInstanceSemantic(TemplateInstance tempinst, Scope* sc, ArgumentList
     {
         tempinst.minst = null;
     }
+    {
+        import dmd.wasmctfe : wasmCtfeBuildActiveNow;
+        if (tempinst.minst && wasmCtfeBuildActiveNow())
+            tempinst.minst = null;
+    }
 
     tempinst.gagged = (global.gag > 0);
 
@@ -1152,9 +1157,11 @@ void templateInstanceSemantic(TemplateInstance tempinst, Scope* sc, ArgumentList
             tempinst.inst.accept(v);
 
             if (!global.params.allInst &&
-                tempinst.minst) // if inst was not speculative...
+                (tempinst.minst ||
+                 (tempinst.inst.memberOf && !tempinst.inst.memberOf.isRoot())))
             {
-                assert(!tempinst.minst.isRoot()); // ... it was previously appended to a non-root module
+                if (tempinst.minst)
+                    assert(!tempinst.minst.isRoot()); // ... it was previously appended to a non-root module
                 // Append again to the root module members[], so that the instance will
                 // get codegen chances (depending on `tempinst.inst.needsCodegen()`).
                 tempinst.inst.appendToModuleMember();
@@ -1795,7 +1802,12 @@ private Dsymbols* appendToModuleMember(TemplateInstance ti)
         mi = (enc ? enc : ti.tempdecl).getModule();
         if (!mi.isRoot())
         {
-            if (mi.importedFrom)
+            bool keepNonRoot = false;
+            {
+                import dmd.wasmctfe : wasmCtfeBuildActiveNow;
+                keepNonRoot = !ti.minst && wasmCtfeBuildActiveNow();
+            }
+            if (mi.importedFrom && !keepNonRoot)
             {
                 mi = mi.importedFrom;
                 assert(mi.isRoot());

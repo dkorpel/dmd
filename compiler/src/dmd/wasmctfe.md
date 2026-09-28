@@ -228,3 +228,86 @@ byte-accurate memory model is *more* correct than the AST interpreter here.
 The verify comparator accepts an AST scalar against a wasm array literal when
 the first wasm element matches, to keep this known divergence from drowning
 out real mismatches.
+
+### static foreach evaluates before aggregate sizes are finalized
+`compilable/issue23391.d`: the same function body evaluated via
+`static foreach (t; MyZip().myarray)` returned length 0 while the identical
+`enum n = arr(R(false)).length` returned 1. Cause: static foreach expansion
+runs its CTFE call while other module members (here the element struct) still
+have `sizeok == Sizeok.fwd`. `Type_toCtype` then baked a backend struct type
+with `Sstructsize == 0`, so `registerShadow` computed alignment 0 and size 0:
+the loop variable and its spill temp collapsed onto shadow-frame offset 0,
+aliasing the saved sret pointer, and the element copy vanished. The
+`.length` result silently became 0 — and the by-mangled-name cache then
+poisoned every later evaluation of the same call in the module. Fix:
+`Type_toCtype` forces `determineSize` on structs during wasm-ctfe builds
+(`Sizeok.fwd` means "ready to compute", so this is safe). The AST
+interpreter never notices because it computes sizes lazily on demand.
+
+### ctfe-scope semantic skips the ExpInitializer-to-construct rewrite
+`interpret3.d` bug 11535 (`md5_digest11535`): passing an array literal to a
+`scope` slice parameter makes expressionsem wrap it as
+`(auto __arrayliteral_on_stack = [...] , cast(slice)tmp)`. In a normal
+function scope, declaration semantic rewrites the temp's ExpInitializer into
+a ConstructExp; in the CTFE evaluation scope (no `sc.func`) that rewrite is
+skipped. `Dsymbol_toElem` then compiled the initializer as a discarded value:
+the literal was materialized into one temp while the slice pointed at the
+never-written `__arrayliteral_on_stack` symbol — `__equals` compared
+garbage. e2ir now detects an ExpInitializer that never references its
+variable during wasm-ctfe builds and emits the missing store. Same hazard
+class as the skipped druntime lowerings: ctfe-scope semantic produces AST
+shapes native codegen never sees.
+
+### Unsupported operators degrade to traps during engine builds
+Druntime pulled `core.simd` x86 `__simd()` intrinsics (OPvector) into a
+worklist; the wasm backend used to `assert(0)` on any unsupported operator,
+killing the whole compiler process. During wasm-ctfe builds the backend now
+lowers unsupported operators to `unreachable` traps instead: if the
+evaluated path never executes them the result is unaffected (coverage on
+`interpret3.d` jumped from 185 to 349 verified evaluations), and if it does,
+the trap surfaces as a runtime failure rather than an ICE.
+
+### Verify mode must ignore engine results when the AST interpreter errored
+In `DMD_CTFE=verify`, several fail_compilation tests (ctfe10995, dbitfields,
+fail19123, ...) printed MISMATCH lines: the AST interpreter produced an
+ErrorExp (the test's expected diagnostic) while the engine produced a value
+or a different failure. Comparing against an error result is meaningless —
+the compare is now skipped when the native result `isErrorExp()`. Note this
+also masks accepts-invalid holes in the in-process path (it runs no legality
+scan yet); that gets addressed when the scanner moves into
+`tryWasmCtfeInproc`.
+
+### Eager semantic3 changes diagnostic flavor on erroneous functions
+The engine forces `functionSemantic3` on worklist functions before the AST
+interpreter would have. When that semantic3 itself fails, dinterpret's
+call-site check `semanticRun >= semantic3done && hasSemantic3Errors` fires
+and prints "CTFE failed because of previous errors in `f`" — but natively
+the first call reaches `interpretFunction`, fails inside `functionSemantic3`
+there, and produces only a silent `cantexp` plus the "called from here"
+backtrace note. Tests encode the native wording (fail208, fail216, fail4448,
+ice10599, ...). Fix: every eager-semantic3 site records a consume-once
+marker (`forcedSem3Errors`) when it detects errors; dinterpret's check
+consumes the marker on the first call and reproduces the native flavor
+(cantexp + backtrace), while later calls print the "previous errors"
+message exactly as native does. There are three eager sites — the legality
+scanner, the inproc entry, and the glue worklist — and all three must set
+the marker.
+
+### -m32 codegen asserts 64-bit-unsafe invariants during engine builds
+`diag7420.d -m32`: e2ir's virtual-call path asserts `tysize(TYnptr) == 4`
+on x86 targets, but engine builds run with wasm64 pointer sizes while
+`target.isX86` still reflects the host target. The assert is skipped when
+`wasmCtfeBuildActive`. Same hazard class as the OS-dependent `retStyle`
+checks: any `target.*` predicate consulted during an engine build sees the
+*host* target, not wasm.
+
+### Mutable statics with unanalyzed initializers crash the worklist
+`fail19447.d` segfaulted: `immutable int i = g19447(mh);` runs CTFE during
+phase-1 semantic, but `int[2] mh = [1, 2];` is a *mutable* static whose
+initializer semantic is deferred to semantic2. The engine worklist pulled
+`mh` in as a referenced data symbol and `toObjFile` hit
+`Initializer_toDt.visitArray` with `ai.type == null` — a raw, unsemantic'd
+ArrayInitializer. The worklist now poisons the build when it meets a
+variable whose ArrayInitializer has no type yet (or a StructInitializer).
+Natively the test errors out ("static variable `mh` cannot be read at
+compile time") before ever touching the initializer.
