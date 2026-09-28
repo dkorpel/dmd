@@ -345,9 +345,13 @@ reallocate via the bump allocator and write the new slice back through
 both the ref and the sret pointer. Signature on wasm64 is
 `(i64 sret, i64 ref, i32 dchar) -> ()`.
 
-### Array identity semantics diverge by design
-The AST interpreter treats structurally equal literals as identical:
-`static assert({ return [1] is [1]; }())` passes natively. The engine
-has real pointer semantics — two literals materialize at two addresses
-and `is` would be false. Non-null array identity compares stay poisoned
-until a decision is made on emulating interpreter identity.
+### Array identity is structural in CTFE — and engine builds emulate it
+The AST interpreter's `is` on arrays goes through `ctfeRawCmp`, i.e. it
+is a structural comparison: `static assert({ return [1] is [1]; }())`
+passes natively even though two literals are involved. The engine has
+real pointer semantics, so a pointer-pair compare would say false;
+engine builds instead lower non-null array identity to
+`len1 == len2 && memcmp(p1, p2, len1 * elemsize) == 0`. Exception:
+arrays of floating-point elements — the interpreter compares those
+elements with `==` (so `[double.nan] is [double.nan]` is *false*
+natively), which bitwise memcmp would get wrong; those stay poisoned.

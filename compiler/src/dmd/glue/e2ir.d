@@ -2388,15 +2388,38 @@ elem* toElem(Expression e, ref IRState irs)
         }
         else if (t1.isStaticOrDynamicArray() && t2.isStaticOrDynamicArray())
         {
-            if (wasmCtfeBuildActive && !ie.e1.isNullExp() && !ie.e2.isNullExp())
-                wasmCtfePoison("array identity compare");
-
             elem* ea1 = toElem(ie.e1, irs);
             ea1 = array_toDarray(t1, ea1);
             elem* ea2 = toElem(ie.e2, irs);
             ea2 = array_toDarray(t2, ea2);
 
-            e = el_bin(eop, totym(ie.type), ea1, ea2);
+            if (wasmCtfeBuildActive && !ie.e1.isNullExp() && !ie.e2.isNullExp()
+                && t1.nextOf().toBasetype().isFloating())
+            {
+                wasmCtfePoison("float array identity compare");
+                e = el_bin(eop, totym(ie.type), ea1, ea2);
+            }
+            else if (wasmCtfeBuildActive && !ie.e1.isNullExp() && !ie.e2.isNullExp())
+            {
+                const esz = t1.nextOf().size();
+                elem* c1 = el_same(ea1);
+                elem* c2 = el_same(ea2);
+                elem* elen1 = el_una(OP128_64, TYsize_t, ea1);
+                elem* elen2 = el_una(OP128_64, TYsize_t, ea2);
+                elem* c3 = el_same(elen1);
+                elem* eptr1 = el_una(OPmsw, TYnptr, c1);
+                elem* eptr2 = el_una(OPmsw, TYnptr, c2);
+                elem* ecount = el_bin(OPmul, TYsize_t, c3, el_long(TYsize_t, esz));
+                elem* ememcmp = el_bin(OPcall, TYint, el_var(getRtlsym(RTLSYM.MEMCMP)),
+                    el_params(ecount, eptr2, eptr1, null));
+                elem* ecmpc = el_bin(OPeqeq, TYint, ememcmp, el_long(TYint, 0));
+                elem* ecmpl = el_bin(OPeqeq, TYint, elen1, elen2);
+                e = el_bin(OPandand, totym(ie.type), ecmpl, ecmpc);
+                if (eop == OPne)
+                    e = el_bin(OPxor, totym(ie.type), e, el_long(totym(ie.type), 1));
+            }
+            else
+                e = el_bin(eop, totym(ie.type), ea1, ea2);
             elem_setLoc(e, ie.loc);
         }
         else
