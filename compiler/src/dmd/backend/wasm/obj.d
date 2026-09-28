@@ -182,6 +182,11 @@ private void checkSegFull(ref const WasmDataSeg ds)
 /// Append a new data segment of `size` bytes at the next `align_`-aligned
 /// linear-memory offset and make it the active segment.
 /// Returns: the segment's assigned linear-memory offset
+private uint ptrRelocSize()
+{
+    return I64() ? 8 : 4;
+}
+
 private uint pushDataSeg(uint size, uint align_, Symbol* sym, const(char)[] name)
 {
     const uint base = (wmod.dataHeap + (align_ - 1)) & ~(align_ - 1);
@@ -917,7 +922,7 @@ private bool emitRelocDataSection(ref OutBuffer out_, ref WasmModule wmod, uint 
         if (rel.segIdx >= wmod.dataSegs.length)
             continue;
         const uint offset = segDataStart[rel.segIdx] + rel.dataByteOffset;
-        if (rel.type == R_WASM.TABLE_INDEX_I32)
+        if (rel.type == R_WASM.TABLE_INDEX_I32 || rel.type == R_WASM.TABLE_INDEX_I64)
         {
             const uint funcIdx = funcIdxBySymOrName(wmod, rel.sym);
             if (funcIdx == uint.max || funcIdx >= funcToSymIdx.length)
@@ -925,7 +930,7 @@ private bool emitRelocDataSection(ref OutBuffer out_, ref WasmModule wmod, uint 
             uint sym = funcToSymIdx[funcIdx];
             if (sym == uint.max)
                 continue;
-            rels ~= EmitReloc(offset, R_WASM.TABLE_INDEX_I32, sym, 0);
+            rels ~= EmitReloc(offset, rel.type, sym, 0);
         }
         else
         {
@@ -934,7 +939,7 @@ private bool emitRelocDataSection(ref OutBuffer out_, ref WasmModule wmod, uint 
             uint sym = dataSymIdx(rel.sym);
             if (sym == uint.max)
                 continue;
-            rels ~= EmitReloc(offset, R_WASM.MEMORY_ADDR_I32, sym, rel.addend);
+            rels ~= EmitReloc(offset, rel.type, sym, rel.addend);
         }
     }
 
@@ -951,7 +956,7 @@ private bool emitRelocDataSection(ref OutBuffer out_, ref WasmModule wmod, uint 
         payload.writeByte(r.type);
         payload.writeuLEB128(r.offset);
         payload.writeuLEB128(r.sym);
-        if (r.type == R_WASM.MEMORY_ADDR_I32)
+        if (r.type == R_WASM.MEMORY_ADDR_I32 || r.type == R_WASM.MEMORY_ADDR_I64)
             payload.writesLEB128(cast(int) r.addend);
     }
 
@@ -1161,7 +1166,7 @@ private Symbol*[] collectRelocDataSyms(ref WasmModule wmod)
             if (r.type == R_WASM.MEMORY_ADDR_LEB)
                 add(cast(Symbol*) r.sym);
     foreach (ref const WasmModule.DataReloc r; wmod.dataRelocations)
-        if (r.type == R_WASM.MEMORY_ADDR_I32)
+        if (r.type == R_WASM.MEMORY_ADDR_I32 || r.type == R_WASM.MEMORY_ADDR_I64)
             add(cast(Symbol*) r.sym);
     return datasyms;
 }
@@ -1248,7 +1253,7 @@ void WasmObj_term2(const(char)[] objfilename, ref WasmModule wmod, ref OutBuffer
         {
             import dmd.backend.wasm.codgen : funcIndex;
             foreach (ref rel; wmod.dataRelocations)
-                if (rel.type == R_WASM.TABLE_INDEX_I32 && rel.sym)
+                if ((rel.type == R_WASM.TABLE_INDEX_I32 || rel.type == R_WASM.TABLE_INDEX_I64) && rel.sym)
                     funcIndex(rel.sym);
         }
         wmod.internPendingTypes();
@@ -1400,12 +1405,14 @@ void WasmObj_moduleinfo(Symbol* scc)
     if (!scc)
         return;
 
-    pushDataSeg(4, 4, null, "__minfo");
+    const uint width = ptrRelocSize();
+    pushDataSeg(width, width, null, "__minfo");
 
     const uint segIdx = wmod.activeSegIdx;
-    uint zero = 0;
-    wmod.dataSegs[segIdx].data.write(&zero, 4);
-    wmod.dataRelocations ~= WasmModule.DataReloc(segIdx, 0, R_WASM.MEMORY_ADDR_I32, scc, 0);
+    const ulong zero = 0;
+    wmod.dataSegs[segIdx].data.write(&zero, width);
+    wmod.dataRelocations ~= WasmModule.DataReloc(segIdx, 0,
+        I64() ? R_WASM.MEMORY_ADDR_I64 : R_WASM.MEMORY_ADDR_I32, scc, 0);
 
     wmod.segOpen = false;
 }
@@ -1663,12 +1670,14 @@ void WasmObj_reftodatseg(int seg, targ_size_t offset, targ_size_t val, uint targ
         }
         const uint segIdx = wmod.activeSegIdx;
         const uint dataOff = cast(uint) wmod.activeSeg.data.length();
-        uint zero = 0;
-        wmod.activeSeg.data.write(&zero, 4);
-        wmod.dataRelocations ~= WasmModule.DataReloc(segIdx, dataOff, R_WASM.MEMORY_ADDR_I32, ds.sym, addr - ds.offset);
+        const ulong zero = 0;
+        wmod.activeSeg.data.write(&zero, ptrRelocSize());
+        wmod.dataRelocations ~= WasmModule.DataReloc(segIdx, dataOff,
+            I64() ? R_WASM.MEMORY_ADDR_I64 : R_WASM.MEMORY_ADDR_I32, ds.sym, addr - ds.offset);
         return;
     }
-    wmod.activeSeg.data.write(&addr, 4);
+    const ulong abs = addr;
+    wmod.activeSeg.data.write(&abs, ptrRelocSize());
 }
 
 void WasmObj_reftocodeseg(int seg, targ_size_t offset, targ_size_t val)
@@ -1677,29 +1686,32 @@ void WasmObj_reftocodeseg(int seg, targ_size_t offset, targ_size_t val)
 
 int WasmObj_reftoident(int seg, targ_size_t offset, Symbol* s, targ_size_t val, int flags)
 {
+    const uint width = ptrRelocSize();
     auto active = wmod.activeSeg;
     if (!active)
-        return 4;
+        return width;
     const uint segIdx = wmod.activeSegIdx;
     if (s && s.Stype && tyfunc(tybasic(s.Stype.Tty)))
     {
         uint dataOff = cast(uint) active.data.length;
-        uint zero = 0;
-        active.data.write(&zero, 4);
-        wmod.dataRelocations ~= WasmModule.DataReloc(segIdx, dataOff, R_WASM.TABLE_INDEX_I32, s, 0);
-        return 4;
+        const ulong zero = 0;
+        active.data.write(&zero, width);
+        wmod.dataRelocations ~= WasmModule.DataReloc(segIdx, dataOff,
+            I64() ? R_WASM.TABLE_INDEX_I64 : R_WASM.TABLE_INDEX_I32, s, 0);
+        return width;
     }
     if (s)
     {
         uint dataOff = cast(uint) active.data.length;
-        uint zero = 0;
-        active.data.write(&zero, 4);
-        wmod.dataRelocations ~= WasmModule.DataReloc(segIdx, dataOff, R_WASM.MEMORY_ADDR_I32, s, cast(uint) val);
-        return 4;
+        const ulong zero = 0;
+        active.data.write(&zero, width);
+        wmod.dataRelocations ~= WasmModule.DataReloc(segIdx, dataOff,
+            I64() ? R_WASM.MEMORY_ADDR_I64 : R_WASM.MEMORY_ADDR_I32, s, cast(uint) val);
+        return width;
     }
-    uint addr = cast(uint) val;
-    active.data.write(&addr, 4);
-    return 4;
+    const ulong addr = val;
+    active.data.write(&addr, width);
+    return width;
 }
 
 void WasmObj_far16thunk(Symbol* s)

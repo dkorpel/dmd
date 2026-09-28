@@ -592,7 +592,7 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
         const int end = tryRegs[ti].end;
         const bool isCatch = tryRegs[ti].isCatch;
         stack ~= Frame(FrameKind.catchLand, end, -1, cg.reachable, ti);
-        cg.emit(OP.BLOCK, isCatch ? WASM_I32 : WASM_TYPE.EXNREF);
+        cg.emit(OP.BLOCK, isCatch ? WASM_PTR : WASM_TYPE.EXNREF);
         stack ~= Frame(FrameKind.tryTable, end, -1, cg.reachable, ti);
         cg.emit(OP.TRY_TABLE, WASM_VOID_BLOCK, Uleb(1));
         if (isCatch)

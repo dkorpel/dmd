@@ -247,6 +247,7 @@ enum WASM_SIMD : uint
     V128_AND = 0x4E,
     V128_OR = 0x50,
     V128_XOR = 0x51,
+    V128_ANY_TRUE = 0x53,
 
     I8X16_NEG = 0x61,
     I8X16_SHL = 0x6B,
@@ -409,6 +410,9 @@ enum R_WASM : ubyte
     TYPE_INDEX_LEB = 6,
     GLOBAL_INDEX_LEB = 7,
     TAG_INDEX_LEB = 10,
+    MEMORY_ADDR_LEB64 = 14,
+    MEMORY_ADDR_I64 = 16,
+    TABLE_INDEX_I64 = 19,
     TABLE_NUMBER_LEB = 20,
 }
 

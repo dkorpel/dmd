@@ -2423,8 +2423,35 @@ bool genElem(ref WasmCG cg, elem* e)
         }
 
     case OPu64_128:
+        if (I64())
+        {
+            cg.genElem(e.E1, WASM_I64);
+            cg.emit(OP.FD_PREFIX, Uleb(WASM_SIMD.I64X2_SPLAT),
+                OP.I64_CONST, Sleb(0),
+                OP.FD_PREFIX, Uleb(WASM_SIMD.I64X2_REPLACE_LANE), Uleb(1));
+            return true;
+        }
+        goto case OPvecfill;
     case OPs64_128:
+        if (I64())
+        {
+            const uint t = cg.allocTemp(WASM_I64);
+            cg.genElem(e.E1, WASM_I64);
+            cg.emit(OP.LOCAL_TEE, Uleb(t),
+                OP.FD_PREFIX, Uleb(WASM_SIMD.I64X2_SPLAT),
+                OP.LOCAL_GET, Uleb(t), OP.I64_CONST, Sleb(63), OP.I64_SHR_S,
+                OP.FD_PREFIX, Uleb(WASM_SIMD.I64X2_REPLACE_LANE), Uleb(1));
+            return true;
+        }
+        goto case OPvecfill;
     case OP128_64:
+        if (I64())
+        {
+            cg.genElem(e.E1);
+            cg.emit(OP.FD_PREFIX, Uleb(WASM_SIMD.I64X2_EXTRACT_LANE), Uleb(0));
+            return true;
+        }
+        goto case OPvecfill;
     case OPc_r:
     case OPc_i:
     case OPvp_fp:
@@ -2640,6 +2667,49 @@ private void emitRelop(ref WasmCG cg, int op, tym_t ty)
         }
     }
 
+    if (wasmType(ty) == WASM_TYPE.V128 && (op == OPeqeq || op == OPne))
+    {
+        cg.emit(OP.FD_PREFIX, Uleb(WASM_SIMD.V128_XOR),
+            OP.FD_PREFIX, Uleb(WASM_SIMD.V128_ANY_TRUE));
+        if ((op == OPeqeq) != negate)
+            cg.emit(OP.I32_EQZ);
+        return;
+    }
+
+    if (wasmType(ty) == WASM_TYPE.V128 &&
+        (op == OPlt || op == OPle || op == OPgt || op == OPge))
+    {
+        const bool isUns = tyuns(ty) != 0;
+        ubyte hiOp, loOp;
+        switch (op)
+        {
+        case OPlt: hiOp = isUns ? OP.I64_LT_U : OP.I64_LT_S; loOp = OP.I64_LT_U; break;
+        case OPle: hiOp = isUns ? OP.I64_LT_U : OP.I64_LT_S; loOp = OP.I64_LE_U; break;
+        case OPgt: hiOp = isUns ? OP.I64_GT_U : OP.I64_GT_S; loOp = OP.I64_GT_U; break;
+        default:   hiOp = isUns ? OP.I64_GT_U : OP.I64_GT_S; loOp = OP.I64_GE_U; break;
+        }
+        const uint tb = cg.allocTemp(WASM_TYPE.V128);
+        const uint ta = cg.allocTemp(WASM_TYPE.V128);
+        cg.emit(OP.LOCAL_SET, Uleb(tb), OP.LOCAL_SET, Uleb(ta));
+        void lane(uint local, uint idx)
+        {
+            cg.emit(OP.LOCAL_GET, Uleb(local),
+                OP.FD_PREFIX, Uleb(WASM_SIMD.I64X2_EXTRACT_LANE), Uleb(idx));
+        }
+        lane(ta, 1);
+        lane(tb, 1);
+        cg.emit(OP.I64_EQ, OP.IF, WASM_I32);
+        lane(ta, 0);
+        lane(tb, 0);
+        cg.emit(loOp, OP.ELSE);
+        lane(ta, 1);
+        lane(tb, 1);
+        cg.emit(hiOp, OP.END);
+        if (negate)
+            cg.emit(OP.I32_EQZ);
+        return;
+    }
+
     if (op == OPlg || op == OPleg)
     {
         const WASM_TYPE wt = wasmType(ty);
@@ -2768,6 +2838,12 @@ void emitCondToI32(ref WasmCG cg, elem* condElem, bool invert = false)
 
     case WASM_I32:
         cg.emit(OP.I32_CONST, Sleb(0), invert ? OP.I32_EQ : OP.I32_NE);
+        return;
+
+    case WASM_TYPE.V128:
+        cg.emit(OP.FD_PREFIX, Uleb(WASM_SIMD.V128_ANY_TRUE));
+        if (invert)
+            cg.emit(OP.I32_EQZ);
         return;
 
     default:
