@@ -161,6 +161,17 @@ void TypeInfo_toObjFile(Expression e, Loc loc, Type t)
     if (t.vtinfo.hadCodegen)
         return;
 
+    if (wasmCtfeBuildActive)
+    {
+        if (t.vtinfo.tinfo.isTypeAArray())
+        {
+            auto tiaa = cast(TypeInfoAssociativeArrayDeclaration) cast(void*) t.vtinfo;
+            if (!tiaa.entry)
+                return;
+        }
+        wasmCtfeRecordTypeInfo(t.vtinfo);
+    }
+
     t.vtinfo.hadCodegen = true;
 
     // ClassInfos are generated as part of ClassDeclaration codegen
@@ -243,7 +254,7 @@ void toObjFile(Dsymbol ds, bool multiobj)
             else if (driverParams.symdebug)
                 toDebug(cd);
 
-            assert(cd.semanticRun >= PASS.semantic3done);     // semantic() should have been run to completion
+            assert(wasmCtfeBuildActive || cd.semanticRun >= PASS.semantic3done);     // semantic() should have been run to completion
 
             SC scclass = SC.comdat;
 
@@ -251,7 +262,8 @@ void toObjFile(Dsymbol ds, bool multiobj)
             /* There might be static ctors in the members, and they cannot
              * be put in separate obj files.
              */
-            cd.members.foreachDsymbol( (s) { s.accept(this); } );
+            if (!wasmCtfeBuildActive)
+                cd.members.foreachDsymbol( (s) { s.accept(this); } );
 
             if (cd.classKind == ClassKind.objc)
             {
@@ -444,18 +456,21 @@ void toObjFile(Dsymbol ds, bool multiobj)
                 /* There might be static ctors in the members, and they cannot
                  * be put in separate obj files.
                  */
-                sd.members.foreachDsymbol( (s) { s.accept(this); } );
+                if (!wasmCtfeBuildActive)
+                {
+                    sd.members.foreachDsymbol( (s) { s.accept(this); } );
 
-                /* Emit the special __xopEquals/__xopCmp/__xtoHash member functions
-                 * required for the TypeInfo, but not added as struct members.
-                 * (Note that `postblit` and `tidtor` are struct members in `sd.members`.)
-                 */
-                if (sd.xeq && sd.xeq != StructDeclaration.xerreq)
-                    sd.xeq.accept(this);
-                if (sd.xcmp && sd.xcmp != StructDeclaration.xerrcmp)
-                    sd.xcmp.accept(this);
-                if (sd.xhash)
-                    sd.xhash.accept(this);
+                    /* Emit the special __xopEquals/__xopCmp/__xtoHash member functions
+                     * required for the TypeInfo, but not added as struct members.
+                     * (Note that `postblit` and `tidtor` are struct members in `sd.members`.)
+                     */
+                    if (sd.xeq && sd.xeq != StructDeclaration.xerreq)
+                        sd.xeq.accept(this);
+                    if (sd.xcmp && sd.xcmp != StructDeclaration.xerrcmp)
+                        sd.xcmp.accept(this);
+                    if (sd.xhash)
+                        sd.xhash.accept(this);
+                }
             }
         }
 

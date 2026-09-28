@@ -144,6 +144,7 @@ void backend_init_wasm_ctfe()
     import dmd.backend.cdef : Config;
 
     config = Config.init;
+    go.mfoptim = 0;
     out_config_init(
         false,
         64,

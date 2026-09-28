@@ -1362,6 +1362,9 @@ public bool wasmCtfeGenerate(FuncDeclaration root, ref OutBuffer objbuf, out con
     import dmd.funcsem : functionSemantic3;
     import dmd.mangle : mangleExact;
 
+    if (wasmCtfeBuildActive)
+        return false;
+
     const startErrors = global.errors;
     ObjcGlue_initialize();
     backend_init_wasm_ctfe();
@@ -1377,7 +1380,11 @@ public bool wasmCtfeGenerate(FuncDeclaration root, ref OutBuffer objbuf, out con
     while (auto d = wasmCtfePopWork())
     {
         if (auto fd = d.isFuncDeclaration())
+        {
             fd.functionSemantic3();
+            if (fd.semanticRun < PASS.semantic3done)
+                continue;
+        }
         toObjFile(d, false);
     }
     if (global.errors == startErrors)

@@ -140,7 +140,7 @@ Expression tryWasmCtfe(Expression e)
         wasmCtfeCodegenTest(ce.f);
         return null;
     }
-    if (mode == WasmCtfeMode.inproc)
+    if (mode == WasmCtfeMode.inproc || mode == WasmCtfeMode.verify)
     {
         wasmCtfeStats.calls++;
         return tryWasmCtfeInproc(ce.f, ce.arguments ? (*ce.arguments)[] : null, e.type, e.loc);

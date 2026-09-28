@@ -159,8 +159,19 @@ void wasmCtfeQueueDefinition(Dsymbol d)
     {
         if (!vd.isDataseg())
             return;
+        if (auto tid = vd.isTypeInfoDeclaration())
+        {
+            import dmd.mtype : TypeClass;
+            if (auto tc = tid.tinfo.isTypeClass())
+            {
+                wasmCtfeQueueDefinition(tc.sym);
+                return;
+            }
+            if (tid.tinfo.isTypeAArray())
+                return;
+        }
     }
-    else
+    else if (!d.isStructDeclaration() && !d.isClassDeclaration() && !d.isEnumDeclaration())
         return;
     wasmCtfeQueued[cast(void*) d] = true;
     wasmCtfeWork.push(d);
@@ -185,6 +196,15 @@ void wasmCtfeRecordObjPass(Dsymbol d, PASS oldPass)
 
 private __gshared Array!Dsymbol wasmCtfeObjMarked;
 private __gshared Array!PASS wasmCtfeObjMarkedPass;
+private __gshared Array!TypeInfoDeclaration wasmCtfeTypeInfos;
+
+package(dmd.glue)
+void wasmCtfeRecordTypeInfo(TypeInfoDeclaration tid)
+{
+    if (!wasmCtfeBuildActive || tid is null)
+        return;
+    wasmCtfeTypeInfos.push(tid);
+}
 
 package(dmd.glue)
 void wasmCtfeWipeCaches()
@@ -205,6 +225,9 @@ void wasmCtfeWipeCaches()
     wasmCtfeSeenTouched.clear();
     wasmCtfeWork.setDim(0);
     wasmCtfeQueued.clear();
+    foreach (tid; wasmCtfeTypeInfos[])
+        tid.hadCodegen = false;
+    wasmCtfeTypeInfos.setDim(0);
 }
 
 package(dmd.glue)
