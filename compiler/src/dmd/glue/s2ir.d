@@ -808,8 +808,13 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
 
         incUsage(irs, s.loc);
         elem* e = toElemDtor(s.exp, irs);
-        const rtlthrow = config.ehmethod == EHmethod.EH_DWARF ? RTLSYM.THROWDWARF : RTLSYM.THROWC;
-        e = el_bin(OPcall, TYvoid, el_var(getRtlsym(rtlthrow)),e);
+        if (config.ehmethod == EHmethod.EH_WASM && wasmCtfeBuildActive)
+            e = el_una(OPthrow, TYnoreturn, e);
+        else
+        {
+            const rtlthrow = config.ehmethod == EHmethod.EH_DWARF ? RTLSYM.THROWDWARF : RTLSYM.THROWC;
+            e = el_bin(OPcall, TYvoid, el_var(getRtlsym(rtlthrow)),e);
+        }
         block_appendexp(blx.curblock, e);
         block_next(blx, BC.exit, null);          // throw never returns
     }

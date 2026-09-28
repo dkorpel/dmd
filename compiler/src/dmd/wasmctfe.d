@@ -1954,6 +1954,47 @@ private extern (C) wasm_trap_t* ipHostGcMalloc(void* env, wasmtime_caller_t* cal
     return null;
 }
 
+private __gshared ulong ipTIBaseOffset;
+
+private extern (C) wasm_trap_t* ipHostEhMatch(void* env, wasmtime_caller_t* caller,
+    const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
+{
+    import dmd.wasmtimec;
+    wasmtime_memory_t m;
+    if (!ipCallerMemory(caller, m))
+        return ipTrap("wasm-ctfe: no memory export");
+    auto mem = ipMemSlice(caller, m);
+    const o = cast(ulong) args[0].of.i64;
+    const ci = cast(ulong) args[1].of.i64;
+    int found = 0;
+    if (o && ipTIBaseOffset)
+    {
+        bool rd(ulong addr, out ulong v) nothrow @nogc
+        {
+            if (addr + 8 > mem.length)
+                return false;
+            v = *cast(ulong*)(mem.ptr + addr);
+            return true;
+        }
+        ulong vtbl, oc;
+        if (!rd(o, vtbl) || !rd(vtbl, oc))
+            return ipTrap("wasm-ctfe: eh match out of bounds");
+        while (oc)
+        {
+            if (oc == ci)
+            {
+                found = 1;
+                break;
+            }
+            if (!rd(oc + ipTIBaseOffset, oc))
+                return ipTrap("wasm-ctfe: eh match out of bounds");
+        }
+    }
+    results[0].kind = WASMTIME_I32;
+    results[0].of.i32 = found;
+    return null;
+}
+
 private extern (C) wasm_trap_t* ipHostArrayAppendC(void* env, wasmtime_caller_t* caller,
     const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
 {
@@ -2522,6 +2563,20 @@ Expression tryWasmCtfeInproc(FuncDeclaration fd, Expression thisExp, Expression[
                 cb = &ipHostAssert;
             else if (nm == "_d_arrayappendcd" || nm == "_d_arrayappendcw")
                 cb = &ipHostArrayAppendC;
+            else if (nm == "_d_eh_wasm_match")
+            {
+                cb = &ipHostEhMatch;
+                if (!ipTIBaseOffset)
+                {
+                    if (auto cd = Type.typeinfoclass)
+                        foreach (v; cd.fields)
+                            if (v.ident && strcmp(v.ident.toChars(), "base") == 0)
+                            {
+                                ipTIBaseOffset = v.offset;
+                                break;
+                            }
+                }
+            }
             auto err = wasmtime_linker_define_func(linker,
                 modName.data, modName.size, name.data, name.size,
                 ft, cb, cast(void*) hi, null);

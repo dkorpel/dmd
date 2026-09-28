@@ -355,3 +355,30 @@ engine builds instead lower non-null array identity to
 arrays of floating-point elements — the interpreter compares those
 elements with `==` (so `[double.nan] is [double.nan]` is *false*
 natively), which bitwise memcmp would get wrong; those stay poisoned.
+
+### Exceptions run in-engine without druntime's EH runtime
+The wasm target lowers `throw` to `_d_throwc` (rt.wasm.eh pins the
+object, chains collateral exceptions, then executes the wasm `throw`
+instruction) and catch dispatch to `_d_eh_wasm_match`. Neither body is
+available to engine builds (rt.wasm.eh is `version (WebAssembly)`, and
+the frontend runs with host versions), so:
+- engine builds lower `throw` directly to the backend's `OPthrow`
+  (native wasm `throw` on the module's `__d_exception` tag). Pinning is
+  unnecessary (the bump allocator never frees) and collateral-exception
+  chaining is not reconstructed;
+- `_d_eh_wasm_match(o, ci)` is a host hook: it reads `vtbl = *o`,
+  `classinfo = *vtbl`, then walks the `TypeInfo_Class.base` chain in
+  guest memory comparing pointers (in-module classinfo pointers are
+  unique). The offset of `base` is taken from `Type.typeinfoclass`'s
+  field layout at bind time.
+An uncaught exception surfaces as a wasmtime execution error; the
+engine result is discarded and the AST interpreter's "uncaught CTFE
+exception" diagnostic stands.
+
+### Classes work inside engine builds
+`new C(...)`, constructors, virtual calls and class field access all
+compile and run in-engine (vtables and classinfo are emitted by the
+regular wasm pipeline; `gc_malloc` binds to the host bump allocator).
+The remaining class gaps are at the boundary: class-typed CTFE
+*results* and *arguments* have no marshalling, and expression wrappers
+bail when the expression itself contains a class-typed subexpression.
