@@ -423,9 +423,9 @@ public WasmFuncType buildFuncType(type* t, Symbol* sfunc, uint hiddenLeadingPtrs
     if (sfunc)
     {
         if (sfunc.identifier == "_Dmain")
-            return WasmFuncType([WASM_I32, WASM_PTR], [WASM_I32]);
+            return WasmFuncType([WASM_PTR, WASM_PTR], [WASM_I32]);
         if (sfunc.identifier == "__main_argc_argv" || sfunc.identifier == "main")
-            return WasmFuncType([WASM_I32, WASM_I32], [WASM_I32]);
+            return WasmFuncType([WASM_I32, WASM_PTR], [WASM_I32]);
         if (sfunc.identifier == "__main_void")
             return WasmFuncType([], [WASM_I32]);
     }
@@ -433,15 +433,15 @@ public WasmFuncType buildFuncType(type* t, Symbol* sfunc, uint hiddenLeadingPtrs
     type* ret = t.Tnext;
     const bool hiddenPtr = returnByPtr(ret);
     if (hiddenPtr)
-        ft.params ~= WASM_I32;
+        ft.params ~= WASM_PTR;
 
     foreach (_; 0 .. hiddenLeadingPtrs)
-        ft.params ~= WASM_I32;
+        ft.params ~= WASM_PTR;
     if (sfunc && sfunc.Sfunc && (sfunc.Sfunc.Fflags & (Fmember | Fnested)))
-        ft.params ~= WASM_I32;
+        ft.params ~= WASM_PTR;
 
     if (dstyleVariadic(t))
-        ft.params ~= WASM_I32;
+        ft.params ~= WASM_PTR;
 
     foreach (param_t p; t.Tparamtypes ? *t.Tparamtypes : null)
     {
@@ -452,12 +452,12 @@ public WasmFuncType buildFuncType(type* t, Symbol* sfunc, uint hiddenLeadingPtrs
 
         if (isSliceOrDelegate(p.Ptype))
         {
-            ft.params ~= WASM_I32;
-            ft.params ~= WASM_I32;
+            ft.params ~= WASM_PTR;
+            ft.params ~= WASM_PTR;
         }
         else if (pty == TYstruct || pty == TYarray)
         {
-            ft.params ~= WASM_I32;
+            ft.params ~= WASM_PTR;
         }
         else
         {
@@ -466,7 +466,7 @@ public WasmFuncType buildFuncType(type* t, Symbol* sfunc, uint hiddenLeadingPtrs
     }
 
     if (variadic(t))
-        ft.params ~= WASM_I32;
+        ft.params ~= WASM_PTR;
 
     if (!hiddenPtr && ret && typeHasValue(ret.Tty) && type_size(ret) != 0)
         ft.results ~= wasmType(ret.Tty);
@@ -538,18 +538,18 @@ private bool emitImportSection(ref OutBuffer out_, ref WasmModule wmod)
         if (wasmSelfLinkImportMemory)
         {
             appendImportHead(*s, "env", "memory", WASM_EXPORT.MEM);
-            s.writeByte(WASM_LIMITS.NO_MAX);
+            s.writeByte(I64() ? WASM_LIMITS.MEM64_NO_MAX : WASM_LIMITS.NO_MAX);
             s.writeuLEB128(wmod.memPages);
         }
         writeSection(out_, WASM_SECTION.import_, s);
         return true;
     }
     appendImportHead(*s, "env", "__linear_memory", WASM_EXPORT.MEM);
-    s.writeByte(WASM_LIMITS.NO_MAX);
+    s.writeByte(I64() ? WASM_LIMITS.MEM64_NO_MAX : WASM_LIMITS.NO_MAX);
     s.writeuLEB128(0);
 
     appendImportHead(*s, "env", "__stack_pointer", WASM_EXPORT.GLOBAL);
-    s.writeByte(WASM_I32);
+    s.writeByte(I64() ? WASM_I64 : WASM_I32);
     s.writeByte(WASM_MUT.VAR);
 
     appendImportHead(*s, "env", "__indirect_function_table", WASM_EXPORT.TABLE);
@@ -723,7 +723,7 @@ private bool emitDataSection(ref OutBuffer out_, ref WasmModule wmod)
     foreach (ref WasmDataSeg ds; wmod.dataSegs)
     {
         s.writeByte(0x00);
-        s.writeByte(OP.I32_CONST);
+        s.writeByte(I64() ? OP.I64_CONST : OP.I32_CONST);
         s.writesLEB128(cast(int) ds.offset);
         s.writeByte(OP.END);
         s.writeuLEB128(cast(uint) ds.data.length());
@@ -1721,7 +1721,7 @@ void wmod_noteTagUse()
 {
     assert(wmod);
     if (wmod.tagTypeIdx == uint.max)
-        wmod.tagTypeIdx = wmod.internType(WasmFuncType([WASM_TYPE.I32], []));
+        wmod.tagTypeIdx = wmod.internType(WasmFuncType([I64() ? WASM_TYPE.I64 : WASM_TYPE.I32], []));
 }
 
 uint wmod_internType(WasmFuncType funcType)
@@ -1904,9 +1904,9 @@ void WasmObj_thunk(Symbol* sthunk, Symbol* sfunc, uint p, tym_t thisty, int d, i
         fb.code.writeuLEB128(pi);
         if (pi == thisParamIndex && d != 0)
         {
-            fb.code.writeByte(OP.I32_CONST);
+            fb.code.writeByte(I64() ? OP.I64_CONST : OP.I32_CONST);
             fb.code.writesLEB128(d);
-            fb.code.writeByte(OP.I32_ADD);
+            fb.code.writeByte(I64() ? OP.I64_ADD : OP.I32_ADD);
         }
     }
 

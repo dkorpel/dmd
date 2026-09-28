@@ -193,6 +193,9 @@ enum WASM_SIMD : uint
     F32X4_SPLAT = 0x13,
     F64X2_SPLAT = 0x14,
 
+    I64X2_EXTRACT_LANE = 0x1D,
+    I64X2_REPLACE_LANE = 0x1E,
+
     I8X16_EQ = 0x23,
     I8X16_NE = 0x24,
     I8X16_LT_S = 0x25,
@@ -373,6 +376,8 @@ enum WASM_LIMITS : ubyte
 {
     NO_MAX = 0x00,
     HAS_MAX = 0x01,
+    MEM64_NO_MAX = 0x04,
+    MEM64_HAS_MAX = 0x05,
 }
 
 /// Mutability flag byte (used in global types)

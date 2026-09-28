@@ -1034,6 +1034,12 @@ bool parseCommandLine(const ref Strings arguments, const size_t argc, out Param 
             if (!(target.os & (Target.OS.WASI | Target.OS.Emscripten)))
                 target.os = Target.OS.WASI;
         }
+        else if (arg == "-mwasm64")
+        {
+            target.setArch(Target.Arch.wasm64);
+            if (!(target.os & (Target.OS.WASI | Target.OS.Emscripten)))
+                target.os = Target.OS.WASI;
+        }
         else if (arg == "-mwasm-selflink")
         {
             import dmd.backend.wasm.selflink : wasmSelfLink;

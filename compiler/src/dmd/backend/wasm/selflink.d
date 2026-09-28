@@ -21,7 +21,8 @@ import dmd.backend.cc;
 import dmd.backend.symbol;
 import dmd.backend.wasm.enums;
 import dmd.backend.wasm.obj;
-import dmd.backend.wasm.util : patchLE32, patchLEB5;
+import dmd.backend.ty : I64;
+import dmd.backend.wasm.util : patchLE32, patchLE64, patchLEB5, patchLEB10;
 import dmd.common.outbuffer;
 
 nothrow:
@@ -133,14 +134,22 @@ private void applyDataRelocs(ref WasmModule wmod)
         if (rel.type == R_WASM.TABLE_INDEX_I32)
         {
             const uint fi = funcIdxBySymOrName(wmod, rel.sym);
-            patchLE32(seg, rel.dataByteOffset, fi == uint.max ? 0 : fi + 1);
+            const uint v = fi == uint.max ? 0 : fi + 1;
+            if (I64())
+                patchLE64(seg, rel.dataByteOffset, v);
+            else
+                patchLE32(seg, rel.dataByteOffset, v);
         }
         else
         {
             const uint addr = dataSymAddr(wmod, rel.sym, byName);
             if (addr == uint.max)
                 noteUnresolved(rel.sym);
-            patchLE32(seg, rel.dataByteOffset, addr == uint.max ? 0 : addr + rel.addend);
+            const uint v = addr == uint.max ? 0 : addr + rel.addend;
+            if (I64())
+                patchLE64(seg, rel.dataByteOffset, v);
+            else
+                patchLE32(seg, rel.dataByteOffset, v);
         }
     }
 }
@@ -252,13 +261,19 @@ void patchSelfLinkCodeRelocs(ref WasmModule wmod, ref WasmFuncBody fb, ubyte[] c
         if (r.type == R_WASM.TABLE_INDEX_SLEB)
         {
             const uint fi = funcIdxBySymOrName(wmod, r.sym);
-            patchLEB5(code, r.offset, fi == uint.max ? 0 : fi + 1);
+            const uint v = fi == uint.max ? 0 : fi + 1;
+            if (I64())
+                patchLEB10(code, r.offset, v);
+            else
+                patchLEB5(code, r.offset, v);
         }
         else if (r.type == R_WASM.MEMORY_ADDR_LEB)
         {
             const uint addr = dataSymAddr(wmod, r.sym, byName);
             if (addr == uint.max)
                 noteUnresolved(r.sym);
+            else if (I64())
+                patchLEB10(code, r.offset, addr + r.addend);
             else
                 patchLEB5(code, r.offset, addr + r.addend);
         }
@@ -287,7 +302,7 @@ bool emitMemorySection(ref OutBuffer out_, ref WasmModule wmod)
     OutBuffer* s = &wmod.scratch;
     s.reset();
     s.writeuLEB128(1);
-    s.writeByte(WASM_LIMITS.NO_MAX);
+    s.writeByte(I64() ? WASM_LIMITS.MEM64_NO_MAX : WASM_LIMITS.NO_MAX);
     s.writeuLEB128(wmod.memPages);
     writeSection(out_, WASM_SECTION.memory, s);
     return true;
@@ -300,9 +315,9 @@ bool emitGlobalSection(ref OutBuffer out_, ref WasmModule wmod)
     OutBuffer* s = &wmod.scratch;
     s.reset();
     s.writeuLEB128(1);
-    s.writeByte(WASM_I32);
+    s.writeByte(I64() ? WASM_I64 : WASM_I32);
     s.writeByte(WASM_MUT.VAR);
-    s.writeByte(OP.I32_CONST);
+    s.writeByte(I64() ? OP.I64_CONST : OP.I32_CONST);
     s.writesLEB128(cast(int) wmod.stackHigh);
     s.writeByte(OP.END);
     writeSection(out_, WASM_SECTION.global, s);

@@ -615,6 +615,12 @@ void util_set64(exefmt_t exe)
         _tysize[TYireal] = 10;
         _tysize[TYcreal] = 20;
     }
+    if (exe & EX_WASM)
+    {
+        _tysize[TYreal] = 8;
+        _tysize[TYireal] = 8;
+        _tysize[TYcreal] = 16;
+    }
     _tysize[TYsptr] = 8;
     _tysize[TYcptr] = 8;
     _tysize[TYfptr] = 10;    // NOTE: There are codgen test that check
@@ -644,6 +650,12 @@ void util_set64(exefmt_t exe)
         _tyalignsize[TYreal] = 2;
         _tyalignsize[TYireal] = 2;
         _tyalignsize[TYcreal] = 2;
+    }
+    if (exe & EX_WASM)
+    {
+        _tyalignsize[TYreal] = 8;
+        _tyalignsize[TYireal] = 8;
+        _tyalignsize[TYcreal] = 8;
     }
     _tyalignsize[TYsptr] = 8;
     _tyalignsize[TYcptr] = 8;

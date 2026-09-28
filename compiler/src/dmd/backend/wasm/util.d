@@ -18,6 +18,37 @@ void writeuLEB128_5(ref OutBuffer buf, uint v) nothrow @safe
     buf.writeByte((v >> 28) & 0x0F);
 }
 
+/// Emit a 10-byte padded ULEB128 (fixed-width, for patchable 64-bit operands)
+void writeuLEB128_10(ref OutBuffer buf, ulong v) nothrow @safe
+{
+    foreach (b; 0 .. 10)
+    {
+        buf.writeByte(cast(ubyte)((v & 0x7F) | (b < 9 ? 0x80 : 0)));
+        v >>= 7;
+    }
+}
+
+/// Overwrite a little-endian 64-bit value in place.
+void patchLE64(ubyte[] buf, uint off, ulong v) nothrow @safe
+{
+    if (off + 8 > buf.length)
+        return;
+    foreach (b; 0 .. 8)
+        buf[off + b] = cast(ubyte)(v >> (8 * b));
+}
+
+/// Overwrite a 10-byte padded LEB128 operand in place.
+void patchLEB10(ubyte[] buf, uint off, ulong v) nothrow @safe
+{
+    if (off + 10 > buf.length)
+        return;
+    foreach (b; 0 .. 10)
+    {
+        buf[off + b] = cast(ubyte)((v & 0x7f) | (b < 9 ? 0x80 : 0));
+        v >>= 7;
+    }
+}
+
 /// Returns: number of bytes needed for ULEB128 encoding of v
 uint ulebSize(uint v) nothrow
 {

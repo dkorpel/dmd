@@ -400,9 +400,10 @@ extern (C++) struct Target
     bool isX86_64;          // generate 64 bit code for x86_64; true by default for 64 bit dmd
     bool isX86;             // generate 32 bit Intel x86 code
     bool isWasm;            // generate WebAssembly code
+    bool isWasm64;          // generate 64-bit (memory64) WebAssembly code
     bool isLP64;            // pointers are 64 bits
 
-    enum Arch : ubyte { aarch64, x86, x86_64, wasm32 }
+    enum Arch : ubyte { aarch64, x86, x86_64, wasm32, wasm64 }
 
     /// Set the target architecture, clearing the other arch flags.
     extern (D) void setArch(Arch arch) @safe
@@ -410,7 +411,8 @@ extern (C++) struct Target
         isAArch64 = arch == Arch.aarch64;
         isX86     = arch == Arch.x86;
         isX86_64  = arch == Arch.x86_64;
-        isWasm    = arch == Arch.wasm32;
+        isWasm    = arch == Arch.wasm32 || arch == Arch.wasm64;
+        isWasm64  = arch == Arch.wasm64;
     }
 
     // Environmental
@@ -484,7 +486,7 @@ extern (C++) struct Target
         DoubleProperties.initialize();
         RealProperties.initialize();
 
-        isLP64 = isX86_64 || isAArch64;
+        isLP64 = isX86_64 || isAArch64 || isWasm64;
 
         // These have default values for 32 bit code, they get
         // adjusted for 64 bit code.
@@ -563,7 +565,7 @@ extern (C++) struct Target
         else if (isAArch64)
             architectureName = "AArch64";
         else if (isWasm)
-            architectureName = "WASM32";
+            architectureName = isWasm64 ? "WASM64" : "WASM32";
         else
             assert(0);
 
