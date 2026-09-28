@@ -99,6 +99,16 @@ public Expression ctfeInterpret(Expression e)
     if (e.type.ty == Terror)
         return ErrorExp.get();
 
+    import dmd.wasmctfe;
+    Expression wasmResult;
+    const wmode = wasmCtfeMode();
+    if (wmode != WasmCtfeMode.off && !global.gag)
+    {
+        wasmResult = tryWasmCtfe(e);
+        if (wmode == WasmCtfeMode.wasm && wasmResult !is null)
+            return scrubReturnValue(e.loc, wasmResult);
+    }
+
     auto rgnpos = ctfeGlobals.region.savePos();
 
     import dmd.timetrace;
@@ -123,6 +133,9 @@ public Expression ctfeInterpret(Expression e)
         result = ErrorExp.get();
 
     ctfeGlobals.region.release(rgnpos);
+
+    if (wasmResult !is null)
+        wasmCtfeCompare(e, result, wasmResult);
 
     return result;
 }
@@ -564,6 +577,16 @@ private Expression interpretFunction(UnionExp* pue, FuncDeclaration fd, InterSta
             return CTFEExp.cantexp;
         }
         eargs[i] = earg;
+    }
+
+    if (!thisarg && !global.gag)
+    {
+        import dmd.wasmctfe;
+        if (wasmCtfeMode() == WasmCtfeMode.wasm)
+        {
+            if (auto wr = tryWasmCtfeCall(fd, eargs[], tf.next, fd.loc))
+                return wr;
+        }
     }
 
     // Now that we've evaluated all the arguments, we can start the frame
