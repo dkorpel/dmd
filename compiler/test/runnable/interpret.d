@@ -1370,6 +1370,22 @@ void test71()
 
 /************************************************/
 
+bool sameElements(T)(T[] a, T[] b)
+{
+    if (a.length != b.length)
+        return false;
+    foreach (x; a)
+    {
+        bool found;
+        foreach (y; b)
+            if (x == y)
+                found = true;
+        if (!found)
+            return false;
+    }
+    return true;
+}
+
 string[] foo72(int[string] a)
 {
     return a.keys;
@@ -1377,7 +1393,7 @@ string[] foo72(int[string] a)
 
 void test72()
 {
-    static assert(foo72(["hello":3, "betty":4]) == ["hello", "betty"]);
+    static assert(sameElements(foo72(["hello":3, "betty":4]), ["hello", "betty"]));
 }
 
 /************************************************/
@@ -1389,7 +1405,7 @@ int[] foo73(int[string] a)
 
 void test73()
 {
-    static assert(foo73(["hello":3, "betty":4]) == [3, 4]);
+    static assert(sameElements(foo73(["hello":3, "betty":4]), [3, 4]));
 }
 
 /************************************************/
@@ -1967,8 +1983,8 @@ void test99()
 
 /************************************************/
 
-int[] map100 = ([4:true, 5:true]).keys;
-bool[] foo100 = ([4:true, 5:true]).values;
+int[] map100 = ([5:true, 4:true]).keys;
+bool[] foo100 = ([5:true, 4:true]).values;
 
 void test100()
 {

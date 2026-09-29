@@ -20,6 +20,7 @@ version (NoBackend)
     const(char)* wasmCtfeLastReason() { return null; }
     bool wasmCtfeBuildActiveNow() { return false; }
     bool wasmCtfeCtfeBlockLowering() pure nothrow @nogc @trusted { return false; }
+    bool wasmCtfeLoweringActive() pure nothrow @nogc @trusted { return false; }
     void wasmCtfeCompare(Expression e, Expression astResult, Expression wasmResult) { }
     Expression tryWasmCtfe(Expression e) { return null; }
     bool wasmCtfeTakeForcedSem3Error(FuncDeclaration fd) { return false; }
@@ -197,6 +198,23 @@ void wasmCtfePrintStats()
             calls, attempts, successes, compileFailures, unsupported, illegal, cacheHits, mismatches);
 }
 
+private __gshared StructLiteralExp[2][] ipCmpStack;
+
+private bool ipIsVthisField(AggregateDeclaration ad, size_t i, size_t n)
+{
+    auto cd = ad.isClassDeclaration();
+    if (!cd)
+        return i < ad.fields.length && ad.fields[i].isThisDeclaration() !is null;
+    ptrdiff_t soFar = n;
+    for (auto c = cd; c; c = c.baseClass)
+    {
+        soFar -= c.fields.length;
+        if (cast(ptrdiff_t) i >= soFar && i < soFar + c.fields.length)
+            return c.fields[i - soFar] is c.vthis || c.fields[i - soFar] is c.vthis2;
+    }
+    return false;
+}
+
 private bool ipResultEqual(Expression astResult, Expression wasmResult, int depth = 0)
 {
     if (depth > 200)
@@ -327,6 +345,11 @@ private bool ipResultEqual(Expression astResult, Expression wasmResult, int dept
     if (auto wsl = wasmResult.isStructLiteralExp())
     {
         auto asl = astResult.isStructLiteralExp();
+        foreach (p; ipCmpStack)
+            if (p[0] is asl && p[1] is wsl)
+                return true;
+        ipCmpStack ~= [asl, wsl];
+        scope (exit) ipCmpStack.length--;
         if (asl && asl.sd is wsl.sd && wsl.sd.isClassDeclaration())
         {
             auto cd = wsl.sd.isClassDeclaration();
@@ -355,6 +378,8 @@ private bool ipResultEqual(Expression astResult, Expression wasmResult, int dept
                 {
                     auto ael = i < na ? (*asl.elements)[i] : null;
                     if (!ael || !(*wsl.elements)[i] || ael.isVoidInitExp())
+                        continue;
+                    if (ael.isNullExp() && ipIsVthisField(wsl.sd, i, n))
                         continue;
                     if (!same || !ipResultEqual(ael, (*wsl.elements)[i], depth + 1))
                     {
@@ -464,6 +489,13 @@ Expression tryWasmCtfe(Expression e)
         return null;
     ipLastReason[0] = 0;
     wasmCtfeStats.calls++;
+    if (auto v = ipCircularVar(e))
+    {
+        if (mode == WasmCtfeMode.verify)
+            return null;
+        global.errorSink.error(e.loc, "circular initialization of %s `%s`", v.kind(), v.toPrettyChars());
+        return ErrorExp.get();
+    }
     auto ce = e.isCallExp();
     if (ce && ce.f)
     {
@@ -474,6 +506,30 @@ Expression tryWasmCtfe(Expression e)
             return r;
     }
     return tryWasmCtfeExpr(e);
+}
+
+private VarDeclaration ipCircularVar(Expression e)
+{
+    import dmd.visitor.postorder : walkPostorder;
+    extern (C++) final class Circular : StoppableVisitor
+    {
+        VarDeclaration found;
+        alias visit = typeof(super).visit;
+        override void visit(Expression) {}
+        override void visit(VarExp e)
+        {
+            auto v = e.var.isVarDeclaration();
+            if (v && v.inuse && v._init && !v.isCTFE()
+                && (v.isConst() || v.isImmutable() || v.storage_class & STC.manifest))
+            {
+                found = v;
+                stop = true;
+            }
+        }
+    }
+    scope c = new Circular();
+    walkPostorder(e, c);
+    return c.found;
 }
 
 private bool ipHasCall(Expression e)
@@ -861,10 +917,19 @@ private void ipAppendSymKey(Expression e, ref OutBuffer kb)
         override void visit(DotVarExp e) { put(e.var); }
         override void visit(FuncExp e) { put(e.fd); }
         override void visit(CallExp e) { if (e.f) put(e.f); }
+        override void visit(StringExp e) { lit(e); }
+        override void visit(IntegerExp e) { lit(e); }
+        override void visit(RealExp e) { lit(e); }
+        extern (D) void lit(Expression e)
+        {
+            kb.writeByte(0);
+            kb.writestring(e.toChars());
+        }
         extern (D) void put(Dsymbol s)
         {
             kb.writeByte(0);
             kb.writestring(s.toPrettyChars());
+            kb.printf("@%p", cast(void*) s);
         }
     }
     scope v = new SymKey();
@@ -1255,10 +1320,13 @@ Expression tryWasmCtfeExpr(Expression e)
     fd.fbody = ret;
     fd.semanticRun = PASS.semantic3done;
     Dsymbols savedParents;
+    ubyte[] savedDataseg;
     foreach (vd; declaredVars)
     {
         savedParents.push(vd.parent);
+        savedDataseg ~= vd.isdataseg;
         vd.parent = fd;
+        vd.isdataseg = 0;
     }
     foreach (vd; enclosingVars)
     {
@@ -1267,7 +1335,10 @@ Expression tryWasmCtfeExpr(Expression e)
     }
     auto r = tryWasmCtfeInproc(fd, null, null, e.type, e.loc);
     foreach (i, vd; declaredVars)
+    {
         vd.parent = savedParents[i];
+        vd.isdataseg = savedDataseg[i];
+    }
     foreach (i, vd; enclosingVars)
         vd.parent = savedParents[declaredVars.length + i];
     if (auto sv = ipResultCache.insert(kb[], null))
@@ -1623,7 +1694,8 @@ extern (C++) final class LegalityScanner : SemanticTimeTransitiveVisitor
         if (relaxed)
         {
             if (auto v = e.var ? e.var.isVarDeclaration() : null)
-                if (v.isDataseg() && !(v.storage_class & STC.manifest))
+                if (v.isDataseg() && !(v.storage_class & STC.manifest)
+                    && !(v.type && v.type.isImmutable() && v._init && v._init.semanticDone))
                     reject("address of global");
             return;
         }
@@ -2940,11 +3012,13 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
     if (thisExp)
     {
         keyBuf.writestring(thisExp.toChars());
+        ipAppendSymKey(thisExp, keyBuf);
         keyBuf.writeByte(0);
     }
     foreach (arg; args)
     {
         keyBuf.writestring(arg.toChars());
+        ipAppendSymKey(arg, keyBuf);
         keyBuf.writeByte(0);
     }
     if (!ipCacheInit)

@@ -1595,8 +1595,8 @@ private bool wasmCtfeGenerateOnce(FuncDeclaration root, ref OutBuffer objbuf, ou
     wasmCtfePoisoned = null;
     wasmCtfeBuiltFuncs = null;
     {
-        import dmd.backend.wasm.codgen : wasmCGTolerateUnsupported;
-        wasmCGTolerateUnsupported = true;
+        import dmd.backend.wasm.codgen : wasmCGCtfeBuild;
+        wasmCGCtfeBuild = true;
     }
 
     const showGag = getenv("DMD_CTFE_SHOWGAG") !is null;
@@ -1707,8 +1707,8 @@ private bool wasmCtfeGenerateOnce(FuncDeclaration root, ref OutBuffer objbuf, ou
     wasmCtfeBuildActive = false;
     global.params.checkAction = oldCheckAction;
     {
-        import dmd.backend.wasm.codgen : wasmCGTolerateUnsupported;
-        wasmCGTolerateUnsupported = false;
+        import dmd.backend.wasm.codgen : wasmCGCtfeBuild;
+        wasmCGCtfeBuild = false;
     }
     wasmCtfeWipeCaches();
     wasmCtfeWipeCtypes();

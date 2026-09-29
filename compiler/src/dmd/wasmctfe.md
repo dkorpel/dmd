@@ -922,3 +922,108 @@ with the same pretty name. Every class the build emits now records its
 vtable address, and decoding looks up the vptr first. Cyclic object
 graphs are tracked by address, so a class that refers to itself no
 longer hits the depth limit.
+
+### Associative array iteration order matches run time
+
+The guest uses the real druntime AA implementation, so `.keys`,
+`.values` and `foreach` visit entries in hash order, the same order as
+the compiled program. The AST interpreter visits them in insertion
+order. `runnable/interpret.d` asserted the insertion order of `.keys`
+and `.values`; those checks now compare the elements without regard to
+order, and the `[4:true, 5:true].keys` initializer was rewritten so both
+engines produce the same array.
+
+### Nested classes get their outer pointer
+
+`new Inner(...)` inside a member function of `Outer` stores `this` in
+the hidden outer pointer of the new object. The AST interpreter ignores
+the `thisexp` of a `NewExp` and leaves the field `null`
+(`compilable/test22292.d`). The guest runs the real constructor
+lowering and stores the pointer. Verify mode accepts a `null` outer
+pointer from the AST interpreter.
+
+### Comparing cyclic results in verify mode
+
+`wasmCtfeCompare` recursed through class references up to a fixed depth.
+Two objects that point at each other twice (`TestA` with two fields
+referring to one `TestB`, which points back) made the comparison
+exponential, and `test22292` grew to 18 GB before the kernel killed it.
+The comparison now tracks the pairs of struct literals in progress.
+
+### Result cache keys include literal values and symbol identity
+
+Results are cached by the location and text of the expression plus the
+symbols it references. `static foreach` bodies produce many expressions
+with the same location and text that differ only in the value of the
+loop symbol, which is not always visible in the text: in
+`tests[tok].description` the index `tok` has already been folded into
+the AA lookup lowering. The unittest runner's
+`__traits(getAttributes)` on 179 generated unittests all got the first
+attribute. Keys now include the address of each referenced symbol and
+the text of every literal in the expression, including lowerings.
+
+### Temporaries declared in module-level expressions
+
+An expression at module scope can declare a temporary, for example the
+copy made for an rvalue passed to a `ref` parameter under
+`-preview=rvaluerefparam` (`compilable/fix21647.d`). Its parent is the
+module, so `isDataseg` caches `true` and the legality scan rejected it
+as a mutable global. The wrapper function now takes over the variable
+and its `isDataseg` cache for the duration of the build.
+
+### Address of an immutable global
+
+`&globalS` where `globalS` is `immutable` with an initializer is
+allowed, like reading it (`compilable/issue24316.d`). The address of a
+mutable global is still rejected.
+
+### Circular initialization
+
+`immutable int i = i;` made the build of the initializer request the
+value of `i` again, which printed the error once from the nested
+evaluation and once from the outer one (`fail_compilation/ice12827.d`).
+The engine now checks up front for a reference to a constant whose
+initializer is being evaluated and reports "circular initialization"
+like the AST interpreter. The check only looks at the expression
+itself; a cycle through a called function is still reported as a
+failed evaluation in strict mode.
+
+### `D main` keeps its declared signature
+
+The wasm backend gives `_Dmain` the fixed signature
+`(i32, i32) -> i32` so the start code can call any form of `main`. In a
+CTFE build `main()` is an ordinary function called with its declared
+arguments (`enum forceCtfe = main();` in
+`runnable/class_destructors.d`), so the normalisation is skipped.
+
+### Template instances used only in `if (__ctfe)` blocks
+
+With the engine active, druntime hooks are lowered inside `if (__ctfe)`
+blocks so the guest can run them. Their template instances, for example
+`__arrayAlloc!char` from `new char[5]`, were then emitted into the host
+object file, where they reference the GC. Under `-betterC` that failed
+to link (`runnable/test18472.d`). Instances created in such a block are
+now marked `ctfeOnly` and are never emitted by the host. If the same
+instance is later needed outside a `__ctfe` block, the flag is cleared.
+
+### `-betterC` attribute inference with engine lowerings
+
+Under `-betterC` a template function that uses the GC is inferred as
+not `@nogc` and marked `skipCodegen`, so that it can still run at
+compile time. The engine lowers `~` to `_d_arraycatnTX` even under
+`-betterC`, and the call to that non-`@nogc` hook ended `@nogc`
+inference before the `CatExp` itself was checked. The function was then
+emitted and failed with "requires the GC" (`compilable/test23606.d`).
+Hook calls that exist only because of the engine no longer take part in
+`@nogc` inference. For the same reason `new T[n]` inside an `if (__ctfe)`
+block no longer marks the function `skipCodegen`.
+
+### `_d_arrayappendcTX` under `-betterC`
+
+Without `D_TypeInfo` the druntime hook asserts. It now has an
+`if (__ctfe)` path that allocates with `GC.malloc` and copies, which
+the guest can run. The host removes the branch, so compiled `-betterC`
+code does not reference the GC. An earlier version rewrote the whole
+hook to work without `TypeInfo`, which made every `-betterC` program
+with an append in a `@__ctfe` function fail to link once the
+`druntime/import` copy was refreshed.

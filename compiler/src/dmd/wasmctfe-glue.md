@@ -51,6 +51,14 @@ instantiations they make became permanently speculative and later failed to
 link. `wasmCtfeSuspendMinstNull` and a separate pre-semantic state
 (`wasmCtfePreSemEnter`) restore normal rooting for those cases.
 
+The opposite problem appears when the frontend lowers druntime hooks only
+for the engine, as it does inside `if (__ctfe)` blocks. The resulting
+instances have a host ancestor, and `needsCodegen` emits every child of
+an emitted instance, so guest-only instances such as `__arrayAlloc!char`
+ended up in the host object file. They are now flagged `ctfeOnly`, which
+`needsCodegen` honours until an instantiation outside a `__ctfe` block
+clears it.
+
 ## 4. The host target leaks into the build
 
 The engine builds for wasm64, but `target.*` still describes the host.

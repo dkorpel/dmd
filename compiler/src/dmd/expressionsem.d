@@ -3605,6 +3605,13 @@ private bool checkNogc(FuncDeclaration f, ref Loc loc, Scope* sc)
     if (f.ident == Id._d_newitemT || f.ident == Id._d_newarrayT || f.ident == Id._d_newarraymTX)
         return false;
 
+    {
+        import dmd.wasmctfe : wasmCtfeLoweringActive;
+        const id = f.ident.toString();
+        if (!global.params.useGC && wasmCtfeLoweringActive() && id.length > 3 && id[0 .. 3] == "_d_")
+            return false;
+    }
+
     if (f.isNogc())
         return false;
 
@@ -7172,7 +7179,7 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
                 tb = tb.isTypeDArray().next.toBasetype();
             }
 
-            if (!global.params.useGC && sc.needsCodegen())
+            if (!global.params.useGC && sc.needsCodegen() && !sc.ctfeBlock)
             {
                 if (sc.func)
                 {

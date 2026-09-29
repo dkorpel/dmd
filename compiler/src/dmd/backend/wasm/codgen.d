@@ -64,7 +64,7 @@ import dmd.common.outbuffer;
 
 nothrow:
 
-__gshared bool wasmCGTolerateUnsupported;
+__gshared bool wasmCGCtfeBuild;
 
 /// Returns: WASM type for element `e`
 WASM_TYPE wasmType(elem* e)
@@ -2514,7 +2514,7 @@ bool genElem(ref WasmCG cg, elem* e)
     case OPnp_f16p:
     case OPf16p_np:
     case OPoffset:
-        if (wasmCGTolerateUnsupported)
+        if (wasmCGCtfeBuild)
         {
             cg.emit(OP.UNREACHABLE);
             return true;
@@ -2525,7 +2525,7 @@ bool genElem(ref WasmCG cg, elem* e)
 
     default:
         cg.emit(OP.UNREACHABLE);
-        if (wasmCGTolerateUnsupported)
+        if (wasmCGCtfeBuild)
             return true;
         printf("unimplemented e.Eoper: %s\n", oper_str(e.Eoper));
         elem_print(e);

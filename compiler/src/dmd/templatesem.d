@@ -942,9 +942,14 @@ void templateInstanceSemantic(TemplateInstance tempinst, Scope* sc, ArgumentList
         tempinst.minst = null;
     }
     {
-        import dmd.wasmctfe : wasmCtfeBuildActiveNow;
+        import dmd.wasmctfe : wasmCtfeBuildActiveNow, wasmCtfeLoweringActive;
         if (tempinst.minst && wasmCtfeBuildActiveNow())
             tempinst.minst = null;
+        if (sc.ctfeBlock && wasmCtfeLoweringActive())
+        {
+            tempinst.minst = null;
+            tempinst.ctfeOnly = true;
+        }
     }
 
     tempinst.gagged = (global.gag > 0);
@@ -1064,6 +1069,13 @@ void templateInstanceSemantic(TemplateInstance tempinst, Scope* sc, ArgumentList
 
         tempinst.tnext = tempinst.inst.tnext;
         tempinst.inst.tnext = tempinst;
+
+        if (tempinst.inst.ctfeOnly && !tempinst.ctfeOnly)
+        {
+            tempinst.inst.ctfeOnly = false;
+            if (!tempinst.minst)
+                tempinst.inst.tinst = tempinst.tinst;
+        }
 
         /* A module can have explicit template instance and its alias
          * in module scope (e,g, `alias Base64 = Base64Impl!('+', '/');`).
@@ -3413,7 +3425,7 @@ bool needsCodegen(TemplateInstance ti)
     // Don't do codegen if the instance has errors,
     // is a dummy instance (see evaluateConstraint),
     // or is determined to be discardable.
-    if (ti.errors || ti.inst is null || ti.inst.isDiscardable())
+    if (ti.errors || ti.inst is null || ti.inst.isDiscardable() || ti.ctfeOnly)
     {
         ti.minst = null; // mark as speculative
         return false;

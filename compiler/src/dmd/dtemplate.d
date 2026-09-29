@@ -808,6 +808,7 @@ extern (C++) class TemplateInstance : ScopeDsymbol
 
     private ushort _nest;       // for recursive pretty printing detection, 3 MSBs reserved for flags (below)
     ubyte inuse;                // for recursive expansion detection
+    bool ctfeOnly;
 
     private enum Flag : uint
     {
