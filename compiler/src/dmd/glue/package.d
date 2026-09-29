@@ -452,8 +452,12 @@ bool obj_linkerdirective(scope const(char)* directive)
     return objmod.linkerdirective(directive);
 }
 
+public __gshared FuncDeclaration[] wasmCtfeBuiltFuncs;
+
 void FuncDeclaration_toObjFile(FuncDeclaration fd, bool multiobj)
 {
+    if (wasmCtfeBuildActive)
+        wasmCtfeBuiltFuncs ~= fd;
     ClassDeclaration cd = fd.parent.isClassDeclaration();
     //printf("FuncDeclaration_toObjFile(%p, %s.%s)\n", fd, fd.parent.toChars(), fd.toChars());
     //printf("storage_class: %llx\n", fd.storage_class);
@@ -642,7 +646,7 @@ void FuncDeclaration_toObjFile(FuncDeclaration fd, bool multiobj)
             toObjFile(fdp, multiobj);
         }
     }
-    else
+    else if (!wasmCtfeBuildActive)
     {
         if (entryPointFunctions(objmod, fd))
             s.Sclass = SC.global;
@@ -1408,6 +1412,7 @@ public bool wasmCtfeGenerate(FuncDeclaration root, ref OutBuffer objbuf, out con
     wasmSelfLinkUnresolved = null;
     wasmCtfeBuildActive = true;
     wasmCtfePoisoned = null;
+    wasmCtfeBuiltFuncs = null;
     {
         import dmd.backend.wasm.codgen : wasmCGTolerateUnsupported;
         wasmCGTolerateUnsupported = true;

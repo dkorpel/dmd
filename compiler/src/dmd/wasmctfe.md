@@ -640,3 +640,69 @@ runtime `TypeInfo_Class.name` is qualified (`"typeid_name.Tiger"`). The
 engine runs the real TypeInfo, so it returns the qualified name. The AST
 interpreter was aligned (`toPrettyChars`) and `compilable/typeid_name.d`
 updated.
+
+### Pointer results are rebuilt from the allocation log
+
+The host bump allocator records every allocation (base, requested size).
+A pointer result is looked up in that log and rebuilt in the AST
+interpreter's shapes. A pointer to the start of a one-struct allocation
+becomes `&S(...)`. Anything else becomes `&[...][i]` over the whole
+allocation, read as an array of the pointee type. Structs and arrays are
+memoized by address, so cycles and sharing survive (`&S(1, <recursion>)`).
+Pointers into static data or the stack are not decodable, so they fall back.
+
+The allocation's type is unknown. `0 in [0:0]` points at the value
+inside an AA `Entry`, which the engine decodes as `&[0, 0][1]`. The AST
+interpreter gives `&[0][0]`. Dereferencing gives the same result, so
+verify compares the pointees, not the shapes.
+
+`new T` at module scope has no `_d_newitemT` lowering, because
+`needsCodegen()` is false there. Engine builds allocate through
+`_d_allocmemory` and blit `T.init`, as they already did for classes.
+
+### AA results are read through the CTFE order table
+
+An AA result is an `Impl*`. `selfLink` records the address of
+`core.internal.newaa.ctfeOrders` (`wasmSelfLinkProbeData`), and the
+decoder walks that table's entries for the impl. The result is an
+`AssocArrayLiteralExp` in insertion order, which is exactly the AST
+interpreter's order. A null impl decodes as `null`.
+
+### Unions decode to the widest member
+
+Memory doesn't say which union member was written last. The decoder
+keeps the widest overlapping field (the earliest on ties) and leaves the
+others `null`. The AST interpreter keeps the member it last wrote. Verify
+compares union structs, and classes containing unions, by their encoded
+bytes instead of by shape. Any later read of a narrower member through
+the AST would be a reinterpretation, but no fallback reads it.
+
+### Enclosing `const` locals are hoisted into the wrapper
+
+`static assert(bowie == 4001)` inside a function reads a `const` local
+whose initializer is itself CTFE (`space()`). The wrapper function gets
+a `DeclarationExp` for each such local, transitively through their
+initializers, and the locals are re-parented for the build. Mutable
+locals and parameters still fail, like in the AST interpreter.
+The `$` length variables of `a[0 .. $]` count as declared by their
+`SliceExp`/`IndexExp`.
+
+### Top-level array operations are unrolled
+
+`enum int[2] D = A[1 .. 3] * 6;` never reaches `_arrayOp`, because array
+operations outside a function body are not lowered by semantic. The
+engine unrolls them into an `ArrayLiteralExp` of per-element
+expressions (`A[1] * 6, A[2] * 6`), recursing for nested arrays. An
+operand whose array depth is lower than the result's is broadcast, so
+`[[1, 2], [3, 4]] + [10, 20]` adds `[10, 20]` to each row. The length
+comes from a static array type, an array literal or a slice with
+constant bounds. Operands containing calls would be evaluated once per
+element, so those still fail. Unary array operations (`-A[]`) at top
+level trip an assert in the AST interpreter too.
+
+### Function pointer and delegate results
+
+Table indices are mapped back to function symbols through the selflink
+table names and the list of functions built for the engine. A function
+literal becomes a `FuncExp`, a plain function a `SymOffExp`. Delegates
+with a non-null context pointer are not decoded yet.

@@ -55,6 +55,9 @@ __gshared const(char)[] wasmSelfLinkProbeData;
 /// ditto
 __gshared uint wasmSelfLinkProbeAddr;
 
+/// Symbol name of each function, by table slot - 1, recorded by `selfLink`.
+__gshared const(char)[][] wasmSelfLinkTableNames;
+
 /// Data symbols no definition and no `wasmSelfLinkDataSymbols` entry was found
 /// for; relocated to address 0. Reported by the driver once the module is done.
 __gshared const(char)[][] wasmSelfLinkUnresolved;
@@ -252,6 +255,10 @@ void selfLink(ref WasmModule wmod)
     fillCallCtors(wmod);
     gatherMinfo(wmod);
     computeLayout(wmod);
+    wasmSelfLinkTableNames = new const(char)[][](wmod.funcs.length);
+    foreach (i, ref f; wmod.funcs)
+        if (f.sym && f.sym.Sident.ptr)
+            wasmSelfLinkTableNames[i] = f.sym.identifier.idup;
     wasmSelfLinkProbeAddr = 0;
     if (wasmSelfLinkProbeData.length)
         foreach (ref const WasmDataSeg ds; wmod.dataSegs)
