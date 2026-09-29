@@ -301,6 +301,9 @@ void wasmCtfeQueueDefinition(Dsymbol d)
         return;
     if (auto fd = d.isFuncDeclaration())
     {
+        import dmd.wasmctfe : wasmCtfeHostBuiltin;
+        if (wasmCtfeHostBuiltin(fd))
+            return;
         if (!fd.fbody && fd.semanticRun >= PASS.semantic3done)
         {
             import core.stdc.stdlib : getenv;
@@ -740,6 +743,15 @@ Symbol* toSymbol(Dsymbol s)
             checkWasmComplex(fd.loc, fd.type);
 
             const(char)* id = mangleExact(fd);
+            {
+                import dmd.wasmctfe : wasmCtfeHostBuiltin, wasmCtfeBuiltinFds;
+                if (wasmCtfeBuildActive && wasmCtfeHostBuiltin(fd))
+                {
+                    auto nm = "__wasmctfe_bi_" ~ id[0 .. strlen(id)] ~ "\0";
+                    wasmCtfeBuiltinFds[cast(string) nm[0 .. $ - 1]] = fd;
+                    id = nm.ptr;
+                }
+            }
 
             //printf("FuncDeclaration.toSymbol(%s %s)\n", fd.kind(), fd.toChars());
 

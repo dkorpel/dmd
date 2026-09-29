@@ -1859,14 +1859,14 @@ int scanLegalityImpl(FuncDeclaration fd, ref bool[void*] inProgress, bool relaxe
         return 1;
     inProgress[cast(void*) fd] = true;
 
-    if (trustedModule(fd))
+    if (trustedModule(fd) || wasmCtfeHostBuiltin(fd))
     {
         (*verdicts)[cast(void*) fd] = 1;
         return 1;
     }
     if (!fd.fbody || fd.errors)
     {
-        const ok = isBuiltin(fd) != BUILTIN.unimp;
+        const ok = isBuiltin(fd) != BUILTIN.unimp || (relaxed && !fd.fbody && !fd.errors);
         (*verdicts)[cast(void*) fd] = ok ? 1 : 0;
         return ok ? 1 : 0;
     }
@@ -2724,6 +2724,48 @@ private struct HostImport
     char[128] name;
     size_t nameLen;
     int softOp = -1;
+    FuncDeclaration builtinFd;
+}
+
+public __gshared FuncDeclaration[string] wasmCtfeBuiltinFds;
+
+public bool wasmCtfeHostBuiltin(FuncDeclaration fd)
+{
+    const b = isBuiltin(fd);
+    return b != BUILTIN.unimp && b != BUILTIN.unknown && b != BUILTIN.ctfeWrite;
+}
+
+private extern (C) wasm_trap_t* ipHostBuiltin(void* env, wasmtime_caller_t* caller,
+    const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
+{
+    alias Impl = wasm_trap_t* function(HostImport*, const(wasmtime_val_t)*, size_t, wasmtime_val_t*, size_t) nothrow @nogc;
+    return (cast(Impl) &ipHostBuiltinImpl)(cast(HostImport*) env, args, nargs, results, nresults);
+}
+
+private wasm_trap_t* ipHostBuiltinImpl(HostImport* hi, const(wasmtime_val_t)* args, size_t nargs,
+    wasmtime_val_t* results, size_t nresults)
+{
+    import dmd.builtin : eval_builtin;
+    auto fd = hi.builtinFd;
+    auto tf = fd.type.isTypeFunction();
+    const n = tf.parameterList.length;
+    if (n != nargs)
+        return ipTrap("wasm-ctfe: builtin arity");
+    auto exps = new Expressions(n);
+    foreach (i, p; tf.parameterList)
+    {
+        wasmtime_val_t v = args[i];
+        auto e = ipDecodeScalar(v, p.type, fd.loc);
+        if (!e)
+            return ipTrap("wasm-ctfe: builtin argument");
+        (*exps)[i] = e;
+    }
+    auto r = eval_builtin(fd.loc, fd, exps);
+    if (!r)
+        return nresults ? ipTrap("wasm-ctfe: builtin failed") : null;
+    if (nresults && !ipMarshalScalar(r, results[0]))
+        return ipTrap("wasm-ctfe: builtin result");
+    return null;
 }
 
 private int ipRealRelop(int op, real a, real b) nothrow @nogc
@@ -3452,6 +3494,15 @@ Expression tryWasmCtfeInproc(FuncDeclaration fd, Expression thisExp, Expression[
 
     if (!fd || !resultType)
         return bail(fd, "no fd/result type");
+    if (!thisExp && wasmCtfeHostBuiltin(fd))
+    {
+        import dmd.builtin : eval_builtin;
+        auto exps = new Expressions(args.length);
+        foreach (i, a; args)
+            (*exps)[i] = a;
+        if (auto r = eval_builtin(loc, fd, exps))
+            return r;
+    }
     if (fd.semanticRun < PASS.semantic3done)
         ipForceSemantic3(fd);
     if (fd.semanticRun < PASS.semantic3done || !fd.fbody || fd.errors)
@@ -3658,6 +3709,14 @@ Expression tryWasmCtfeInproc(FuncDeclaration fd, Expression thisExp, Expression[
                 cb = &ipHostAssertMsg;
             else if (nm == "_d_arrayappendcd" || nm == "_d_arrayappendcw")
                 cb = &ipHostArrayAppendC;
+            else if (nm.length > 14 && nm[0 .. 14] == "__wasmctfe_bi_")
+            {
+                if (auto bp = (cast(string) nm) in wasmCtfeBuiltinFds)
+                {
+                    hi.builtinFd = *bp;
+                    cb = &ipHostBuiltin;
+                }
+            }
             else if (nm.length > 16 && nm[0 .. 16] == "__wasmctfe_real_")
             {
                 import dmd.backend.wasm.softreal : softRealNames;
