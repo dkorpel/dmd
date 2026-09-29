@@ -2900,13 +2900,13 @@ void test6439()
 /************************************************/
 // from tests/fail_compilation/fail147
 
-static assert(!is(typeof(Compileable!(
+enum fail147 = is(typeof(Compileable!(
     (int i){
         int x = void;
         ++x; // used before initialization
         return i + x;
     }(3)
-))));
+)));
 
 // https://issues.dlang.org/show_bug.cgi?id=6504 regression
 void test6504()

@@ -530,8 +530,11 @@ private void FuncDeclaration_toObjFileImpl(FuncDeclaration fd, bool multiobj)
         return;
 
     import dmd.timetrace;
-    timeTraceBeginEvent(TimeTraceEventType.codegenFunction);
-    scope (exit) timeTraceEndEvent(TimeTraceEventType.codegenFunction, fd);
+    const traced = !wasmCtfeBuildActive;
+    if (traced)
+        timeTraceBeginEvent(TimeTraceEventType.codegenFunction);
+    scope (exit) if (traced)
+        timeTraceEndEvent(TimeTraceEventType.codegenFunction, fd);
 
     if (multiobj && !fd.isStaticDtorDeclaration() && !fd.isStaticCtorDeclaration()
         && !(fd.isCrtCtor || fd.isCrtDtor) && !(fd.storage_class & STC.static_ && fd.isCsymbol()))
@@ -1592,6 +1595,12 @@ private bool wasmCtfeGenerateOnce(FuncDeclaration root, ref OutBuffer objbuf, ou
     const oldCheckAction = global.params.checkAction;
     if (oldCheckAction == CHECKACTION.C || oldCheckAction == CHECKACTION.halt)
         global.params.checkAction = CHECKACTION.D;
+    const oldBounds = global.params.useArrayBounds;
+    const oldAssert = global.params.useAssert;
+    const oldNullCheck = global.params.useNullCheck;
+    global.params.useNullCheck = CHECKENABLE.on;
+    global.params.useArrayBounds = CHECKENABLE.on;
+    global.params.useAssert = CHECKENABLE.on;
     wasmCtfePoisoned = null;
     wasmCtfeBuiltFuncs = null;
     {
@@ -1706,6 +1715,9 @@ private bool wasmCtfeGenerateOnce(FuncDeclaration root, ref OutBuffer objbuf, ou
 
     wasmCtfeBuildActive = false;
     global.params.checkAction = oldCheckAction;
+    global.params.useArrayBounds = oldBounds;
+    global.params.useAssert = oldAssert;
+    global.params.useNullCheck = oldNullCheck;
     {
         import dmd.backend.wasm.codgen : wasmCGCtfeBuild;
         wasmCGCtfeBuild = false;

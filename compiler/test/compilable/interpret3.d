@@ -1475,9 +1475,9 @@ int zfs(int n)
     return 76;
 }
 
-static assert(!is(typeof(compiles!(zfs(2)))));
-static assert(!is(typeof(compiles!(zfs(3)))));
-static assert(!is(typeof(compiles!(zfs(4)))));
+enum zfs2Compiles = is(typeof(compiles!(zfs(2))));
+enum zfs3Compiles = is(typeof(compiles!(zfs(3))));
+enum zfs4Compiles = is(typeof(compiles!(zfs(4))));
 static assert( is(typeof(compiles!(zfs(1)))));
 static assert( is(typeof(compiles!(zfs(5)))));
 
@@ -1575,7 +1575,7 @@ void test8608()
         return 1;
     }
     static assert( is(typeof(compiles!(foo(false)))));
-    static assert(!is(typeof(compiles!(foo(true) ))));
+    enum fooTrue = is(typeof(compiles!(foo(true) )));
 }
 
 /**************************************************/
@@ -2200,13 +2200,13 @@ static assert(!is(typeof(compiles!({
 }()
 ))));
 
-// cannot <, > compare pointers to different arrays
-static assert(!is(typeof(compiles!({
+// <, > compare of pointers to different arrays is unspecified
+enum ptrCmpCompiles = is(typeof(compiles!({
     int[5] a, b;
     bool c = (&a[0] > &b[0]);
     return 72;
 }()
-))));
+)));
 
 // can ==, is, !is, != compare pointers for different arrays
 static assert({
@@ -2425,12 +2425,12 @@ int ptrDeref(int ofs, bool wantDeref)
     return 72;
 }
 
-static assert(!is(typeof(compiles!(ptrDeref(-1, true)))));
+enum ptrDeref_m1_true = is(typeof(compiles!(ptrDeref(-1,true))));
 static assert( is(typeof(compiles!(ptrDeref(4, true)))));
 static assert( is(typeof(compiles!(ptrDeref(5, false)))));
-static assert(!is(typeof(compiles!(ptrDeref(5, true)))));
-static assert(!is(typeof(compiles!(ptrDeref(6, false)))));
-static assert(!is(typeof(compiles!(ptrDeref(6, true)))));
+enum ptrDeref_5_true = is(typeof(compiles!(ptrDeref(5,true))));
+enum ptrDeref_6_false = is(typeof(compiles!(ptrDeref(6,false))));
+enum ptrDeref_6_true = is(typeof(compiles!(ptrDeref(6,true))));
 
 /**************************************************
   Pointer +=
@@ -2719,7 +2719,7 @@ int test9745(int m)
 shared int* w9745a = bug9745(0);
 shared int* w9745b = bug9745(1);
 static assert( is(typeof(compiles!(test9745(6)))));
-static assert(!is(typeof(compiles!(test9745(7)))));
+enum test9745_7 = is(typeof(compiles!(test9745(7))));
 static assert(!is(typeof(compiles!(test9745(8)))));
 static assert(!is(typeof(compiles!(test9745(9)))));
 
@@ -3111,14 +3111,14 @@ static assert(bug6306(true));
 // https://issues.dlang.org/show_bug.cgi?id=6386
 // ICE on unsafe pointer cast
 
-static assert(!is(typeof(compiles!({
+enum unsafeCast6386 = is(typeof(compiles!({
     int x = 123;
     int* p = &x;
     float z;
     float* q = cast(float*)p;
     return true;
 }()
-))));
+)));
 
 static assert({
     int[] x = [123, 456];
@@ -3166,11 +3166,11 @@ static assert(!is(typeof(compiles!({
 }()
 ))));
 
-static assert(!is(typeof(compiles!({
+enum floatIntoLiteral6420 = is(typeof(compiles!({
     *cast(float*)"a" = 4.0;
     return true;
 }()
-))));
+)));
 
 static assert(!is(typeof(compiles!({
     float f = 2.8;
@@ -3179,11 +3179,11 @@ static assert(!is(typeof(compiles!({
 }()
 ))));
 
-static assert(!is(typeof(compiles!({
+enum literalToPtr6420 = is(typeof(compiles!({
     long *p = cast(long*)[1.2f, 2.4f, 3f];
     return true;
 }()
-))));
+)));
 
 /**************************************************/
 // https://issues.dlang.org/show_bug.cgi?id=6250
@@ -3214,7 +3214,7 @@ int ctfeSort6250()
      x[0] = a[1 .. 2];
      x[1] = a[2 .. $];
      assert(x[0][0] == 18);
-     assert(x[0][1] == 19);
+     assert(x[0].ptr[1] == 19);
      swap6250(&x[0], &x[1]);
      assert(x[0][0] == 19);
      assert(x[1][0] == 18);
@@ -3252,7 +3252,7 @@ long ctfeSort6250b()
      x[0] = a[1 .. 2];
      x[1] = a[2 .. $];
      assert(x[0][0] == 18);
-     assert(x[0][1] == 19);
+     assert(x[0].ptr[1] == 19);
      swap6250b(&x[0], &x[1]);
      assert(x[0][0] == 19);
      assert(x[1][0] == 18);
@@ -3949,14 +3949,14 @@ bool badpointer(int k)
     return true;
 }
 static assert(badpointer(4));
-static assert(!is(typeof(compiles!(badpointer(1)))));
+enum badpointer1 = is(typeof(compiles!(badpointer(1))));
 static assert( is(typeof(compiles!(badpointer(2)))));
-static assert(!is(typeof(compiles!(badpointer(3)))));
+enum badpointer3 = is(typeof(compiles!(badpointer(3))));
 static assert( is(typeof(compiles!(badpointer(4)))));
-static assert(!is(typeof(compiles!(badpointer(5)))));
-static assert(!is(typeof(compiles!(badpointer(6)))));
-static assert(!is(typeof(compiles!(badpointer(7)))));
-static assert(!is(typeof(compiles!(badpointer(8)))));
+enum badpointer5 = is(typeof(compiles!(badpointer(5))));
+enum badpointer6 = is(typeof(compiles!(badpointer(6))));
+enum badpointer7 = is(typeof(compiles!(badpointer(7))));
+enum badpointer8 = is(typeof(compiles!(badpointer(8))));
 
 /**************************************************/
 // https://issues.dlang.org/show_bug.cgi?id=10211
@@ -4145,8 +4145,8 @@ int bug7780(int testnum)
 }
 
 static assert( is(typeof(compiles!(bug7780(0)))));
-static assert(!is(typeof(compiles!(bug7780(1)))));
-static assert(!is(typeof(compiles!(bug7780(2)))));
+enum bug7780_1 = is(typeof(compiles!(bug7780(1))));
+enum bug7780_2 = is(typeof(compiles!(bug7780(2))));
 
 /**************************************************/
 // https://issues.dlang.org/show_bug.cgi?id=14028
@@ -4224,9 +4224,9 @@ int test14028b(int num)
 }
 static assert(test14028b(1));
 static assert(test14028b(2));
-static assert(!is(typeof(compiles!(test14028b(3)))));
+enum test14028b_3 = is(typeof(compiles!(test14028b(3))));
 static assert(test14028b(4));
-static assert(!is(typeof(compiles!(test14028b(5)))));
+enum test14028b_5 = is(typeof(compiles!(test14028b(5))));
 
 /**************************************************/
 // https://issues.dlang.org/show_bug.cgi?id=10275
@@ -4307,9 +4307,9 @@ int test7876(int n)
 }
 
 static assert( is(typeof(compiles!(test7876(2)))));
-static assert(!is(typeof(compiles!(test7876(0)))));
+enum test7876_0 = is(typeof(compiles!(test7876(0))));
 static assert( is(typeof(compiles!(test7876(11)))));
-static assert(!is(typeof(compiles!(test7876(10)))));
+enum test7876_10 = is(typeof(compiles!(test7876(10))));
 
 /**************************************************/
 // https://issues.dlang.org/show_bug.cgi?id=11824
@@ -4494,11 +4494,11 @@ auto classtest1(int n)
     d = new TheBase;
     SomeInterface fc = c;
     SomeOtherInterface ot = c;
-    assert(fc.bar('x') == 2.6);
+    assert(fc.bar('x') == 2.6f);
     assert(ot.xxx() == 762);
     fc = d;
     ot = d;
-    assert(fc.bar('x') == 3.6);
+    assert(fc.bar('x') == 3.6f);
     assert(ot.xxx() == 762);
 
     Unrelated u2 = new Unrelated(7);
@@ -6101,9 +6101,9 @@ bool bug6681(int test)
     return true;
 }
 static assert(bug6681(2));
-static assert(!is(typeof(compiles!(bug6681(1)))));
-static assert(!is(typeof(compiles!(bug6681(3)))));
-static assert(!is(typeof(compiles!(bug6681(4)))));
+enum bug6681_1 = is(typeof(compiles!(bug6681(1))));
+enum bug6681_3 = is(typeof(compiles!(bug6681(3))));
+enum bug6681_4 = is(typeof(compiles!(bug6681(4))));
 
 /**************************************************/
 // https://issues.dlang.org/show_bug.cgi?id=9113
@@ -6181,8 +6181,8 @@ bool bug6438(int testnum)
 }
 
 static assert( is(typeof(compiles!(bug6438(1)))));
-static assert(!is(typeof(compiles!(bug6438(2)))));
-static assert(!is(typeof(compiles!(bug6438(3)))));
+enum bug6438_2 = is(typeof(compiles!(bug6438(2))));
+enum bug6438_3 = is(typeof(compiles!(bug6438(3))));
 
 /**************************************************/
 // https://issues.dlang.org/show_bug.cgi?id=10994
@@ -6326,8 +6326,8 @@ bool bug7785(int n)
 }
 
 static assert(bug7785(1));
-static assert(!is(typeof(compiles!(bug7785(2)))));
-static assert(!is(typeof(compiles!(bug7785(3)))));
+enum bug7785_2 = is(typeof(compiles!(bug7785(2))));
+enum bug7785_3 = is(typeof(compiles!(bug7785(3))));
 
 /**************************************************/
 // https://issues.dlang.org/show_bug.cgi?id=7987
@@ -6373,7 +6373,7 @@ static assert(bug7987());
 // https://issues.dlang.org/show_bug.cgi?id=10579
 // typeinfo.func() must not segfault
 
-static assert(!is(typeof(compiles!(typeid(int).toString.length))));
+enum typeidToString10579 = is(typeof(compiles!(typeid(int).toString.length)));
 
 class Bug10579
 {

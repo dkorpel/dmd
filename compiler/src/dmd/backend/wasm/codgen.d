@@ -530,6 +530,17 @@ private void emitLoad(ref WasmCG cg, tym_t ty, uint offset = 0)
 
 private void emitStore(ref WasmCG cg, tym_t ty, uint offset = 0)
 {
+    if (isSoftRealTy(ty) && _tysize[TYreal] == 12)
+    {
+        const uint v = cg.allocTemp(WASM_TYPE.V128);
+        const uint a = cg.allocTemp(WASM_PTR);
+        cg.emit(OP.LOCAL_SET, Uleb(v), OP.LOCAL_SET, Uleb(a),
+            OP.LOCAL_GET, Uleb(a), OP.LOCAL_GET, Uleb(v),
+            OP.FD_PREFIX, Uleb(WASM_SIMD.V128_STORE64_LANE), Uleb(2), Uleb(offset), cast(ubyte) 0,
+            OP.LOCAL_GET, Uleb(a), OP.LOCAL_GET, Uleb(v),
+            OP.FD_PREFIX, Uleb(WASM_SIMD.V128_STORE32_LANE), Uleb(2), Uleb(offset + 8), cast(ubyte) 2);
+        return;
+    }
     if (tyvector(tybasic(ty)) || isSoftRealTy(ty) ||
         (I64() && (tybasic(ty) == TYcent || tybasic(ty) == TYucent)))
         return cg.emit(OP.FD_PREFIX, Uleb(WASM_SIMD.V128_STORE), Uleb(4), Uleb(offset));
@@ -537,6 +548,8 @@ private void emitStore(ref WasmCG cg, tym_t ty, uint offset = 0)
     const m = memOpsFor(ty);
     cg.emit(m.storeOp, Uleb(naturalAlign(m.storeOp)), Uleb(offset));
 }
+
+__gshared Symbol*[const(Symbol)*] wasmExnPayloadVar;
 
 /// Store the caught exception payload (i32 on the value stack) into the
 /// try's jcatchvar shadow slot. Called by the block structurer right after

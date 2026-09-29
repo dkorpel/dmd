@@ -145,9 +145,10 @@ void backend_init_wasm_ctfe()
 
     config = Config.init;
     go.mfoptim = 0;
+    import dmd.target : target;
     out_config_init(
         false,
-        64,
+        target.isLP64 ? 64 : 32,
         false,
         false,
         false,
@@ -177,8 +178,18 @@ void backend_init_wasm_ctfe()
         import dmd.backend.ty : _tysize, _tyalignsize, TYreal, TYireal, TYcreal;
         import dmd.target : target;
         softRealReset();
-        wasmSoftReal = real.mant_dig == 64 && target.realsize == 16 && target.realpad == 6;
-        if (wasmSoftReal)
+        wasmSoftReal = real.mant_dig == 64 && (target.realsize == 16 && target.realpad == 6
+            || target.realsize == 12 && target.realpad == 2);
+        if (wasmSoftReal && target.realsize == 12)
+        {
+            _tysize[TYreal] = 12;
+            _tysize[TYireal] = 12;
+            _tysize[TYcreal] = 24;
+            _tyalignsize[TYreal] = 4;
+            _tyalignsize[TYireal] = 4;
+            _tyalignsize[TYcreal] = 4;
+        }
+        else if (wasmSoftReal)
         {
             _tysize[TYreal] = 16;
             _tysize[TYireal] = 16;

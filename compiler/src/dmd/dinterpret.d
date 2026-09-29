@@ -99,13 +99,17 @@ public Expression ctfeInterpret(Expression e)
     if (e.type.ty == Terror)
         return ErrorExp.get();
 
+    import dmd.timetrace;
+    timeTraceBeginEvent(TimeTraceEventType.ctfe);
+    scope (exit) timeTraceEndEvent(TimeTraceEventType.ctfe, e);
+
     import dmd.wasmctfe;
     Expression wasmResult;
     const wmode = wasmCtfeMode();
     const wstrict = wmode == WasmCtfeMode.strict;
     if (wmode != WasmCtfeMode.off && (!global.gag || wstrict))
     {
-        wasmResult = tryWasmCtfe(e);
+        wasmResult = tryWasmCtfeTraced(e);
         if ((wmode == WasmCtfeMode.inproc || wstrict) && wasmResult !is null)
             return scrubReturnValue(e.loc, wasmResult);
         if (wstrict && !wasmCtfeIsLiteral(e))
@@ -117,10 +121,6 @@ public Expression ctfeInterpret(Expression e)
     }
 
     auto rgnpos = ctfeGlobals.region.savePos();
-
-    import dmd.timetrace;
-    timeTraceBeginEvent(TimeTraceEventType.ctfe);
-    scope (exit) timeTraceEndEvent(TimeTraceEventType.ctfe, e);
 
     Expression result = interpret(e, null);
 

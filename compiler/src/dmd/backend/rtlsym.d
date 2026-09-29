@@ -133,7 +133,11 @@ enum RTLSYM
 
     CXA_ATEXIT,
 
-    EHWASMMATCH
+    EHWASMMATCH,
+    WASMCTFEAPPEND,
+    WASMCTFESHIFTERR,
+    WASMCTFECHAIN,
+    WASMCTFECOV,
 }
 
 private __gshared Symbol*[RTLSYM.max + 1] rtlsym;
@@ -295,6 +299,10 @@ Symbol* getRtlsym(RTLSYM i) @trusted
 
         case RTLSYM.CXA_ATEXIT:             symbolz(ps,FL.func,FREGSAVED,"__cxa_atexit", 0, t); break;
         case RTLSYM.EHWASMMATCH:            symbolz(ps,FL.func,FREGSAVED,"_d_eh_wasm_match", 0, t); break;
+        case RTLSYM.WASMCTFEAPPEND:         symbolz(ps,FL.func,FREGSAVED,"__wasmctfe_append", 0, t); break;
+        case RTLSYM.WASMCTFESHIFTERR:       symbolz(ps,FL.func,FREGSAVED,"__wasmctfe_shift_error", SFLexit, t); break;
+        case RTLSYM.WASMCTFECHAIN:          symbolz(ps,FL.func,FREGSAVED,"__wasmctfe_chain", 0, t); break;
+        case RTLSYM.WASMCTFECOV:            symbolz(ps,FL.func,FREGSAVED,"__wasmctfe_cov", 0, t); break;
         default:
             assert(0);
     }
@@ -404,6 +412,10 @@ private type* wasmRtlsymType(RTLSYM i)
 
         case RTLSYM.CXA_ATEXIT:             return fn([voidPtr(), voidPtr(), voidPtr()], tint);
         case RTLSYM.EHWASMMATCH:            return fn([voidPtr(), voidPtr()], tstypes[TYbool]);
+        case RTLSYM.WASMCTFEAPPEND:         return fn([voidPtr(), voidPtr(), tsize, tsize], tvoid);
+        case RTLSYM.WASMCTFESHIFTERR:       return fn([charPtr(), tuint, tstypes[TYllong], tstypes[TYllong]], tvoid);
+        case RTLSYM.WASMCTFECHAIN:          return fn([voidPtr(), voidPtr()], voidPtr());
+        case RTLSYM.WASMCTFECOV:            return fn([tuint, tuint], tvoid);
 
         case RTLSYM.MONITOR_HANDLER:        return null;
         case RTLSYM.MONITOR_PROLOG:         return null;

@@ -1388,9 +1388,40 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
             StmtState finallyState = StmtState(stmtstate, s);
 
             setScopeIndex(blx, blx.curblock, previndex);
-            if (s.finalbody)
+            if (config.ehmethod == EHmethod.EH_WASM && wasmCtfeBuildActive
+                && !(blx.funcsym.Sfunc.Fflags & Feh_none) && s.finalbody)
+            {
+                import dmd.backend.wasm.codgen : wasmExnPayloadVar;
+                Symbol* sexn = symbol_genauto(type_fake(mTYvolatile | TYnptr));
+                wasmExnPayloadVar[sflag] = sexn;
+
+                block* ftry = block_goto(blx, BC.goto_, null);
+                const fprev = blx.scope_index;
+                ftry.Blast_index = fprev;
+                blx.scope_index = ftry.Bscope_index = blx.next_index++;
+                ftry.jcatchvar = symbol_genauto(type_fake(mTYvolatile | TYnptr));
+                blx.tryblock = ftry;
+                block_goto(blx, BC.try_, null);
                 Statement_toIR(s.finalbody, irs, &finallyState);
-            block_goto(blx, BC.goto_, retblock);
+                blx.tryblock = ftry.Btry;
+                blx.scope_index = fprev;
+                blx.curblock.Bsucc.push(retblock);
+                block_next(blx, BC.goto_, null);
+                ftry.Bsucc.push(blx.curblock);
+                block_goto(blx, BC.jcatch, null);
+                elem* e1 = el_bin(OPcond, TYnptr, el_var(sflag),
+                    el_bin(OPcolon, TYnptr, el_long(TYnptr, 0), el_var(sexn)));
+                elem* ec = el_bin(OPcall, TYnptr, el_var(getRtlsym(RTLSYM.WASMCTFECHAIN)),
+                    el_param(el_var(ftry.jcatchvar), e1));
+                block_appendexp(blx.curblock, el_una(OPthrow, TYnoreturn, ec));
+                block_next(blx, BC.exit, retblock);
+            }
+            else
+            {
+                if (s.finalbody)
+                    Statement_toIR(s.finalbody, irs, &finallyState);
+                block_goto(blx, BC.goto_, retblock);
+            }
 
             block_next(blx,BC.finRet,breakblock);
         }

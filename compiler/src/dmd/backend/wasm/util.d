@@ -139,6 +139,17 @@ void patchLE32(ubyte[] buf, uint off, uint v) nothrow @safe
 /// Overwrite a 5-byte padded LEB128 operand in place. Values below 2^28 encode
 /// identically as signed and unsigned here, which covers every index and
 /// address a self-linked module produces.
+void patchSLEB5(ubyte[] buf, uint off, int v) nothrow @safe
+{
+    if (off + 5 > buf.length)
+        return;
+    foreach (b; 0 .. 5)
+    {
+        buf[off + b] = cast(ubyte)((v & 0x7f) | (b < 4 ? 0x80 : 0));
+        v >>= 7;
+    }
+}
+
 void patchLEB5(ubyte[] buf, uint off, uint v) nothrow @safe
 {
     if (off + 5 > buf.length)

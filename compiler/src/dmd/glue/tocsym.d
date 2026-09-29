@@ -119,6 +119,7 @@ void resetCtfeSymbolCache()
 }
 
 package(dmd.glue) __gshared bool wasmCtfeBuildActive;
+public __gshared Module[] wasmCtfeCovModules;
 
 private __gshared Array!ClassDeclaration wasmCtfeClasses;
 
@@ -392,6 +393,9 @@ private __gshared Array!Dsymbol wasmCtfeObjMarked;
 private __gshared Array!PASS wasmCtfeObjMarkedPass;
 private __gshared Array!TypeInfoDeclaration wasmCtfeTypeInfos;
 
+/// TypeInfo declarations emitted by the last engine build, by symbol name.
+__gshared TypeInfoDeclaration[string] wasmCtfeTypeInfoByName;
+
 package(dmd.glue)
 void wasmCtfeRecordTypeInfo(TypeInfoDeclaration tid)
 {
@@ -412,6 +416,10 @@ void wasmCtfePoison(const(char)* why)
 package(dmd.glue)
 void wasmCtfeWipeCaches()
 {
+    wasmCtfeTypeInfoByName = null;
+    foreach (tid; wasmCtfeTypeInfos[])
+        if (tid.csym && (cast(Symbol*) tid.csym).Sident.ptr)
+            wasmCtfeTypeInfoByName[(cast(Symbol*) tid.csym).identifier.idup] = tid;
     foreach (i, d; wasmCtfeObjMarked[])
         d.semanticRun = wasmCtfeObjMarkedPass[i];
     wasmCtfeObjMarked.setDim(0);

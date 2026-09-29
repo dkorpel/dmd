@@ -725,6 +725,13 @@ elem* toElem(Expression e, ref IRState irs)
             return el_long(TYsize_t, 0);
         }
 
+        if (wasmCtfeBuildActive && se.op == EXP.variable && v && v.ident == Id.dollar
+            && (v.storage_class & STC.ctfe) && v.isDataseg() && v._init)
+        {
+            if (auto ie = v._init.isExpInitializer())
+                return toElem(ie.exp, irs);
+        }
+
         /* The magic variable __ctfe is always false at runtime
          */
         if (se.op == EXP.variable && v && v.ident == Id.ctfe)
@@ -1112,6 +1119,8 @@ elem* toElem(Expression e, ref IRState irs)
         assert(tc);
         // generate **classptr to get the classinfo
         elem* result = toElem(ex, irs);
+        if (wasmCtfeBuildActive && irs.nullDerefCheck())
+            applyNullDerefErrorCheck(result, result.Ety, irs, e.loc);
         result = el_una(OPind,TYnptr,result);
         result = el_una(OPind,TYnptr,result);
         // Add extra indirection for interfaces
@@ -1157,7 +1166,10 @@ elem* toElem(Expression e, ref IRState irs)
 
     elem* visitInteger(IntegerExp ie)
     {
-        elem* e = el_long(totym(ie.type), ie.getInteger());
+        ulong v = ie.getInteger();
+        if (wasmCtfeBuildActive && v && ie.type.toBasetype().ty == Tpointer)
+            v ^= wasmCtfeIntPtrTag(tysize(TYnptr));
+        elem* e = el_long(totym(ie.type), v);
         elem_setLoc(e,ie.loc);
         return e;
     }
@@ -1960,6 +1972,30 @@ elem* toElem(Expression e, ref IRState irs)
 
     /********************************************
      */
+    elem* wasmCtfeShiftGuard(BinExp be, int op, ref elem* er, ref elem* check)
+    {
+        if (!wasmCtfeBuildActive || er.Eoper == OPconst)
+            return er;
+        if (op != OPshl && op != OPshr && op != OPashr && op != OPshlass && op != OPshrass && op != OPashrass)
+            return er;
+        const csz = tysize(er.Ety);
+        const bits = be.e1.type.toBasetype().size() * 8;
+        if ((csz != 4 && csz != 8) || (bits != 32 && bits != 64))
+            return er;
+        const ctym = er.Ety;
+        elem* ec = el_same(er);
+        elem* cnt = csz == 8 ? el_copytree(ec)
+            : el_una(tyuns(ctym) ? OPu32_64 : OPs32_64, TYllong, el_copytree(ec));
+        const efile = irs.locToFileElem(be.loc);
+        elem* call = el_bin(OPcall, TYvoid, el_var(getRtlsym(RTLSYM.WASMCTFESHIFTERR)),
+            el_params(el_long(TYllong, bits - 1), cnt, el_long(TYuint, be.loc.linnum), efile, null));
+        elem* neg = el_bin(OPlt, TYint, er, el_long(ctym, 0));
+        elem* big = el_bin(OPgt, TYint, el_copytree(ec), el_long(ctym, bits - 1));
+        check = el_bin(OPandand, TYvoid, el_bin(OPoror, TYint, neg, big), call);
+        er = ec;
+        return er;
+    }
+
     elem* toElemBin(BinExp be, int op)
     {
         //printf("toElemBin() '%s'\n", be.toChars());
@@ -1975,8 +2011,11 @@ elem* toElem(Expression e, ref IRState irs)
 
         elem* el = toElem(be.e1, irs);
         elem* er = toElem(be.e2, irs);
+        elem* check;
+        wasmCtfeShiftGuard(be, op, er, check);
 
         elem* e = el_bin(op,tym,el,er);
+        e = el_combine(check, e);
 
         elem_setLoc(e,be.loc);
         return e;
@@ -2045,6 +2084,8 @@ elem* toElem(Expression e, ref IRState irs)
             ev = el_una(OPind, tym, ev);
         }
         elem* er = toElem(be.e2, irs);
+        elem* shiftCheck;
+        wasmCtfeShiftGuard(be, op, er, shiftCheck);
 
         if (tybasic(er.Ety) == TYnoreturn)
             op = OPcomma;
@@ -2072,6 +2113,7 @@ elem* toElem(Expression e, ref IRState irs)
             e = el_bin(op, tym, el, er);
         }
         e = el_combine(e, ev);
+        e = el_combine(shiftCheck, e);
         elem_setLoc(e,be.loc);
         return e;
     }
@@ -3318,8 +3360,28 @@ elem* toElem(Expression e, ref IRState irs)
                     e = toElem(lowering, irs);
                 else if (wasmCtfeBuildActive)
                 {
-                    wasmCtfePoison("unlowered append");
-                    return el_long(totym(ce.type), 0);
+                    Type tb1 = ce.e1.type.toBasetype();
+                    Type tel = tb1.nextOf();
+                    if (tb1.ty != Tarray || needsPostblit(tel) || needsDtor(tel))
+                    {
+                        wasmCtfePoison("unlowered append");
+                        return el_long(totym(ce.type), 0);
+                    }
+                    const isElem = ce.op == EXP.concatenateElemAssign;
+                    elem* e1 = toElem(ce.e1, irs);
+                    elem* re1 = addressElem(e1, ce.e1.type.pointerTo(), false);
+                    elem* ev = el_same(re1);
+                    elem* e2 = toElem(ce.e2, irs);
+                    elem* ea2 = addressElem(e2, ce.e2.type, false);
+                    elem* ep = el_params(el_long(TYsize_t, isElem ? 1 : 0),
+                        el_long(TYsize_t, tel.size()), ea2, el_copytree(ev), null);
+                    e = el_bin(OPcall, TYvoid, el_var(getRtlsym(RTLSYM.WASMCTFEAPPEND)), ep);
+                    e = el_combine(re1, e);
+                    e = el_combine(e, el_una(OPind, e1.Ety, ev));
+                    if (tybasic(e1.Ety) == TYstruct)
+                        e.ET = e1.ET;
+                    elem_setLoc(e, ce.loc);
+                    return e;
                 }
                 else if (ce.op == EXP.concatenateAssign)
                     assert(0, "This case should have been rewritten to `_d_arrayappendT` in the semantic phase");
@@ -3486,7 +3548,9 @@ elem* toElem(Expression e, ref IRState irs)
         elem* eleft  = toElem(se.e1, irs);
         eleft.Ety = touns(eleft.Ety);
         elem* eright = toElem(se.e2, irs);
-        elem* e = el_bin(OPshr, totym(se.type), eleft, eright);
+        elem* check;
+        wasmCtfeShiftGuard(se, OPshr, eright, check);
+        elem* e = el_combine(check, el_bin(OPshr, totym(se.type), eleft, eright));
         elem_setLoc(e, se.loc);
         return e;
     }
@@ -4049,6 +4113,15 @@ elem* toElem(Expression e, ref IRState irs)
         // When there is a lowering availabe, use that
         elem* e = ce.lowering is null ? toElem(ce.e1, irs) : toElem(ce.lowering, irs);
 
+        if (wasmCtfeBuildActive && ce.lowering is null)
+        {
+            Type tf = ce.e1.type.toBasetype();
+            Type tt = ce.to.toBasetype();
+            if (tf.ty == Tpointer && tt.isIntegral())
+                e = wasmCtfePtrTag(e);
+            else if (tt.ty == Tpointer && tf.isIntegral())
+                return wasmCtfePtrTag(toElemCast(ce, e, false, irs));
+        }
         return toElemCast(ce, e, false, irs);
     }
 
@@ -4179,12 +4252,21 @@ elem* toElem(Expression e, ref IRState irs)
             // pointer is (ptr + lwr*sz)
             // Combine as (length pair ptr)
 
+            elem* ebase = wasmCtfeBuildActive && t1.ty == Tpointer && tb.ty == Tarray ? el_copytree(e) : null;
             elem* eofs = el_bin(OPmul, TYsize_t, elwr2, el_long(TYsize_t, sz));
             elem* eptr = el_bin(OPadd, TYnptr, e, eofs);
 
             if (tb.ty == Tarray)
             {
                 elem* elen = el_bin(OPmin, TYsize_t, eupr2, el_copytree(elwr2));
+                if (ebase)
+                {
+                    elem* ev = el_same(elen);
+                    elem* ok = el_bin(OPoror, TYint, el_bin(OPne, TYint, ebase, el_long(TYnptr, 0)),
+                        el_bin(OPeqeq, TYint, el_copytree(ev), el_long(TYsize_t, 0)));
+                    elem* chk = el_bin(OPoror, TYvoid, ok, buildNullDerefError(irs, se.loc));
+                    elen = el_combine(el_combine(elen, chk), ev);
+                }
                 e = el_pair(TYdarray, elen, eptr);
             }
             else
@@ -4262,6 +4344,8 @@ elem* toElem(Expression e, ref IRState irs)
         }
 
         n1 = array_toPtr(t1, n1);
+        if (wasmCtfeBuildActive && t1.ty == Tpointer && irs.nullDerefCheck())
+            applyNullDerefErrorCheck(n1, n1.Ety, irs, ie.loc);
 
         {
             elem* escale = el_long(TYsize_t, t1.nextOf().size());
@@ -4861,6 +4945,11 @@ elem* Dsymbol_toElem(Dsymbol s, ref IRState irs)
                         e = elAssign(ev, e, vd.type, sp.Stype);
                     }
                 }
+                else if (wasmCtfeBuildActive && vd._init.isVoidInitializer() && vd.type.size() > 0)
+                {
+                    elem* enbytes = el_long(TYsize_t, vd.type.size());
+                    e = el_bin(OPmemset, TYnptr, el_ptr(sp), el_param(enbytes, el_long(TYchar, 0)));
+                }
             }
 
             /* Mark the point of construction of a variable that needs to be destructed.
@@ -5035,6 +5124,18 @@ elem* ExpressionsToStaticArray(ref IRState irs, Loc loc, Expressions* exps, Symb
 
 /***************************************************
  */
+public ulong wasmCtfeIntPtrTag(uint ptrsize) nothrow @nogc { return ptrsize == 4 ? 0xF800_0000 : 1UL << 48; }
+public enum ulong wasmCtfeNoFrame = 0xFF00_0000;
+
+private elem* wasmCtfePtrTag(elem* e)
+{
+    const tym_t ty = e.Ety;
+    elem* ec = el_same(e);
+    elem* x = el_bin(OPxor, ty, ec, el_long(ty, wasmCtfeIntPtrTag(tysize(TYnptr))));
+    elem* c = el_bin(OPne, TYint, e, el_long(ty, 0));
+    return el_bin(OPcond, ty, c, el_bin(OPcolon, ty, x, el_long(ty, 0)));
+}
+
 elem* toElemCast(CastExp ce, elem* e, bool isLvalue, ref IRState irs)
 {
     tym_t ftym;
@@ -6285,7 +6386,7 @@ elem* callfunc(Loc loc,
             // the virtual path gets from its vtable lookup would otherwise be
             // skipped. Insert it here so null 'this' is caught before the call.
             if (tybasic(ethis.Ety) == TYnptr && irs.nullDerefCheck())
-                applyNullDerefErrorCheck(ethis, TYnptr, irs, loc);
+                eside = el_combine(eside, el_bin(OPoror, TYvoid, el_copytree(ethis), buildNullDerefError(irs, loc)));
         }
         else
         {

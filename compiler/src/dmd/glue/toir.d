@@ -168,9 +168,24 @@ extern (D) elem* incUsageElem(ref IRState irs, Loc loc)
 {
     uint linnum = loc.linnum;
 
+    if (wasmCtfeBuildActive)
+    {
+        if (!irs.params.ctfe_cov || !linnum || !irs.getFunc())
+            return null;
+        Module fm = irs.getFunc().getModule();
+        if (!fm)
+            return null;
+        uint idx = 0;
+        while (idx < wasmCtfeCovModules.length && wasmCtfeCovModules[idx] !is fm)
+            idx++;
+        if (idx == wasmCtfeCovModules.length)
+            wasmCtfeCovModules ~= fm;
+        return el_bin(OPcall, TYvoid, el_var(getRtlsym(RTLSYM.WASMCTFECOV)),
+            el_params(el_long(TYuint, linnum), el_long(TYuint, idx), null));
+    }
     Module m = cast(Module)irs.blx._module;
     //printf("m.cov %p linnum %d filename %s srcfile %s numlines %d\n", m.cov, linnum, loc.filename, m.srcfile.toChars(), m.numlines);
-    if (!m.cov || !linnum || wasmCtfeBuildActive ||
+    if (!m.cov || !linnum ||
         strcmp(loc.filename, m.srcfile.toChars()))
         return null;
 
@@ -343,7 +358,10 @@ elem* getEthis(Loc loc, ref IRState irs, Dsymbol fd, Dsymbol fdp = null, Dsymbol
         if (!irs.sthis)                // if no frame pointer for this function
         {
             if (wasmCtfeBuildActive)
-                return el_long(TYnptr, 0);
+            {
+                import dmd.glue.e2ir : wasmCtfeNoFrame;
+                return el_long(TYnptr, wasmCtfeNoFrame);
+            }
             irs.eSink.error(loc, "`%s` is a nested function and cannot be accessed from `%s`", fd.toErrMsg(), irs.getFunc().toPrettyChars());
             return el_long(TYnptr, 0); // error recovery
         }

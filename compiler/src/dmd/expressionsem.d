@@ -6240,6 +6240,16 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
         Expression ekv;
         auto keys = aaExp.keys;
         auto values = aaExp.values;
+        {
+            import dmd.wasmctfe : wasmCtfeLoweringActive;
+            if (wasmCtfeLoweringActive())
+                foreach (kv; [keys, values])
+                    if (kv)
+                        foreach (ref el; *kv)
+                            if (auto inner = el ? el.isAssocArrayLiteralExp() : null)
+                                if (!inner.lowering && inner.type)
+                                    el = inner.expressionSemantic(sc);
+        }
         if (keys && values && values.length > 1)
         {
             // ensure lexical order

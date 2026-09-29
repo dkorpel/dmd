@@ -576,19 +576,23 @@ it provides a `version (NoBackend)` stub section (mode always `off`,
 all entry points no-ops) and keeps the real implementation in the
 `else` branch.
 
-### Frame-free nested functions run with a null context
+### Nested functions without a frame get a trapping context
 
 A `static assert` inside a function body can call that function's nested
 functions. The expression wrapper lives at module scope and has no frame.
-It is allowed when every enclosing function up to the first non-nested
-one has no nested frame refs (`hasNestedFrameRefs()` is false, and there
-is no dual context), because nothing can read through the context. In
-that case `getEthis` returns a null context during engine builds instead
-of erroring. A read of an *enclosing-frame variable* from a frame-less
-function still poisons the build (`visitSymbol`). Nested codegen
-normally compiles the enclosing function first, to get frame offsets.
-That step is skipped while the parent is still in semantic3; the
-`static assert` sits inside it.
+During engine builds `getEthis` returns `wasmCtfeNoFrame` (0xFF00_0000)
+instead of erroring, and a direct call of a nested function passes the
+same value. That address lies above the most the guest memory can grow
+to (see "Mutable globals are poisoned"), so the call runs until it
+actually reads or writes the enclosing frame, and then traps. Taking the
+address of an enclosing variable (`ref` argument) does not trap. The AST
+interpreter rejects that as well; `compilable/interpret3.d` was made
+mode-neutral for it (`test8608`). Functions with a dual context or a
+`this` are still rejected up front. A read of an *enclosing-frame
+variable* from a frame-less function still poisons the build
+(`visitSymbol`). Nested codegen normally compiles the enclosing function
+first, to get frame offsets. That step is skipped while the parent is
+still in semantic3; the `static assert` sits inside it.
 
 Variables declared inside the wrapped expression are re-parented to the
 wrapper for the duration of the build, then restored. One example is the
@@ -974,8 +978,28 @@ and its `isDataseg` cache for the duration of the build.
 ### Address of an immutable global
 
 `&globalS` where `globalS` is `immutable` with an initializer is
-allowed, like reading it (`compilable/issue24316.d`). The address of a
-mutable global is still rejected.
+allowed, like reading it (`compilable/issue24316.d`). Mutable globals are
+covered by the next section.
+
+### Mutable globals are poisoned
+
+The AST interpreter lets CTFE take the address of a mutable global or
+static local, do arithmetic on it and compare it, but not read or write
+through it. The legality scan used to reject any mention of a mutable
+global. It now records its mangled name in `wasmSelfLinkPoisonNames`,
+and the wasm object writer places such symbols at 0xF000_0000 and above
+instead of in the data section. No bytes are emitted for them, and CTFE
+builds declare the memory with a maximum of 0xF000 pages, so any load or
+store traps while the address stays valid. A pointer into the poisoned
+area is decoded back to `&global + offset` by symbol name
+(`interpret3.bug9745`). Druntime's own globals (the trusted modules) are
+never poisoned; a mutable druntime global in scanned code is still
+rejected. Compiler temporaries (`STC.temp`) such as the `__critsec` of a
+`synchronized` block are plain guest data, and the critical section and
+monitor hooks are host no-ops.
+
+Slicing a mutable global without reading it now succeeds, so
+`test9745(7)` in `interpret3.d` was made mode-neutral.
 
 ### Circular initialization
 
@@ -1027,3 +1051,184 @@ code does not reference the GC. An earlier version rewrote the whole
 hook to work without `TypeInfo`, which made every `-betterC` program
 with an append in a `@__ctfe` function fail to link once the
 `druntime/import` copy was refreshed.
+
+### Integer-to-pointer casts are tagged
+
+`cast(int*) 123` is a pointer that must not be dereferenced at compile
+time. In the guest, address 123 is ordinary memory, and the value read
+would depend on the layout of the build. In CTFE builds a non-null
+integer converted to a pointer is XORed with `wasmCtfeIntPtrTag`
+(1 << 48), both for `CastExp` and for pointer-typed `IntegerExp` constants
+that the frontend folded. Converting a pointer back to an integer XORs
+again, so round trips give the original value, and comparisons and
+arithmetic between such pointers still work. A dereference traps because
+the address is far outside memory. Result decoding strips the tag before
+building the `cast(T*) n` expression.
+
+### Null pointers
+
+Address 0 is writable wasm memory, so a null dereference does not trap
+by itself. Null checks are forced on in CTFE builds (see below), which
+covers `*p` and member access. Two other paths needed their own checks:
+slicing a pointer (`p[0 .. n]` with `p is null` and a non-zero length),
+and the host `memcpy`, `memset`, `memcmp` and `_memset*` imports, which
+trap on any range that touches the first four bytes. Nothing is placed
+there because `dataHeap` starts at 4. `null[0 .. 0]` with a length only
+known at run time stays valid (`std.array.Appender.put`).
+
+### Checks are always on in CTFE builds
+
+Bounds checks, asserts and null checks are switched on for the duration
+of a build, whatever `-release`, `-check` or `-boundscheck` say, and
+`checkaction=C` or `halt` become `D`. CTFE reports these errors under all
+switches. Out-of-range shift counts on 32 and 64-bit operands call
+`__wasmctfe_shift_error`, which the AST interpreter also reports.
+
+### Exception chaining
+
+An exception thrown from a `finally` block that runs because of another
+exception must be chained to it (`Throwable.next`), or replace it with
+`bypassedException` set when the new one is an `Error` and the old one is
+not. In CTFE builds the lowering of `try`/`finally` extracts the D object
+of the in-flight `exnref` at the landing pad (a `try_table` with a
+`catch` of the D tag around `throw_ref`) into a shadow slot, and wraps
+the finally body in a catch whose handler throws
+`__wasmctfe_chain(e1, e2)`. The host import implements
+`Throwable.chainTogether` and the `Error` bypass on guest memory. Code
+compiled for a real wasm target does not chain yet.
+
+### Class invariants
+
+`assert(obj)` calls `rt.invariant_._d_invariant`, which is not in the
+importable druntime. The host implements it: it walks the `ClassInfo`
+chain of the object and calls each `classInvariant` through the function
+table.
+
+### What the engine allows that the AST interpreter rejects
+
+The following run in the engine and are deterministic and sandboxed, so
+they are allowed. Tests that asserted they fail at compile time were
+changed to record the result in an `enum` instead.
+
+- D-style variadic functions (`runnable/test42.d`).
+- Reading a `= void` local or field: CTFE builds zero-initialize them
+  (`interpret3.bug6438`).
+- Writing through a string literal.
+- `<` and `>` between pointers into different allocations.
+- Pointer arithmetic and dereference outside the bounds of an allocation,
+  as long as it stays inside guest memory (`interpret3.test14028b`,
+  `ptrDeref`). The result depends on the build's memory layout.
+- Reinterpreting casts between pointer types, arrays and pointers, and
+  `void*` arithmetic (`interpret3.badpointer`, `bug6386`, `bug6420`), and
+  reading an `int[]` as `byte[]` (`bug7780`). Wasm is little-endian, like
+  every dmd target.
+- Reading an inactive union member (`bug6681`).
+- Slicing a pointer to a local (`bug7785`), and returning the address of a
+  local without dereferencing it (`test7876`).
+- `typeid(int).toString()` (`bug10579`).
+- Floating point is computed at the precision of the type, not in
+  `real`. `interpret3.classtest1` compared a `float` to a `double`
+  literal and relied on the extra precision; it now compares to `2.6f`.
+  `compilable/paranoia_ctfe.d -version=Single` reports 0 defects in the
+  engine and 1 with the AST interpreter, so verify mode reports a
+  mismatch there.
+
+`interpret3.ctfeSort6250` indexed a slice of length 1 at index 1, which
+throws `RangeError` at run time and in the engine. The AST interpreter
+checked against the underlying array. The test now uses `.ptr[1]`.
+
+### `__ctfeWrite`
+
+`__ctfeWrite` is a host import that prints, except in verify mode where
+the AST interpreter already printed. An evaluation that printed is not
+put in the result cache, because a cache hit would skip the output.
+
+### Appends and `-profile=gc`
+
+`~=` of an element without postblit or destructor has no druntime
+lowering in some contexts. CTFE builds call the host import
+`__wasmctfe_append` for it. `core.internal.profile_gc` wraps its hooks in
+`scope(exit)` accounting that calls into `rt`; those statements are now
+`scope(exit) if (!__ctfe)`, so the lowered hooks run in the guest under
+`-profile=gc`.
+
+### Other lowering details
+
+- Nested associative array literals inside a lowered AA literal get their
+  own semantic when the engine lowering is active, so the inner literal
+  is lowered too.
+- A `$` variable of a slice at module scope is a static with an
+  initializer. CTFE builds use the initializer instead of the variable.
+- `if (__ctfe || x)` and `?:` / `&&` / `||` with `__ctfe` are folded the
+  same way by the legality scan and by codegen.
+- `!is(T)`-style `NotExp` of a `TypeExp` evaluates to `false` directly.
+- An `immutable` or `const` global with a string literal initializer is
+  answered with a copy of the literal, without a build.
+
+
+### 32-bit targets
+
+With `-m32` the frontend has `size_t == uint` and 4-byte pointers, so the
+CTFE build is a wasm32 module (memory32, `i32` stack pointer) rather than
+the wasm64 used for 64-bit targets. `backend_init_wasm_ctfe` picks the
+model from `target.isLP64`. On the host side every pointer-sized value
+goes through `ipPS` (the target pointer size): `ipValP`/`ipSetP` read and
+write host-call arguments and results, `ipLdP`/`ipStP` read and write
+pointer-sized words in guest memory, and struct layouts known to the host
+(`BlkInfo`, `Interface`, slices, AA buckets) use multiples of `ipPS`.
+
+- The integer-to-pointer tag is `0xF800_0000` instead of `1 << 48`. Small
+  integers cast to pointers land in the poisoned range and trap on access.
+  Integers at or above `0xF800_0000` cast to pointers alias ordinary
+  memory; accessing them does not trap.
+- x87 `real` is 12 bytes on 32-bit x86 (10 bytes plus 2 padding). Soft
+  real still carries the value in a `v128`, but stores write only 12
+  bytes (`v128.store64_lane` plus `v128.store32_lane`) so they do not
+  clobber the next field. Loads still read 16 bytes.
+- Poisoned globals sit at `0xF000_0000` and above. In wasm32 that is a
+  negative `i32.const`, so the self-linker patches data addresses in
+  `i32.const` with a signed LEB128.
+
+### Nested struct context pointers in results
+
+A nested struct returned from CTFE carries its context pointer. For a
+function called without a frame, that pointer is the `wasmCtfeNoFrame`
+marker. The AST interpreter always produces `null` for the hidden `this`
+field of a struct literal, and the glue layer asserts that it is `null`.
+The decoder writes `null` for that field, and turns the marker into
+`null` wherever else it shows up.
+
+### Null checks on pointer indexing and `typeid`
+
+`p[i]` on a null pointer reads address `i * T.sizeof`, which is valid
+memory, and `typeid(obj)` on a null class reference reads the vtable
+from address 0. In 64-bit builds the second read happened to trap on the
+data at address 4; in 32-bit builds it silently returned `null`. CTFE
+builds now add a null check on the base pointer of a pointer `IndexExp`
+and on the object of a class `typeid`.
+
+### Identity of literals with complex fields
+
+`T.init is T.init` where `T` has a `cfloat` field cannot be built (complex
+types block the engine). If both sides of `is`/`==`/`!=` fold to
+literals, the engine compares them directly: struct literals field by
+field, `ComplexExp`/`RealExp` with bitwise identity for `is` and IEEE
+equality for `==`.
+
+### `-cov=ctfe`
+
+The AST interpreter counts each statement it runs into
+`Module.ctfe_cov`. CTFE builds with `-cov=ctfe` call the host import
+`__wasmctfe_cov(module, line)` in place of the usual `__coverage` counter
+increment. `module` is an index into `wasmCtfeCovModules`. The engine's
+result cache skips repeated evaluations, so counts can be lower than the
+AST interpreter's. Only whether a line was hit is reliable.
+
+### `-ftime-trace`
+
+The `Ctfe:` event now wraps the engine as well as the AST interpreter.
+When the expression is a call, the engine also emits a `Ctfe: call` event
+with the callee and arguments. The AST interpreter emits one of those for
+every function it interprets; the engine only emits one for the outermost
+call. Code generation for CTFE builds does not emit `Codegen: function`
+events.

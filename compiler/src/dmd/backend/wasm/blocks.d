@@ -36,6 +36,7 @@ module dmd.backend.wasm.blocks;
 import dmd.backend.cc;
 import dmd.backend.cdef;
 import dmd.backend.el;
+import dmd.backend.symbol : Symbol;
 import dmd.backend.oper;
 import dmd.backend.ty;
 import dmd.backend.type;
@@ -621,8 +622,24 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
             if (tryRegs[f.tryIdx].isCatch)
                 cg.emitCaughtStore(tryRegs[f.tryIdx].tryBlock.jcatchvar);
             else
-                cg.emit(OP.LOCAL_SET,
-                    Uleb(cg.exnLocalFor(tryRegs[f.tryIdx].tryBlock.Bsucc[1].flag)));
+            {
+                Symbol* flag = tryRegs[f.tryIdx].tryBlock.Bsucc[1].flag;
+                const uint exn = cg.exnLocalFor(flag);
+                cg.emit(OP.LOCAL_SET, Uleb(exn));
+                if (auto pv = flag in wasmExnPayloadVar)
+                {
+                    cg.noteTagUse();
+                    cg.emit(OP.BLOCK, WASM_PTR);
+                    cg.emit(OP.TRY_TABLE, WASM_VOID_BLOCK, Uleb(1));
+                    cg.emit(WASM_CATCH.CATCH, RelocOp(R_WASM.TAG_INDEX_LEB));
+                    cg.emit(Uleb(0));
+                    cg.emit(OP.LOCAL_GET, Uleb(exn), OP.THROW_REF);
+                    cg.emit(OP.END);
+                    cg.emit(OP.UNREACHABLE);
+                    cg.emit(OP.END);
+                    cg.emitCaughtStore(*pv);
+                }
+            }
             cg.reachable = true;
         }
         else

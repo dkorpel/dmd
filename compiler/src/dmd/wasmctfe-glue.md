@@ -129,3 +129,35 @@ Building a function the evaluation turns out not to need must not print
 anything. Builds therefore run gagged, track poisoning, stub failing
 functions, and retry. Gagging also hides real engine bugs, so
 `DMD_CTFE_SHOWGAG=1` disables it for debugging.
+
+## 10. CTFE semantics leak into the glue layer and backend
+
+Some CTFE rules cannot be expressed in the frontend, so the glue layer and
+the wasm backend check `wasmCtfeBuildActive` / `wasmCGCtfeBuild` and
+emit different code:
+
+- `e2ir` tags integer-to-pointer casts and pointer-typed integer
+  constants, adds a null check to pointer slicing, zero-initializes
+  `= void` locals, and guards shift counts.
+- `s2ir` wraps `finally` bodies in a catch that chains exceptions, and
+  the block structurer extracts the D object of an in-flight `exnref` for
+  it.
+- The wasm object writer places poisoned globals outside the memory and
+  gives the memory a maximum size. These names are collected by the
+  frontend's legality scan, so the writer must only honour them while an
+  engine build is active; otherwise a real wasm compilation in the same
+  process would move its globals too.
+
+Each of these is a second code path in code shared with normal
+compilation, and the object writer depends on frontend state it cannot
+see.
+
+## 11. The backend model is global
+
+`backend_init_wasm_ctfe` calls `out_config_init` with the model derived
+from `target`, and resizes `TYreal` for soft real. Both are global
+backend state that `backend_reinit_host` has to restore. A 32-bit target
+gets a wasm32 CTFE module. The host engine then has to read and write
+every pointer-sized value at the target width. `backend/wasm` itself was
+wasm32 first, so no backend changes were needed apart from the 12-byte
+soft-real store and signed data-address relocations.

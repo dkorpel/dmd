@@ -22,7 +22,7 @@ import dmd.backend.symbol;
 import dmd.backend.wasm.enums;
 import dmd.backend.wasm.obj;
 import dmd.backend.ty : I64;
-import dmd.backend.wasm.util : patchLE32, patchLE64, patchLEB5, patchLEB10;
+import dmd.backend.wasm.util : patchLE32, patchLE64, patchLEB5, patchLEB10, patchSLEB5;
 import dmd.common.outbuffer;
 
 nothrow:
@@ -57,6 +57,23 @@ __gshared uint wasmSelfLinkProbeAddr;
 
 /// Addresses of the class vtables `selfLink` placed, by symbol name.
 __gshared uint[const(char)[]] wasmSelfLinkVtblAddrs;
+
+/// Data symbols placed at `wasmSelfLinkPoisonBase` and above, beyond the most
+/// the memory can grow to, so that every access to them traps while their
+/// addresses can still be taken and compared. Their bytes are not emitted.
+__gshared bool[string] wasmSelfLinkPoisonNames;
+/// ditto
+enum uint wasmSelfLinkPoisonBase = 0xF000_0000;
+
+struct WasmDataExtent
+{
+    uint start;
+    uint size;
+    const(char)[] name;
+}
+
+/// Start, size and symbol name of each data segment `selfLink` placed, sorted by start.
+__gshared WasmDataExtent[] wasmSelfLinkDataExtents;
 
 /// Symbol name of each function, by table slot - 1, recorded by `selfLink`.
 __gshared const(char)[][] wasmSelfLinkTableNames;
@@ -264,6 +281,20 @@ void selfLink(ref WasmModule wmod)
             wasmSelfLinkTableNames[i] = f.sym.identifier.idup;
     wasmSelfLinkProbeAddr = 0;
     wasmSelfLinkVtblAddrs = null;
+    wasmSelfLinkDataExtents.length = 0;
+    foreach (ref const WasmDataSeg ds; wmod.dataSegs)
+        if (ds.data && ds.data.length)
+            wasmSelfLinkDataExtents ~= WasmDataExtent(ds.offset, cast(uint) ds.data.length,
+                ds.sym && ds.sym.Sident.ptr ? ds.sym.identifier.idup : null);
+    {
+        import core.stdc.stdlib : qsort;
+        extern (C) static int cmp(scope const void* a, scope const void* b)
+        {
+            const x = (cast(const WasmDataExtent*) a).start, y = (cast(const WasmDataExtent*) b).start;
+            return x < y ? -1 : x > y;
+        }
+        qsort(wasmSelfLinkDataExtents.ptr, wasmSelfLinkDataExtents.length, WasmDataExtent.sizeof, &cmp);
+    }
     foreach (ref const WasmDataSeg ds; wmod.dataSegs)
     {
         if (!ds.sym || !ds.sym.Sident.ptr)
@@ -314,6 +345,8 @@ void patchSelfLinkCodeRelocs(ref WasmModule wmod, ref WasmFuncBody fb, ubyte[] c
                 noteUnresolved(r.sym);
             else if (I64())
                 patchLEB10(code, r.offset, addr + r.addend);
+            else if (r.offset && code[r.offset - 1] == OP.I32_CONST)
+                patchSLEB5(code, r.offset, cast(int)(addr + r.addend));
             else
                 patchLEB5(code, r.offset, addr + r.addend);
         }
@@ -342,8 +375,18 @@ bool emitMemorySection(ref OutBuffer out_, ref WasmModule wmod)
     OutBuffer* s = &wmod.scratch;
     s.reset();
     s.writeuLEB128(1);
-    s.writeByte(I64() ? WASM_LIMITS.MEM64_NO_MAX : WASM_LIMITS.NO_MAX);
-    s.writeuLEB128(wmod.memPages);
+    import dmd.backend.wasm.codgen : wasmCGCtfeBuild;
+    if (wasmCGCtfeBuild)
+    {
+        s.writeByte(I64() ? WASM_LIMITS.MEM64_HAS_MAX : WASM_LIMITS.HAS_MAX);
+        s.writeuLEB128(wmod.memPages);
+        s.writeuLEB128(wasmSelfLinkPoisonBase >> 16);
+    }
+    else
+    {
+        s.writeByte(I64() ? WASM_LIMITS.MEM64_NO_MAX : WASM_LIMITS.NO_MAX);
+        s.writeuLEB128(wmod.memPages);
+    }
     writeSection(out_, WASM_SECTION.memory, s);
     return true;
 }

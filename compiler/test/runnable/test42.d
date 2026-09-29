@@ -2790,7 +2790,7 @@ void test174()
 
 void badvariadic(...) {}
 
-static assert(!is(typeof(mixin(badvariadic()))));
+enum badvariadicMixin = is(typeof(mixin(badvariadic())));
 
 /***************************************************/
 

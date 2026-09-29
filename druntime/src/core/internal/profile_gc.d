@@ -75,7 +75,7 @@ auto _d_HookTraceImpl(T, alias Hook, string errorMessage)(Parameters!Hook parame
     version (D_TypeInfo)
     {
         const currentlyAllocated = gcAllocatedInCurrentThreadPure;
-        scope(exit)
+        scope(exit) if (!__ctfe)
             accumulatePure(file, line, __traits(identifier, Hook), T.stringof, currentlyAllocated);
 
         return Hook(parameters);
@@ -89,7 +89,7 @@ ref Tarr _d_arrayappendcTX(Tarr : T[], T)(return ref scope Tarr px, size_t n,
     string file = __FILE__, int line = __LINE__, string funcname = __FUNCTION__) @trusted
 {
     const currentlyAllocated = gcAllocatedInCurrentThreadPure;
-    scope(exit)
+    scope(exit) if (!__ctfe)
         accumulatePure(file, line, funcname, Tarr.stringof, currentlyAllocated);
 
     return core.internal.array.appending._d_arrayappendcTX(px, n);
@@ -100,7 +100,7 @@ ref Tarr _d_arrayappendT(Tarr : T[], T)(return ref scope Tarr x, scope Tarr y,
     string file = __FILE__, int line = __LINE__, string funcname = __FUNCTION__) @trusted
 {
     const currentlyAllocated = gcAllocatedInCurrentThreadPure;
-    scope(exit)
+    scope(exit) if (!__ctfe)
         accumulatePure(file, line, funcname, Tarr.stringof, currentlyAllocated);
 
     return core.internal.array.appending._d_arrayappendT(x, y);
@@ -111,7 +111,7 @@ Tret _d_arraycatnTX(Tret, Tarr...)(scope auto ref Tarr froms,
     string file = __FILE__, int line = __LINE__, string funcname = __FUNCTION__) @trusted
 {
     const currentlyAllocated = gcAllocatedInCurrentThreadPure;
-    scope(exit)
+    scope(exit) if (!__ctfe)
         accumulatePure(file, line, funcname, Tarr.stringof, currentlyAllocated);
 
     import core.lifetime : forward;
@@ -131,7 +131,7 @@ T* _d_newitemT(T)(string file = __FILE__, int line = __LINE__, string funcname =
     }
 
     const currentlyAllocated = gcAllocatedInCurrentThreadPure;
-    scope(exit)
+    scope(exit) if (!__ctfe)
         accumulatePure(file, line, funcname, T.stringof, currentlyAllocated);
 
     return core.lifetime._d_newitemT!T();
@@ -142,7 +142,7 @@ T[] _d_newarrayT(T)(size_t length, bool isShared,
     string file = __FILE__, int line = __LINE__, string funcname = __FUNCTION__) @trusted
 {
     const currentlyAllocated = gcAllocatedInCurrentThreadPure;
-    scope(exit)
+    scope(exit) if (!__ctfe)
         accumulatePure(file, line, funcname, T.stringof, currentlyAllocated);
 
     return core.internal.array.construction._d_newarrayT!T(length, isShared);
@@ -153,7 +153,7 @@ T[] _d_newarrayU(T)(size_t length, bool isShared,
     string file = __FILE__, int line = __LINE__, string funcname = __FUNCTION__) @trusted
 {
     const currentlyAllocated = gcAllocatedInCurrentThreadPure;
-    scope(exit)
+    scope(exit) if (!__ctfe)
         accumulatePure(file, line, funcname, T.stringof, currentlyAllocated);
 
     return core.internal.array.construction._d_newarrayU!T(length, isShared);
@@ -164,7 +164,7 @@ Tarr _d_newarraymTX(Tarr : U[], T, U)(scope size_t[] dims, bool isShared = false
     string file = __FILE__, int line = __LINE__, string funcname = __FUNCTION__) @trusted
 {
     const currentlyAllocated = gcAllocatedInCurrentThreadPure;
-    scope(exit)
+    scope(exit) if (!__ctfe)
         accumulatePure(file, line, funcname, T.stringof, currentlyAllocated);
 
     return core.internal.array.construction._d_newarraymTX!(Tarr, T)(dims, isShared);
@@ -175,7 +175,7 @@ size_t _d_arraysetlengthT(Tarr : T[], T)(return ref scope Tarr arr, size_t newle
     string file = __FILE__, int line = __LINE__, string funcname = __FUNCTION__) @trusted
 {
     const currentlyAllocated = gcAllocatedInCurrentThreadPure;
-    scope(exit)
+    scope(exit) if (!__ctfe)
         accumulatePure(file, line, funcname, Tarr.stringof, currentlyAllocated);
 
     return core.internal.array.capacity._d_arraysetlengthT!Tarr(arr, newlength);
@@ -186,7 +186,7 @@ void* _d_arrayliteralTX(T)(size_t length,
     string file = __FILE__, int line = __LINE__, string funcname = __FUNCTION__) @trusted pure nothrow
 {
     const currentlyAllocated = gcAllocatedInCurrentThreadPure;
-    scope(exit)
+    scope(exit) if (!__ctfe)
         accumulatePure(file, line, funcname, (T[]).stringof, currentlyAllocated);
 
     return core.internal.array.construction._d_arrayliteralTX!T(length);
@@ -196,7 +196,7 @@ void* _d_arrayliteralTX(T)(size_t length,
 T _d_newclassT(T)(string file = __FILE__, int line = __LINE__, string funcname = __FUNCTION__) @trusted
 {
     const currentlyAllocated = gcAllocatedInCurrentThreadPure;
-    scope(exit)
+    scope(exit) if (!__ctfe)
         accumulatePure(file, line, funcname, T.stringof, currentlyAllocated);
 
     return core.lifetime._d_newclassT!T();
