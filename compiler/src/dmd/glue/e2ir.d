@@ -1460,6 +1460,16 @@ elem* toElem(Expression e, ref IRState irs)
             else if (auto lowering = ne.lowering)
                 // Call _d_newitemT()
                 ex = toElem(ne.lowering, irs);
+            else if (wasmCtfeBuildActive)
+            {
+                ex = el_bin(OPcall, TYnptr, el_var(getRtlsym(RTLSYM.ALLOCMEMORY)),
+                    el_long(TYsize_t, sd.structsize));
+                Symbol* tsi = symbol_genauto(TYnptr);
+                elem* eeq = el_bin(OPeq, TYnptr, el_var(tsi), ex);
+                elem* einit = elAssign(el_una(OPind, TYstruct, el_var(tsi)),
+                    el_var(toInitializer(sd)), null, Type_toCtype(tclass));
+                ex = el_combine(el_combine(eeq, einit), el_var(tsi));
+            }
             else if (!irs.params.useGC)
             {
                 // new is allowed in CTFE, so this can only be checked at codegen
@@ -1563,6 +1573,30 @@ elem* toElem(Expression e, ref IRState irs)
             else if (auto lowering = ne.lowering)
                 // Call _d_newitemT()
                 e = toElem(ne.lowering, irs);
+            else if (wasmCtfeBuildActive)
+            {
+                Type tn = tp.next.toBasetype();
+                e = el_bin(OPcall, TYnptr, el_var(getRtlsym(RTLSYM.ALLOCMEMORY)),
+                    el_long(TYsize_t, tn.size(ne.loc)));
+                if (!(ne.arguments && ne.arguments.length == 1))
+                {
+                    Symbol* ts = symbol_genauto(Type_toCtype(tp));
+                    elem* eeq1 = el_bin(OPeq, TYnptr, el_var(ts), e);
+                    elem* einit;
+                    if (auto tsd = tn.isTypeStruct())
+                    {
+                        elem* ederef = el_una(OPind, TYstruct, el_var(ts));
+                        einit = elAssign(ederef, el_var(toInitializer(tsd.sym)), null, Type_toCtype(tn));
+                    }
+                    else
+                    {
+                        elem* ev = toElem(tn.defaultInitLiteral(ne.loc), irs);
+                        einit = el_bin(OPeq, ev.Ety, el_una(OPind, ev.Ety, el_var(ts)), ev);
+                    }
+                    e = el_combine(eeq1, einit);
+                    e = el_combine(e, el_var(ts));
+                }
+            }
             else if (!irs.params.useGC)
             {
                 irs.eSink.error(ne.loc, "`new` expression `%s` requires the GC which is not available with `-betterC`", ne.toErrMsg());

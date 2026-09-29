@@ -49,6 +49,12 @@ __gshared bool wasmSelfLinkImportMemory = false;
 /// the snippet's `stdout`/`stderr` onto its own libc's).
 __gshared uint[string] wasmSelfLinkDataSymbols;
 
+/// Name prefix of a data symbol whose address `selfLink` records in
+/// `wasmSelfLinkProbeAddr` (0 when absent).
+__gshared const(char)[] wasmSelfLinkProbeData;
+/// ditto
+__gshared uint wasmSelfLinkProbeAddr;
+
 /// Data symbols no definition and no `wasmSelfLinkDataSymbols` entry was found
 /// for; relocated to address 0. Reported by the driver once the module is done.
 __gshared const(char)[][] wasmSelfLinkUnresolved;
@@ -246,6 +252,20 @@ void selfLink(ref WasmModule wmod)
     fillCallCtors(wmod);
     gatherMinfo(wmod);
     computeLayout(wmod);
+    wasmSelfLinkProbeAddr = 0;
+    if (wasmSelfLinkProbeData.length)
+        foreach (ref const WasmDataSeg ds; wmod.dataSegs)
+        {
+            if (!ds.sym || !ds.sym.Sident.ptr)
+                continue;
+            const name = ds.sym.identifier;
+            if (name.length >= wasmSelfLinkProbeData.length
+                && name[0 .. wasmSelfLinkProbeData.length] == wasmSelfLinkProbeData)
+            {
+                wasmSelfLinkProbeAddr = ds.offset;
+                break;
+            }
+        }
 }
 
 /// Resolve the code relocations a relocatable object leaves to wasm-ld.
