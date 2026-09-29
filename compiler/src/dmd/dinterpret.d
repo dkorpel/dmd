@@ -106,7 +106,7 @@ public Expression ctfeInterpret(Expression e)
     if (wmode != WasmCtfeMode.off && (!global.gag || wstrict))
     {
         wasmResult = tryWasmCtfe(e);
-        if ((wmode == WasmCtfeMode.wasm || wmode == WasmCtfeMode.inproc || wstrict) && wasmResult !is null)
+        if ((wmode == WasmCtfeMode.inproc || wstrict) && wasmResult !is null)
             return scrubReturnValue(e.loc, wasmResult);
         if (wstrict && !wasmCtfeIsLiteral(e))
         {
@@ -584,16 +584,6 @@ private Expression interpretFunction(UnionExp* pue, FuncDeclaration fd, InterSta
             return CTFEExp.cantexp;
         }
         eargs[i] = earg;
-    }
-
-    if (!thisarg && !global.gag)
-    {
-        import dmd.wasmctfe;
-        if (wasmCtfeMode() == WasmCtfeMode.wasm)
-        {
-            if (auto wr = tryWasmCtfeCall(fd, eargs[], tf.next, fd.loc))
-                return wr;
-        }
     }
 
     // Now that we've evaluated all the arguments, we can start the frame

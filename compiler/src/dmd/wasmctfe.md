@@ -1,8 +1,9 @@
 # WASM CTFE engine
 
-`dmd.wasmctfe` evaluates CTFE function calls by compiling them to WebAssembly
-and executing them in wasmtime, instead of walking the AST with the
-interpreter in `dmd.dinterpret`.
+`dmd.wasmctfe` evaluates CTFE by compiling the expression and everything it
+calls to WebAssembly with dmd's own glue layer and backend, and running the
+result in wasmtime through its C API, inside the compiler process. It is
+meant to replace the AST interpreter in `dmd.dinterpret`.
 
 ## Activation
 
@@ -11,84 +12,52 @@ experimental):
 
 | Variable | Effect |
 |---|---|
-| `DMD_CTFE=wasm` | Use the wasm engine where possible, AST interpreter as fallback |
+| `DMD_CTFE=inproc` | Use the engine where possible, AST interpreter as fallback |
 | `DMD_CTFE=verify` | Run both engines, report result mismatches to stderr, use the AST result |
 | `DMD_CTFE=strict` | Engine only, also under `global.gag`; a non-literal the engine can't evaluate is an error (`wasm-ctfe cannot evaluate ... [reason]`) |
 | `DMD_CTFE_STATS=1` | Print counters at exit |
 | `DMD_CTFE_VERBOSE=1` | Log every attempt/success/failure |
-| `DMD_CTFE_DIR=path` | Work directory for generated files (default `./__wasmctfe`) |
-| `DMD_CTFE_KEEP=1` | Keep generated shim/wasm files |
+| `DMD_CTFE_TRACEGEN=1` | Log what the build pulls in and which functions become stubs |
+| `DMD_CTFE_SHOWGAG=1` | Don't gag errors raised while building |
+| `DMD_CTFE_KEEP=1` | Write each built module to `wasmctfe_ip_N.wasm` |
 
 ## How it works
 
-For a CTFE call `f(args...)` (hooked both at `ctfeInterpret` top level and at
-`interpretFunction` inside the AST interpreter, so nested calls are also
-candidates):
+`ctfeInterpret` calls `tryWasmCtfe` before the AST interpreter.
 
-1. **Support check**: `f` must be a non-nested, non-virtual, non-template plain
-   function; parameter and return types restricted to integers, floats, bool,
-   chars, enums of those, and (nested) dynamic arrays of those; all arguments
-   must be literal expressions.
-2. **Legality scan**: a conservative transitive walk over the function body and
-   its callees rejects anything the AST interpreter would refuse (calls to
-   bodyless externs, inline asm, mutable globals, pointers, classes, AAs,
-   delegates, `real`, `__ctfe`, ...). This prevents the wasm engine from
-   *succeeding* where CTFE must report an error. Modules under
-   `core.internal.*`, `core.lifetime`, `core.math`, `core.bitop`,
-   `core.checkedint`, `core.int128`, `object` and `rt.*` are trusted without
-   scanning (the AST interpreter special-cases the same druntime hooks).
-3. **Shim generation**: a small D module is written that declares the function
-   `pragma(mangle, ...)`-bound to its mangled name with an ABI-erased
-   signature, calls it with the rendered literal arguments, and serializes the
-   result to stdout in a small tagged text format.
-4. **Compile + run**: the same dmd binary is re-invoked as a subprocess with
-   `-mwasm32 -os=wasi -i`, compiling the shim plus the module that defines the
-   function; the result is linked by wasm-ld and executed by wasmtime.
-5. **Decode**: the tagged output is parsed back into typed literal
-   `Expression`s (IntegerExp/RealExp/StringExp/ArrayLiteralExp/NullExp).
-
-Any failure anywhere (unsupported construct, compile error, link error, trap,
-nonzero exit) falls back silently to the AST interpreter, so diagnostics for
-erroneous CTFE remain byte-identical.
-
-Results and failures are memoized per (mangled name, rendered args); each
-function gets a bounded number of subprocess attempts.
-
-## Supported surface
-
-Scalars (integers, bool, chars, float/double), enums of those, dynamic and
-static arrays (nested), strings of all widths, and POD structs of the above
-(mirrored in the shim as ABI-erased `struct __Sn` declarations, serialized
-field-by-field via `.tupleof`). Rejected: templates/instances, nested
-functions, methods/`this`, `ref`/`out`/`lazy` params, classes, AAs, pointers,
-delegates, `real`, unions, bitfields, non-default alignment.
+1. **Wrap**: a call is evaluated directly. Any other expression is wrapped in
+   a generated function; enclosing `const` locals are hoisted into it and
+   top-level array operations are unrolled.
+2. **Check**: `ipExprSupported` and the legality scan reject what the engine
+   can't do yet or what CTFE must refuse. In `verify` and `inproc` mode that
+   falls back to the AST interpreter; in `strict` mode it is an error.
+3. **Build** (`wasmCtfeGenerate` in `glue/package.d`): the root function goes
+   through `toObjFile` for the wasm64 target, and every function, vtable,
+   `TypeInfo` and global it references is queued and built the same way,
+   forcing `semantic3` where needed. `wasmCtfeBuildActive` switches glue
+   lowerings to CTFE semantics (`__ctfe` is true, GC lowerings are on,
+   `const` initializers fold). The build is retried to add lazily built
+   virtual functions, to replace functions that fail to build with traps, and
+   to run `semantic3` on functions found late.
+4. **Run**: the module is compiled and instantiated with the wasmtime C API
+   (`dmd.wasmtimec`) and cached per root function. Imports bind to host
+   callbacks: the bump allocator behind `gc_malloc` and `malloc`, math
+   builtins, 80-bit `real`, C++ casts, `_aApply*` and stub traps. A trap
+   becomes a CTFE error.
+5. **Decode**: guest memory is read back into literal `Expression`s:
+   scalars, arrays, structs, unions, pointers, class references (by vtable
+   address), AAs, function pointers and delegates, keeping shared references
+   and cycles.
 
 ## Results
 
-`./run.d quick` (compilable + fail_compilation + runnable subset + unit +
-dshell) passes identically with `DMD_CTFE=wasm`: exit 0, zero failing
-targets. Wall time ~5 min vs ~1 min baseline on a 16-thread machine — the
-suite is a worst case (thousands of small one-shot CTFE calls, each paying
-subprocess compile+link+run once before memoization/budgeting kicks in).
-
-Benchmarks (function defined in an imported module, evaluated once in an
-`enum`; `/usr/bin/time`, warm FS caches):
-
-| workload | AST time | wasm time | AST maxrss | wasm maxrss |
-|---|---|---|---|---|
-| `fib(30)` recursive | 3.70 s | 0.22 s | 141 MB | 176 MB |
-| bubble-sort 2000 ints + checksum | 5.48 s | 0.41 s | 210 MB | 177 MB |
-| build 20 000-entry string by `~=` | 3.48 s | 0.43 s | **5.88 GB** | 181 MB |
-| 200 distinct tiny calls (same module) | 0.02 s | 2.37 s | 18 MB | 177 MB |
-
-Compute-heavy CTFE is 10–17× faster and, for allocation-heavy code, up to
-30× lighter (the AST interpreter's region allocator never frees during an
-evaluation). The last row is the adversarial case: pipeline overhead
-(~100–150 ms per unique call: dmd -mwasm32 + wasm-ld + wasmtime) dwarfs tiny
-evaluations, and same-module calls additionally re-run the enum in the
-subprocess (see quirks); the per-function attempt budget caps the damage.
+To be measured against the AST interpreter (baseline `12d7c683ba`).
 
 ## Bugs and quirks discovered
+
+The first version generated a D shim and ran `dmd -mwasm32` and `wasmtime`
+as subprocesses. It has been removed; sections that mention the subprocess
+or the shim describe problems from that version.
 
 (collected during development; see git history of this file)
 
