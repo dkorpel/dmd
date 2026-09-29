@@ -197,6 +197,7 @@ wasmtime_error_t* wasmtime_func_call(wasmtime_context_t*, const(wasmtime_func_t)
 
 wasmtime_context_t* wasmtime_caller_context(wasmtime_caller_t*);
 bool wasmtime_caller_export_get(wasmtime_caller_t*, const(char)* name, size_t name_len, wasmtime_extern_t*);
+bool wasmtime_table_get(wasmtime_context_t*, const(wasmtime_table_t)*, ulong index, wasmtime_val_t* val);
 
 ubyte* wasmtime_memory_data(const(wasmtime_context_t)*, const(wasmtime_memory_t)*);
 size_t wasmtime_memory_data_size(const(wasmtime_context_t)*, const(wasmtime_memory_t)*);

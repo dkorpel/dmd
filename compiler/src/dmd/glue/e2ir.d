@@ -714,6 +714,13 @@ elem* toElem(Expression e, ref IRState irs)
         //printf("\tparent = '%s'\n", se.var.parent ? se.var.parent.toChars() : "null");
         if (se.op == EXP.variable && se.var.needThis())
         {
+            if (wasmCtfeBuildActive && v && v._init && (v.isConst() || v.isImmutable()))
+            {
+                import dmd.expressionsem : getConstInitializer;
+                if (auto ei = getConstInitializer(v))
+                    if (ei.op != EXP.error)
+                        return toElem(ei, irs);
+            }
             irs.eSink.error(se.loc, "need `this` to access member `%s`", se.toErrMsg());
             return el_long(TYsize_t, 0);
         }

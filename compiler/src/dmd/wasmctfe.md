@@ -903,3 +903,51 @@ the evaluation, not deferred to the unittest.
 A class built during CTFE can have field initializers that haven't been
 through semantic. `membersToDt` runs `getConstInitializer` on them, like
 the AST interpreter does when it builds a class literal.
+
+### `-betterC`
+
+Engine builds ignore `-betterC` for the lowerings they need.
+`checkaction=C` and `checkaction=halt` become `checkaction=D` during a
+build, because `__assert_fail` and `hlt` have no CTFE meaning. The GC
+lowerings for `new`, `~` and `~=` are generated even when `useGC` is
+off, and `_d_arrayappendcTX` in druntime no longer has a `-betterC`
+body of `assert(0)`: it uses `typeid(T)` only when `D_TypeInfo` is
+available. The AST interpreter never cared about `-betterC` either.
+
+### Functions that fail to build become traps
+
+A function called from the evaluated expression can fail to build even
+though the AST interpreter never reaches the failing part, or never
+calls it at all. Examples are functions containing inline assembly,
+`__traits` that only work at runtime, or code whose semantic errors are
+gagged. When a function other than the root poisons the build or
+produces gagged errors, the build is retried with that function as an
+import. Calling the import traps with `cannot build X: reason`, which in
+strict mode becomes the error. A module with such stubs is not cached,
+because the next evaluation may not need the stub at all.
+
+### C allocation and `errno`
+
+`malloc`, `calloc`, `realloc` and `free` bind to the host bump
+allocator, and `free` does nothing. `gc_addRange` and `gc_removeRange`
+do nothing. `__errno_location` returns a cell in guest memory, which is
+reset with the heap. This lets code that manages its own memory through
+`core.stdc.stdlib` run at CTFE, which the AST interpreter rejects.
+
+### `foreach` over strings with a different character type
+
+`foreach (dchar c; string)` and the other transcoding loops lower to
+`_aApplycd1` and friends in `rt`, which are not in the build. The host
+implements all 18 variants (`_aApply[R]XY{1,2}`): it decodes the
+array, re-encodes each character to the loop type, and calls the loop
+body through the function table with a temporary in guest memory.
+Invalid UTF traps, like the AST interpreter's error.
+
+### Class results are identified by vtable address
+
+Class references in a result used to be decoded by the `ClassInfo`
+name, which is ambiguous for nested classes and classes in templates
+with the same pretty name. Every class the build emits now records its
+vtable address, and decoding looks up the vptr first. Cyclic object
+graphs are tracked by address, so a class that refers to itself no
+longer hits the depth limit.

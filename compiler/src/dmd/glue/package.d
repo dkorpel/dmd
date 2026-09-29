@@ -1440,6 +1440,32 @@ private bool glueHasErrors()
     return wasmCtfeBuildActive ? global.errors != wasmCtfeBaseErrors : global.errors != 0;
 }
 private __gshared bool[void*] wasmCtfeSem3Tried;
+private __gshared bool wasmCtfeStubAdded;
+
+private void wasmCtfeStubFunc(FuncDeclaration fd, const(char)* why)
+{
+    import core.stdc.stdlib : malloc;
+    import dmd.glue.tocsym : wasmCtfeStubFuncs;
+    import dmd.mangle : mangleExact;
+    const m = mangleExact(fd);
+    const key = m[0 .. strlen(m)];
+    if (key in wasmCtfeStubFuncs)
+        return;
+    const name = fd.toPrettyChars();
+    const n = strlen(name) + strlen(why) + 32;
+    auto msg = cast(char*) malloc(n);
+    snprintf(msg, n, "cannot build `%s`: %s", name, why);
+    wasmCtfeStubFuncs[key.idup] = msg;
+    wasmCtfeStubAdded = true;
+    if (getenv("DMD_CTFE_TRACEGEN"))
+        fprintf(stderr, "wasm-ctfe stub: %s\n", msg);
+}
+
+public bool wasmCtfeHasStubs()
+{
+    import dmd.glue.tocsym : wasmCtfeStubFuncs;
+    return wasmCtfeStubFuncs.length != 0;
+}
 
 public bool wasmCtfeGenerate(FuncDeclaration root, ref OutBuffer objbuf, out const(char)[][] unresolved)
 {
@@ -1447,14 +1473,21 @@ public bool wasmCtfeGenerate(FuncDeclaration root, ref OutBuffer objbuf, out con
 
     if (wasmCtfeBuildActive)
         return false;
+    import dmd.glue.tocsym : wasmCtfeStubFuncs;
     bool preSemErrors;
+    typeof(wasmCtfeStubFuncs) stubs;
     foreach (attempt; 0 .. 64)
     {
         wasmCtfeNeedSem3 = null;
+        wasmCtfeStubAdded = false;
+        wasmCtfeStubFuncs = stubs;
         objbuf.setsize(0);
         auto ok = wasmCtfeGenerateOnce(root, objbuf, unresolved);
+        stubs = wasmCtfeStubFuncs;
         auto need = wasmCtfeNeedSem3;
         wasmCtfeNeedSem3 = null;
+        if (!ok && wasmCtfeStubAdded && !need.length)
+            continue;
         if (!need.length)
         {
             if (preSemErrors && !wasmCtfePoisoned)
@@ -1475,6 +1508,7 @@ public bool wasmCtfeGenerate(FuncDeclaration root, ref OutBuffer objbuf, out con
         wasmCtfePreSemLeave();
         if (global.endGagging(oldGag))
             preSemErrors = true;
+        wasmCtfeStubFuncs = stubs;
     }
     wasmCtfePoisoned = "semantic3 retry limit";
     unresolved = null;
@@ -1649,7 +1683,11 @@ private bool wasmCtfeGenerateOnce(FuncDeclaration root, ref OutBuffer objbuf, ou
             fprintf(stderr, "wasm-ctfe gen: %s %s\n", d.toPrettyChars(), gfd ? mangleExact(gfd) : "".ptr);
         }
         const errsBefore = global.errors;
+        const poisonBefore = wasmCtfePoisoned;
         toObjFile(d, false);
+        if (auto sfd = d.isFuncDeclaration())
+            if (sfd !is root && ((wasmCtfePoisoned && !poisonBefore) || global.errors != errsBefore))
+                wasmCtfeStubFunc(sfd, wasmCtfePoisoned && !poisonBefore ? wasmCtfePoisoned : "gagged errors");
         if (getenv("DMD_CTFE_TRACEGEN") && global.errors != errsBefore)
             fprintf(stderr, "wasm-ctfe gen: %s raised %u errors\n",
                 d.toPrettyChars(), global.errors - errsBefore);

@@ -142,6 +142,12 @@ public ClassDeclaration wasmCtfeFindClass(const(char)[] name)
         if (name == p[0 .. strlen(p)])
             return cd;
     }
+    foreach (cd; wasmCtfeClasses[])
+    {
+        const p = cd.toPrettyChars(true);
+        if (name == p[0 .. strlen(p)])
+            return cd;
+    }
     return null;
 }
 
@@ -299,6 +305,7 @@ void wasmCtfeRecord(Dsymbol d)
 
 package(dmd.glue) __gshared bool wasmCtfeVtblCtx;
 public __gshared FuncDeclaration[const(char)[]] wasmCtfeLazyFuncs;
+public __gshared const(char)*[const(char)[]] wasmCtfeStubFuncs;
 
 package(dmd.glue)
 void wasmCtfeQueueDefinition(Dsymbol d)
@@ -318,6 +325,13 @@ void wasmCtfeQueueDefinition(Dsymbol d)
             const m = mangleExact(fd);
             wasmCtfeLazyFuncs[m[0 .. strlen(m)].idup] = fd;
             return;
+        }
+        if (wasmCtfeStubFuncs.length)
+        {
+            import core.stdc.string : strlen;
+            const m = mangleExact(fd);
+            if (m[0 .. strlen(m)] in wasmCtfeStubFuncs)
+                return;
         }
         if (!fd.fbody && fd.semanticRun >= PASS.semantic3done)
         {
