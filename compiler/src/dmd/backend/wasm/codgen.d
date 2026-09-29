@@ -2493,6 +2493,7 @@ bool genElem(ref WasmCG cg, elem* e)
             cg.emitBswap32();
         return true;
 
+    case OPbt:
     case OPbtc:
     case OPbtr:
     case OPbts:
@@ -2619,37 +2620,44 @@ private void emitBswap64(ref WasmCG cg)
         OP.LOCAL_GET, Uleb(hi), OP.I64_EXTEND_I32_U, OP.I64_OR);
 }
 
-private void emitBitTestOp(ref WasmCG cg, uint op, elem* bitnumE, elem* ptrE)
+private void emitBitTestOp(ref WasmCG cg, uint op, elem* ptrE, elem* bitnumE)
 {
-    // bit = bitnumE;
-    // addr = ptrE + (bit >> 5) * 4;   // word holding the bit
-    // word = *addr;
-    // mask = 1 << (bit & 31);
-    // result = (word & mask) != 0;    // old bit value, left on stack
-    // *addr = word <op> mask;         // bts: |, btr: & ~, btc: ^
-    cg.emit(bitnumE);
-    const uint bitTmp = cg.allocTemp(WASM_I32);
+    const wide = bitnumE.wasmType == WASM_I64;
     const uint addrTmp = cg.allocTemp(WASM_PTR);
+    const uint bitTmp = cg.allocTemp(wide ? WASM_I64 : WASM_I32);
     const uint wordTmp = cg.allocTemp(WASM_I32);
     const uint maskTmp = cg.allocTemp(WASM_I32);
     const uint resultTmp = cg.allocTemp(WASM_I32);
 
-    cg.emit(
-        OP.LOCAL_SET, Uleb(bitTmp), ptrE,
-        OP.LOCAL_GET, Uleb(bitTmp), OP.I32_CONST, Sleb(5), OP.I32_SHR_U,
-        OP.I32_CONST, Sleb(2), OP.I32_SHL);
-    cg.extendToPtr();
+    cg.emit(ptrE);
+    cg.emit(OP.LOCAL_SET, Uleb(addrTmp));
+    cg.emit(bitnumE);
+    cg.emit(OP.LOCAL_SET, Uleb(bitTmp), OP.LOCAL_GET, Uleb(addrTmp), OP.LOCAL_GET, Uleb(bitTmp));
+    if (wide)
+        cg.emit(OP.I64_CONST, Sleb(5), OP.I64_SHR_U, OP.I64_CONST, Sleb(2), OP.I64_SHL);
+    else
+    {
+        cg.emit(OP.I32_CONST, Sleb(5), OP.I32_SHR_U, OP.I32_CONST, Sleb(2), OP.I32_SHL);
+        cg.extendToPtr();
+    }
     cg.emit(
         OP_PTR_ADD,
         OP.LOCAL_TEE, Uleb(addrTmp), OP.I32_LOAD, Uleb(2), Uleb(0),
         OP.LOCAL_SET, Uleb(wordTmp),
-        OP.I32_CONST, Sleb(1), OP.LOCAL_GET, Uleb(bitTmp),
+        OP.I32_CONST, Sleb(1), OP.LOCAL_GET, Uleb(bitTmp));
+    if (wide)
+        cg.emit(OP.I32_WRAP_I64);
+    cg.emit(
         OP.I32_CONST, Sleb(31), OP.I32_AND, OP.I32_SHL,
         OP.LOCAL_TEE, Uleb(maskTmp),
         OP.LOCAL_GET, Uleb(wordTmp), OP.I32_AND, OP.I32_CONST, Sleb(0), OP.I32_NE,
-        OP.LOCAL_SET, Uleb(resultTmp),
-        OP.LOCAL_GET, Uleb(addrTmp), OP.LOCAL_GET, Uleb(wordTmp), OP.LOCAL_GET, Uleb(maskTmp)
-    );
+        OP.LOCAL_SET, Uleb(resultTmp));
+    if (op == OPbt)
+    {
+        cg.emit(OP.LOCAL_GET, Uleb(resultTmp));
+        return;
+    }
+    cg.emit(OP.LOCAL_GET, Uleb(addrTmp), OP.LOCAL_GET, Uleb(wordTmp), OP.LOCAL_GET, Uleb(maskTmp));
 
     switch (op)
     {

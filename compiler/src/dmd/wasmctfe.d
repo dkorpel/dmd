@@ -2163,6 +2163,8 @@ extern (C++) final class LegalityScanner : SemanticTimeTransitiveVisitor
     override void visit(ClassDeclaration) {}
     override void visit(InterfaceDeclaration) {}
     override void visit(TemplateDeclaration) {}
+    override void visit(AliasDeclaration) {}
+    override void visit(AliasAssign) {}
 
     override void visit(VarDeclaration v)
     {

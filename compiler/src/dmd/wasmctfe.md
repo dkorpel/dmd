@@ -342,6 +342,34 @@ paths (`__wasmctfe_append`, `~= dchar`) share the same logic and over-allocate
 by 1.5x. Aliasing behaves as at run time: appending to a slice that doesn't
 end at the used end copies.
 
+### Bit-test intrinsics had swapped, 32-bit-only operands
+On wasm the argument list of `core.bitop.bts`/`btr`/`btc` arrives as
+`(bitnum, ptr)`, while the optimizer's `OPbt` (from `cgelem`'s
+`p[b >> 6] & (1 << (b & 63))` pattern and `gother`'s dead-store rewrite of
+`bts`) uses the x86 order `(ptr, bitnum)`. The wasm lowering followed the
+first order and kept the bit number in an i32 local, which is invalid wasm
+under `-m64` (found by `ctRegex`: "type mismatch: expected i32, found i64"),
+and `OPbt` was not lowered at all. e2ir now swaps the intrinsic operands on
+wasm so both use `(ptr, bitnum)`, and the lowering handles i64 bit numbers
+and `OPbt`. This also affects native wasm codegen.
+
+### Aliases in function bodies are not scanned
+`alias t = someFunction;` inside a body made the legality scanner (a
+`SemanticTimeTransitiveVisitor`) walk `someFunction`'s body. That body may
+not have had semantic3, so its locals showed up as "unresolved
+declaration" and the whole call chain was rejected (`std.uni.simpleCaseFoldings`,
+hence every `ctRegex`). Calls through the alias are still found as
+`CallExp`s.
+
+### Const outer locals: frame first, initializer second
+Reading an enclosing function's `const`/`immutable` local re-evaluates its
+initializer when the reader has no real frame (ctfe-scope lambdas,
+`static foreach` aggregates). This must not happen when the reference is
+a normal nested reference: `immutable oldLen = array.length;
+array.length += n; (){ ... oldLen ... }()` in `std.array.insertInPlace`
+re-read the grown length. The initializer is now only used when the
+current function is not in the variable's `nestedrefs`.
+
 ### `~= dchar` runs host-side
 `_d_arrayappendcd`/`_d_arrayappendwd` are implemented as host functions:
 decode the slice at the ref address, UTF-8/UTF-16-encode the code point,
