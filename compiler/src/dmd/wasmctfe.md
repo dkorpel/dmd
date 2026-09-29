@@ -182,6 +182,9 @@ over-approximated statically. Interestingly this hole was masked until the
 eager-semantic3 change widened coverage — every scanner liberalization can
 expose new accepts-invalid cases.
 
+Later superseded: unions are allowed and only pointer reinterpretation is
+checked, at run time (see "Pointers in unions").
+
 ### Version blocks are re-resolved for wasi
 The subprocess re-runs semantic analysis under `-os=wasi`, so
 `version (linux)` etc. resolve differently than they did in the host compile.
@@ -1122,7 +1125,18 @@ changed to record the result in an `enum` instead.
   `void*` arithmetic (`interpret3.badpointer`, `bug6386`, `bug6420`), and
   reading an `int[]` as `byte[]` (`bug7780`). Wasm is little-endian, like
   every dmd target.
-- Reading an inactive union member (`bug6681`).
+- Reading an inactive union member (`bug6681`), unless it reads a pointer
+  as non-pointer data or the other way around (see "Pointers in unions").
+  `fail_compilation/fail19123.d`, `test16284.d`, `diag11756.d` and
+  `dbitfields.d` moved to `compilable/` and assert the reinterpreted
+  values.
+- `= void` locals and fields returned from CTFE or read through a
+  default-initialized struct (`ice14055.d`, `ctfe10995.d`, now in
+  `compilable/`).
+- Slice assignment to a `__vector` (`ice20042.d`, now in `compilable/`).
+- Casting away `immutable` from an array and writing through it
+  (`fail14304.d` keeps only its first, pointer-cast error). The write only
+  changes the engine's copy of the data.
 - Slicing a pointer to a local (`bug7785`), and returning the address of a
   local without dereferencing it (`test7876`).
 - `typeid(int).toString()` (`bug10579`).
@@ -1136,6 +1150,94 @@ changed to record the result in an `enum` instead.
 `interpret3.ctfeSort6250` indexed a slice of length 1 at index 1, which
 throws `RangeError` at run time and in the engine. The AST interpreter
 checked against the underlying array. The test now uses `.ptr[1]`.
+
+### Error sites
+
+Errors that the AST interpreter reports from its own checks are reported by
+the engine with the same text, so that diagnostics do not depend on which
+engine ran. The glue layer finds the construct at compile time and emits a
+call to `__wasmctfe_error(kind, site)` (or `__wasmctfe_error2` with two
+extra values) in its place, guarded by a run-time condition where the AST
+interpreter only fails for some values. `site` indexes the expression.
+Nothing is reported unless the code runs: a function that contains a bad
+cast in a branch that is never taken still evaluates. When the call traps,
+`ipReportSiteError` builds the message from the site expression and adds
+the call chain.
+
+| Kind | Construct | Message |
+|---|---|---|
+| 1, 2 | read of an unreadable or circularly initialized static | `variable ... cannot be read at compile time`, `circular initialization of ...` |
+| 3 | `switch` without a matching case | `no case label for ...` |
+| 4 | overlapping or mismatched slice copy | same as the AST interpreter |
+| 5, 6 | `SymOffExp` that reinterprets its variable | `reinterpreting cast ...`, `cannot convert ...` |
+| 7 | pointer cast that reinterprets the pointee | `reinterpreting cast from ... is not supported in CTFE` |
+| 8 | address of an imported symbol | `cannot take address of imported symbol ...` |
+| 9 | `throw null` | `to be thrown ... must be non-null` |
+| 10, 13 | array cast between element types of different layout, hex string length | `array cast from ... is not supported at compile time` |
+| 11 | cast of a `noreturn` value | `cannot cast ... at compile time` |
+| 12 | address of the `.init` symbol of a dynamic array | `cannot determine the address of the initializer symbol` |
+| 14 | `.init` of a struct whose default initializer has errors | the initializer's errors |
+| 15 | `new` of a class with a field that is being initialized | `circular reference to ...` |
+| 16 | real pointer cast to an integer | `cannot cast ... to ... at compile time` |
+| 17 | placement `new` | ``new ( ... )` PlacementExpression cannot be evaluated at compile time`` |
+| 18 | field of `typeid(T)` other than `name` | `... is not yet implemented at compile time` |
+| 19 | C function that ends without `return` | `no return value from function` |
+| 20 | slice of a pointer past its allocation | `pointer slice [..] exceeds allocated memory block [..]` |
+| 21 | slice of a `null` array | `slice [..] is out of bounds` |
+| 22 | union member read that reinterprets pointers | `reinterpretation through overlapped field ...` |
+
+Casts in trusted (druntime) modules, compiler-generated functions and C
+files are exempt from kinds 5 to 16, since they are lowerings rather than
+user code.
+
+A few checks are not tied to a site. A call to a function without a body
+reaches the stub import for its mangled name, which reports `cannot be
+interpreted at compile time, because it has no available source code`.
+A root expression that calls a type (`int(int)(3)`) or applies an array
+operation to a string literal is rejected by the legality scan with the
+AST interpreter's message.
+
+Some kinds need facts known only at run time. Kind 16 compares the
+pointer against the tag used for integer-to-pointer casts, so a round
+trip `cast(size_t) cast(int*) 123` still works. Kind 20 looks the pointer
+up in the allocation log and the data segment map and measures the slice
+in elements of the pointer's type; a string literal's terminating zero is
+not part of its block. Pointers into the stack are not checked. Kind 21
+is emitted only on the path where the bounds check already failed and the
+array's pointer is `null`, and reports at the declaration of the variable
+the slice was taken from, as the AST interpreter reports at the location
+of the `null` literal.
+
+### Pointers in unions
+
+Reading a union member reinterprets its bytes (see "Unions and
+reinterpretation are allowed"), except where a pointer would be read as
+something else or be forged from non-pointer data. For a member whose
+pointer offsets differ from an overlapping member's, the glue layer
+calls `__wasmctfe_union(info, op, address)` on each access. A write (an
+assignment to the member, or taking its address) records the member as
+active at that address; a read checks the active members recorded over
+its bytes. Declaring a local of a type that contains such a union clears
+the records for its storage. Copies of the whole aggregate do not carry
+the records, so a read after a copy is allowed. Members with the same
+pointer layout, such as `size_t*` and `struct { size_t* p; }`, are not
+tracked.
+
+### Discarded roots
+
+A root expression whose type the engine cannot return, and a `noreturn`
+root, are run in a `void` wrapper only to surface their errors. Side
+effects of that run (`__ctfeWrite`, coverage counts) are suppressed. If
+the run succeeds, the expression falls back as before.
+
+### Recursion limit
+
+The AST interpreter stops at 1000 nested calls with "CTFE recursion
+limit exceeded". The engine has no call counter: deep recursion runs
+until the guest stack is exhausted and wasmtime traps. If the call chain
+of the trap repeats the same call at least 16 times, the engine prints
+the AST interpreter's message, including the fixed text "1000 recursive
+calls", although the real depth depends on the frame sizes.
 
 ### `__ctfeWrite`
 

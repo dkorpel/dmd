@@ -137,6 +137,14 @@ private struct EmitReloc
     uint addend;
 }
 
+struct WasmSite
+{
+    uint offset;
+    uint site;
+}
+
+__gshared WasmSite[] wasmModuleSites;
+
 struct WasmFuncBody
 {
     Symbol* sym;
@@ -147,6 +155,7 @@ struct WasmFuncBody
 
     WasmReloc[] relocs;
     uint codePayloadStart;
+    WasmSite[] sites;
 }
 
 __gshared WasmFuncBody[] wasmFuncBodies;
@@ -303,6 +312,7 @@ struct WasmModule
     }
 
     uint poisonHeap = wasmSelfLinkPoisonBase;
+    size_t moduleStart;
     uint dataHeap = 4; // next free byte offset in linear memory; starts at 4 to reserve address 0 as null
 
     /// Deferred relocations in data segments. Written as 0 at emit time;
@@ -730,6 +740,16 @@ private bool emitCodeSection(ref OutBuffer out_, ref WasmModule wmod)
         s.writeByte(OP.END);
 
         payloadOffset += bodySizeBytes + bodySize;
+    }
+    if (wasmCGCtfeBuild)
+    {
+        const uint payloadBase = cast(uint)(out_.length - wmod.moduleStart + 1 + ulebSize(cast(uint) s.length));
+        wasmModuleSites.length = 0;
+        foreach (size_t fi; 0 .. defined)
+            if (fi < wasmFuncBodies.length && wasmFuncBodies[fi].code.length())
+                foreach (ref const WasmSite ws; wasmFuncBodies[fi].sites)
+                    if (ws.offset)
+                        wasmModuleSites ~= WasmSite(payloadBase + wasmFuncBodies[fi].codePayloadStart + ws.offset - 1, ws.site);
     }
     writeSection(out_, WASM_SECTION.code, s);
     return true;
@@ -1267,6 +1287,7 @@ void preRegisterExternals(elem* e)
 
 void WasmObj_term2(const(char)[] objfilename, ref WasmModule wmod, ref OutBuffer out_)
 {
+    wmod.moduleStart = out_.length;
     out_.put("\x00\x61\x73\x6D\x01\x00\x00\x00");
 
     {

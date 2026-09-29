@@ -23,6 +23,13 @@ struct wasm_valtype_t;
 struct wasm_externtype_t;
 struct wasm_importtype_t;
 struct wasm_exporttype_t;
+struct wasm_frame_t;
+
+struct wasm_frame_vec_t
+{
+    size_t size;
+    wasm_frame_t** data;
+}
 
 struct wasm_byte_vec_t
 {
@@ -212,6 +219,10 @@ void wasmtime_error_message(const(wasmtime_error_t)*, wasm_name_t*);
 void wasmtime_error_delete(wasmtime_error_t*);
 void wasm_trap_message(const(wasm_trap_t)*, wasm_message_t*);
 void wasm_trap_delete(wasm_trap_t*);
+void wasmtime_error_wasm_trace(const(wasmtime_error_t)*, wasm_frame_vec_t*);
+void wasm_trap_trace(const(wasm_trap_t)*, wasm_frame_vec_t*);
+void wasm_frame_vec_delete(wasm_frame_vec_t*);
+size_t wasm_frame_module_offset(const(wasm_frame_t)*);
 void wasm_byte_vec_delete(wasm_byte_vec_t*);
 
 wasm_valtype_t* wasm_valtype_new(uint kind);

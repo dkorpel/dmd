@@ -427,6 +427,19 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
 
         incUsage(irs, s.loc);
         elem* econd = toElemDtor(s.condition, irs);
+        const ctfeCond = wasmCtfeBuildActive && s.condition.type.isIntegral()
+            && !(s.condition.isCallExp() && s.condition.isCallExp().f && s.condition.isCallExp().f.ident == Id.__switch);
+        if (ctfeCond && econd.Eoper != OPvar)
+        {
+            elem* e = exp2_copytotemp(econd);
+            block_appendexp(mystate.switchBlock, e);
+            econd = el_copytree(e.E2);
+        }
+        if (ctfeCond)
+            wasmCtfeSwitchConds ~= WasmCtfeSwitchCond(el_copytree(econd), s);
+        scope (exit)
+            if (ctfeCond)
+                wasmCtfeSwitchConds.length--;
         if (s.hasVars)
         {   /* Generate a sequence of if-then-else blocks for the cases.
              */
@@ -569,6 +582,17 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
 
         //printf("SwitchErrorStatement.toIR(), exp = %s\n", s.exp ? s.exp.toChars() : "");
         incUsage(irs, s.loc);
+        if (wasmCtfeSwitchConds.length)
+        {
+            auto sc = wasmCtfeSwitchConds[$ - 1];
+            auto ce = new CastExp(sc.sw.condition.loc, sc.sw.condition, Type.tint64);
+            ce.type = Type.tint64;
+            elem* ev = toElemCast(ce, el_copytree(sc.cond), false, irs);
+            const idx = wasmCtfeAddSite(sc.sw.condition);
+            block_appendexp(blx.curblock, el_bin(OPcall, TYvoid, el_var(getRtlsym(RTLSYM.WASMCTFESWITCHERR)),
+                el_params(ev, el_long(TYuint, idx), null)));
+            return;
+        }
         block_appendexp(blx.curblock, toElemDtor(s.exp, irs));
     }
 
@@ -809,7 +833,7 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
         incUsage(irs, s.loc);
         elem* e = toElemDtor(s.exp, irs);
         if (config.ehmethod == EHmethod.EH_WASM && wasmCtfeBuildActive)
-            e = el_una(OPthrow, TYnoreturn, e);
+            e = el_una(OPthrow, TYnoreturn, wasmCtfeThrowHook(e, s.exp));
         else
         {
             const rtlthrow = config.ehmethod == EHmethod.EH_DWARF ? RTLSYM.THROWDWARF : RTLSYM.THROWC;
@@ -1840,6 +1864,14 @@ void insertFinallyBlockGotos(block* startblock)
 /*************************************** private *******************************************/
 
 private:
+
+struct WasmCtfeSwitchCond
+{
+    elem* cond;
+    SwitchStatement sw;
+}
+
+__gshared WasmCtfeSwitchCond[] wasmCtfeSwitchConds;
 
 private void block_setLoc(block* b, Loc loc) nothrow
 {

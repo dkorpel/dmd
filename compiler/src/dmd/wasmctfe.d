@@ -23,6 +23,7 @@ version (NoBackend)
     bool wasmCtfeLoweringActive() pure nothrow @nogc @trusted { return false; }
     void wasmCtfeCompare(Expression e, Expression astResult, Expression wasmResult) { }
     Expression tryWasmCtfe(Expression e) { return null; }
+    Expression tryWasmCtfeTraced(Expression e) { return null; }
     bool wasmCtfeTakeForcedSem3Error(FuncDeclaration fd) { return false; }
     void wasmCtfeSuspendMinstNull() { }
     void wasmCtfeResumeMinstNull() { }
@@ -504,16 +505,161 @@ Expression tryWasmCtfe(Expression e)
         global.errorSink.error(e.loc, "circular initialization of %s `%s`", v.kind(), v.toPrettyChars());
         return ErrorExp.get();
     }
+    if (mode != WasmCtfeMode.verify)
+        if (auto r = ipReportCircularCall(e, false))
+            return r;
+    if (mode != WasmCtfeMode.verify)
+        if (auto r = ipCheckRootAssign(e))
+            return r;
+    if (mode != WasmCtfeMode.verify)
+        if (auto r = ipCheckNewClass(e))
+            return r;
     auto ce = e.isCallExp();
+    if (ce && ce.f && ce.f.semanticRun >= PASS.semantic3done && ce.f.hasSemantic3Errors
+        && mode != WasmCtfeMode.verify)
+    {
+        import dmd.hdrgen : toErrMsg;
+        if (wasmCtfeTakeForcedSem3Error(ce.f))
+            global.errorSink.errorSupplemental(ce.loc, "called from here: `%s`", ce.toChars());
+        else
+            global.errorSink.error(ce.loc, "CTFE failed because of previous errors in `%s`", ce.f.toErrMsg());
+        return ErrorExp.get();
+    }
     if (ce && ce.f)
     {
         Expression thisExp;
         if (auto dve = ce.e1.isDotVarExp())
             thisExp = dve.e1;
-        if (auto r = tryWasmCtfeInproc(ce.f, thisExp, ce.arguments ? (*ce.arguments)[] : null, e.type, e.loc))
+        auto savedRoot = ipRootCall;
+        ipRootCall = ce;
+        auto r = tryWasmCtfeInproc(ce.f, thisExp, ce.arguments ? (*ce.arguments)[] : null, e.type, e.loc);
+        ipRootCall = savedRoot;
+        if (r)
             return r;
     }
-    return tryWasmCtfeExpr(e);
+    auto outerRoot = ipRootCall;
+    ipRootCall = null;
+    auto r = tryWasmCtfeExpr(e);
+    ipRootCall = outerRoot;
+    if (!r && mode != WasmCtfeMode.verify)
+        r = ipReportCircularCall(e, true);
+    return r;
+}
+
+private Expression ipCheckRootAssign(Expression root)
+{
+    import dmd.visitor.postorder : walkPostorder;
+    import dmd.hdrgen : toErrMsg;
+    extern (C++) final class Contains : StoppableVisitor
+    {
+        alias visit = typeof(super).visit;
+        Expression target;
+        override void visit(Expression e)
+        {
+            if (e is target)
+                stop = true;
+        }
+    }
+    extern (C++) final class Find : StoppableVisitor
+    {
+        alias visit = typeof(super).visit;
+        BinExp found;
+        override void visit(Expression) {}
+        override void visit(AssignExp e) { note(e); }
+        override void visit(BinAssignExp e) { note(e); }
+        extern (D) void note(BinExp e)
+        {
+            if (!found)
+                found = e;
+            else
+            {
+                scope c = new Contains();
+                c.target = found;
+                if (walkPostorder(e, c))
+                    found = e;
+            }
+        }
+    }
+    scope f = new Find();
+    walkPostorder(root, f);
+    if (!f.found)
+        return null;
+    global.errorSink.error(f.found.loc, "value of `%s` is not known at compile time", f.found.e1.toErrMsg());
+    return ErrorExp.get();
+}
+
+private Expression ipCheckNewClass(Expression root)
+{
+    import dmd.visitor.postorder : walkPostorder;
+    import dmd.expressionsem : getConstInitializer;
+    extern (C++) final class Find : StoppableVisitor
+    {
+        alias visit = typeof(super).visit;
+        Expression result;
+        override void visit(Expression) {}
+        override void visit(NewExp e)
+        {
+            auto tc = e.newtype ? e.newtype.toBasetype().isTypeClass() : null;
+            if (!tc)
+                return;
+            for (ClassDeclaration c = tc.sym; c; c = c.baseClass)
+                foreach (v; c.fields)
+                {
+                    if (v.inuse)
+                    {
+                        global.errorSink.error(e.loc, "circular reference to `%s`", v.toPrettyChars());
+                        result = ErrorExp.get();
+                        stop = true;
+                        return;
+                    }
+                    if (!v._init || v._init.isVoidInitializer())
+                        continue;
+                    auto m = v.getConstInitializer(true);
+                    if (!m || m.op == EXP.error)
+                    {
+                        result = ErrorExp.get();
+                        stop = true;
+                        return;
+                    }
+                }
+        }
+    }
+    scope f = new Find();
+    walkPostorder(root, f);
+    return f.result;
+}
+
+private Expression ipReportCircularCall(Expression root, bool pending)
+{
+    import dmd.visitor.postorder : walkPostorder;
+    extern (C++) final class Find : StoppableVisitor
+    {
+        alias visit = typeof(super).visit;
+        CallExp found;
+        bool pending;
+        override void visit(Expression) {}
+        override void visit(CallExp e)
+        {
+            if (auto dve = e.e1.isDotVarExp())
+                if (dve.e1.isThisExp())
+                    return;
+            if (e.f && (e.f.semanticRun == PASS.semantic3 || pending && e.f.semanticRun < PASS.semantic3done))
+            {
+                found = e;
+                stop = true;
+            }
+        }
+    }
+    scope f = new Find();
+    f.pending = pending;
+    walkPostorder(root, f);
+    if (!f.found)
+        return null;
+    auto fd = f.found.f;
+    global.errorSink.error(fd.loc, "%s `%s` circular dependency. Functions cannot be interpreted while being compiled",
+        fd.kind, fd.toPrettyChars);
+    global.errorSink.errorSupplemental(f.found.loc, "called from here: `%s`", f.found.toChars());
+    return ErrorExp.get();
 }
 
 private VarDeclaration ipCircularVar(Expression e)
@@ -701,8 +847,12 @@ Expression wasmCtfeOuterConstInit(VarDeclaration v)
     return e;
 }
 
+private __gshared ThisExp ipScanThisExp;
+private __gshared CallExp ipScanBadCall;
+private __gshared BinExp ipScanArrayBinop;
+
 private bool ipExprSupported(Expression e, out const(char)* why, VarDeclarations* declaredOut = null,
-    VarDeclarations* enclosingOut = null)
+    VarDeclarations* enclosingOut = null, VarDeclaration* badOut = null)
 {
     import dmd.visitor.postorder : walkPostorder;
     extern (C++) final class Scan : StoppableVisitor
@@ -741,7 +891,17 @@ private bool ipExprSupported(Expression e, out const(char)* why, VarDeclarations
                 return;
             auto vd = e.var ? e.var.isVarDeclaration() : null;
             if (vd && !vd.isDataseg() && !(vd.storage_class & STC.manifest)
-                && vd.parent && vd.parent.isFuncDeclaration())
+                && vd.parent && (vd.parent.isFuncDeclaration() || (vd.isField() && !((vd.isConst() || vd.isImmutable()) && vd._init))))
+                funcLocals.push(vd);
+        }
+        override void visit(SymOffExp e)
+        {
+            visit(cast(Expression) e);
+            if (stop)
+                return;
+            auto vd = e.var ? e.var.isVarDeclaration() : null;
+            if (vd && !vd.isDataseg() && !(vd.storage_class & STC.manifest)
+                && vd.parent && (vd.parent.isFuncDeclaration() || (vd.isField() && !((vd.isConst() || vd.isImmutable()) && vd._init))))
                 funcLocals.push(vd);
         }
         override void visit(Expression e)
@@ -774,7 +934,11 @@ private bool ipExprSupported(Expression e, out const(char)* why, VarDeclarations
             auto t1 = e.e1.type ? e.e1.type.toBasetype() : null;
             auto t2 = e.e2.type ? e.e2.type.toBasetype() : null;
             if ((t1 && t1.isStaticOrDynamicArray()) || (t2 && t2.isStaticOrDynamicArray()))
+            {
+                if (!why)
+                    ipScanArrayBinop = e;
                 fail("array binop");
+            }
         }
         override void visit(CatExp e)
         {
@@ -828,18 +992,31 @@ private bool ipExprSupported(Expression e, out const(char)* why, VarDeclarations
             if (!e.lowering)
                 fail("AssocArrayLiteralExp");
         }
-        override void visit(ThisExp)
+        override void visit(ThisExp e)
         {
+            if (!why)
+                ipScanThisExp = e;
             fail("ThisExp");
         }
-        override void visit(SuperExp)
+        override void visit(SuperExp e)
         {
+            if (!why)
+                ipScanThisExp = e;
             fail("SuperExp");
         }
         override void visit(CallExp e)
         {
             visit(cast(Expression) e);
-            if (stop || !e.f)
+            if (stop)
+                return;
+            if (e.e1.isTypeExp())
+            {
+                if (!why)
+                    ipScanBadCall = e;
+                fail("type call");
+                return;
+            }
+            if (!e.f)
                 return;
             if (e.f.isNested() && !ipNestedCallable(e.f))
                 fail("nested call");
@@ -870,7 +1047,7 @@ private bool ipExprSupported(Expression e, out const(char)* why, VarDeclarations
             else if (tb.ty == Tclass || fb.ty == Tclass)
                 fail("class or array cast");
             else if (tb.ty == Tarray && fb.ty == Tarray
-                && tb.nextOf().size() != fb.nextOf().size())
+                && tb.nextOf().size() != fb.nextOf().size() && !wasmCtfeBadPointerCast(e, null))
                 fail("class or array cast");
         }
     }
@@ -897,7 +1074,11 @@ private bool ipExprSupported(Expression e, out const(char)* why, VarDeclarations
         if (!enclosingOut || !ipHoistEnclosing(vd, why, declaredOut, enclosingOut))
         {
             if (!why)
+            {
                 why = "enclosing local";
+                if (badOut)
+                    *badOut = vd;
+            }
             return false;
         }
     }
@@ -964,6 +1145,98 @@ private void ipAppendSymKey(Expression e, ref OutBuffer kb)
 
 private __gshared bool traceFallback = false;
 private __gshared bool traceFallbackChecked = false;
+
+private Expression ipReportUnreadable(Expression root, VarDeclaration bad)
+{
+    import dmd.visitor.postorder : walkPostorder;
+    import dmd.hdrgen : toErrMsg;
+    extern (C++) final class Find : StoppableVisitor
+    {
+        alias visit = typeof(super).visit;
+        VarDeclaration bad;
+        Expression target;
+        bool inner;
+        SymbolExp found;
+        CallExp[] calls;
+        override void visit(Expression) {}
+        override void visit(SymOffExp e)
+        {
+            if (!target && e.var is bad)
+            {
+                found = e;
+                stop = true;
+            }
+            else if (inner && target is e)
+                stop = true;
+        }
+        override void visit(VarExp e)
+        {
+            if (!target && e.var is bad)
+            {
+                found = e;
+                stop = true;
+            }
+            else if (inner && target is e)
+                stop = true;
+        }
+        override void visit(CallExp e)
+        {
+            if (!target || !e.arguments)
+                return;
+            foreach (a; *e.arguments)
+            {
+                scope f = new Find();
+                f.target = target;
+                f.inner = true;
+                if (walkPostorder(a, f))
+                {
+                    calls ~= e;
+                    break;
+                }
+            }
+        }
+    }
+    if ((bad.isConst() || bad.isImmutable()) && bad._init)
+    {
+        import dmd.init : ExpInitializer;
+        auto ei = bad._init.isExpInitializer();
+        if (!ei || !ei.exp || ei.exp.op == EXP.error || bad.type.ty == Terror)
+            return ErrorExp.get();
+        if (auto ae = ei.exp.isAssignExp())
+            if (ae.e2.op == EXP.error)
+                return ErrorExp.get();
+    }
+    scope f = new Find();
+    f.bad = bad;
+    walkPostorder(root, f);
+    if (!f.found)
+        return null;
+    scope g = new Find();
+    g.target = f.found;
+    walkPostorder(root, g);
+    global.errorSink.error(f.found.loc, "variable `%s` cannot be read at compile time", bad.toErrMsg());
+    foreach (ce; g.calls)
+        global.errorSink.errorSupplemental(ce.loc, "called from here: `%s`", ce.toChars());
+    return ErrorExp.get();
+}
+
+private Expression ipReportStringArrayOp(BinExp be)
+{
+    import dmd.hdrgen : toErrMsg;
+    foreach (op; [be.e1, be.e2])
+    {
+        Expression x = op;
+        while (x.isSliceExp() || x.isCastExp())
+            x = x.isSliceExp() ? x.isSliceExp().e1 : x.isCastExp().e1;
+        auto se = x.isStringExp();
+        if (!se)
+            continue;
+        global.errorSink.error(se.loc, "CTFE internal error: non-constant value `%s`", se.toErrMsg());
+        global.errorSink.error(be.loc, "`%s` cannot be interpreted at compile time", be.toErrMsg());
+        return ErrorExp.get();
+    }
+    return null;
+}
 
 private Expression ipFallback(Expression e, const(char)* reason)
 {
@@ -1355,7 +1628,13 @@ Expression tryWasmCtfeExpr(Expression e)
     {
         auto lowered = ipLowerArrayOp(e);
         if (!lowered)
+        {
+            if (auto be = e.isBinExp())
+                if (mode != WasmCtfeMode.verify)
+                    if (auto r = ipReportStringArrayOp(be))
+                        return r;
             return ipFallback(e, "expr unsupported [array binop]");
+        }
         return tryWasmCtfeExpr(lowered);
     }
     if (auto ie = e.isIdentityExp())
@@ -1381,17 +1660,41 @@ Expression tryWasmCtfeExpr(Expression e)
     if (!ipHasCall(e))
         if (auto r = ipFoldLiteralCompare(e))
             return r;
-    if (!ipResultType(e.type) && e.type.toBasetype().ty != Tvoid)
+    const isNoreturn = e.type.toBasetype().isTypeNoreturn() !is null;
+    const discard = !ipResultType(e.type) && e.type.toBasetype().ty != Tvoid && !isNoreturn;
+    char[160] typeWhy = void;
+    if (discard)
     {
-        char[160] rb = void;
-        snprintf(rb.ptr, rb.length, "expr type [%s]", e.type.toChars());
-        return ipFallback(e, rb.ptr);
+        snprintf(typeWhy.ptr, typeWhy.length, "expr type [%s]", e.type.toChars());
+        if (mode == WasmCtfeMode.verify)
+            return ipFallback(e, typeWhy.ptr);
     }
+    const voidWrap = isNoreturn || discard;
     const(char)* unsupportedWhy;
     VarDeclarations declaredVars;
     VarDeclarations enclosingVars;
-    if (!ipExprSupported(e, unsupportedWhy, &declaredVars, &enclosingVars))
+    VarDeclaration badVar;
+    ipScanThisExp = null;
+    ipScanBadCall = null;
+    ipScanArrayBinop = null;
+    if (!ipExprSupported(e, unsupportedWhy, &declaredVars, &enclosingVars, &badVar))
     {
+        if (ipScanThisExp && mode != WasmCtfeMode.verify)
+        {
+            global.errorSink.error(ipScanThisExp.loc, "value of `this` is not known at compile time");
+            return ErrorExp.get();
+        }
+        if (ipScanArrayBinop && mode != WasmCtfeMode.verify)
+            if (auto r = ipReportStringArrayOp(ipScanArrayBinop))
+                return r;
+        if (ipScanBadCall && mode != WasmCtfeMode.verify)
+        {
+            import dmd.hdrgen : toErrMsg;
+            global.errorSink.error(ipScanBadCall.loc, "cannot call `%s` at compile time", ipScanBadCall.toErrMsg());
+            return ErrorExp.get();
+        }
+        if (badVar && mode != WasmCtfeMode.verify)
+            return ipReportUnreadable(e, badVar);
         char[96] rb = void;
         snprintf(rb.ptr, rb.length, "expr unsupported [%s]", unsupportedWhy ? unsupportedWhy : "?".ptr);
         return ipFallback(e, rb.ptr);
@@ -1415,11 +1718,11 @@ Expression tryWasmCtfeExpr(Expression e)
         wasmCtfeStats.cacheHits++;
         return sv.value;
     }
-    auto tf = new TypeFunction(ParameterList(), e.type, LINK.d);
+    auto tf = new TypeFunction(ParameterList(), voidWrap ? Type.tvoid : e.type, LINK.d);
     auto fd = new FuncDeclaration(e.loc, e.loc, Identifier.generateId("__wasmctfe_expr"), STC.none, tf);
     fd.parent = mod;
     fd._linkage = LINK.d;
-    Statement ret = new ReturnStatement(e.loc, e);
+    Statement ret = voidWrap ? new ExpStatement(e.loc, e) : new ReturnStatement(e.loc, e);
     if (enclosingVars.length)
     {
         auto cs = new CompoundStatement(e.loc);
@@ -1445,7 +1748,15 @@ Expression tryWasmCtfeExpr(Expression e)
         vd.parent = fd;
     }
     const writesBefore = ipCtfeWrites;
-    auto r = tryWasmCtfeInproc(fd, null, null, e.type, e.loc);
+    auto savedDiscard = ipDiscardFd;
+    if (discard)
+        ipDiscardFd = fd;
+    auto r = tryWasmCtfeInproc(fd, null, null, voidWrap ? Type.tvoid : e.type, e.loc);
+    ipDiscardFd = savedDiscard;
+    if (voidWrap && r && !r.isErrorExp())
+        r = null;
+    if (discard && !r)
+        r = ipFallback(e, typeWhy.ptr);
     foreach (i, vd; declaredVars)
     {
         vd.parent = savedParents[i];
@@ -1564,6 +1875,11 @@ int scanLegalityImpl(FuncDeclaration fd, ref bool[void*] inProgress, bool relaxe
         (*verdicts)[cast(void*) fd] = 1;
         return 1;
     }
+    if (fd.semanticRun >= PASS.semantic3done && fd.hasSemantic3Errors)
+    {
+        (*verdicts)[cast(void*) fd] = 1;
+        return 1;
+    }
     if (!fd.fbody || fd.errors)
     {
         const ok = isBuiltin(fd) != BUILTIN.unimp || (relaxed && !fd.fbody && !fd.errors);
@@ -1576,6 +1892,11 @@ int scanLegalityImpl(FuncDeclaration fd, ref bool[void*] inProgress, bool relaxe
     {
         inProgress.remove(cast(void*) fd);
         return 2;
+    }
+    if (fd.hasSemantic3Errors)
+    {
+        (*verdicts)[cast(void*) fd] = 1;
+        return 1;
     }
     Module mod = fd.getModule();
     if (!mod || !mod.srcfile.toChars())
@@ -1644,7 +1965,7 @@ bool hasOverlaps(StructDeclaration sd)
     return result;
 }
 
-bool trustedModule(Dsymbol fd)
+public bool trustedModule(Dsymbol fd)
 {
     Module mod = fd.getModule();
     if (!mod)
@@ -1780,6 +2101,12 @@ extern (C++) final class LegalityScanner : SemanticTimeTransitiveVisitor
                 {
                     if (!ipNotePoisonGlobal(v))
                         reject("mutable global");
+                    checkExpType(e);
+                    return;
+                }
+                if (v.inuse && v._init && !trustedModule(v))
+                {
+                    ipCircularVars[v] = true;
                     checkExpType(e);
                     return;
                 }
@@ -1967,12 +2294,19 @@ private __gshared
         ulong ctfeOrdersAddr;
         FuncDeclaration[] tableFuncs;
         ClassDeclaration[ulong] cppVtbls;
+        uint[size_t] sites;
     }
 
     IpModule*[void*] ipModuleCache;
     bool[void*] ipModuleFailed;
 
     char[512] ipTrapBuf;
+
+    enum IpErrKind : ubyte { none, index, shift, nullp, slice, assert_, assertMsg, errorFunc, uncaught, siteError }
+    IpErrKind ipErrKind;
+    ulong[3] ipErrVals;
+    char[512] ipErrMsg;
+    size_t ipErrMsgLen;
 }
 
 private struct HostImport
@@ -1994,6 +2328,28 @@ private extern (C) wasm_trap_t* ipHostStubbed(void* env, wasmtime_caller_t* call
 }
 
 private __gshared FuncDeclaration ipLazyHit;
+private __gshared FuncDeclaration ipErrFunc;
+
+private extern (C) wasm_trap_t* ipHostErrorFunc(void* env, wasmtime_caller_t* caller,
+    const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
+{
+    auto hi = cast(HostImport*) env;
+    ipErrKind = IpErrKind.errorFunc;
+    ipErrFunc = hi.lazyFd;
+    return ipTrap("$sem3$callee has semantic errors");
+}
+
+private __gshared bool ipErrNoBody;
+
+private extern (C) wasm_trap_t* ipHostNoBody(void* env, wasmtime_caller_t* caller,
+    const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
+{
+    auto hi = cast(HostImport*) env;
+    ipErrKind = IpErrKind.errorFunc;
+    ipErrFunc = hi.lazyFd;
+    ipErrNoBody = true;
+    return ipTrap("$nobody$callee has no body");
+}
 
 private extern (C) wasm_trap_t* ipHostLazy(void* env, wasmtime_caller_t* caller,
     const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
@@ -2061,6 +2417,8 @@ private __gshared size_t ipCtfeWrites;
 private extern (C) wasm_trap_t* ipHostCtfeWrite(void* env, wasmtime_caller_t* caller,
     const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
 {
+    if (ipReplayAt || ipDiscardRun)
+        return null;
     wasmtime_memory_t m;
     if (!ipCallerMemory(caller, m))
         return ipTrap("wasm-ctfe: no memory export");
@@ -2297,6 +2655,176 @@ private void ipNoteAddrGlobal(VarDeclaration v)
 }
 
 private __gshared bool[VarDeclaration] ipPoisonNoted;
+private __gshared bool[VarDeclaration] ipCircularVars;
+
+public int wasmCtfeUnreadableVar(VarDeclaration v)
+{
+    if (v in ipPoisonNoted)
+        return 1;
+    if (v.inuse && v in ipCircularVars)
+        return 2;
+    return 0;
+}
+
+public __gshared Expression wasmCtfeCastExempt;
+
+public bool wasmCtfeFloatIntPaint(PtrExp e)
+{
+    import dmd.ctfeexpr : isFloatIntPaint;
+    if (auto soe1 = e.e1.isSymOffExp())
+        return soe1.offset == 0 && soe1.var.isVarDeclaration() && isFloatIntPaint(e.type, soe1.var.type);
+    if (auto ce1 = e.e1.isCastExp())
+        if (auto ae11 = ce1.e1.isAddrExp())
+            return isFloatIntPaint(e.type, ae11.e1.type);
+    return false;
+}
+
+public int wasmCtfeBadPointerCast(Expression e, FuncDeclaration fd)
+{
+    import dmd.astenums : FileType;
+    if (e is wasmCtfeCastExempt)
+        return 0;
+    if (fd && (trustedModule(fd) || fd.isGenerated()))
+        return 0;
+    if (fd && fd.getModule() && fd.getModule().filetype == FileType.c)
+        return 0;
+    Type a, b;
+    return ipBadPointerCast(e, a, b);
+}
+
+private int ipBadPointerCast(Expression e, out Type from, out Type to)
+{
+    import dmd.ctfeexpr : isSafePointerCast, isTypeInfo_Class;
+    import dmd.typesem : isIntegral, mutableOf, unSharedOf, baseElemOf;
+    if (auto soe = e.isSymOffExp())
+    {
+        auto var = soe.var;
+        if (var.isFuncDeclaration() && soe.offset == 0)
+            return 0;
+        if (isTypeInfo_Class(soe.type) && soe.offset == 0)
+            return 0;
+        if (soe.type.ty != Tpointer || var.isThreadlocal())
+            return 0;
+        Type pointee = soe.type.nextOf();
+        Type vt = var.type;
+        Type fromType = vt.isStaticOrDynamicArray() ? vt.nextOf() : null;
+        if (var.isDataseg() && ((soe.offset == 0 && isSafePointerCast(vt, pointee)) ||
+                                (fromType && isSafePointerCast(fromType, pointee)) ||
+                                (var.isCsymbol() && soe.offset + pointee.size() <= vt.size())))
+            return 0;
+        from = vt;
+        to = soe.type;
+        if (fromType)
+        {
+            if (vt.ty == Tsarray && pointee.ty == Tsarray && fromType.size() == pointee.nextOf().size())
+                return 0;
+            if (isSafePointerCast(fromType, pointee) || (soe.offset == 0 && isSafePointerCast(vt, pointee)))
+                return 0;
+            return 5;
+        }
+        return soe.offset == 0 && isSafePointerCast(vt, pointee) ? 0 : 6;
+    }
+    auto ce = e.isCastExp();
+    if (!ce)
+        return 0;
+    auto e1 = ce.e1;
+    if (e1.type && e1.type.toBasetype().isTypeNoreturn() && ce.to.ty != Tvoid && !ce.to.toBasetype().isTypeNoreturn()
+        && !e1.isCallExp() && !e1.isThrowExp() && !e1.isAssertExp() && !e1.isHaltExp() && !e1.isCommaExp() && !e1.isCondExp())
+    {
+        from = e1.type;
+        to = ce.to;
+        return 11;
+    }
+    if ((ce.to.ty == Tarray || ce.to.ty == Tsarray) && e1.type && e1.type.isStaticOrDynamicArray() && e1.op != EXP.null_)
+    {
+        Type ft = e1.type.nextOf();
+        Type tt = ce.to.nextOf();
+        auto se = e1.isStringExp();
+        if (se && se.hexString && se.postfix == StringExp.NoPostfix && tt.isIntegral())
+        {
+            if (!isSafePointerCast(ft, tt) && se.len % cast(size_t) tt.size() != 0)
+            {
+                from = e1.type;
+                to = ce.to;
+                return 13;
+            }
+            return 0;
+        }
+        if (ft.ty != Tvoid && !isSafePointerCast(ft, tt)
+            && !ft.mutableOf().unSharedOf().equals(tt.mutableOf().unSharedOf()))
+        {
+            from = e1.type;
+            if (auto sle = e1.isSliceExp())
+                from = sle.e1.type;
+            to = ce.to;
+            return 10;
+        }
+        return 0;
+    }
+    if (!ce.lowering && e1.type && e1.type.toBasetype().ty == Tpointer && e1.op != EXP.null_
+        && ce.to.toBasetype().isIntegral() && ce.to.toBasetype().ty != Tbool)
+    {
+        from = e1.type;
+        to = ce.to;
+        return 16;
+    }
+    if (ce.lowering || ce.to.ty != Tpointer || ce.type.ty != Tpointer)
+        return 0;
+    if (e1.op == EXP.null_ || e1.isIntegerExp())
+        return 0;
+    Type t1 = e1.type;
+    if (!t1.isStaticOrDynamicArray() && t1.ty != Tpointer)
+        return 0;
+    Type pointee = ce.type.nextOf();
+    Type elemtype = t1.nextOf();
+    if (auto se = e1.isSliceExp())
+        elemtype = se.e1.type.nextOf();
+    Type up = pointee;
+    Type us = elemtype;
+    while (up.ty == Tpointer && us.ty == Tpointer)
+    {
+        up = up.nextOf();
+        us = us.nextOf();
+    }
+    if (up.ty == Tsarray && up.nextOf().equivalent(us))
+        return 0;
+    if (us.ty == Tsarray && us.baseElemOf().mutableOf().unSharedOf().equals(up.baseElemOf().mutableOf().unSharedOf()))
+        return 0;
+    if (up.ty == Tvoid || us.ty == Tvoid || isSafePointerCast(elemtype, pointee))
+        return 0;
+    from = elemtype;
+    to = pointee;
+    return 7;
+}
+
+private __gshared bool[AggregateDeclaration] ipInitErrors;
+
+public bool wasmCtfeInitErrors(AggregateDeclaration ad)
+{
+    if (auto p = ad in ipInitErrors)
+        return *p;
+    const gag = global.startGagging();
+    auto e = ad.type.defaultInitLiteral(ad.loc);
+    global.endGagging(gag);
+    const bad = !e || e.op == EXP.error;
+    ipInitErrors[ad] = bad;
+    return bad;
+}
+
+public VarDeclaration wasmCtfeNewCircular(NewExp e)
+{
+    auto tc = e.newtype ? e.newtype.toBasetype().isTypeClass() : null;
+    if (!tc)
+        return null;
+    for (ClassDeclaration c = tc.sym; c; c = c.baseClass)
+        foreach (v; c.fields)
+            if (v.inuse)
+            {
+                ipCircularVars[v] = true;
+                return v;
+            }
+    return null;
+}
 
 private bool ipNotePoisonGlobal(VarDeclaration v)
 {
@@ -2313,7 +2841,7 @@ private bool ipNotePoisonGlobal(VarDeclaration v)
     return true;
 }
 
-private bool ipFindData(ulong p, out ulong base, out ulong sz, out const(char)[] name)
+private bool ipFindData(ulong p, out ulong base, out ulong sz, out const(char)[] name) nothrow @nogc
 {
     import dmd.backend.wasm.selflink : wasmSelfLinkDataExtents;
     size_t lo = 0, hi = wasmSelfLinkDataExtents.length;
@@ -2344,7 +2872,7 @@ private bool ipIsCharType(Type t)
     return t.ty == Tchar || t.ty == Twchar || t.ty == Tdchar;
 }
 
-private bool ipAllZero(const(ubyte)[] b)
+private bool ipAllZero(const(ubyte)[] b) nothrow @nogc
 {
     foreach (x; b)
         if (x)
@@ -2743,9 +3271,343 @@ private void ipComputeThrowOffsets() nothrow
                 ipErrorBypassOffset = v.offset;
 }
 
+private __gshared bool ipDiscardRun;
+private __gshared FuncDeclaration ipDiscardFd;
+private __gshared uint ipThrowCount;
+private __gshared uint ipReplayAt;
+private __gshared uint ipReplayPending;
+
+private extern (C) wasm_trap_t* ipHostThrow(void* env, wasmtime_caller_t* caller,
+    const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
+{
+    ipSetP(results[0], ipValP(args[0]));
+    if (!ipValP(args[0]))
+    {
+        ipErrKind = IpErrKind.siteError;
+        ipErrVals[0] = 9;
+        ipErrVals[1] = cast(uint) args[1].of.i32;
+        return ipTrap("$nullthrow$");
+    }
+    ++ipThrowCount;
+    if (ipReplayAt && ipThrowCount == ipReplayAt)
+    {
+        ipErrKind = IpErrKind.uncaught;
+        ipErrVals[0] = ipValP(args[0]);
+        ipErrVals[1] = cast(uint) args[1].of.i32;
+        return ipTrap("$uncaught$");
+    }
+    return null;
+}
+
+private extern (C) wasm_trap_t* ipHostSiteError(void* env, wasmtime_caller_t* caller,
+    const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
+{
+    ipErrKind = IpErrKind.siteError;
+    ipErrVals[0] = cast(uint) args[0].of.i32;
+    ipErrVals[1] = cast(uint) args[1].of.i32;
+    return ipTrap("$site$");
+}
+
+private __gshared ulong[3] ipErrExtra;
+
+private struct IpUnionInfo
+{
+    VarDeclaration v;
+    uint site;
+    ulong size;
+    ulong[] ptrOffs;
+    bool known;
+}
+
+private __gshared IpUnionInfo[] ipUnionInfos;
+private __gshared bool[VarDeclaration] ipMixedCache;
+private __gshared bool[void*] ipMixedTypeCache;
+
+private struct IpUnionTag
+{
+    ulong addr;
+    uint info;
+}
+
+private __gshared IpUnionTag[1024] ipUnionTags;
+private __gshared size_t ipUnionTagCount;
+
+private bool ipPtrOffsets(Type t, ulong base, ref ulong[] offs)
+{
+    import dmd.typesem : size, hasPointers;
+    auto tb = t.toBasetype();
+    if (offs.length > 256)
+        return false;
+    switch (tb.ty)
+    {
+        case Tpointer, Tclass, Taarray, Tnull:
+            offs ~= base;
+            return true;
+        case Tarray:
+            offs ~= base + ipPS;
+            return true;
+        case Tdelegate:
+            offs ~= base;
+            offs ~= base + ipPS;
+            return true;
+        case Tsarray:
+        {
+            auto tsa = tb.isTypeSArray();
+            if (!tsa.next.hasPointers())
+                return true;
+            const n = tsa.dim.toInteger();
+            const es = tsa.next.size();
+            if (n > 64)
+                return false;
+            foreach (i; 0 .. n)
+                if (!ipPtrOffsets(tsa.next, base + i * es, offs))
+                    return false;
+            return true;
+        }
+        case Tstruct:
+        {
+            auto sd = tb.isTypeStruct().sym;
+            ulong[] tmp;
+            foreach (f; sd.fields)
+                if (!ipPtrOffsets(f.type, base + f.offset, tmp))
+                    return false;
+            foreach (i; 1 .. tmp.length)
+                for (size_t j = i; j > 0 && tmp[j - 1] > tmp[j]; j--)
+                {
+                    const x = tmp[j];
+                    tmp[j] = tmp[j - 1];
+                    tmp[j - 1] = x;
+                }
+            foreach (i, o; tmp)
+                if (i == 0 || tmp[i - 1] != o)
+                    offs ~= o;
+            return true;
+        }
+        default:
+            return true;
+    }
+}
+
+public bool wasmCtfeMixedOverlap(VarDeclaration v)
+{
+    import dmd.typesem : hasPointers, size;
+    if (!v.overlapped)
+        return false;
+    if (auto p = v in ipMixedCache)
+        return *p;
+    bool mixed;
+    auto ad = v.isMember2();
+    if (ad)
+    {
+        const vs = v.type.size();
+        const vp = v.type.hasPointers();
+        foreach (w; ad.fields)
+        {
+            if (w is v)
+                continue;
+            const ws = w.type.size();
+            if (w.offset >= v.offset + vs || v.offset >= w.offset + ws)
+                continue;
+            const wp = w.type.hasPointers();
+            if (!vp && !wp)
+                continue;
+            ulong[] pv, pw;
+            bool okv = ipPtrOffsets(v.type, v.offset, pv);
+            bool okw = ipPtrOffsets(w.type, w.offset, pw);
+            const lo = v.offset > w.offset ? v.offset : w.offset;
+            const hi = v.offset + vs < w.offset + ws ? v.offset + vs : w.offset + ws;
+            ulong[] rv, rw;
+            foreach (o; pv)
+                if (o >= lo && o < hi)
+                    rv ~= o;
+            foreach (o; pw)
+                if (o >= lo && o < hi)
+                    rw ~= o;
+            if (!okv || !okw || rv != rw)
+            {
+                mixed = true;
+                break;
+            }
+        }
+    }
+    ipMixedCache[v] = mixed;
+    return mixed;
+}
+
+public bool wasmCtfeHasMixedUnion(Type t)
+{
+    auto tb = t.toBasetype();
+    while (auto tsa = tb.isTypeSArray())
+        tb = tsa.next.toBasetype();
+    auto ts = tb.isTypeStruct();
+    if (!ts)
+        return false;
+    auto sd = ts.sym;
+    if (auto p = cast(void*) sd in ipMixedTypeCache)
+        return *p;
+    ipMixedTypeCache[cast(void*) sd] = false;
+    bool r;
+    foreach (f; sd.fields)
+        if (wasmCtfeMixedOverlap(f) || wasmCtfeHasMixedUnion(f.type))
+        {
+            r = true;
+            break;
+        }
+    ipMixedTypeCache[cast(void*) sd] = r;
+    return r;
+}
+
+public uint wasmCtfeUnionInfo(VarDeclaration v, uint site, ulong size)
+{
+    IpUnionInfo info;
+    info.v = v;
+    info.site = site;
+    info.size = size;
+    if (v)
+        info.known = ipPtrOffsets(v.type, 0, info.ptrOffs);
+    ipUnionInfos ~= info;
+    return cast(uint) (ipUnionInfos.length - 1);
+}
+
+private bool ipSamePtrLayout(ulong wa, const(IpUnionInfo)* w, ulong va, const(IpUnionInfo)* v) nothrow @nogc
+{
+    if (!w.known || !v.known)
+        return false;
+    const lo = wa > va ? wa : va;
+    const hi = wa + w.size < va + v.size ? wa + w.size : va + v.size;
+    size_t i, j;
+    while (true)
+    {
+        while (i < w.ptrOffs.length && (wa + w.ptrOffs[i] < lo || wa + w.ptrOffs[i] >= hi))
+            i++;
+        while (j < v.ptrOffs.length && (va + v.ptrOffs[j] < lo || va + v.ptrOffs[j] >= hi))
+            j++;
+        if (i == w.ptrOffs.length || j == v.ptrOffs.length)
+            return i == w.ptrOffs.length && j == v.ptrOffs.length;
+        if (wa + w.ptrOffs[i] != va + v.ptrOffs[j])
+            return false;
+        i++;
+        j++;
+    }
+}
+
+private extern (C) wasm_trap_t* ipHostUnion(void* env, wasmtime_caller_t* caller,
+    const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
+{
+    const idx = cast(uint) args[0].of.i32;
+    const op = cast(uint) args[1].of.i32;
+    const addr = ipValP(args[2]);
+    if (idx >= ipUnionInfos.length)
+        return null;
+    auto info = &ipUnionInfos[idx];
+    const end = addr + info.size;
+    if (op == 0)
+    {
+        foreach (ref t; ipUnionTags[0 .. ipUnionTagCount])
+        {
+            auto w = &ipUnionInfos[t.info];
+            if (w.v is info.v || t.addr >= end || addr >= t.addr + w.size)
+                continue;
+            if (!ipSamePtrLayout(t.addr, w, addr, info))
+            {
+                ipErrKind = IpErrKind.siteError;
+                ipErrVals[0] = 22;
+                ipErrVals[1] = info.site;
+                return ipTrap("$site$");
+            }
+        }
+        return null;
+    }
+    size_t n;
+    foreach (t; ipUnionTags[0 .. ipUnionTagCount])
+        if (t.addr >= end || addr >= t.addr + ipUnionInfos[t.info].size)
+            ipUnionTags[n++] = t;
+    ipUnionTagCount = n;
+    if (op == 1 && n < ipUnionTags.length)
+        ipUnionTags[ipUnionTagCount++] = IpUnionTag(addr, idx);
+    return null;
+}
+
+
+private extern (C) wasm_trap_t* ipHostError2(void* env, wasmtime_caller_t* caller,
+    const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
+{
+    ipErrKind = IpErrKind.siteError;
+    ipErrVals[0] = cast(uint) args[0].of.i32;
+    ipErrVals[1] = cast(uint) args[1].of.i32;
+    ipErrExtra[0] = ipValP(args[2]);
+    ipErrExtra[1] = ipValP(args[3]);
+    return ipTrap("$site$");
+}
+
+private extern (C) wasm_trap_t* ipHostPtrSlice(void* env, wasmtime_caller_t* caller,
+    const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
+{
+    const esz = cast(uint) args[1].of.i32;
+    const lwr = ipValP(args[2]);
+    const upr = ipValP(args[3]);
+    const p = ipValP(args[4]);
+    if (!p || !esz)
+        return null;
+    ulong base, sz;
+    if (!ipFindAlloc(p, base, sz))
+    {
+        const(char)[] name;
+        if (!ipFindData(p, base, sz, name))
+            return null;
+        wasmtime_memory_t m;
+        if (esz <= 4 && sz >= esz && ipCallerMemory(caller, m))
+        {
+            auto mem = ipMemSlice(caller, m);
+            if (base + sz <= mem.length && ipAllZero(mem[cast(size_t) (base + sz - esz) .. cast(size_t) (base + sz)]))
+                sz -= esz;
+        }
+    }
+    if ((p - base) % esz)
+        return null;
+    const off = (p - base) / esz;
+    const blen = sz / esz;
+    if (upr <= blen - (off < blen ? off : blen) || lwr > upr)
+        return null;
+    ipErrKind = IpErrKind.siteError;
+    ipErrVals[0] = 20;
+    ipErrVals[1] = cast(uint) args[0].of.i32;
+    ipErrExtra[0] = off + lwr;
+    ipErrExtra[1] = off + upr;
+    ipErrExtra[2] = blen;
+    return ipTrap("$site$");
+}
+
+private extern (C) wasm_trap_t* ipHostSwitchError(void* env, wasmtime_caller_t* caller,
+    const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
+{
+    ipErrKind = IpErrKind.siteError;
+    ipErrVals[0] = 3;
+    ipErrVals[1] = cast(uint) args[0].of.i32;
+    ipErrVals[2] = args[1].of.i64;
+    return ipTrap("$switch$");
+}
+
+private extern (C) wasm_trap_t* ipHostSliceCopy(void* env, wasmtime_caller_t* caller,
+    const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
+{
+    ipErrKind = IpErrKind.siteError;
+    ipErrVals[0] = 4;
+    ipErrVals[1] = cast(uint) args[0].of.i32;
+    ipErrVals[2] = ipValP(args[1]);
+    ipErrLenFrom = ipValP(args[2]);
+    ipErrPtrTo = ipValP(args[3]);
+    ipErrPtrFrom = ipValP(args[4]);
+    return ipTrap("$slicecopy$");
+}
+
+private __gshared ulong ipErrLenFrom, ipErrPtrTo, ipErrPtrFrom;
+
 private extern (C) wasm_trap_t* ipHostCov(void* env, wasmtime_caller_t* caller,
     const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
 {
+    if (ipReplayAt || ipDiscardRun)
+        return null;
     alias Impl = void function(uint, uint) nothrow @nogc;
     (cast(Impl) &ipCovInc)(cast(uint) args[0].of.i32, cast(uint) args[1].of.i32);
     return null;
@@ -3211,6 +4073,9 @@ private extern (C) wasm_trap_t* ipHostBoundsIndex(void* env, wasmtime_caller_t* 
     ubyte[] mem;
     if (ipCallerMemory(caller, m))
         mem = ipMemSlice(caller, m);
+    ipErrKind = IpErrKind.index;
+    ipErrVals[0] = ipValP(args[2]);
+    ipErrVals[1] = ipValP(args[3]);
     const n = snprintf(ipTrapBuf.ptr, ipTrapBuf.length,
         "$bounds$%s(%d): array index %llu exceeds array length %llu",
         ipMemString(mem, ipValP(args[0])), args[1].of.i32,
@@ -3225,6 +4090,9 @@ private extern (C) wasm_trap_t* ipHostShiftError(void* env, wasmtime_caller_t* c
     ubyte[] mem;
     if (ipCallerMemory(caller, m))
         mem = ipMemSlice(caller, m);
+    ipErrKind = IpErrKind.shift;
+    ipErrVals[0] = args[2].of.i64;
+    ipErrVals[1] = args[3].of.i64;
     const n = snprintf(ipTrapBuf.ptr, ipTrapBuf.length,
         "$shift$%s(%d): shift by %lld is outside the range 0..%lld",
         ipMemString(mem, ipValP(args[0])), args[1].of.i32,
@@ -3239,6 +4107,7 @@ private extern (C) wasm_trap_t* ipHostNullPointer(void* env, wasmtime_caller_t* 
     ubyte[] mem;
     if (ipCallerMemory(caller, m))
         mem = ipMemSlice(caller, m);
+    ipErrKind = IpErrKind.nullp;
     const n = snprintf(ipTrapBuf.ptr, ipTrapBuf.length,
         "$null$%s(%d): null pointer dereference",
         ipMemString(mem, ipValP(args[0])), args[1].of.i32);
@@ -3252,11 +4121,22 @@ private extern (C) wasm_trap_t* ipHostBoundsSlice(void* env, wasmtime_caller_t* 
     ubyte[] mem;
     if (ipCallerMemory(caller, m))
         mem = ipMemSlice(caller, m);
+    ipErrKind = IpErrKind.slice;
+    ipErrVals[0] = ipValP(args[2]);
+    ipErrVals[1] = ipValP(args[3]);
+    ipErrVals[2] = ipValP(args[4]);
     const n = snprintf(ipTrapBuf.ptr, ipTrapBuf.length,
         "$bounds$%s(%d): slice [%llu..%llu] exceeds array bounds [0..%llu]",
         ipMemString(mem, ipValP(args[0])), args[1].of.i32,
         ipValP(args[2]), ipValP(args[3]), ipValP(args[4]));
     return wasmtime_trap_new(ipTrapBuf.ptr, n);
+}
+
+private extern (C) wasm_trap_t* ipHostAssertStr(void* env, wasmtime_caller_t* caller,
+    const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
+{
+    ipErrKind = IpErrKind.assert_;
+    return ipTrap("$assert$assertion failure");
 }
 
 private extern (C) wasm_trap_t* ipHostAssert(void* env, wasmtime_caller_t* caller,
@@ -3266,6 +4146,7 @@ private extern (C) wasm_trap_t* ipHostAssert(void* env, wasmtime_caller_t* calle
     ubyte[] mem;
     if (ipCallerMemory(caller, m))
         mem = ipMemSlice(caller, m);
+    ipErrKind = IpErrKind.assert_;
     const n = snprintf(ipTrapBuf.ptr, ipTrapBuf.length,
         "$assert$%s(%d): assertion failure",
         ipMemString(mem, ipValP(args[0])), args[1].of.i32);
@@ -3305,6 +4186,9 @@ private extern (C) wasm_trap_t* ipHostAssertMsg(void* env, wasmtime_caller_t* ca
     }
     const msg = str(ipValP(args[0]), ipValP(args[1]));
     const file = str(ipValP(args[2]), ipValP(args[3]));
+    ipErrKind = IpErrKind.assertMsg;
+    ipErrMsgLen = msg.length < ipErrMsg.length ? msg.length : ipErrMsg.length;
+    ipErrMsg[0 .. ipErrMsgLen] = msg[0 .. ipErrMsgLen];
     const n = snprintf(ipTrapBuf.ptr, ipTrapBuf.length,
         "$assert$%.*s(%d): %.*s",
         cast(int) file.length, file.ptr, args[4].of.i32,
@@ -3412,6 +4296,11 @@ private IpModule* ipGetModule(FuncDeclaration fd)
     im.exportName = mangled[0 .. strlen(mangled)];
     im.ctfeOrdersAddr = ordersAddr;
     {
+        import dmd.backend.wasm.obj : wasmModuleSites;
+        foreach (ws; wasmModuleSites)
+            im.sites[ws.offset] = ws.site;
+    }
+    {
         import dmd.glue.tocsym : wasmCtfeClassList;
         import dmd.backend.wasm.selflink : wasmSelfLinkVtblAddrs;
         foreach (cd; wasmCtfeClassList())
@@ -3440,9 +4329,460 @@ private IpModule* ipGetModule(FuncDeclaration fd)
         wasmCtfeBuiltFuncs = null;
     }
     import dmd.glue : wasmCtfeHasStubs;
-    if (!wasmCtfeHasStubs())
+    if (!wasmCtfeHasStubs() && !ipCircularVars.length)
         ipModuleCache[cast(void*) fd] = im;
     return im;
+}
+
+private __gshared CallExp ipRootCall;
+
+private const(ubyte)[] ipInstanceMemory(wasmtime_context_t* ctx, ref wasmtime_instance_t inst)
+{
+    import dmd.wasmtimec;
+    wasmtime_extern_t memExt;
+    if (!wasmtime_instance_export_get(ctx, &inst, "memory".ptr, "memory".length, &memExt)
+        || memExt.kind != WASMTIME_EXTERN_MEMORY)
+        return null;
+    const data = wasmtime_memory_data(ctx, &memExt.of.memory);
+    return data[0 .. wasmtime_memory_data_size(ctx, &memExt.of.memory)];
+}
+
+private void ipPrintChain(uint errSite, const(uint)[] chain)
+{
+    import dmd.glue.tocsym : wasmCtfeSites, wasmCtfeSiteArgCalls;
+    auto eSink = global.errorSink;
+    void argCalls(uint idx)
+    {
+        if (idx < wasmCtfeSiteArgCalls.length)
+            foreach (ce; wasmCtfeSiteArgCalls[idx])
+                eSink.errorSupplemental(ce.loc, "called from here: `%s`", ce.toChars());
+    }
+    if (errSite)
+        argCalls(errSite);
+    foreach (c; chain)
+    {
+        if (auto ce = wasmCtfeSites[c].isCallExp())
+            eSink.errorSupplemental(ce.loc, "called from here: `%s`", ce.toChars());
+        argCalls(c);
+    }
+    if (ipRootCall)
+        eSink.errorSupplemental(ipRootCall.loc, "called from here: `%s`", ipRootCall.toChars());
+}
+
+private Expression ipReportSiteError(const(uint)[] chain)
+{
+    import dmd.glue.tocsym : wasmCtfeSites;
+    import dmd.hdrgen : toErrMsg;
+    if (ipErrVals[1] >= wasmCtfeSites.length)
+        return null;
+    auto site = wasmCtfeSites[cast(size_t) ipErrVals[1]];
+    auto eSink = global.errorSink;
+    if (ipErrVals[0] == 4)
+    {
+        auto ae = site.isAssignExp();
+        if (!ae)
+            return null;
+        const lento = ipErrVals[2];
+        const lenfr = ipErrLenFrom;
+        bool bounds(Expression x, ulong len, out ulong lo, out ulong hi)
+        {
+            if (auto se = x.isSliceExp())
+            {
+                if (se.lwr && se.upr && se.lwr.isIntegerExp() && se.upr.isIntegerExp())
+                {
+                    lo = se.lwr.isIntegerExp().toInteger();
+                    hi = se.upr.isIntegerExp().toInteger();
+                    return true;
+                }
+                return false;
+            }
+            lo = 0;
+            hi = len;
+            return true;
+        }
+        ulong lo1, hi1, lo2, hi2;
+        const ok1 = bounds(ae.e1, lento, lo1, hi1);
+        const ok2 = bounds(ae.e2, lenfr, lo2, hi2);
+        const esz = ae.e1.type.nextOf() ? ae.e1.type.nextOf().size() : 1;
+        const long d = esz ? (cast(long) ipErrPtrFrom - cast(long) ipErrPtrTo) / cast(long) esz : 0;
+        if (!ok1 && ok2)
+        {
+            lo1 = lo2 - d;
+            hi1 = lo1 + lento;
+        }
+        else if (ok1 && !ok2)
+        {
+            lo2 = lo1 + d;
+            hi2 = lo2 + lenfr;
+        }
+        else if (!ok1)
+        {
+            lo1 = d < 0 ? -d : 0;
+            hi1 = lo1 + lento;
+            lo2 = lo1 + d;
+            hi2 = lo2 + lenfr;
+        }
+        if (lento != lenfr)
+            eSink.error(ae.loc, "array length mismatch assigning `[0..%llu]` to `[%llu..%llu]`", lenfr, lo1, hi1);
+        else
+            eSink.error(ae.loc, "overlapping slice assignment `[%llu..%llu] = [%llu..%llu]`", lo1, hi1, lo2, hi2);
+        ipPrintChain(cast(uint) ipErrVals[1], chain);
+        return ErrorExp.get();
+    }
+    if (ipErrVals[0] == 3)
+    {
+        auto v = new IntegerExp(site.loc, ipErrVals[2], site.type);
+        eSink.error(site.loc, "no `default` or `case` for `%s` in `switch` statement", v.toErrMsg());
+        ipPrintChain(cast(uint) ipErrVals[1], chain);
+        return ErrorExp.get();
+    }
+    if (ipErrVals[0] == 15)
+    {
+        auto ne = site.isNewExp();
+        auto v = ne ? wasmCtfeNewCircular(ne) : null;
+        if (!v)
+            return null;
+        eSink.error(ne.loc, "circular reference to `%s`", v.toPrettyChars());
+        ipPrintChain(cast(uint) ipErrVals[1], chain);
+        return ErrorExp.get();
+    }
+    if (ipErrVals[0] == 14)
+    {
+        auto sd = site.isVarExp() ? site.isVarExp().var.isSymbolDeclaration() : null;
+        if (!sd)
+            return null;
+        eSink.error(site.loc, "CTFE failed because of previous errors in `%s.init`", sd.toErrMsg());
+        ipPrintChain(cast(uint) ipErrVals[1], chain);
+        return ErrorExp.get();
+    }
+    if (ipErrVals[0] == 12)
+    {
+        eSink.error(site.loc, "cannot determine the address of the initializer symbol during CTFE");
+        ipPrintChain(cast(uint) ipErrVals[1], chain);
+        return ErrorExp.get();
+    }
+    if (ipErrVals[0] == 22)
+    {
+        auto dve = site.isDotVarExp();
+        if (!dve)
+            return null;
+        eSink.error(dve.loc, "reinterpretation through overlapped field `%s` is not allowed in CTFE", dve.var.toChars());
+        ipPrintChain(cast(uint) ipErrVals[1], chain);
+        return ErrorExp.get();
+    }
+    if (ipErrVals[0] == 21)
+    {
+        auto se = site.isSliceExp();
+        if (!se)
+            return null;
+        Loc loc = se.e1.loc;
+        Expression x = se.e1;
+        while (x.isIndexExp() || x.isDotVarExp() || x.isCastExp())
+            x = x.isIndexExp() ? x.isIndexExp().e1 : x.isDotVarExp() ? x.isDotVarExp().e1 : x.isCastExp().e1;
+        if (auto ve = x.isVarExp())
+            if (ve.var.isVarDeclaration())
+                loc = ve.var.loc;
+        eSink.error(loc, "slice `[%llu..%llu]` is out of bounds", ipErrExtra[0], ipErrExtra[1]);
+        ipPrintChain(cast(uint) ipErrVals[1], chain);
+        return ErrorExp.get();
+    }
+    if (ipErrVals[0] == 20)
+    {
+        eSink.error(site.loc, "pointer slice `[%llu..%llu]` exceeds allocated memory block `[0..%llu]`",
+            ipErrExtra[0], ipErrExtra[1], ipErrExtra[2]);
+        ipPrintChain(cast(uint) ipErrVals[1], chain);
+        return ErrorExp.get();
+    }
+    if (ipErrVals[0] == 19)
+    {
+        auto ve = site.isVarExp();
+        auto fd = ve ? ve.var.isFuncDeclaration() : null;
+        if (!fd)
+            return null;
+        eSink.error(fd.loc, "%s `%s` no return value from function", fd.kind, fd.toPrettyChars);
+        ipPrintChain(cast(uint) ipErrVals[1], chain);
+        return ErrorExp.get();
+    }
+    if (ipErrVals[0] == 18)
+    {
+        auto dve = site.isDotVarExp();
+        if (!dve)
+            return null;
+        eSink.error(dve.loc, "`%s.%s` is not yet implemented at compile time", dve.e1.toErrMsg(), dve.var.toErrMsg());
+        ipPrintChain(cast(uint) ipErrVals[1], chain);
+        return ErrorExp.get();
+    }
+    if (ipErrVals[0] == 17)
+    {
+        auto ne = site.isNewExp();
+        if (!ne || !ne.placement)
+            return null;
+        eSink.error(ne.placement.loc, "`new ( %s )` PlacementExpression cannot be evaluated at compile time", ne.placement.toErrMsg());
+        ipPrintChain(cast(uint) ipErrVals[1], chain);
+        return ErrorExp.get();
+    }
+    if (ipErrVals[0] == 9)
+    {
+        eSink.error(site.loc, "to be thrown `%s` must be non-null", site.toErrMsg());
+        ipPrintChain(cast(uint) ipErrVals[1], chain);
+        return ErrorExp.get();
+    }
+    if (ipErrVals[0] == 8)
+    {
+        auto ae = site.isAddrExp();
+        if (!ae || !ae.e1.isVarExp())
+            return null;
+        eSink.error(ae.loc, "cannot take address of imported symbol `%s` at compile time", ae.e1.isVarExp().var.toErrMsg());
+        ipPrintChain(cast(uint) ipErrVals[1], chain);
+        return ErrorExp.get();
+    }
+    if (((ipErrVals[0] >= 5 && ipErrVals[0] <= 13) || ipErrVals[0] == 16) && ipErrVals[0] != 8 && ipErrVals[0] != 9 && ipErrVals[0] != 12)
+    {
+        Type from, to;
+        const k = ipBadPointerCast(site, from, to);
+        if (k == 5)
+            eSink.error(site.loc, "reinterpreting cast from `%s` to `%s` is not supported in CTFE", from.toErrMsg(), to.toErrMsg());
+        else if (k == 6)
+            eSink.error(site.loc, "cannot convert `&%s` to `%s` at compile time", from.toErrMsg(), to.toErrMsg());
+        else if (k == 7)
+            eSink.error(site.loc, "reinterpreting cast from `%s*` to `%s*` is not supported in CTFE", from.toErrMsg(), to.toErrMsg());
+        else if (k == 10)
+        {
+            eSink.error(site.loc, "array cast from `%s` to `%s` is not supported at compile time", from.toErrMsg(), to.toErrMsg());
+            auto se = site.isCastExp().e1.isStringExp();
+            if (se && se.hexString && se.postfix != StringExp.NoPostfix)
+                eSink.errorSupplemental(site.loc, "perhaps remove postfix `%.*s` from hex string", 1, &se.postfix);
+        }
+        else if (k == 13)
+        {
+            auto se = site.isCastExp().e1.isStringExp();
+            eSink.error(site.loc, "hex string length %d must be a multiple of %d to cast to `%s`",
+                cast(int) se.len, cast(int) to.nextOf().size(), to.toErrMsg());
+        }
+        else if (k == 11)
+            eSink.error(site.loc, "cannot cast `%s` to `%s` at compile time", site.isCastExp().e1.toErrMsg(), to.toErrMsg());
+        else if (k == 16)
+        {
+            Expression v = site.isCastExp().e1;
+            while (v.isCastExp())
+                v = v.isCastExp().e1;
+            eSink.error(site.loc, "cannot cast `%s` to `%s` at compile time", v.toErrMsg(), to.toErrMsg());
+        }
+        else
+            return null;
+        ipPrintChain(cast(uint) ipErrVals[1], chain);
+        return ErrorExp.get();
+    }
+    auto ve = site.isVarExp();
+    auto v = ve ? ve.var.isVarDeclaration() : null;
+    if (!v)
+        return null;
+    switch (ipErrVals[0])
+    {
+        case 1:
+            eSink.error(ve.loc, "static variable `%s` cannot be read at compile time", v.toErrMsg());
+            break;
+        case 2:
+            eSink.error(ve.loc, "circular initialization of %s `%s`", v.kind(), v.toPrettyChars());
+            break;
+        default:
+            return null;
+    }
+    ipPrintChain(cast(uint) ipErrVals[1], chain);
+    return ErrorExp.get();
+}
+
+private Expression ipReportRecursion(const(uint)[] chain)
+{
+    import dmd.hdrgen : toErrMsg;
+    import dmd.glue.tocsym : wasmCtfeSites;
+    CallExp[] calls;
+    foreach (c; chain)
+        if (auto ce = wasmCtfeSites[c].isCallExp())
+            calls ~= ce;
+    size_t i = 0;
+    while (i + 1 < calls.length && calls[i] !is calls[i + 1])
+        i++;
+    if (i + 16 > calls.length || !calls[i].f)
+        return null;
+    auto rec = calls[i];
+    auto fd = rec.f;
+    size_t n = i;
+    while (n < calls.length && calls[n] is rec)
+        n++;
+    if (n - i < 16)
+        return null;
+    auto eSink = global.errorSink;
+    eSink.error(fd.loc, "%s `%s` CTFE recursion limit exceeded", fd.kind, fd.toPrettyChars);
+    eSink.errorSupplemental(rec.loc, "called from here: `%s`", rec.toChars());
+    eSink.errorSupplemental(fd.loc, "%d recursive calls to function `%s`", 1000, fd.toChars());
+    foreach (ce; calls[n .. $])
+        eSink.errorSupplemental(ce.loc, "called from here: `%s`", ce.toChars());
+    if (ipRootCall)
+        eSink.errorSupplemental(ipRootCall.loc, "called from here: `%s`", ipRootCall.toChars());
+    return ErrorExp.get();
+}
+
+private Expression ipReportUncaught(const(uint)[] chain, const(ubyte)[] data)
+{
+    import dmd.glue.tocsym : wasmCtfeSites;
+    import dmd.hdrgen : toErrMsg;
+    if (ipErrVals[1] >= wasmCtfeSites.length || !ClassDeclaration.object)
+        return null;
+    auto site = wasmCtfeSites[cast(size_t) ipErrVals[1]];
+    auto cre = ipDecodeClassRef(data, ipErrVals[0], ClassDeclaration.object.type, site.loc, 0);
+    auto cr = cre ? cre.isClassReferenceExp() : null;
+    if (!cr || !cr.value.elements || !cr.value.elements.length)
+        return null;
+    import dmd.expressionsem : toStringExp;
+    auto e = (*cr.value.elements)[0];
+    auto se = e.toStringExp();
+    if (se && se.sz == 1 && ClassDeclaration.throwable && ClassDeclaration.throwable.fields.length)
+    {
+        const a = ipErrVals[0] + ClassDeclaration.throwable.fields[0].offset + ipPS;
+        ulong base, sz;
+        const(char)[] name;
+        if (a + ipPS <= data.length && !ipFindData(ipRead(data, a, ipPS), base, sz, name))
+            se.postfix = 'c';
+    }
+    auto eSink = global.errorSink;
+    eSink.error(site.loc, "uncaught CTFE exception `%s(%s)`", cr.originalClass().type.toErrMsg(),
+        se ? se.toErrMsg() : e.toErrMsg());
+    if (ipRootCall)
+        eSink.errorSupplemental(ipRootCall.loc, "called from here: `%s`", ipRootCall.toChars());
+    else
+        foreach_reverse (c; chain)
+            if (auto ce = wasmCtfeSites[c].isCallExp())
+            {
+                eSink.errorSupplemental(ce.loc, "called from here: `%s`", ce.toChars());
+                break;
+            }
+    return ErrorExp.get();
+}
+
+private Expression ipReportTrap(const(wasm_trap_t)* trap, const(wasmtime_error_t)* err, IpModule* im,
+    const(ubyte)[] data)
+{
+    import dmd.wasmtimec;
+    import dmd.glue.tocsym : wasmCtfeSites;
+    import dmd.hdrgen : toErrMsg;
+    import dmd.dtemplate : isExpression;
+    bool stackExhausted;
+    if (ipErrKind == IpErrKind.none)
+    {
+        wasm_message_t msg;
+        if (trap)
+            wasm_trap_message(trap, &msg);
+        else
+            wasmtime_error_message(err, &msg);
+        const m = msg.data[0 .. msg.size];
+        enum pat = "call stack exhausted";
+        foreach (k; 0 .. m.length >= pat.length ? m.length - pat.length + 1 : 0)
+            if (m[k .. k + pat.length] == pat)
+                stackExhausted = true;
+        wasm_byte_vec_delete(&msg);
+        if (!stackExhausted)
+            return null;
+    }
+    wasm_frame_vec_t frames;
+    if (trap)
+        wasm_trap_trace(trap, &frames);
+    else
+        wasmtime_error_wasm_trace(err, &frames);
+    scope (exit) wasm_frame_vec_delete(&frames);
+    uint[] chain;
+    foreach (i; 0 .. frames.size)
+    {
+        const off = wasm_frame_module_offset(frames.data[i]);
+        if (auto p = off in im.sites)
+        {
+            if (*p < wasmCtfeSites.length)
+                chain ~= *p;
+        }
+        else if (i == 0 && ipErrKind == IpErrKind.errorFunc)
+        {
+            chain ~= 0;
+        }
+        else if (i == 0 && ipErrKind != IpErrKind.uncaught && ipErrKind != IpErrKind.siteError && !stackExhausted)
+            return null;
+    }
+    if (ipErrKind == IpErrKind.uncaught)
+        return ipReportUncaught(chain, data);
+    if (stackExhausted)
+        return ipReportRecursion(chain);
+    if (ipErrKind == IpErrKind.siteError)
+        return ipReportSiteError(chain);
+    if (!chain.length)
+        return null;
+    auto site = wasmCtfeSites[chain[0]];
+    auto eSink = global.errorSink;
+    final switch (ipErrKind)
+    {
+        case IpErrKind.none:
+            return null;
+        case IpErrKind.index:
+            if (auto ie = site.isIndexExp())
+                eSink.error(ie.loc, "array index %llu is out of bounds `%s[0 .. %llu]`",
+                    ipErrVals[0], ie.e1.toErrMsg(), ipErrVals[1]);
+            else
+                return null;
+            break;
+        case IpErrKind.slice:
+            eSink.error(site.loc, "slice `[%llu..%llu]` exceeds array bounds `[0..%llu]`",
+                ipErrVals[0], ipErrVals[1], ipErrVals[2]);
+            break;
+        case IpErrKind.shift:
+            eSink.error(site.loc, "shift by %lld is outside the range 0..%llu",
+                cast(long) ipErrVals[0], ipErrVals[1]);
+            break;
+        case IpErrKind.nullp:
+            if (auto te = site.isTypeidExp())
+            {
+                auto ex = isExpression(te.obj);
+                eSink.error(te.loc, "null pointer dereference evaluating typeid. `%s` is `null`",
+                    ex ? ex.toErrMsg() : te.toErrMsg());
+            }
+            else if (auto pe = site.isPtrExp())
+                eSink.error(pe.loc, "dereference of null pointer `%s`", pe.e1.toErrMsg());
+            else if (auto ie = site.isIndexExp())
+                eSink.error(ie.loc, "dereference of null pointer `%s`", ie.e1.toErrMsg());
+            else if (auto dve = site.isDotVarExp())
+                eSink.error(dve.loc, "dereference of null pointer `%s`", dve.e1.toErrMsg());
+            else
+                return null;
+            break;
+        case IpErrKind.assert_:
+            eSink.error(site.loc, "`%s` failed", site.toErrMsg());
+            break;
+        case IpErrKind.assertMsg:
+            eSink.error(site.loc, "%.*s", cast(int) ipErrMsgLen, ipErrMsg.ptr);
+            break;
+        case IpErrKind.uncaught:
+        case IpErrKind.siteError:
+            return null;
+        case IpErrKind.errorFunc:
+            if (ipErrNoBody)
+            {
+                if (!site || !site.isCallExp())
+                    return null;
+                eSink.error(site.loc, "`%s` cannot be interpreted at compile time, because it has no available source code", ipErrFunc.toErrMsg());
+                return CTFEExp.showcontext;
+            }
+            if (!site || !site.isCallExp())
+            {
+                ipPrintChain(0, chain[1 .. $]);
+                return ErrorExp.get();
+            }
+            if (!wasmCtfeTakeForcedSem3Error(ipErrFunc))
+            {
+                eSink.error(site.loc, "CTFE failed because of previous errors in `%s`", ipErrFunc.toErrMsg());
+                break;
+            }
+            ipPrintChain(0, chain);
+            return ErrorExp.get();
+    }
+    ipPrintChain(chain[0], chain[1 .. $]);
+    return ErrorExp.get();
 }
 
 public Expression tryWasmCtfeTraced(Expression e)
@@ -3476,7 +4816,17 @@ Expression tryWasmCtfeInproc(FuncDeclaration fd, Expression thisExp, Expression[
     foreach (attempt; 0 .. 32)
     {
         ipLazyHit = null;
+        ipReplayPending = 0;
         auto r = tryWasmCtfeInprocOnce(fd, thisExp, args, resultType, loc);
+        if (ipReplayPending && !ipLazyHit)
+        {
+            ipReplayAt = ipReplayPending;
+            ipReplayPending = 0;
+            auto r2 = tryWasmCtfeInprocOnce(fd, thisExp, args, resultType, loc);
+            ipReplayAt = 0;
+            ipLazyHit = null;
+            return r2 && r2.isErrorExp() ? r2 : r;
+        }
         auto lf = ipLazyHit;
         ipLazyHit = null;
         if (!lf || lf.semanticRun >= PASS.semantic3done)
@@ -3698,7 +5048,7 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
             else
                 wasm_valtype_vec_new_empty(&rvec);
             auto ft = wasm_functype_new(&pvec, &rvec);
-            import dmd.glue.tocsym : wasmCtfeLazyFuncs, wasmCtfeStubFuncs;
+            import dmd.glue.tocsym : wasmCtfeLazyFuncs, wasmCtfeStubFuncs, wasmCtfeErrorFuncs;
             wasmtime_func_callback_t cb = &ipHostStub;
             const nm = name.data[0 .. name.size];
             if (nm == "gc_malloc" || nm == "_d_allocmemory" || nm == "gc_mallocTrace" || nm == "gc_calloc" || nm == "gc_callocTrace")
@@ -3743,6 +5093,8 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
                 cb = &ipHostAssert;
             else if (nm == "_d_arraybounds")
                 cb = &ipHostBounds;
+            else if (nm == "_d_assert")
+                cb = &ipHostAssertStr;
             else if (nm == "_d_assert_msg")
                 cb = &ipHostAssertMsg;
             else if (nm == "_d_arrayappendcd" || nm == "_d_arrayappendcw")
@@ -3751,6 +5103,20 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
                 cb = &ipHostAppend;
             else if (nm == "_d_nullpointerp")
                 cb = &ipHostNullPointer;
+            else if (nm == "__wasmctfe_slicecopy")
+                cb = &ipHostSliceCopy;
+            else if (nm == "__wasmctfe_switcherr")
+                cb = &ipHostSwitchError;
+            else if (nm == "__wasmctfe_error")
+                cb = &ipHostSiteError;
+            else if (nm == "__wasmctfe_error2")
+                cb = &ipHostError2;
+            else if (nm == "__wasmctfe_ptrslice")
+                cb = &ipHostPtrSlice;
+            else if (nm == "__wasmctfe_union")
+                cb = &ipHostUnion;
+            else if (nm == "__wasmctfe_throw")
+                cb = &ipHostThrow;
             else if (nm == "__wasmctfe_cov")
                 cb = &ipHostCov;
             else if (nm == "__wasmctfe_chain")
@@ -3788,6 +5154,11 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
                 hi.stubWhy = *sp;
                 cb = &ipHostStubbed;
             }
+            else if (auto ep = nm in wasmCtfeErrorFuncs)
+            {
+                hi.lazyFd = *ep;
+                cb = &ipHostErrorFunc;
+            }
             else if (auto lp = nm in wasmCtfeLazyFuncs)
             {
                 hi.lazyFd = *lp;
@@ -3799,6 +5170,15 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
             {
                 cb = &ipHostEhMatch;
                 ipComputeTIOffsets();
+            }
+            else if (cb is &ipHostStub)
+            {
+                import dmd.glue.tocsym : wasmCtfeNoBodyFuncs;
+                if (auto np = nm in wasmCtfeNoBodyFuncs)
+                {
+                    hi.lazyFd = *np;
+                    cb = &ipHostNoBody;
+                }
             }
             auto err = wasmtime_linker_define_func(linker,
                 modName.data, modName.size, name.data, name.size,
@@ -3911,9 +5291,13 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
     }
 
     ipHeapPtr = 0;
+    ipErrKind = IpErrKind.none;
+    ipErrNoBody = false;
+    ipThrowCount = 0;
     ipErrnoCell = 0;
     ipHeapEnd = 0;
     ipAllocCount = 0;
+    ipUnionTagCount = 0;
     ipDecodeMemo.setDim(0);
     ipCtfeOrdersAddr = im.ctfeOrdersAddr;
     ipTableFuncs = im.tableFuncs;
@@ -3922,8 +5306,10 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
         wasmtime_error_delete(err);
     wasmtime_val_t[1] results;
     const nresults = (sret || zeroResult || resultType.toBasetype().ty == Tvoid) ? 0 : 1;
-    if (auto err = wasmtime_func_call(ctx, &fnExt.of.func, vals.ptr, nvals,
-        results.ptr, nresults, &trap))
+    ipDiscardRun = ipDiscardFd is fd;
+    auto callErr = wasmtime_func_call(ctx, &fnExt.of.func, vals.ptr, nvals, results.ptr, nresults, &trap);
+    ipDiscardRun = false;
+    if (auto err = callErr)
     {
         if (verbose)
         {
@@ -3933,8 +5319,20 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
                 fd.toPrettyChars(), cast(int) msg.size, msg.data);
             wasm_byte_vec_delete(&msg);
         }
+        if (mode != WasmCtfeMode.verify && !ipLazyHit && ipErrKind == IpErrKind.none
+            && ipThrowCount && !ipReplayAt)
+        {
+            wasmtime_error_delete(err);
+            ipReplayPending = ipThrowCount;
+            return null;
+        }
+        Expression ee;
+        if (mode != WasmCtfeMode.verify && !ipLazyHit)
+        {
+            ee = ipReportTrap(null, err, im, ipInstanceMemory(ctx, inst));
+        }
         wasmtime_error_delete(err);
-        return null;
+        return ee;
     }
     if (trap)
     {
@@ -3946,8 +5344,13 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
                 fd.toPrettyChars(), cast(int) msg.size, msg.data);
             wasm_byte_vec_delete(&msg);
         }
+        Expression ee;
+        if (mode != WasmCtfeMode.verify && !ipLazyHit)
+        {
+            ee = ipReportTrap(trap, null, im, ipInstanceMemory(ctx, inst));
+        }
         wasm_trap_delete(trap);
-        return null;
+        return ee;
     }
 
     Expression resultExp;

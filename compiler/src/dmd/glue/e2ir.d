@@ -732,6 +732,30 @@ elem* toElem(Expression e, ref IRState irs)
                 return toElem(ie.exp, irs);
         }
 
+        if (wasmCtfeBuildActive && se.op == EXP.variable && se.var.isSymbolDeclaration())
+        {
+            import dmd.wasmctfe : wasmCtfeInitErrors;
+            import dmd.wasmctfe : trustedModule;
+            if (se.var.type.toBasetype().isTypeDArray() && !(irs.getFunc() && trustedModule(irs.getFunc())))
+                return wasmCtfeErrorElem(12, se, se.type);
+            if (wasmCtfeInitErrors(se.var.isSymbolDeclaration().dsym))
+                return wasmCtfeErrorElem(14, se, se.type);
+        }
+
+        if (wasmCtfeBuildActive && se.op == EXP.symbolOffset)
+        {
+            import dmd.wasmctfe : wasmCtfeBadPointerCast;
+            if (const kind = wasmCtfeBadPointerCast(se, irs.getFunc()))
+                return wasmCtfeErrorElem(kind, se, se.type);
+        }
+
+        if (wasmCtfeBuildActive && se.op == EXP.variable && v && v.ident != Id.ctfe && v.isDataseg())
+        {
+            import dmd.wasmctfe : wasmCtfeUnreadableVar;
+            if (const kind = wasmCtfeUnreadableVar(v))
+                return wasmCtfeErrorElem(kind, se, se.type);
+        }
+
         /* The magic variable __ctfe is always false at runtime
          */
         if (se.op == EXP.variable && v && v.ident == Id.ctfe)
@@ -1120,7 +1144,7 @@ elem* toElem(Expression e, ref IRState irs)
         // generate **classptr to get the classinfo
         elem* result = toElem(ex, irs);
         if (wasmCtfeBuildActive && irs.nullDerefCheck())
-            applyNullDerefErrorCheck(result, result.Ety, irs, e.loc);
+            applyNullDerefErrorCheck(result, result.Ety, irs, e.loc, e);
         result = el_una(OPind,TYnptr,result);
         result = el_una(OPind,TYnptr,result);
         // Add extra indirection for interfaces
@@ -1346,6 +1370,19 @@ elem* toElem(Expression e, ref IRState irs)
             //printf("\tmember = %s\n", ne.member.toChars());
         elem* e;
         Type ectype;
+        if (wasmCtfeBuildActive && t.ty == Tclass)
+        {
+            import dmd.wasmctfe : wasmCtfeNewCircular;
+            if (wasmCtfeNewCircular(ne))
+                return wasmCtfeErrorElem(15, ne, ne.type);
+        }
+        if (wasmCtfeBuildActive && ne.placement)
+        {
+            import dmd.wasmctfe : trustedModule;
+            auto fd = irs.getFunc();
+            if (!fd || !trustedModule(fd))
+                return wasmCtfeErrorElem(17, ne, ne.type);
+        }
         if (t.ty == Tclass)
         {
             auto tclass = ne.newtype.toBasetype().isTypeClass();
@@ -1934,6 +1971,7 @@ elem* toElem(Expression e, ref IRState irs)
             auto eline = el_long(TYint, ae.loc.linnum);
             ea = el_bin(OPcall, TYnoreturn, eassert, el_param(eline, efile));
         }
+        wasmCtfeSiteOf(ea, ae);
         if (einv)
         {
             // tmp = e, e || assert, e.inv
@@ -1952,6 +1990,8 @@ elem* toElem(Expression e, ref IRState irs)
         //printf("ThrowExp.toElem() '%s'\n", te.toChars());
 
         elem* e = toElemDtor(te.e1, irs);
+        if (config.ehmethod == EHmethod.EH_WASM && wasmCtfeBuildActive)
+            return el_una(OPthrow, TYnoreturn, wasmCtfeThrowHook(e, te.e1));
         const rtlthrow = config.ehmethod == EHmethod.EH_DWARF ? RTLSYM.THROWDWARF : RTLSYM.THROWC;
         elem* sym = el_var(getRtlsym(rtlthrow));
         return el_bin(OPcall, TYnoreturn, sym, e);
@@ -2680,6 +2720,10 @@ elem* toElem(Expression e, ref IRState irs)
 
     elem* visitAssign(AssignExp ae)
     {
+        auto savedUnionWrite = wasmCtfeUnionWrite;
+        wasmCtfeUnionWrite = wasmCtfeBuildActive ? ae.e1 : null;
+        scope (exit)
+            wasmCtfeUnionWrite = savedUnionWrite;
         version (none)
         {
             if (ae.op == EXP.blit)      printf("BlitExp.toElem('%s')\n", ae.toChars());
@@ -2796,7 +2840,15 @@ elem* toElem(Expression e, ref IRState irs)
                     c1 = el_bin(OPandand, TYint, c1, c2);
 
                     // Construct: (c1 || arrayBoundsError)
-                    auto ea = buildArraySliceError(irs, ae.loc, el_copytree(elwr), el_copytree(eupr), el_copytree(enbytesx));
+                    auto ea = buildArraySliceError(irs, ae.loc, el_copytree(elwr), el_copytree(eupr), el_copytree(enbytesx), ae);
+                    if (wasmCtfeBuildActive && ta.ty == Tarray && !el_sideeffect(n1))
+                    {
+                        elem* enull = el_bin(OPcall, TYvoid, el_var(getRtlsym(RTLSYM.WASMCTFEERROR2)),
+                            el_params(el_copytree(eupr), el_copytree(elwr), el_long(TYuint, wasmCtfeAddSite(are)),
+                                el_long(TYuint, 21), null));
+                        ea = el_bin(OPcond, TYvoid, el_bin(OPeqeq, TYint, el_copytree(n1), el_long(TYnptr, 0)),
+                            el_bin(OPcolon, TYvoid, enull, ea));
+                    }
                     elem* eb = el_bin(OPoror,TYvoid,c1,ea);
                     einit = el_combine(einit, eb);
                 }
@@ -2881,6 +2933,11 @@ elem* toElem(Expression e, ref IRState irs)
                         auto ey = el_same(efrom);
                         auto eleny = getDotLength(irs, efrom, ey);
                         epfr = array_toPtr(ae.e2.type, ey);
+                        elem* ctfeErr;
+                        if (wasmCtfeBuildActive)
+                            ctfeErr = el_bin(OPcall, TYvoid, el_var(getRtlsym(RTLSYM.WASMCTFESLICECOPY)),
+                                el_params(el_copytree(epfr), el_copytree(epto), el_copytree(eleny), el_copytree(elen),
+                                    el_long(TYuint, wasmCtfeAddSite(ae)), null));
 
                         // length check: (eleny == elen)
                         auto c = el_bin(OPeqeq, TYint, eleny, el_copytree(elen));
@@ -2898,7 +2955,7 @@ elem* toElem(Expression e, ref IRState irs)
                         }
 
                         // Construct: (c || arrayBoundsError)
-                        echeck = el_bin(OPoror, TYvoid, c, buildRangeError(irs, ae.loc));
+                        echeck = el_bin(OPoror, TYvoid, c, ctfeErr ? ctfeErr : buildRangeError(irs, ae.loc, ae));
                     }
                     else
                     {
@@ -3598,7 +3655,7 @@ elem* toElem(Expression e, ref IRState irs)
         auto ctfecond = ce.econd.op == EXP.not ? (cast(NotExp)ce.econd).e1 : ce.econd;
         if (auto ve = ctfecond.isVarExp())
             if (ve.var && ve.var.ident == Id.ctfe)
-                return toElem(ctfecond is ce.econd ? ce.e2 : ce.e1, irs);
+                return toElem((ctfecond is ce.econd) != wasmCtfeBuildActive ? ce.e2 : ce.e1, irs);
 
         elem* ec = toElem(ce.econd, irs);
 
@@ -3675,6 +3732,14 @@ elem* toElem(Expression e, ref IRState irs)
             irs.eSink.error(dve.loc, "`%s` is not a field, but a %s", dve.var.toErrMsg(), dve.var.kind());
             return el_long(TYint, 0);
         }
+        if (wasmCtfeBuildActive && v.ident.toString() != "name" && (dve.e1.isTypeidExp() ||
+            (dve.e1.isSymOffExp() && dve.e1.isSymOffExp().var.isTypeInfoDeclaration())))
+        {
+            import dmd.wasmctfe : trustedModule;
+            auto fd = irs.getFunc();
+            if (!fd || !trustedModule(fd))
+                return wasmCtfeErrorElem(18, dve, dve.type);
+        }
 
         // https://issues.dlang.org/show_bug.cgi?id=12900
         Type txb = dve.type.toBasetype();
@@ -3704,7 +3769,7 @@ elem* toElem(Expression e, ref IRState irs)
             typ = tybasic(e.Ety);
         }
         else if (irs.nullDerefCheck())
-            applyNullDerefErrorCheck(e, typ, irs, dve.loc);
+            applyNullDerefErrorCheck(e, typ, irs, dve.loc, dve);
 
         const tym = totym(dve.type);
         auto voffset = v.offset;
@@ -3729,6 +3794,16 @@ elem* toElem(Expression e, ref IRState irs)
 
         auto eoffset = el_long(TYsize_t, voffset);
         e = el_bin(OPadd, typ, e, objc.getOffset(v, tb1, eoffset));
+        if (wasmCtfeBuildActive && v.overlapped && !(v.storage_class & (STC.out_ | STC.ref_)))
+        {
+            import dmd.wasmctfe : wasmCtfeMixedOverlap, trustedModule;
+            auto fd = irs.getFunc();
+            if ((!fd || !trustedModule(fd)) && wasmCtfeMixedOverlap(v))
+            {
+                elem* ecopy = el_same(e);
+                e = el_combine(wasmCtfeUnionCall(v, dve, v.type.size(), dve is wasmCtfeUnionWrite ? 1 : 0, e), ecopy);
+            }
+        }
         if (v.storage_class & (STC.out_ | STC.ref_))
             e = el_una(OPind, TYnptr, e);
         e = el_una(OPind, tym, e);
@@ -3783,7 +3858,7 @@ elem* toElem(Expression e, ref IRState irs)
             if (irs.nullDerefCheck())
             {
                 // check context pointer
-                applyNullDerefErrorCheck(ethis2, ethis2.Ety, irs, de.loc);
+                applyNullDerefErrorCheck(ethis2, ethis2.Ety, irs, de.loc, de);
             }
         }
 
@@ -3805,7 +3880,7 @@ elem* toElem(Expression e, ref IRState irs)
                 ethis = addressElem(ethis, de.e1.type);
 
             if (irs.nullDerefCheck())
-                applyNullDerefErrorCheck(ethis, ethis.Ety, irs, de.loc);
+                applyNullDerefErrorCheck(ethis, ethis.Ety, irs, de.loc, de);
 
             if (ethis2)
                 ethis2 = setEthis2(de.loc, irs, de.func, ethis2, ethis, eeq);
@@ -3876,7 +3951,15 @@ elem* toElem(Expression e, ref IRState irs)
 
     elem* visitAddr(AddrExp ae)
     {
+        auto savedUnionWrite = wasmCtfeUnionWrite;
+        wasmCtfeUnionWrite = wasmCtfeBuildActive ? ae.e1 : null;
+        scope (exit)
+            wasmCtfeUnionWrite = savedUnionWrite;
         //printf("AddrExp.toElem('%s')\n", ae.toChars());
+        if (wasmCtfeBuildActive)
+            if (auto ve = ae.e1.isVarExp())
+                if (ve.var.isImportedSymbol())
+                    return wasmCtfeErrorElem(8, ae, ae.type);
         if (auto sle = ae.e1.isStructLiteralExp())
         {
             //printf("AddrExp.toElem('%s') %d\n", ae.toChars(), ae);
@@ -3910,7 +3993,12 @@ elem* toElem(Expression e, ref IRState irs)
     elem* visitPtr(PtrExp pe)
     {
         //printf("PtrExp.toElem() %s\n", pe.toChars());
+        import dmd.wasmctfe : wasmCtfeCastExempt, wasmCtfeFloatIntPaint;
+        auto savedExempt = wasmCtfeCastExempt;
+        if (wasmCtfeBuildActive && wasmCtfeFloatIntPaint(pe))
+            wasmCtfeCastExempt = pe.e1;
         elem* e = toElem(pe.e1, irs);
+        wasmCtfeCastExempt = savedExempt;
         if (tybasic(e.Ety) == TYnptr &&
             pe.e1.type.nextOf() &&
             pe.e1.type.nextOf().isImmutable())
@@ -3919,7 +4007,7 @@ elem* toElem(Expression e, ref IRState irs)
         }
 
         if (irs.nullDerefCheck())
-            applyNullDerefErrorCheck(e, e.Ety, irs, pe.loc);
+            applyNullDerefErrorCheck(e, e.Ety, irs, pe.loc, pe);
 
         e = el_una(OPind,totym(pe.type),e);
         if (tybasic(e.Ety) == TYstruct)
@@ -4110,9 +4198,41 @@ elem* toElem(Expression e, ref IRState irs)
             printf("\tfrom: %s\n", ce.e1.type.toChars());
             printf("\tto  : %s\n", ce.to.toChars());
         }
+        import dmd.wasmctfe : wasmCtfeBadPointerCast;
+        const ctfeKind = wasmCtfeBuildActive ? wasmCtfeBadPointerCast(ce, irs.getFunc()) : 0;
+        if (ctfeKind == 11)
+            return wasmCtfeErrorElem(ctfeKind, ce, ce.type);
+        if (ctfeKind == 10 || ctfeKind == 13)
+            return el_combine(toElem(ce.e1, irs), wasmCtfeErrorElem(ctfeKind, ce, ce.type));
+
         // When there is a lowering availabe, use that
         elem* e = ce.lowering is null ? toElem(ce.e1, irs) : toElem(ce.lowering, irs);
 
+        if (wasmCtfeBuildActive && ce.lowering is null)
+        {
+            if (const kind = ctfeKind)
+            {
+                elem* err = wasmCtfeErrorCall(kind, ce);
+                if (kind == 16)
+                {
+                    elem* ec = el_same(e);
+                    elem* ec2 = el_same(ec);
+                    const ulong bound = tysize(TYnptr) == 4 ? wasmCtfeIntPtrTag(4) : wasmCtfeNoFrame;
+                    elem* isReal = el_bin(OPandand, TYint, el_bin(OPne, TYint, e, el_long(e.Ety, 0)),
+                        el_bin(OPlt, TYint, ec, el_long(ec.Ety, bound)));
+                    e = el_combine(el_bin(OPandand, TYint, isReal, el_combine(err, el_long(TYint, 0))), ec2);
+                }
+                else if (ce.e1.type.toBasetype().ty == Tpointer)
+                {
+                    elem* ec = el_same(e);
+                    elem* chk = el_bin(OPandand, TYint, el_bin(OPne, TYint, e, el_long(e.Ety, 0)),
+                        el_combine(err, el_long(TYint, 0)));
+                    e = el_combine(chk, ec);
+                }
+                else
+                    e = el_combine(err, e);
+            }
+        }
         if (wasmCtfeBuildActive && ce.lowering is null)
         {
             Type tf = ce.e1.type.toBasetype();
@@ -4238,7 +4358,16 @@ elem* toElem(Expression e, ref IRState irs)
                     // Construct: (c1 || arrayBoundsError)
                     // if lowerIsLessThanUpper (e.g. arr[-1..0]), elen is null here
                     elen = elen ? elen : el_long(TYsize_t, 0);
-                    auto ea = buildArraySliceError(irs, se.loc, el_copytree(elwr2), el_copytree(eupr2), el_copytree(elen));
+                    auto ea = buildArraySliceError(irs, se.loc, el_copytree(elwr2), el_copytree(eupr2), el_copytree(elen), se);
+                    if (wasmCtfeBuildActive && t1.ty == Tarray && !el_sideeffect(e) && !se.e1.isArrayLiteralExp())
+                    {
+                        elem* eptr0 = el_una(OPmsw, TYnptr, el_copytree(e));
+                        elem* enull = el_bin(OPcall, TYvoid, el_var(getRtlsym(RTLSYM.WASMCTFEERROR2)),
+                            el_params(el_copytree(eupr2), el_copytree(elwr2), el_long(TYuint, wasmCtfeAddSite(se)),
+                                el_long(TYuint, 21), null));
+                        ea = el_bin(OPcond, TYvoid, el_bin(OPeqeq, TYint, eptr0, el_long(TYnptr, 0)),
+                            el_bin(OPcolon, TYvoid, enull, ea));
+                    }
                     elem* eb = el_bin(OPoror, TYvoid, c1, ea);
 
                     elwr = el_combine(elwr, eb);
@@ -4264,8 +4393,17 @@ elem* toElem(Expression e, ref IRState irs)
                     elem* ev = el_same(elen);
                     elem* ok = el_bin(OPoror, TYint, el_bin(OPne, TYint, ebase, el_long(TYnptr, 0)),
                         el_bin(OPeqeq, TYint, el_copytree(ev), el_long(TYsize_t, 0)));
-                    elem* chk = el_bin(OPoror, TYvoid, ok, buildNullDerefError(irs, se.loc));
+                    elem* chk = el_bin(OPoror, TYvoid, ok, buildNullDerefError(irs, se.loc, se));
                     elen = el_combine(el_combine(elen, chk), ev);
+                    import dmd.wasmctfe : trustedModule;
+                    auto fd = irs.getFunc();
+                    if ((!fd || !trustedModule(fd)) && !el_sideeffect(eupr2) && !el_sideeffect(elwr2))
+                    {
+                        elem* pc = el_bin(OPcall, TYvoid, el_var(getRtlsym(RTLSYM.WASMCTFEPTRSLICE)),
+                            el_params(el_copytree(ebase), el_copytree(eupr2), el_copytree(elwr2),
+                                el_long(TYuint, sz), el_long(TYuint, wasmCtfeAddSite(se)), null));
+                        elen = el_combine(pc, elen);
+                    }
                 }
                 e = el_pair(TYdarray, elen, eptr);
             }
@@ -4338,14 +4476,14 @@ elem* toElem(Expression e, ref IRState irs)
                 n2x = el_bin(OPlt, TYint, n2x, elength);
 
                 // Construct: (n2x || arrayBoundsError)
-                auto ea = buildArrayIndexError(irs, ie.loc, el_copytree(n2), el_copytree(elength));
+                auto ea = buildArrayIndexError(irs, ie.loc, el_copytree(n2), el_copytree(elength), ie);
                 eb = el_bin(OPoror,TYvoid,n2x,ea);
             }
         }
 
         n1 = array_toPtr(t1, n1);
         if (wasmCtfeBuildActive && t1.ty == Tpointer && irs.nullDerefCheck())
-            applyNullDerefErrorCheck(n1, n1.Ety, irs, ie.loc);
+            applyNullDerefErrorCheck(n1, n1.Ety, irs, ie.loc, ie);
 
         {
             elem* escale = el_long(TYsize_t, t1.nextOf().size());
@@ -4689,7 +4827,7 @@ elem* toElemRVO(Expression e, elem* ehidden, ref IRState irs, Type forceType = n
         auto ctfecond = ce.econd.op == EXP.not ? (cast(NotExp)ce.econd).e1 : ce.econd;
         if (auto ve = ctfecond.isVarExp())
             if (ve.var && ve.var.ident == Id.ctfe)
-                return toElemRVO(ctfecond is ce.econd ? ce.e2 : ce.e1, ehidden, irs, forceType, offset);
+                return toElemRVO((ctfecond is ce.econd) != wasmCtfeBuildActive ? ce.e2 : ce.e1, ehidden, irs, forceType, offset);
 
         elem* ec = toElem(ce.econd, irs);
 
@@ -4952,6 +5090,13 @@ elem* Dsymbol_toElem(Dsymbol s, ref IRState irs)
                 }
             }
 
+            if (wasmCtfeBuildActive && !(vd.storage_class & (STC.ref_ | STC.out_)))
+            {
+                import dmd.wasmctfe : wasmCtfeHasMixedUnion;
+                if (wasmCtfeHasMixedUnion(vd.type))
+                    e = el_combine(wasmCtfeUnionCall(null, null, vd.type.size(), 2, el_ptr(sp)), e);
+            }
+
             /* Mark the point of construction of a variable that needs to be destructed.
              */
             if (vd.needsScopeDtor())
@@ -5124,6 +5269,62 @@ elem* ExpressionsToStaticArray(ref IRState irs, Loc loc, Expressions* exps, Symb
 
 /***************************************************
  */
+private __gshared Expression wasmCtfeCallSiteExp;
+
+public uint wasmCtfeAddSite(Expression e)
+{
+    if (!wasmCtfeSites.length)
+    {
+        wasmCtfeSites ~= null;
+        wasmCtfeSiteArgCalls ~= null;
+    }
+    wasmCtfeSites ~= e;
+    Expression[] outer;
+    foreach_reverse (c; wasmCtfeArgCallStack)
+        outer ~= c;
+    wasmCtfeSiteArgCalls ~= outer;
+    return cast(uint)(wasmCtfeSites.length - 1);
+}
+
+private __gshared Expression wasmCtfeUnionWrite;
+
+private elem* wasmCtfeUnionCall(VarDeclaration v, Expression site, ulong size, uint op, elem* addr)
+{
+    import dmd.wasmctfe : wasmCtfeUnionInfo;
+    const idx = wasmCtfeUnionInfo(v, site ? wasmCtfeAddSite(site) : 0, size);
+    return el_bin(OPcall, TYvoid, el_var(getRtlsym(RTLSYM.WASMCTFEUNION)),
+        el_params(addr, el_long(TYuint, op), el_long(TYuint, idx), null));
+}
+
+public elem* wasmCtfeErrorCall(int kind, Expression site)
+{
+    const idx = wasmCtfeAddSite(site);
+    return el_bin(OPcall, TYvoid, el_var(getRtlsym(RTLSYM.WASMCTFEERROR)),
+        el_params(el_long(TYuint, idx), el_long(TYuint, kind), null));
+}
+
+elem* wasmCtfeErrorElem(int kind, Expression site, Type t)
+{
+    elem* h = wasmCtfeErrorCall(kind, site);
+    elem* e = el_una(OPind, totym(t), el_combine(h, el_long(TYnptr, 0)));
+    if (tybasic(e.Ety) == TYstruct || tybasic(e.Ety) == TYarray)
+        e.ET = Type_toCtype(t);
+    return e;
+}
+
+public elem* wasmCtfeThrowHook(elem* e, Expression site)
+{
+    const idx = wasmCtfeAddSite(site);
+    return el_bin(OPcall, TYnptr, el_var(getRtlsym(RTLSYM.WASMCTFETHROW)), el_params(el_long(TYuint, idx), e, null));
+}
+
+private elem* wasmCtfeSiteOf(elem* e, Expression site)
+{
+    if (wasmCtfeBuildActive && e && site && (e.Eoper == OPcall || e.Eoper == OPucall))
+        e.Esite = wasmCtfeAddSite(site);
+    return e;
+}
+
 public ulong wasmCtfeIntPtrTag(uint ptrsize) nothrow @nogc { return ptrsize == 4 ? 0xF800_0000 : 1UL << 48; }
 public enum ulong wasmCtfeNoFrame = 0xFF00_0000;
 
@@ -5136,7 +5337,7 @@ private elem* wasmCtfePtrTag(elem* e)
     return el_bin(OPcond, ty, c, el_bin(OPcolon, ty, x, el_long(ty, 0)));
 }
 
-elem* toElemCast(CastExp ce, elem* e, bool isLvalue, ref IRState irs)
+public elem* toElemCast(CastExp ce, elem* e, bool isLvalue, ref IRState irs)
 {
     tym_t ftym;
     tym_t ttym;
@@ -6053,6 +6254,8 @@ elem* callfunc(Loc loc,
     elem* delegateNullCheck = null;
     elem* eresult = ehidden;
     const op = fd ? intrinsic_op(fd) : NotIntrinsic;
+    Expression siteExp = wasmCtfeCallSiteExp;
+    wasmCtfeCallSiteExp = null;
 
     version (none)
     {
@@ -6119,7 +6322,7 @@ elem* callfunc(Loc loc,
             //  and can't be due to lazy being able to have a null context pointer.
             elem* combined = el_combine(el_same(thisptr), el_same(funcptr));
 
-            applyNullDerefErrorCheck(combined, TYnptr, irs, loc);
+            applyNullDerefErrorCheck(combined, TYnptr, irs, loc, siteExp);
 
             // No need to check if delegateNullCheck is non-null, combined will be used if it is.
             delegateNullCheck = el_combine(delegateNullCheck, combined);
@@ -6134,7 +6337,7 @@ elem* callfunc(Loc loc,
         if (fd is null && irs.nullDerefCheck() && ec.Eoper == OPind)
         {
             // check function pointers
-            applyNullDerefErrorCheck(ec.E1, ec.E1.Ety, irs, loc);
+            applyNullDerefErrorCheck(ec.E1, ec.E1.Ety, irs, loc, siteExp);
         }
     }
 
@@ -6187,6 +6390,11 @@ elem* callfunc(Loc loc,
         const int j = tf.isDstyleVariadic();
         const osx_aapcs64 = irs.target.isAArch64 && irs.target.os == Target.OS.OSX;
 
+        if (siteExp)
+            wasmCtfeArgCallStack ~= siteExp;
+        scope (exit)
+            if (siteExp)
+                wasmCtfeArgCallStack.length--;
         foreach (const i, arg; *arguments)
         {
             elem* ea = toElem(arg, irs);
@@ -6386,7 +6594,7 @@ elem* callfunc(Loc loc,
             // the virtual path gets from its vtable lookup would otherwise be
             // skipped. Insert it here so null 'this' is caught before the call.
             if (tybasic(ethis.Ety) == TYnptr && irs.nullDerefCheck())
-                eside = el_combine(eside, el_bin(OPoror, TYvoid, el_copytree(ethis), buildNullDerefError(irs, loc)));
+                eside = el_combine(eside, el_bin(OPoror, TYvoid, el_copytree(ethis), buildNullDerefError(irs, loc, siteExp)));
         }
         else
         {
@@ -6571,6 +6779,8 @@ elem* callfunc(Loc loc,
             e = el_bin(OPcall, tyret, ec, ep);
         else
             e = el_una(OPucall, tyret, ec);
+        if (siteExp)
+            e.Esite = wasmCtfeAddSite(siteExp);
 
         if (tf.parameterList.varargs != VarArg.none)
         {
@@ -7417,6 +7627,8 @@ elem* toElemCall(CallExp ce, ref IRState irs, elem* ehidden = null)
         ve.type = ce.vthis2.type.pointerTo();
         ethis2 = toElem(ve, irs);
     }
+    if (wasmCtfeBuildActive)
+        wasmCtfeCallSiteExp = ce;
     elem* ecall = callfunc(ce.loc, irs, ce.directcall, ce.type, ec, ectype, fd, t1, ehidden, ce.arguments, null, ethis2);
 
     if (dctor && ecall.Eoper == OPind)
@@ -7890,7 +8102,12 @@ elem* filelinefunction(ref IRState irs, Loc loc)
  * Returns:
  *      elem generated
  */
-elem* buildRangeError(ref IRState irs, Loc loc)
+elem* buildRangeError(ref IRState irs, Loc loc, Expression site = null)
+{
+    return wasmCtfeSiteOf(buildRangeErrorImpl(irs, loc), site);
+}
+
+private elem* buildRangeErrorImpl(ref IRState irs, Loc loc)
 {
     final switch (irs.params.checkAction)
     {
@@ -7905,15 +8122,20 @@ elem* buildRangeError(ref IRState irs, Loc loc)
     }
 }
 
-void applyNullDerefErrorCheck(ref elem* e, tym_t type, ref IRState irs, const ref Loc loc)
+void applyNullDerefErrorCheck(ref elem* e, tym_t type, ref IRState irs, const ref Loc loc, Expression site = null)
 {
-    auto ne = buildNullDerefError(irs, loc);
+    auto ne = buildNullDerefError(irs, loc, site);
     auto originale = el_same(e);
     e = el_bin(OPoror, TYvoid, e, ne);
     e = el_bin(OPcomma, type, e, originale);
 }
 
-elem* buildNullDerefError(ref IRState irs, const ref Loc loc)
+elem* buildNullDerefError(ref IRState irs, const ref Loc loc, Expression site = null)
+{
+    return wasmCtfeSiteOf(buildNullDerefErrorImpl(irs, loc), site);
+}
+
+private elem* buildNullDerefErrorImpl(ref IRState irs, const ref Loc loc)
 {
     final switch (irs.params.checkAction)
     {
@@ -7939,7 +8161,12 @@ elem* buildNullDerefError(ref IRState irs, const ref Loc loc)
  * Returns:
  *      elem generated
  */
-elem* buildArraySliceError(ref IRState irs, Loc loc, elem* lower, elem* upper, elem* length)
+elem* buildArraySliceError(ref IRState irs, Loc loc, elem* lower, elem* upper, elem* length, Expression site = null)
+{
+    return wasmCtfeSiteOf(buildArraySliceErrorImpl(irs, loc, lower, upper, length), site);
+}
+
+private elem* buildArraySliceErrorImpl(ref IRState irs, Loc loc, elem* lower, elem* upper, elem* length)
 {
     final switch (irs.params.checkAction)
     {
@@ -7967,7 +8194,12 @@ elem* buildArraySliceError(ref IRState irs, Loc loc, elem* lower, elem* upper, e
  * Returns:
  *      elem generated
  */
-elem* buildArrayIndexError(ref IRState irs, Loc loc, elem* index, elem* length)
+elem* buildArrayIndexError(ref IRState irs, Loc loc, elem* index, elem* length, Expression site = null)
+{
+    return wasmCtfeSiteOf(buildArrayIndexErrorImpl(irs, loc, index, length), site);
+}
+
+private elem* buildArrayIndexErrorImpl(ref IRState irs, Loc loc, elem* index, elem* length)
 {
     final switch (irs.params.checkAction)
     {

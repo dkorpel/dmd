@@ -1,10 +1,3 @@
-/*
-TEST_OUTPUT:
----
-fail_compilation/fail19123.d(23): Error: uninitialized variable `b` cannot be returned from CTFE
----
-*/
-
 // https://issues.dlang.org/show_bug.cgi?id=19123
 
 union U
@@ -21,3 +14,4 @@ byte[4] f(int val)
 }
 
 static byte[4] forceCtfe = f(1);
+static assert(f(1) == [1, 0, 0, 0]);

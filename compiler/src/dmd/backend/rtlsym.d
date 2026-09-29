@@ -138,6 +138,13 @@ enum RTLSYM
     WASMCTFESHIFTERR,
     WASMCTFECHAIN,
     WASMCTFECOV,
+    WASMCTFETHROW,
+    WASMCTFEERROR,
+    WASMCTFESWITCHERR,
+    WASMCTFESLICECOPY,
+    WASMCTFEPTRSLICE,
+    WASMCTFEERROR2,
+    WASMCTFEUNION,
 }
 
 private __gshared Symbol*[RTLSYM.max + 1] rtlsym;
@@ -303,6 +310,13 @@ Symbol* getRtlsym(RTLSYM i) @trusted
         case RTLSYM.WASMCTFESHIFTERR:       symbolz(ps,FL.func,FREGSAVED,"__wasmctfe_shift_error", SFLexit, t); break;
         case RTLSYM.WASMCTFECHAIN:          symbolz(ps,FL.func,FREGSAVED,"__wasmctfe_chain", 0, t); break;
         case RTLSYM.WASMCTFECOV:            symbolz(ps,FL.func,FREGSAVED,"__wasmctfe_cov", 0, t); break;
+        case RTLSYM.WASMCTFETHROW:          symbolz(ps,FL.func,FREGSAVED,"__wasmctfe_throw", 0, t); break;
+        case RTLSYM.WASMCTFEERROR:          symbolz(ps,FL.func,FREGSAVED,"__wasmctfe_error", 0, t); break;
+        case RTLSYM.WASMCTFESWITCHERR:      symbolz(ps,FL.func,FREGSAVED,"__wasmctfe_switcherr", 0, t); break;
+        case RTLSYM.WASMCTFESLICECOPY:      symbolz(ps,FL.func,FREGSAVED,"__wasmctfe_slicecopy", 0, t); break;
+        case RTLSYM.WASMCTFEPTRSLICE:       symbolz(ps,FL.func,FREGSAVED,"__wasmctfe_ptrslice", 0, t); break;
+        case RTLSYM.WASMCTFEERROR2:         symbolz(ps,FL.func,FREGSAVED,"__wasmctfe_error2", 0, t); break;
+        case RTLSYM.WASMCTFEUNION:          symbolz(ps,FL.func,FREGSAVED,"__wasmctfe_union", 0, t); break;
         default:
             assert(0);
     }
@@ -416,6 +430,13 @@ private type* wasmRtlsymType(RTLSYM i)
         case RTLSYM.WASMCTFESHIFTERR:       return fn([charPtr(), tuint, tstypes[TYllong], tstypes[TYllong]], tvoid);
         case RTLSYM.WASMCTFECHAIN:          return fn([voidPtr(), voidPtr()], voidPtr());
         case RTLSYM.WASMCTFECOV:            return fn([tuint, tuint], tvoid);
+        case RTLSYM.WASMCTFETHROW:          return fn([voidPtr(), tuint], voidPtr());
+        case RTLSYM.WASMCTFEERROR:          return fn([tuint, tuint], tvoid);
+        case RTLSYM.WASMCTFESWITCHERR:      return fn([tuint, tstypes[TYllong]], tvoid);
+        case RTLSYM.WASMCTFESLICECOPY:      return fn([tuint, tsize, tsize, voidPtr(), voidPtr()], tvoid);
+        case RTLSYM.WASMCTFEPTRSLICE:       return fn([tuint, tuint, tsize, tsize, voidPtr()], tvoid);
+        case RTLSYM.WASMCTFEERROR2:         return fn([tuint, tuint, tsize, tsize], tvoid);
+        case RTLSYM.WASMCTFEUNION:          return fn([tuint, tuint, voidPtr()], tvoid);
 
         case RTLSYM.MONITOR_HANDLER:        return null;
         case RTLSYM.MONITOR_PROLOG:         return null;

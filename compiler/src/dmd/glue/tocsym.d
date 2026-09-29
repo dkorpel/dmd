@@ -120,6 +120,10 @@ void resetCtfeSymbolCache()
 
 package(dmd.glue) __gshared bool wasmCtfeBuildActive;
 public __gshared Module[] wasmCtfeCovModules;
+public __gshared Expression[] wasmCtfeSites;
+public __gshared FuncDeclaration[const(char)[]] wasmCtfeNoBodyFuncs;
+public __gshared Expression[][] wasmCtfeSiteArgCalls;
+public __gshared Expression[] wasmCtfeArgCallStack;
 
 private __gshared Array!ClassDeclaration wasmCtfeClasses;
 
@@ -307,6 +311,7 @@ void wasmCtfeRecord(Dsymbol d)
 package(dmd.glue) __gshared bool wasmCtfeVtblCtx;
 public __gshared FuncDeclaration[const(char)[]] wasmCtfeLazyFuncs;
 public __gshared const(char)*[const(char)[]] wasmCtfeStubFuncs;
+public __gshared FuncDeclaration[const(char)[]] wasmCtfeErrorFuncs;
 
 package(dmd.glue)
 void wasmCtfeQueueDefinition(Dsymbol d)
@@ -320,6 +325,13 @@ void wasmCtfeQueueDefinition(Dsymbol d)
         import dmd.wasmctfe : wasmCtfeHostBuiltin;
         if (wasmCtfeHostBuiltin(fd))
             return;
+        if (fd.semanticRun >= PASS.semantic3done && fd.hasSemantic3Errors)
+        {
+            import core.stdc.string : strlen;
+            const m = mangleExact(fd);
+            wasmCtfeErrorFuncs[m[0 .. strlen(m)].idup] = fd;
+            return;
+        }
         if (wasmCtfeVtblCtx && fd.fbody && fd.semanticRun < PASS.semantic3done)
         {
             import core.stdc.string : strlen;
@@ -333,6 +345,12 @@ void wasmCtfeQueueDefinition(Dsymbol d)
             const m = mangleExact(fd);
             if (m[0 .. strlen(m)] in wasmCtfeStubFuncs)
                 return;
+        }
+        if (!fd.fbody)
+        {
+            import core.stdc.string : strlen;
+            const m = mangleExact(fd);
+            wasmCtfeNoBodyFuncs[m[0 .. strlen(m)].idup] = fd;
         }
         if (!fd.fbody && fd.semanticRun >= PASS.semantic3done)
         {

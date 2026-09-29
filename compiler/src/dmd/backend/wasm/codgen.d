@@ -280,6 +280,7 @@ struct WasmCG
     Symbol*[] locals; /// local variable table (params first); temporaries hold a shared type-marker symbol
     uint numParams; /// number of parameters (= first numParams locals)
     WasmReloc[] relocs; /// relocations recorded in this function's code body
+    WasmSite[] sites;
 
     bool hasShadowFrame;
 
@@ -1432,8 +1433,12 @@ private bool genCall(ref WasmCG cg, elem* e)
     if (ctx.isCVariadic)
         cg.genVarArgs(varArgs, spLocal, vaFrameSize);
 
+    if (wasmCGCtfeBuild && e.Esite)
+        cg.sites ~= WasmSite(0, e.Esite);
     if (calleeSym)
     {
+        if (cg.sites.length && cg.sites[$ - 1].offset == 0)
+            cg.sites[$ - 1].offset = cast(uint) cg.code.length + 1;
         cg.emit(OP.CALL, callReloc(cg.funcIndex(calleeSym), calleeSym));
     }
     else
@@ -1449,6 +1454,8 @@ private bool genCall(ref WasmCG cg, elem* e)
         elem* fn = (e.E1.Eoper == OPind && e.E1.E1) ? e.E1.E1 : e.E1;
         cg.genElem(fn);
         cg.wrapPtrToI32();
+        if (cg.sites.length && cg.sites[$ - 1].offset == 0)
+            cg.sites[$ - 1].offset = cast(uint) cg.code.length + 1;
         cg.emit(OP.CALL_INDIRECT,
             RelocOp(R_WASM.TYPE_INDEX_LEB, typeIdx, null), RelocOp(R_WASM.TABLE_NUMBER_LEB));
     }
@@ -3250,6 +3257,7 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
     fb.locals = cg.locals;
     fb.numParams = cg.numParams;
     fb.relocs = cg.relocs;
+    fb.sites = cg.sites;
     fb.code.reset();
     fb.code.write(cg.code.peekSlice());
 }

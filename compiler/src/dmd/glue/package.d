@@ -982,6 +982,15 @@ private void FuncDeclaration_toObjFileImpl(FuncDeclaration fd, bool multiobj)
         return;
     }
 
+    if (wasmCtfeBuildActive && fd.getModule() && fd.getModule().filetype == FileType.c)
+    {
+        auto tfn = fd.type.toBasetype().isTypeFunction();
+        if (tfn && tfn.next && tfn.next.ty != Tvoid)
+        {
+            import dmd.glue.e2ir : wasmCtfeErrorCall;
+            block_appendexp(bx.curblock, wasmCtfeErrorCall(19, new VarExp(fd.loc, fd)));
+        }
+    }
     bx.curblock.bc = BC.ret;
 
     f.Fstartblock = bx.startblock;

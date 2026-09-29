@@ -161,3 +161,24 @@ gets a wasm32 CTFE module. The host engine then has to read and write
 every pointer-sized value at the target width. `backend/wasm` itself was
 wasm32 first, so no backend changes were needed apart from the 12-byte
 soft-real store and signed data-address relocations.
+
+## 12. Error locations need to survive the backend
+
+Many CTFE errors must name an expression and print the chain of calls
+that led to it ("called from here"). The glue layer records the
+expression as a site (`wasmCtfeAddSite`) and passes the index to a host
+import. Calls record their site in a new `elem.Esite` field, which the
+wasm code generator emits into the site table when it lowers the call.
+
+An earlier version kept a map from `elem*` to site. Elems are freed and
+reused by the optimizer, so the map returned sites for unrelated calls.
+The field travels with the elem, but every optimizer transformation that
+replaces a call elem has to carry it: `cgelem.cgel_lvalue` rewrites
+`(a, f())` so that the comma node ends up where the call was, and lost the
+site until it was copied over. Other rewrites may still drop it; the
+result is a missing "called from here" line, not a wrong one.
+
+The `switch` statement's CTFE check shared its condition elem between the
+check and the jump, which is invalid in the backend's tree model and
+crashed `elem_debug` after the optimizer freed one of them. It is now
+copied with `el_copytree`.

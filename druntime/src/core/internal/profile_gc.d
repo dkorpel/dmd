@@ -122,6 +122,7 @@ Tret _d_arraycatnTX(Tret, Tarr...)(scope auto ref Tarr froms,
 T* _d_newitemT(T)(string file = __FILE__, int line = __LINE__, string funcname = __FUNCTION__) @trusted
 {
     static if (is(T == struct))
+    if (!__ctfe)
     {
         // Prime the TypeInfo name so it does not affect the allocated byte count.
         // See https://github.com/dlang/dmd/issues/20832

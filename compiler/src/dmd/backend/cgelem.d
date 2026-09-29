@@ -113,6 +113,8 @@ private elem* cgel_lvalue(elem* e)
         e1.E1 = e1.E2;
         e1.E2 = e.E2;
         e.E2 = e1;
+        e1.Esite = e.Esite;
+        e.Esite = 0;
         goto L1;
     }
     else if (OTassign(e1.Eoper))
