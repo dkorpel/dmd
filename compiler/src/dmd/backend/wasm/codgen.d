@@ -1087,6 +1087,11 @@ private void genVarArgs(ref WasmCG cg, elem*[] varArgs, ref uint spLocal, ref ui
             sz = 4;
             al = 2;
             break;
+        case WASM_TYPE.V128:
+            storeOp = OP.FD_PREFIX;
+            sz = 16;
+            al = 4;
+            break;
         default:
             assert(0);
         }
@@ -1108,7 +1113,10 @@ private void genVarArgs(ref WasmCG cg, elem*[] varArgs, ref uint spLocal, ref ui
             cg.emit(OP.LOCAL_GET, Uleb(spLocal), sl.e);
             if (sl.promoteF32)
                 cg.emit(OP.F64_PROMOTE_F32);
-            cg.emit(sl.storeOp, Uleb(sl.alignLog2), Uleb(sl.off));
+            if (sl.storeOp == OP.FD_PREFIX)
+                cg.emit(OP.FD_PREFIX, Uleb(WASM_SIMD.V128_STORE), Uleb(sl.alignLog2), Uleb(sl.off));
+            else
+                cg.emit(sl.storeOp, Uleb(sl.alignLog2), Uleb(sl.off));
             break;
 
         case VaKind.slicePair:

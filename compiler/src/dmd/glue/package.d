@@ -563,7 +563,7 @@ private void FuncDeclaration_toObjFileImpl(FuncDeclaration fd, bool multiobj)
             break;
     }
 
-    if (UnitTestDeclaration udp = needsDeferredNested(fd))
+    if (UnitTestDeclaration udp = wasmCtfeBuildActive ? null : needsDeferredNested(fd))
     {
         /* Can't do unittest's out of order, they are order dependent in that their
          * execution is done in lexical order.
@@ -740,7 +740,7 @@ private void FuncDeclaration_toObjFileImpl(FuncDeclaration fd, bool multiobj)
 
     if (fd.vthis)
     {
-        assert(!fd.vthis.csym);
+        assert(!fd.vthis.csym || wasmCtfeBuildActive);
         sthis = toSymbol(fd.vthis);
         sthis.Stype = getParentClosureType(sthis, fd);
         irs.sthis = sthis;
@@ -775,7 +775,7 @@ private void FuncDeclaration_toObjFileImpl(FuncDeclaration fd, bool multiobj)
         foreach (i, v; *fd.parameters)
         {
             //printf("param[%d] = %p, %s\n", cast(int)i, v, v.toChars());
-            assert(!v.csym);
+            assert(!v.csym || wasmCtfeBuildActive);
             lastParam = toSymbol(v);
             params[pi + i] = lastParam;
         }
@@ -1641,7 +1641,10 @@ private bool wasmCtfeGenerateOnce(FuncDeclaration root, ref OutBuffer objbuf, ou
             }
         }
         if (getenv("DMD_CTFE_TRACEGEN"))
-            fprintf(stderr, "wasm-ctfe gen: %s\n", d.toPrettyChars());
+        {
+            auto gfd = d.isFuncDeclaration();
+            fprintf(stderr, "wasm-ctfe gen: %s %s\n", d.toPrettyChars(), gfd ? mangleExact(gfd) : "".ptr);
+        }
         const errsBefore = global.errors;
         toObjFile(d, false);
         if (getenv("DMD_CTFE_TRACEGEN") && global.errors != errsBefore)

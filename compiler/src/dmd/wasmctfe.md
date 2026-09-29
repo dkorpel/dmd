@@ -851,3 +851,55 @@ now requires a side-effect-free lvalue.
 - `noreturn` fields decode to their default initializer.
 - A nested function without a frame gets an explicit null context
   argument when called directly.
+
+### Unions and reinterpretation are allowed
+
+Function bodies may use unions and anonymous unions. Reading a member
+other than the last one written reinterprets the bytes, as it does at
+run time. The AST interpreter rejects this ("reinterpretation through
+overlapped field"). Wasm memory is little-endian on every host, so the
+result is the same everywhere. A pointer read back as an integer is an
+engine address. It is deterministic but means nothing outside the
+engine.
+
+### `extern(C++)` classes
+
+A C++ vtable has no `ClassInfo` slot, so the dynamic class of a result
+can't be read from memory. `selfLink` records the address of every
+`__vtblZ` symbol, and the engine maps each C++ class in the build to its
+vtable address. A downcast between C++ classes is a paint at run time,
+but CTFE checks the dynamic type. Engine builds lower it to the host
+import `__wasmctfe_cppcast(obj, targetVtbl)`, which returns `null` when
+the object isn't a `targetVtbl` class or a subclass of it.
+
+### `scope` class destruction
+
+`delete` of a `scope` class variable calls `_d_callfinalizer`, which is
+in `rt` and not in the build. Engine builds call the destructors of the
+allocated class directly, most derived first, as the AST interpreter
+does. They stop after the first destructor of a non-D class. The vptr is
+not cleared and the memory is not reset.
+
+### Virtual functions are built lazily
+
+Emitting a vtable used to pull in every virtual function and force
+semantic3 on it. For dmd's own `Type` hierarchy that reached unrelated
+code whose semantic failed at that point. A vtable entry for a function
+without semantic3 is now an import. If the program calls it, the host
+records the function and traps. The host then runs semantic3 on it and
+rebuilds and reruns the evaluation, up to 32 times. The AST interpreter
+also runs semantic3 only on functions it calls.
+
+### Legality scan follows the build
+
+The static scan skips the dead branch of `if (__ctfe)` and
+`if (!__ctfe)`, like codegen does. It doesn't enter nested aggregates or
+templates, whose members are scanned when they are called. Manifest
+constants are skipped. Functions nested in a `unittest` are built with
+the evaluation, not deferred to the unittest.
+
+### Field initializers without semantic
+
+A class built during CTFE can have field initializers that haven't been
+through semantic. `membersToDt` runs `getConstInitializer` on them, like
+the AST interpreter does when it builds a class literal.

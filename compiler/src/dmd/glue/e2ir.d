@@ -694,6 +694,11 @@ elem* toElem(Expression e, ref IRState irs)
 {
     elem* visit(Expression e)
     {
+        if (wasmCtfeBuildActive && e.op == EXP.error)
+        {
+            wasmCtfePoison("error expression");
+            return el_long(TYint, 0);
+        }
         printf("[%s] %s: %s\n", e.loc.toChars(), EXPtoString(e.op).ptr, e.toChars());
         assert(0);
     }
@@ -3868,6 +3873,24 @@ elem* toElem(Expression e, ref IRState irs)
         //e1.type.print();
         elem* e = toElem(de.e1, irs);
         tb = de.e1.type.toBasetype();
+        if (wasmCtfeBuildActive)
+            if (auto cd = scopeNewClass(de.e1))
+            {
+                Symbol* stmp = symbol_genauto(Type_toCtype(cd.type));
+                elem* eres = el_bin(OPeq, TYnptr, el_var(stmp), e);
+                for (auto c = cd; c; c = c.baseClass)
+                {
+                    if (!c.dtor)
+                        continue;
+                    eres = el_combine(eres, callfunc(de.loc, irs, 1, Type.tvoid, el_var(stmp), cd.type, c.dtor, c.dtor.type, null, null));
+                    if (c.classKind != ClassKind.d)
+                        break;
+                }
+                eres = el_combine(eres, el_long(TYint, 0));
+                eres.Ety = TYvoid;
+                elem_setLoc(eres, de.loc);
+                return eres;
+            }
         RTLSYM rtl;
         switch (tb.ty)
         {
@@ -5168,6 +5191,12 @@ elem* toElemCast(CastExp ce, elem* e, bool isLvalue, ref IRState irs)
         }
         else if (cdfrom.classKind == cdto.classKind)
         {
+            if (wasmCtfeBuildActive && cdfrom.classKind == ClassKind.cpp
+                && !cdfrom.isInterfaceDeclaration() && !cdto.isInterfaceDeclaration())
+            {
+                import dmd.backend.wasm.softreal : cppCastSym;
+                e = el_bin(OPcall, TYnptr, el_var(cppCastSym()), el_param(el_ptr(toVtblSymbol(cdto)), e));
+            }
             /* Casting from a non-D linkage class/interface to a unrelated class/interface
              * is always a 'paint' operation (for dmd, other backends might use RTTI
              * of other languages)
@@ -5876,6 +5905,27 @@ elem* toElemCast(CastExp ce, elem* e, bool isLvalue, ref IRState irs)
 /************************************
  * Call a function.
  */
+
+private ClassDeclaration scopeNewClass(Expression e)
+{
+    auto ve = e.isVarExp();
+    auto vd = ve ? ve.var.isVarDeclaration() : null;
+    if (!vd || !vd.onstack || !vd._init)
+        return null;
+    auto ie = vd._init.isExpInitializer();
+    if (!ie)
+        return null;
+    Expression x = ie.exp;
+    if (auto ae = x.isAssignExp())
+        x = ae.e2;
+    while (auto ce = x.isCastExp())
+        x = ce.e1;
+    auto ne = x.isNewExp();
+    if (!ne)
+        return null;
+    auto cd = ne.newtype.toBasetype().isClassHandle();
+    return cd && !cd.isInterfaceDeclaration() ? cd : null;
+}
 
 elem* callfunc(Loc loc,
         ref IRState irs,

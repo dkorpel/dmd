@@ -216,6 +216,15 @@ void Initializer_toDt(Initializer init, ref DtBuilder dtb, bool isCfile)
     void visitExp(ExpInitializer ei)
     {
         //printf("ExpInitializer.toDt() %s\n", ei.exp.toChars());
+        if (!ei.exp.type)
+        {
+            import dmd.glue.tocsym : wasmCtfeBuildActive, wasmCtfePoison;
+            if (wasmCtfeBuildActive)
+            {
+                wasmCtfePoison("initializer without semantic");
+                return;
+            }
+        }
         ei.exp = ei.exp.optimize(WANTvalue);
         Expression_toDt(ei.exp, dtb);
     }
@@ -1072,6 +1081,12 @@ private void membersToDt(AggregateDeclaration ad, ref DtBuilder dtb,
                     continue;
 
                 assert(vd.semanticRun >= PASS.semantic2done || wasmCtfeBuildActive);
+                if (wasmCtfeBuildActive && vd._scope && !vd.inuse)
+                {
+                    import dmd.expressionsem : getConstInitializer;
+                    getConstInitializer(vd, false);
+                    init = vd._init;
+                }
                 auto ei = init.isExpInitializer();
                 assert(ei);
                 auto ie = ei.exp.isIntegerExp();
@@ -1092,6 +1107,12 @@ private void membersToDt(AggregateDeclaration ad, ref DtBuilder dtb,
                     continue;
 
                 assert(vd.semanticRun >= PASS.semantic2done || wasmCtfeBuildActive);
+                if (wasmCtfeBuildActive && vd._scope && !vd.inuse)
+                {
+                    import dmd.expressionsem : getConstInitializer;
+                    getConstInitializer(vd, false);
+                    init = vd._init;
+                }
 
                 auto ei = init.isExpInitializer();
                 auto tsa = vd.type.toBasetype().isTypeSArray();

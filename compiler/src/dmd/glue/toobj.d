@@ -330,6 +330,8 @@ void toObjFile(Dsymbol ds, bool multiobj)
             auto dtbv = DtBuilder(0);
             if (cd.vtblOffset())
                 dtbv.xoff(cast(Symbol*)cd.csym, 0, TYnptr);           // first entry is ClassInfo reference
+            const oldVtblCtx = wasmCtfeVtblCtx;
+            wasmCtfeVtblCtx = true;
             foreach (i; cd.vtblOffset() .. cd.vtbl.length)
             {
                 FuncDeclaration fd = cd.vtbl[i].isFuncDeclaration();
@@ -342,6 +344,7 @@ void toObjFile(Dsymbol ds, bool multiobj)
                 else
                     dtbv.size(0);
             }
+            wasmCtfeVtblCtx = oldVtblCtx;
             if (dtbv.isZeroLength())
             {
                 /* Someone made an 'extern (C++) class C { }' with no virtual functions.

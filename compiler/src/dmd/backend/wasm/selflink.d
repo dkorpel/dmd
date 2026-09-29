@@ -55,6 +55,9 @@ __gshared const(char)[] wasmSelfLinkProbeData;
 /// ditto
 __gshared uint wasmSelfLinkProbeAddr;
 
+/// Addresses of the class vtables `selfLink` placed, by symbol name.
+__gshared uint[const(char)[]] wasmSelfLinkVtblAddrs;
+
 /// Symbol name of each function, by table slot - 1, recorded by `selfLink`.
 __gshared const(char)[][] wasmSelfLinkTableNames;
 
@@ -260,6 +263,15 @@ void selfLink(ref WasmModule wmod)
         if (f.sym && f.sym.Sident.ptr)
             wasmSelfLinkTableNames[i] = f.sym.identifier.idup;
     wasmSelfLinkProbeAddr = 0;
+    wasmSelfLinkVtblAddrs = null;
+    foreach (ref const WasmDataSeg ds; wmod.dataSegs)
+    {
+        if (!ds.sym || !ds.sym.Sident.ptr)
+            continue;
+        const name = ds.sym.identifier;
+        if (name.length > 8 && name[$ - 8 .. $] == "6__vtblZ")
+            wasmSelfLinkVtblAddrs[name.idup] = ds.offset;
+    }
     if (wasmSelfLinkProbeData.length)
         foreach (ref const WasmDataSeg ds; wmod.dataSegs)
         {

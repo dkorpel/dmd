@@ -145,6 +145,11 @@ public ClassDeclaration wasmCtfeFindClass(const(char)[] name)
     return null;
 }
 
+public ClassDeclaration[] wasmCtfeClassList()
+{
+    return wasmCtfeClasses[];
+}
+
 public bool wasmCtfeHasSubclass(ClassDeclaration cd)
 {
     foreach (c; wasmCtfeClasses[])
@@ -292,6 +297,9 @@ void wasmCtfeRecord(Dsymbol d)
     wasmCtfeQueueDefinition(d);
 }
 
+package(dmd.glue) __gshared bool wasmCtfeVtblCtx;
+public __gshared FuncDeclaration[const(char)[]] wasmCtfeLazyFuncs;
+
 package(dmd.glue)
 void wasmCtfeQueueDefinition(Dsymbol d)
 {
@@ -304,6 +312,13 @@ void wasmCtfeQueueDefinition(Dsymbol d)
         import dmd.wasmctfe : wasmCtfeHostBuiltin;
         if (wasmCtfeHostBuiltin(fd))
             return;
+        if (wasmCtfeVtblCtx && fd.fbody && fd.semanticRun < PASS.semantic3done)
+        {
+            import core.stdc.string : strlen;
+            const m = mangleExact(fd);
+            wasmCtfeLazyFuncs[m[0 .. strlen(m)].idup] = fd;
+            return;
+        }
         if (!fd.fbody && fd.semanticRun >= PASS.semantic3done)
         {
             import core.stdc.stdlib : getenv;
