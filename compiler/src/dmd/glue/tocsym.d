@@ -145,6 +145,14 @@ public ClassDeclaration wasmCtfeFindClass(const(char)[] name)
     return null;
 }
 
+public bool wasmCtfeHasSubclass(ClassDeclaration cd)
+{
+    foreach (c; wasmCtfeClasses[])
+        if (c !is cd && cd.isBaseOf(c, null))
+            return true;
+    return false;
+}
+
 package(dmd.glue)
 bool wasmGlue()
 {

@@ -781,8 +781,49 @@ elem* toElem(Expression e, ref IRState irs)
         if (s.Sclass == SC.auto_ || s.Sclass == SC.parameter || s.Sclass == SC.shadowreg ||
             s.Sclass == SC.fastpar || s.Sclass == SC.regpar)
         {
-            if (fd && fd != irs.getFunc())
+            if (fd && fd != irs.getFunc() &&
+                !(wasmCtfeBuildActive && s.Ssymnum < (*cstate.CSpsymtab).length && (*cstate.CSpsymtab)[s.Ssymnum] is s))
             {
+                if (wasmCtfeBuildActive)
+                {
+                    import dmd.wasmctfe : wasmCtfeOuterConstInit;
+                    if (auto ce = wasmCtfeOuterConstInit(se.var.isVarDeclaration()))
+                    {
+                        auto cv = se.var.isVarDeclaration();
+                        cv.inuse++;
+                        scope (exit) cv.inuse--;
+                        type* tv = Type_toCtype(cv.type);
+                        Symbol* stmp = symbol_genauto(tv);
+                        elem* einit;
+                        Type tvb = cv.type.toBasetype();
+                        if (tvb.ty == Tsarray && ce.type.toBasetype().ty != Tsarray)
+                            einit = setArray(ce, el_ptr(stmp), el_long(TYsize_t, tvb.isTypeSArray().dim.toInteger()),
+                                ce.type, toElem(ce, irs), irs, EXP.blit);
+                        else
+                        {
+                            elem* ev = el_var(stmp);
+                            ev.Ety = totym(cv.type);
+                            if (tybasic(ev.Ety) == TYstruct || tybasic(ev.Ety) == TYarray)
+                                ev.ET = tv;
+                            einit = elAssign(ev, toElem(ce, irs), cv.type, tv);
+                        }
+                        elem* er;
+                        if (se.op == EXP.variable)
+                        {
+                            er = el_var(stmp);
+                            er.Ety = totym(se.type);
+                            if (tybasic(er.Ety) == TYstruct || tybasic(er.Ety) == TYarray)
+                                er.ET = Type_toCtype(se.type);
+                        }
+                        else
+                        {
+                            er = el_ptr(stmp);
+                            if (offset)
+                                er = el_bin(OPadd, TYnptr, er, el_long(TYsize_t, offset));
+                        }
+                        return el_combine(einit, er);
+                    }
+                }
                 if (wasmCtfeBuildActive && !irs.sthis)
                 {
                     wasmCtfePoison("enclosing frame variable");
