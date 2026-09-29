@@ -2404,10 +2404,9 @@ private extern (C) wasm_trap_t* ipHostAppend(void* env, wasmtime_caller_t* calle
     if (ptr > mem.length || oldBytes > mem.length - ptr || sptr > mem.length || addBytes > mem.length - sptr)
         return ipTrap("wasm-ctfe: append out of bounds");
     ulong r;
-    if (auto trap = ipBumpAlloc(caller, m, oldBytes + addBytes, r))
+    if (auto trap = ipGrowArray(caller, m, ptr, oldBytes, addBytes, r))
         return trap;
     mem = ipMemSlice(caller, m);
-    memmove(mem.ptr + r, mem.ptr + ptr, cast(size_t) oldBytes);
     memmove(mem.ptr + r + oldBytes, mem.ptr + sptr, cast(size_t) addBytes);
     const nlen = len + n;
     ipStP(mem.ptr + dst, nlen);
@@ -2603,6 +2602,7 @@ private __gshared
     ulong ipErrnoCell;
     ulong* ipAllocBase;
     ulong* ipAllocSize;
+    ulong* ipAllocUsed;
     size_t ipAllocCount;
     size_t ipAllocCap;
 }
@@ -2615,9 +2615,11 @@ private void ipRecordAlloc(ulong base, ulong sz) nothrow @nogc
         ipAllocCap = ipAllocCap ? ipAllocCap * 2 : 256;
         ipAllocBase = cast(ulong*) realloc(ipAllocBase, ipAllocCap * ulong.sizeof);
         ipAllocSize = cast(ulong*) realloc(ipAllocSize, ipAllocCap * ulong.sizeof);
+        ipAllocUsed = cast(ulong*) realloc(ipAllocUsed, ipAllocCap * ulong.sizeof);
     }
     ipAllocBase[ipAllocCount] = base;
     ipAllocSize[ipAllocCount] = sz;
+    ipAllocUsed[ipAllocCount] = sz;
     ipAllocCount++;
 }
 
@@ -3822,7 +3824,7 @@ private extern (C) wasm_trap_t* ipHostArrayAppendC(void* env, wasmtime_caller_t*
 {
     import dmd.wasmtimec;
     auto hi = cast(HostImport*) env;
-    const wide = hi.nameLen && hi.name[hi.nameLen - 1] == 'w';
+    const wide = hi.nameLen > 2 && hi.name[hi.nameLen - 2] == 'w';
     wasmtime_memory_t m;
     if (!ipCallerMemory(caller, m))
         return ipTrap("wasm-ctfe: no memory export");
@@ -3884,10 +3886,9 @@ private extern (C) wasm_trap_t* ipHostArrayAppendC(void* env, wasmtime_caller_t*
     if (ptr + len * esz > mem.length)
         return ipTrap("wasm-ctfe: appendc out of bounds");
     ulong np;
-    if (auto trap = ipBumpAlloc(caller, m, (len + n) * esz, np))
+    if (auto trap = ipGrowArray(caller, m, ptr, len * esz, n * esz, np))
         return trap;
     mem = ipMemSlice(caller, m);
-    memcpy(mem.ptr + np, mem.ptr + ptr, cast(size_t)(len * esz));
     memcpy(mem.ptr + np + len * esz, enc.ptr, cast(size_t)(n * esz));
     ipStP(mem.ptr + xptr, len + n);
     ipStP(mem.ptr + xptr + ipPS, np);
@@ -4021,11 +4022,71 @@ private extern (C) wasm_trap_t* ipHostMemcmp(void* env, wasmtime_caller_t* calle
     return null;
 }
 
+private size_t ipFindArrayBlock(ulong len, ulong ptr, out ulong off) nothrow @nogc
+{
+    if (!ptr)
+        return size_t.max;
+    size_t lo = 0, hi = ipAllocCount;
+    while (lo < hi)
+    {
+        const mid = (lo + hi) / 2;
+        if (ipAllocBase[mid] <= ptr)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    if (lo == 0)
+        return size_t.max;
+    const i = lo - 1;
+    off = ptr - ipAllocBase[i];
+    if (off >= ipAllocSize[i] || ipAllocUsed[i] != off + len)
+        return size_t.max;
+    return i;
+}
+
+private wasm_trap_t* ipGrowArray(wasmtime_caller_t* caller, ref wasmtime_memory_t m,
+    ulong ptr, ulong oldBytes, ulong addBytes, out ulong r) nothrow @nogc
+{
+    ulong off;
+    const i = ipFindArrayBlock(oldBytes, ptr, off);
+    if (i != size_t.max && addBytes <= ipAllocSize[i] - off - oldBytes)
+    {
+        ipAllocUsed[i] = off + oldBytes + addBytes;
+        r = ptr;
+        return null;
+    }
+    const need = oldBytes + addBytes;
+    if (auto trap = ipBumpAlloc(caller, m, need + (need >> 1), r))
+        return trap;
+    ipAllocUsed[ipAllocCount - 1] = need;
+    auto mem = ipMemSlice(caller, m);
+    memmove(mem.ptr + r, mem.ptr + ptr, cast(size_t) oldBytes);
+    return null;
+}
+
 private extern (C) wasm_trap_t* ipHostExpandArray(void* env, wasmtime_caller_t* caller,
     const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
 {
+    ulong off;
+    const i = ipFindArrayBlock(ipValP(args[0]), ipValP(args[1]), off);
+    const n = ipValP(args[2]);
+    const ok = i != size_t.max && n <= ipAllocSize[i] - off;
+    if (ok)
+        ipAllocUsed[i] = off + n;
     results[0].kind = WASMTIME_I32;
-    results[0].of.i32 = 0;
+    results[0].of.i32 = ok;
+    return null;
+}
+
+private extern (C) wasm_trap_t* ipHostReserveArray(void* env, wasmtime_caller_t* caller,
+    const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
+{
+    ulong off;
+    const i = ipFindArrayBlock(ipValP(args[0]), ipValP(args[1]), off);
+    ulong cap = i == size_t.max ? 0 : ipAllocSize[i] - off;
+    if (ipValP(args[2]) > cap)
+        cap = 0;
+    ipSetP(results[0], cap);
     return null;
 }
 
@@ -4040,8 +4101,14 @@ private extern (C) wasm_trap_t* ipHostZero64(void* env, wasmtime_caller_t* calle
 private extern (C) wasm_trap_t* ipHostShrinkArray(void* env, wasmtime_caller_t* caller,
     const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
 {
+    ulong off;
+    const len = ipValP(args[0]);
+    const i = ipFindArrayBlock(ipValP(args[2]), ipValP(args[1]), off);
+    const ok = i != size_t.max && len <= ipAllocSize[i] - off;
+    if (ok)
+        ipAllocUsed[i] = off + len;
     results[0].kind = WASMTIME_I32;
-    results[0].of.i32 = 1;
+    results[0].of.i32 = ok;
     return null;
 }
 
@@ -5084,6 +5151,8 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
                 cb = &ipHostExpandArray;
             else if (nm == "gc_shrinkArrayUsed")
                 cb = &ipHostShrinkArray;
+            else if (nm == "gc_reserveArrayCapacity")
+                cb = &ipHostReserveArray;
             else if (nm == "gc_query")
                 cb = &ipHostGcQuery;
             else if (nm == "gc_allocatedInCurrentThread")
@@ -5100,7 +5169,7 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
                 cb = &ipHostAssertStr;
             else if (nm == "_d_assert_msg")
                 cb = &ipHostAssertMsg;
-            else if (nm == "_d_arrayappendcd" || nm == "_d_arrayappendcw")
+            else if (nm == "_d_arrayappendcd" || nm == "_d_arrayappendwd")
                 cb = &ipHostArrayAppendC;
             else if (nm == "__wasmctfe_append")
                 cb = &ipHostAppend;

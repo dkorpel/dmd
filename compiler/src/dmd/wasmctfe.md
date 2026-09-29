@@ -331,8 +331,19 @@ so engine builds lower a heap array literal to a
 allocator, same as `gc_malloc`) followed by inline element stores —
 the same shape the native lowering produces.
 
+### Appends use GC-style block capacity
+The host bump allocator keeps a "used" length per allocation, and
+`gc_expandArrayUsed`, `gc_shrinkArrayUsed` and `gc_reserveArrayCapacity`
+implement the druntime GC contract on it: a slice whose end is the block's
+used end grows in place while capacity remains. Without it every `~=`
+reallocated, and since the bump allocator never frees, building a large
+string or AA at compile time ran out of guest memory. The host-side append
+paths (`__wasmctfe_append`, `~= dchar`) share the same logic and over-allocate
+by 1.5x. Aliasing behaves as at run time: appending to a slice that doesn't
+end at the used end copies.
+
 ### `~= dchar` runs host-side
-`_d_arrayappendcd`/`_d_arrayappendcw` are implemented as host functions:
+`_d_arrayappendcd`/`_d_arrayappendwd` are implemented as host functions:
 decode the slice at the ref address, UTF-8/UTF-16-encode the code point,
 reallocate via the bump allocator and write the new slice back through
 both the ref and the sret pointer. Signature on wasm64 is

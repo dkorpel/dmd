@@ -1154,6 +1154,23 @@ private void genVarArgs(ref WasmCG cg, elem*[] varArgs, ref uint spLocal, ref ui
     cg.emit(OP.LOCAL_GET, Uleb(spLocal));
 }
 
+private void genCommaSpine(ref WasmCG cg, elem* e)
+{
+    import dmd.backend.barray : Barray;
+    Barray!(elem*) spine;
+    for (elem* c = e.E1; c && c.Eoper == OPcomma; c = c.E1)
+        spine.push(c);
+    if (!spine.length)
+    {
+        cg.genElemDiscard(e.E1);
+        return;
+    }
+    cg.genElemDiscard(spine[$ - 1].E1);
+    foreach_reverse (c; spine[])
+        cg.genElemDiscard(c.E2);
+    spine.dtor();
+}
+
 private elem* unwrapComma(ref WasmCG cg, elem* e)
 {
     while (e && e.Eoper == OPcomma)
@@ -1523,6 +1540,11 @@ bool genElem(ref WasmCG cg, elem* e, WASM_TYPE type)
 /// Returns: true if a value was produced (and dropped).
 bool genElemDiscard(ref WasmCG cg, elem* e)
 {
+    if (e && e.Eoper == OPcomma && e.E1 && e.E1.Eoper == OPcomma)
+    {
+        genCommaSpine(cg, e);
+        return cg.genElemDiscard(e.E2);
+    }
     if (!el_sideeffect(e))
         return false;
     cg.discardResult = true;
@@ -2176,13 +2198,20 @@ bool genElem(ref WasmCG cg, elem* e)
 
 
     case OPcomma:
-        cg.genElemDiscard(e.E1);
+    {
+        elem* c = e;
+        while (c.Eoper == OPcomma)
+        {
+            genCommaSpine(cg, c);
+            c = c.E2;
+        }
         if (discard)
         {
-            cg.genElemDiscard(e.E2);
+            cg.genElemDiscard(c);
             return false;
         }
-        return cg.genElem(e.E2);
+        return cg.genElem(c);
+    }
 
     case OPcond:
     {
