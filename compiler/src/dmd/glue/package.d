@@ -590,7 +590,7 @@ private void FuncDeclaration_toObjFileImpl(FuncDeclaration fd, bool multiobj)
     }
 
     // tunnel type of "this" to debug info generation
-    if (AggregateDeclaration ad = fd.parent.isAggregateDeclaration())
+    if (AggregateDeclaration ad = wasmCtfeBuildActive ? null : fd.parent.isAggregateDeclaration())
     {
         .type* t = Type_toCtype(getType(ad));
         if (cd)
@@ -1393,6 +1393,19 @@ private bool wasmCtfeAggReady(AggregateDeclaration ad)
     {
         if (v.semanticRun < PASS.semantic2done && v._init)
         {
+            if (!v._scope && !v.inuse)
+            {
+                auto ei = v._init.isExpInitializer();
+                if (!ei || !ei.exp)
+                    return false;
+                import dmd.optimize : optimize;
+                import dmd.expression : WANTexpand, WANTvalue;
+                auto e = ei.exp.optimize(WANTvalue | WANTexpand);
+                if (!e.isConst() && !e.isNullExp() && !e.isStringExp() && !e.isArrayLiteralExp() && !e.isStructLiteralExp())
+                    return false;
+                ei.exp = e;
+                continue;
+            }
             if (!v._scope || v.inuse)
                 return false;
             import dmd.initsem : initializerSemantic;
@@ -1561,8 +1574,12 @@ private bool wasmCtfeGenerateOnce(FuncDeclaration root, ref OutBuffer objbuf, ou
         {
             if (auto ad = fd.isMember())
             {
-                if (ad.semanticRun < PASS.semanticdone)
+                if (ad.semanticRun < PASS.semanticdone && (fd.needThis() || fd.isVirtual()))
+                {
+                    if (getenv("DMD_CTFE_TRACEGEN"))
+                        fprintf(stderr, "wasm-ctfe skip member of unfinished agg: %s\n", fd.toPrettyChars());
                     continue;
+                }
             }
             if (fd.semanticRun < PASS.semantic3done && !(cast(void*) fd in wasmCtfeSem3Tried))
             {

@@ -520,6 +520,10 @@ void toObjFile(Dsymbol ds, bool multiobj)
             if (!vd.isDataseg() || vd.storage_class & STC.extern_)
                 return;
 
+            if (wasmCtfeBuildActive)
+                if (auto ad = isAggregate(vd.type.baseElemOf()))
+                    if (ad.sizeok != Sizeok.done)
+                        return wasmCtfePoison("unsized aggregate variable");
             Symbol* s = toSymbol(vd);
             const sz64 = vd.type.size(vd.loc);
             if (sz64 == SIZE_INVALID)

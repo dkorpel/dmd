@@ -185,10 +185,16 @@ type* Type_toCtype(Type t)
         {
             StructDeclaration sym = t.sym;
             {
-                import dmd.glue.tocsym : wasmCtfeBuildActive;
+                import dmd.glue.tocsym : wasmCtfeBuildActive, wasmCtfePoison;
+                import dmd.dsymbol : PASS;
                 import dmd.dsymbolsem : determineSize;
                 if (wasmCtfeBuildActive && sym.sizeok != Sizeok.done)
-                    determineSize(sym, sym.loc);
+                {
+                    if (sym.semanticRun == PASS.semantic)
+                        wasmCtfePoison("aggregate in semantic");
+                    else
+                        determineSize(sym, sym.loc);
+                }
             }
             auto arg1type = sym.argType(0);
             auto arg2type = sym.argType(1);
