@@ -9,11 +9,14 @@ by running the glue layer and backend during semantic analysis are collected in
 
 ## Activation
 
-Off by default. Controlled by environment variables (kept out of the CLI while
-experimental):
+On by default on Posix hosts, in `strict` mode: the AST interpreter is not
+used, not even for expressions that are already literals, which are copied
+and scrubbed directly. Other hosts use the AST interpreter. Controlled by
+environment variables (kept out of the CLI while experimental):
 
 | Variable | Effect |
 |---|---|
+| `DMD_CTFE=off` | Use only the AST interpreter |
 | `DMD_CTFE=inproc` | Use the engine where possible, AST interpreter as fallback |
 | `DMD_CTFE=verify` | Run both engines, report result mismatches to stderr, use the AST result |
 | `DMD_CTFE=strict` | Engine only, also under `global.gag`; a non-literal the engine can't evaluate is an error (`wasm-ctfe cannot evaluate ... [reason]`) |

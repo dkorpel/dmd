@@ -112,8 +112,10 @@ public Expression ctfeInterpret(Expression e)
         wasmResult = tryWasmCtfeTraced(e);
         if ((wmode == WasmCtfeMode.inproc || wstrict) && wasmResult !is null)
             return scrubReturnValue(e.loc, wasmResult);
-        if (wstrict && !wasmCtfeIsLiteral(e))
+        if (wstrict)
         {
+            if (wasmCtfeIsLiteral(e))
+                return ctfeLiteral(e);
             const why = wasmCtfeLastReason();
             global.errorSink.error(e.loc, "wasm-ctfe cannot evaluate `%s` [%s]", e.toChars(), why ? why : "run");
             return ErrorExp.get();
@@ -145,6 +147,65 @@ public Expression ctfeInterpret(Expression e)
         wasmCtfeCompare(e, result, wasmResult);
 
     return result;
+}
+
+private Expression ctfeLiteral(Expression e)
+{
+    if (auto te = e.isTupleExp())
+    {
+        auto exps = new Expressions(te.exps.length);
+        foreach (i, el; *te.exps)
+            (*exps)[i] = ctfeLiteral(el);
+        auto r = new TupleExp(te.loc, te.e0 ? ctfeLiteral(te.e0) : null, exps);
+        r.type = te.type;
+        return r;
+    }
+    return scrubReturnValue(e.loc, ctfeFillHidden(copyLiteral(e).copy()));
+}
+
+private Expression ctfeFillHidden(Expression e)
+{
+    Expressions* own(Expressions* exps)
+    {
+        if (!exps)
+            return exps;
+        foreach (ref el; *exps)
+            if (el)
+                el = ctfeFillHidden(el);
+        return exps;
+    }
+    if (auto sle = e.isStructLiteralExp())
+    {
+        if (sle.ownedByCtfe != OwnedBy.ctfe)
+            sle = copyLiteral(sle).copy().isStructLiteralExp();
+        const nvthis = sle.sd.fields.length - sle.elements.length;
+        foreach (i; 0 .. nvthis)
+        {
+            auto ne = new NullExp(sle.loc);
+            ne.type = (sle.elements.length == sle.sd.nonHiddenFields() ? sle.sd.vthis : sle.sd.vthis2).type;
+            sle.elements.push(ne);
+        }
+        own(sle.elements);
+        return sle;
+    }
+    if (auto ale = e.isArrayLiteralExp())
+    {
+        if (ale.ownedByCtfe != OwnedBy.ctfe)
+            ale = copyLiteral(ale).copy().isArrayLiteralExp();
+        if (ale.basis)
+            ale.basis = ctfeFillHidden(ale.basis);
+        own(ale.elements);
+        return ale;
+    }
+    if (auto aae = e.isAssocArrayLiteralExp())
+    {
+        if (aae.ownedByCtfe != OwnedBy.ctfe)
+            aae = copyLiteral(aae).copy().isAssocArrayLiteralExp();
+        own(aae.keys);
+        own(aae.values);
+        return aae;
+    }
+    return e;
 }
 
 /* Run CTFE on the expression, but allow the expression to be a TypeExp

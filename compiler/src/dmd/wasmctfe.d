@@ -166,9 +166,12 @@ WasmCtfeMode wasmCtfeMode()
     modeChecked = true;
     version (Posix)
     {
+        mode = WasmCtfeMode.strict;
         if (const p = getenv("DMD_CTFE"))
         {
-            if (strcmp(p, "verify") == 0)
+            if (strcmp(p, "off") == 0)
+                mode = WasmCtfeMode.off;
+            else if (strcmp(p, "verify") == 0)
                 mode = WasmCtfeMode.verify;
             else if (strcmp(p, "inproc") == 0)
                 mode = WasmCtfeMode.inproc;
