@@ -293,6 +293,22 @@ private bool ipResultEqual(Expression astResult, Expression wasmResult)
             }
         }
     }
+    if (auto aie = astResult.isIntegerExp())
+    {
+        if (auto wie = wasmResult.isIntegerExp())
+            return aie.toInteger() == wie.toInteger();
+        return false;
+    }
+    if (auto are = astResult.isRealExp())
+    {
+        if (auto wre = wasmResult.isRealExp())
+        {
+            if (CTFloat.isIdentical(are.value, wre.value))
+                return true;
+        }
+        else
+            return false;
+    }
     return strcmp(astResult.toChars(), wasmResult.toChars()) == 0;
 }
 
@@ -505,16 +521,31 @@ private Expression ipFallback(Expression e, const(char)* reason)
     return null;
 }
 
+private Expression ipFoldNoCall(Expression e)
+{
+    import dmd.optimize : optimize;
+    const oldGagged = global.startGagging();
+    auto r = e.optimize(WANTvalue);
+    if (global.endGagging(oldGagged))
+        return ipFallback(e, "no call fold error");
+    if (r && (r.isIntegerExp() || r.isRealExp() || r.isComplexExp()
+        || r.isStringExp() || r.isNullExp() || r.isSymOffExp()))
+        return r;
+    return ipFallback(e, "no call");
+}
+
 Expression tryWasmCtfeExpr(Expression e)
 {
-    if (!e.type || (!ipScalarType(e.type) && !ipMemType(e.type)))
-        return ipFallback(e, "expr type");
     if (e.isIntegerExp() || e.isRealExp() || e.isStringExp() || e.isNullExp()
         || e.isArrayLiteralExp() || e.isStructLiteralExp() || e.isVarExp()
         || e.isSymOffExp() || e.isFuncExp())
         return null;
+    if (!e.type)
+        return ipFallback(e, "expr type");
     if (!ipHasCall(e))
-        return ipFallback(e, "no call");
+        return ipFoldNoCall(e);
+    if (!ipScalarType(e.type) && !ipMemType(e.type))
+        return ipFallback(e, "expr type");
     if (!ipExprSupported(e))
         return ipFallback(e, "expr unsupported");
     auto mod = Module.rootModule;
