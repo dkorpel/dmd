@@ -404,7 +404,25 @@ private bool ipTypeBlocksEngine(Type t, int depth = 0)
     return false;
 }
 
-private bool ipExprSupported(Expression e)
+private bool ipNestedFrameFree(FuncDeclaration f)
+{
+    import dmd.funcsem : hasNestedFrameRefs;
+    if (f.hasDualContext || f.needThis())
+        return false;
+    for (Dsymbol p = f.toParent2(); p; p = p.toParent2())
+    {
+        auto pf = p.isFuncDeclaration();
+        if (!pf)
+            return true;
+        if (pf.hasNestedFrameRefs() || pf.hasDualContext)
+            return false;
+        if (!pf.isNested())
+            return true;
+    }
+    return false;
+}
+
+private bool ipExprSupported(Expression e, out const(char)* why, VarDeclarations* declaredOut = null)
 {
     import dmd.visitor.postorder : walkPostorder;
     extern (C++) final class Scan : StoppableVisitor
@@ -412,6 +430,13 @@ private bool ipExprSupported(Expression e)
         alias visit = typeof(super).visit;
         VarDeclarations declared;
         VarDeclarations funcLocals;
+        const(char)* why;
+        extern (D) void fail(const(char)* r)
+        {
+            if (!why)
+                why = r;
+            stop = true;
+        }
         override void visit(DeclarationExp e)
         {
             if (auto vd = e.declaration ? e.declaration.isVarDeclaration() : null)
@@ -432,7 +457,7 @@ private bool ipExprSupported(Expression e)
             if (!e.type)
                 return;
             if (ipTypeBlocksEngine(e.type))
-                stop = true;
+                fail("blocked type");
         }
         override void visit(BinExp e)
         {
@@ -457,40 +482,33 @@ private bool ipExprSupported(Expression e)
             auto t1 = e.e1.type ? e.e1.type.toBasetype() : null;
             auto t2 = e.e2.type ? e.e2.type.toBasetype() : null;
             if ((t1 && t1.isStaticOrDynamicArray()) || (t2 && t2.isStaticOrDynamicArray()))
-                stop = true;
-        }
-        override void visit(ArrayLiteralExp e)
-        {
-            visit(cast(Expression) e);
-            if (stop)
-                return;
-            auto tb = e.type ? e.type.toBasetype() : null;
-            if (tb && tb.ty == Tarray && e.elements && e.elements.length && !e.onstack && !e.lowering)
-                stop = true;
+                fail("array binop");
         }
         override void visit(CatExp e)
         {
             if (!e.lowering)
-                stop = true;
+                fail("CatExp");
         }
         override void visit(CatAssignExp e)
         {
             if (!e.lowering)
-                stop = true;
+                fail("CatAssignExp");
         }
         override void visit(NewExp e)
         {
             if (!e.lowering && !(e.type && e.type.toBasetype().ty == Tclass))
-                stop = true;
+                fail("NewExp");
         }
         override void visit(AssignExp e)
         {
             if (e.e1.isArrayLengthExp())
-                stop = true;
+                fail("length assign");
         }
-        override void visit(FuncExp)
+        override void visit(FuncExp e)
         {
-            stop = true;
+            if (!e.fd || e.fd.isNested() || e.fd.needThis() || e.fd.semanticRun < PASS.semantic3done
+                || e.fd.errors || e.fd.hasSemantic3Errors)
+                fail("FuncExp");
         }
         int classRefDepth;
         override void visit(ClassReferenceExp e)
@@ -500,7 +518,7 @@ private bool ipExprSupported(Expression e)
                 return;
             if (classRefDepth >= 8)
             {
-                stop = true;
+                fail("class ref depth");
                 return;
             }
             ++classRefDepth;
@@ -517,30 +535,27 @@ private bool ipExprSupported(Expression e)
             if (stop)
                 return;
             if (!e.loweringCtfe)
-                stop = true;
+                fail("AssocArrayLiteralExp");
         }
         override void visit(ThisExp)
         {
-            stop = true;
+            fail("ThisExp");
         }
         override void visit(SuperExp)
         {
-            stop = true;
+            fail("SuperExp");
         }
         override void visit(CallExp e)
         {
             visit(cast(Expression) e);
             if (stop || !e.f)
                 return;
-            if (e.f.isNested())
-                stop = true;
-            if (auto m = e.f.getModule())
-                if (m.filetype == FileType.c)
-                    stop = true;
+            if (e.f.isNested() && !ipNestedFrameFree(e.f))
+                fail("nested call");
         }
         override void visit(DelegateExp)
         {
-            stop = true;
+            fail("DelegateExp");
         }
         override void visit(CastExp e)
         {
@@ -552,15 +567,21 @@ private bool ipExprSupported(Expression e)
             if (!tb || !fb)
                 return;
             if (tb.ty == Tclass || fb.ty == Tclass)
-                stop = true;
+                fail("class or array cast");
             else if (tb.ty == Tarray && fb.ty == Tarray
                 && tb.nextOf().size() != fb.nextOf().size())
-                stop = true;
+                fail("class or array cast");
         }
     }
     scope v = new Scan();
     if (walkPostorder(e, v))
+    {
+        why = v.why;
         return false;
+    }
+    if (declaredOut)
+        foreach (dv; v.declared)
+            declaredOut.push(dv);
     foreach (vd; v.funcLocals)
     {
         bool found = false;
@@ -571,7 +592,10 @@ private bool ipExprSupported(Expression e)
                 break;
             }
         if (!found)
+        {
+            why = "enclosing local";
             return false;
+        }
     }
     return true;
 }
@@ -676,9 +700,19 @@ Expression tryWasmCtfeExpr(Expression e)
         && !etb.isTypeClass().sym.isInterfaceDeclaration()
         && ipClassDecodable(etb.isTypeClass().sym);
     if (!ipScalarType(e.type) && !ipMemType(e.type) && !classExprResult)
-        return ipFallback(e, "expr type");
-    if (!ipExprSupported(e))
-        return ipFallback(e, "expr unsupported");
+    {
+        char[160] rb = void;
+        snprintf(rb.ptr, rb.length, "expr type [%s]", e.type.toChars());
+        return ipFallback(e, rb.ptr);
+    }
+    const(char)* unsupportedWhy;
+    VarDeclarations declaredVars;
+    if (!ipExprSupported(e, unsupportedWhy, &declaredVars))
+    {
+        char[96] rb = void;
+        snprintf(rb.ptr, rb.length, "expr unsupported [%s]", unsupportedWhy ? unsupportedWhy : "?".ptr);
+        return ipFallback(e, rb.ptr);
+    }
     auto mod = Module.rootModule;
     if (!mod)
         return ipFallback(e, "no root module");
@@ -704,7 +738,15 @@ Expression tryWasmCtfeExpr(Expression e)
     fd._linkage = LINK.d;
     fd.fbody = new ReturnStatement(e.loc, e);
     fd.semanticRun = PASS.semantic3done;
+    Dsymbols savedParents;
+    foreach (vd; declaredVars)
+    {
+        savedParents.push(vd.parent);
+        vd.parent = fd;
+    }
     auto r = tryWasmCtfeInproc(fd, null, null, e.type, e.loc);
+    foreach (i, vd; declaredVars)
+        vd.parent = savedParents[i];
     if (auto sv = ipResultCache.insert(kb[], null))
         sv.value = r;
     return r;
@@ -1290,7 +1332,7 @@ int scanLegalityImpl(FuncDeclaration fd, ref bool[void*] inProgress, bool relaxe
         return 2;
     }
     Module mod = fd.getModule();
-    if (!mod || !mod.srcfile.toChars() || mod.filetype == FileType.c)
+    if (!mod || !mod.srcfile.toChars())
     {
         (*verdicts)[cast(void*) fd] = 0;
         return 0;
@@ -2694,16 +2736,13 @@ Expression tryWasmCtfeInproc(FuncDeclaration fd, Expression thisExp, Expression[
         ipForceSemantic3(fd);
     if (fd.semanticRun < PASS.semantic3done || !fd.fbody || fd.errors)
         return bail(fd, "not semantic3done");
-    if (auto m = fd.getModule())
-        if (m.filetype == FileType.c)
-            return bail(fd, "importc");
     if (!scanLegality(fd, true))
         return bail(fd, "legality scan");
     auto tf = fd.type ? fd.type.isTypeFunction() : null;
     const bool isCtor = fd.isCtorDeclaration() !is null;
     if (!tf || (tf.isRef && !isCtor) || tf.parameterList.varargs != VarArg.none)
         return bail(fd, "func type shape");
-    if (fd.isNested())
+    if (fd.isNested() && !ipNestedFrameFree(fd))
         return bail(fd, "nested/this");
     StructDeclaration thisSd;
     if (fd.needThis())

@@ -774,6 +774,11 @@ elem* toElem(Expression e, ref IRState irs)
         {
             if (fd && fd != irs.getFunc())
             {
+                if (wasmCtfeBuildActive && !irs.sthis)
+                {
+                    wasmCtfePoison("enclosing frame variable");
+                    return el_long(totym(se.type), 0);
+                }
                 // 'var' is a variable in an enclosing function.
                 elem* ethis = getEthis(se.loc, irs, fd, null, se.originalScope);
                 ethis = el_una(OPaddr, TYnptr, ethis);
@@ -2029,7 +2034,45 @@ elem* toElem(Expression e, ref IRState irs)
         }
 
         if (auto lowering = ce.lowering)
-            return toElem(lowering, irs);
+        {
+            auto call = wasmCtfeBuildActive ? lowering.isCallExp() : null;
+            if (!call || !call.arguments || call.arguments.length < 2)
+                return toElem(lowering, irs);
+            size_t lastSide = 0;
+            foreach (i, arg; *call.arguments)
+                if (i && hasSideEffect(arg))
+                    lastSide = i;
+            if (!lastSide)
+                return toElem(lowering, irs);
+            elem* eside = null;
+            auto saved = (*call.arguments)[].dup;
+            foreach (i; 0 .. lastSide)
+            {
+                auto arg = (*call.arguments)[i];
+                if (arg.isConst() || !arg.isLvalue())
+                    continue;
+                import dmd.identifier : Identifier;
+                auto vd = new VarDeclaration(arg.loc, arg.type, Identifier.generateId("__ctfecat"), null);
+                vd.parent = irs.getFunc();
+                Symbol* stmp = symbol_genauto(Type_toCtype(arg.type));
+                vd.csym = stmp;
+                elem* ev = toElem(arg, irs);
+                elem* es = el_var(stmp);
+                if (tybasic(ev.Ety) == TYstruct || tybasic(ev.Ety) == TYarray)
+                {
+                    es = el_bin(OPstreq, ev.Ety, es, ev);
+                    es.ET = ev.ET;
+                }
+                else
+                    es = el_bin(OPeq, ev.Ety, es, ev);
+                eside = el_combine(eside, es);
+                (*call.arguments)[i] = new VarExp(arg.loc, vd);
+            }
+            auto e = el_combine(eside, toElem(lowering, irs));
+            foreach (i, a; saved)
+                (*call.arguments)[i] = a;
+            return e;
+        }
 
         assert(0, "This case should have been rewritten to `_d_arraycatnTX` in the semantic phase");
     }

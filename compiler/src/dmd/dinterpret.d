@@ -6183,9 +6183,11 @@ public:
                 {
                     import dmd.typesem : toDsymbol;
                     auto sym = t.toDsymbol(null);
-                    if (auto ident = (sym ? sym.ident : null))
+                    if (sym && sym.ident)
                     {
-                        result = new StringExp(e.loc, ident.toString());
+                        import core.stdc.string : strlen;
+                        auto pretty = sym.toPrettyChars();
+                        result = new StringExp(e.loc, pretty[0 .. strlen(pretty)]);
                         result.expressionSemantic(null);
                         return ;
                     }

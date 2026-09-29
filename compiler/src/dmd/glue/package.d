@@ -636,7 +636,8 @@ void FuncDeclaration_toObjFile(FuncDeclaration fd, bool multiobj)
          * in order to calculate correct frame pointer offset.
          */
         FuncDeclaration fdp = fd.toParent2().isFuncDeclaration();
-        if (fdp && fdp.semanticRun < PASS.obj)
+        if (fdp && fdp.semanticRun < PASS.obj
+            && !(wasmCtfeBuildActive && fdp.semanticRun < PASS.semantic3done))
         {
             toObjFile(fdp, multiobj);
         }

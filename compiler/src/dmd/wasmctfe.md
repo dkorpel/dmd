@@ -603,3 +603,40 @@ The unit-test runner builds the frontend with `-version=NoBackend`.
 it provides a `version (NoBackend)` stub section (mode always `off`,
 all entry points no-ops) and keeps the real implementation in the
 `else` branch.
+
+### Frame-free nested functions run with a null context
+
+A `static assert` inside a function body can call that function's nested
+functions. The expression wrapper lives at module scope and has no frame.
+It is allowed when every enclosing function up to the first non-nested
+one has no nested frame refs (`hasNestedFrameRefs()` is false, and there
+is no dual context), because nothing can read through the context. In
+that case `getEthis` returns a null context during engine builds instead
+of erroring. A read of an *enclosing-frame variable* from a frame-less
+function still poisons the build (`visitSymbol`). Nested codegen
+normally compiles the enclosing function first, to get frame offsets.
+That step is skipped while the parent is still in semantic3; the
+`static assert` sits inside it.
+
+Variables declared inside the wrapped expression are re-parented to the
+wrapper for the duration of the build, then restored. One example is the
+stack temp for an array literal passed to a `scope` parameter.
+Otherwise they look like enclosing-frame variables, and `&(null ctx)`
+asserted in `cgcs`.
+
+### `a ~ f(a)` evaluation order
+
+`_d_arraycatnTX` takes `auto ref` operands, so an lvalue operand is
+passed by reference and read after later operands have run. Natively,
+`val ~ cat11ret3(val)` (the callee appends to `val`) yields the
+post-call `val`. `runnable/evalorder.d` carries a FIXME for that. CTFE
+is left-to-right. During engine builds, `visitCat` spills earlier lvalue
+operands into temporaries when a later operand has side effects.
+
+### `typeid(C).name` at CTFE is now fully qualified
+
+The AST interpreter used to return the bare identifier (`"Tiger"`), while
+runtime `TypeInfo_Class.name` is qualified (`"typeid_name.Tiger"`). The
+engine runs the real TypeInfo, so it returns the qualified name. The AST
+interpreter was aligned (`toPrettyChars`) and `compilable/typeid_name.d`
+updated.
