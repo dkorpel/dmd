@@ -318,7 +318,7 @@ void toTraceGC(ref IRState irs, elem* e, Loc loc)
         [ RTLSYM.ALLOCMEMORY, RTLSYM.TRACEALLOCMEMORY ],
     ];
 
-    if (!irs.params.tracegc || !loc.filename)
+    if (!irs.params.tracegc || !loc.filename || wasmCtfeBuildActive)
         return;
 
     assert(e.Eoper == OPcall);
@@ -488,6 +488,15 @@ void clearStringTab()
     }
 }
 private __gshared StringTable!(Symbol*) *stringTab;
+private __gshared StringTable!(Symbol*) *stringTabStash;
+
+package(dmd.glue)
+void stringTab_swap()
+{
+    auto t = stringTab;
+    stringTab = stringTabStash;
+    stringTabStash = t;
+}
 
 /*********************************************
  * Figure out whether a data symbol should be dllimported
@@ -777,6 +786,14 @@ elem* toElem(Expression e, ref IRState irs)
                 if (wasmCtfeBuildActive && !irs.sthis)
                 {
                     wasmCtfePoison("enclosing frame variable");
+                    if (se.op == EXP.variable && (tb.ty == Tstruct || tb.ty == Tsarray))
+                    {
+                        elem* ev = el_var(symbol_genauto(Type_toCtype(se.type)));
+                        ev.Ety = totym(se.type);
+                        if (tybasic(ev.Ety) == TYstruct || tybasic(ev.Ety) == TYarray)
+                            ev.ET = Type_toCtype(se.type);
+                        return ev;
+                    }
                     return el_long(totym(se.type), 0);
                 }
                 // 'var' is a variable in an enclosing function.
@@ -3246,6 +3263,11 @@ elem* toElem(Expression e, ref IRState irs)
 
                 if (auto lowering = ce.lowering)
                     e = toElem(lowering, irs);
+                else if (wasmCtfeBuildActive)
+                {
+                    wasmCtfePoison("unlowered append");
+                    return el_long(totym(ce.type), 0);
+                }
                 else if (ce.op == EXP.concatenateAssign)
                     assert(0, "This case should have been rewritten to `_d_arrayappendT` in the semantic phase");
                 else

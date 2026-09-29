@@ -155,10 +155,126 @@ private __gshared bool[void*] wasmCtfeSeenTouched;
 private __gshared Array!Dsymbol wasmCtfeWork;
 private __gshared bool[void*] wasmCtfeQueued;
 
+package(dmd.glue) __gshared bool hostGlueActive;
+package(dmd.glue) __gshared int hostFuncDepth;
+private __gshared Array!Dsymbol hostTouched;
+private __gshared bool[void*] hostSeenTouched;
+
+private struct HostSymSave
+{
+    void* csym;
+    void* sinit;
+    bool deferToObj;
+    bool hadCodegen;
+    PASS run;
+}
+
+private __gshared HostSymSave[] hostSaved;
+private __gshared StructLiteralExp[] hostSles;
+private __gshared void*[] hostSleSyms;
+
+package(dmd.glue)
+void wasmCtfeHostRecord(Dsymbol d)
+{
+    if (!hostGlueActive || wasmCtfeBuildActive || d is null)
+        return;
+    if (cast(void*) d in hostSeenTouched)
+        return;
+    hostSeenTouched[cast(void*) d] = true;
+    hostTouched.push(d);
+}
+
+package(dmd.glue)
+void wasmCtfeHostReset()
+{
+    hostTouched.setDim(0);
+    hostSeenTouched.clear();
+}
+
+package(dmd.glue)
+void wasmCtfeStashHostSyms()
+{
+    hostSaved.length = hostTouched.length;
+    foreach (i, d; hostTouched[])
+    {
+        auto h = &hostSaved[i];
+        h.csym = d.csym;
+        d.csym = null;
+        h.sinit = null;
+        if (auto ad = d.isAggregateDeclaration())
+        {
+            h.sinit = ad.sinit;
+            ad.sinit = null;
+        }
+        else if (auto ed = d.isEnumDeclaration())
+        {
+            h.sinit = ed.sinit;
+            ed.sinit = null;
+        }
+        h.deferToObj = false;
+        if (auto fld = d.isFuncLiteralDeclaration())
+        {
+            h.deferToObj = fld.deferToObj;
+            fld.deferToObj = false;
+        }
+        h.run = d.semanticRun;
+        if (d.semanticRun >= PASS.obj)
+            d.semanticRun = d.isFuncDeclaration() ? PASS.semantic3done : PASS.semanticdone;
+        h.hadCodegen = false;
+        if (auto tid = d.isTypeInfoDeclaration())
+        {
+            h.hadCodegen = tid.hadCodegen;
+            tid.hadCodegen = false;
+        }
+    }
+    hostSles.length = ctfeSymbolLiterals.length;
+    hostSleSyms.length = ctfeSymbolLiterals.length;
+    foreach (i, sle; ctfeSymbolLiterals[])
+    {
+        hostSles[i] = sle;
+        hostSleSyms[i] = sle.sym;
+        sle.sym = null;
+    }
+    ctfeSymbolLiterals.setDim(0);
+}
+
+package(dmd.glue)
+void wasmCtfeUnstashHostSyms()
+{
+    foreach (i, ref h; hostSaved)
+    {
+        auto d = hostTouched[i];
+        d.csym = h.csym;
+        if (auto ad = d.isAggregateDeclaration())
+            ad.sinit = h.sinit;
+        else if (auto ed = d.isEnumDeclaration())
+            ed.sinit = h.sinit;
+        if (auto fld = d.isFuncLiteralDeclaration())
+            fld.deferToObj = h.deferToObj;
+        d.semanticRun = h.run;
+        if (auto tid = d.isTypeInfoDeclaration())
+            tid.hadCodegen = h.hadCodegen;
+    }
+    hostSaved.length = 0;
+    resetCtfeSymbolCache();
+    foreach (i, sle; hostSles)
+    {
+        sle.sym = hostSleSyms[i];
+        ctfeSymbolLiterals.push(sle);
+    }
+    hostSles.length = 0;
+    hostSleSyms.length = 0;
+}
+
 package(dmd.glue)
 void wasmCtfeRecord(Dsymbol d)
 {
-    if (!wasmCtfeBuildActive || d is null)
+    if (!wasmCtfeBuildActive)
+    {
+        wasmCtfeHostRecord(d);
+        return;
+    }
+    if (d is null)
         return;
     if (cast(void*) d !in wasmCtfeSeenTouched)
     {

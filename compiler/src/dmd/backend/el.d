@@ -254,6 +254,15 @@ struct Stab
 }
 
 private __gshared Stab stable;
+private __gshared Stab stableStash;
+
+@trusted
+void el_stable_swap()
+{
+    auto t = stable;
+    stable = stableStash;
+    stableStash = t;
+}
 
 
 /*******************************

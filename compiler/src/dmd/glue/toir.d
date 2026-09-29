@@ -170,7 +170,7 @@ extern (D) elem* incUsageElem(ref IRState irs, Loc loc)
 
     Module m = cast(Module)irs.blx._module;
     //printf("m.cov %p linnum %d filename %s srcfile %s numlines %d\n", m.cov, linnum, loc.filename, m.srcfile.toChars(), m.numlines);
-    if (!m.cov || !linnum ||
+    if (!m.cov || !linnum || wasmCtfeBuildActive ||
         strcmp(loc.filename, m.srcfile.toChars()))
         return null;
 

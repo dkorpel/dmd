@@ -3700,14 +3700,16 @@ elem* elstruct(elem* e, Goal goal)
                 }
                 else if (I64 && targ1 && targ2)
                 {
-                    if (tyfloating(tybasic(targ1.Tty)) &&
+                    if (config.exe & EX_WASM)
+                        tym = TYucent;
+                    else if (tyfloating(tybasic(targ1.Tty)) &&
                         !cgstate.AArch64) // TODO AArch64
                         tym = TYcdouble;
                     else if (0 && cgstate.AArch64)
                         goto Ldefault;
                     else
                         tym = TYucent;
-                    if ((0 == tyfloating(targ1.Tty)) ^ (0 == tyfloating(targ2.Tty)))
+                    if (!(config.exe & EX_WASM) && (0 == tyfloating(targ1.Tty)) ^ (0 == tyfloating(targ2.Tty)))
                     {
                         tym |= tyfloating(targ1.Tty) ? mTYxmmgpr : mTYgprxmm;
                     }

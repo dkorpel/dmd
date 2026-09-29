@@ -14,9 +14,12 @@ version (NoBackend)
         verify,
         codegen,
         inproc,
+        strict,
     }
 
     WasmCtfeMode wasmCtfeMode() { return WasmCtfeMode.off; }
+    bool wasmCtfeIsLiteral(Expression e) { return true; }
+    const(char)* wasmCtfeLastReason() { return null; }
     bool wasmCtfeBuildActiveNow() { return false; }
     bool wasmCtfeCtfeBlockLowering() pure nothrow @nogc @trusted { return false; }
     void wasmCtfeCompare(Expression e, Expression astResult, Expression wasmResult) { }
@@ -70,6 +73,7 @@ enum WasmCtfeMode
     verify,
     codegen,
     inproc,
+    strict,
 }
 
 struct WasmCtfeStats
@@ -99,12 +103,31 @@ public void wasmCtfeResumeMinstNull()
     --buildActiveSuspended;
 }
 
+private __gshared uint preSemDepth;
+private __gshared uint[] preSemSavedSuspend;
+
+public void wasmCtfePreSemEnter()
+{
+    preSemSavedSuspend ~= buildActiveSuspended;
+    buildActiveSuspended = 0;
+    ++preSemDepth;
+}
+
+public void wasmCtfePreSemLeave()
+{
+    --preSemDepth;
+    buildActiveSuspended = preSemSavedSuspend[$ - 1];
+    preSemSavedSuspend = preSemSavedSuspend[0 .. $ - 1];
+}
+
 bool wasmCtfeBuildActiveNow()
 {
     if (buildActiveSuspended)
         return false;
     if (wasmCtfeMode() == WasmCtfeMode.off)
         return false;
+    if (preSemDepth)
+        return true;
     import dmd.glue : wasmCtfeBuildInProgress;
     return wasmCtfeBuildInProgress();
 }
@@ -160,6 +183,8 @@ WasmCtfeMode wasmCtfeMode()
                 mode = WasmCtfeMode.codegen;
             else if (strcmp(p, "inproc") == 0)
                 mode = WasmCtfeMode.inproc;
+            else if (strcmp(p, "strict") == 0)
+                mode = WasmCtfeMode.strict;
         }
         verbose = getenv("DMD_CTFE_VERBOSE") !is null;
         if (mode != WasmCtfeMode.off)
@@ -461,8 +486,9 @@ Expression tryWasmCtfe(Expression e)
             wasmCtfeCodegenTest(ce.f);
         return null;
     }
-    if (mode == WasmCtfeMode.inproc || mode == WasmCtfeMode.verify)
+    if (mode == WasmCtfeMode.inproc || mode == WasmCtfeMode.verify || mode == WasmCtfeMode.strict)
     {
+        ipLastReason[0] = 0;
         wasmCtfeStats.calls++;
         if (ce && ce.f)
         {
@@ -519,7 +545,7 @@ private bool ipTypeBlocksEngine(Type t, int depth = 0)
 private bool ipNestedFrameFree(FuncDeclaration f)
 {
     import dmd.funcsem : hasNestedFrameRefs;
-    if (f.hasDualContext || f.needThis())
+    if (f.hasDualContext || f.needThis() || ipReadsOuterLocals(f))
         return false;
     for (Dsymbol p = f.toParent2(); p; p = p.toParent2())
     {
@@ -532,6 +558,46 @@ private bool ipNestedFrameFree(FuncDeclaration f)
             return true;
     }
     return false;
+}
+
+private bool ipReadsOuterLocals(FuncDeclaration f)
+{
+    import dmd.visitor.foreachvar : foreachExpAndVar;
+    import dmd.visitor.postorder : walkPostorder;
+    if (!f.fbody)
+        return false;
+    extern (C++) final class OuterScan : StoppableVisitor
+    {
+        alias visit = typeof(super).visit;
+        FuncDeclaration f;
+        extern (D) void check(Declaration d)
+        {
+            auto v = d ? d.isVarDeclaration() : null;
+            if (!v || v.isDataseg() || (v.storage_class & STC.manifest))
+                return;
+            auto p = v.toParent2();
+            if (p && p.isFuncDeclaration() && p !is f)
+                stop = true;
+        }
+        override void visit(Expression) {}
+        override void visit(VarExp e) { check(e.var); }
+        override void visit(SymOffExp e) { check(e.var); }
+        override void visit(DeclarationExp e)
+        {
+            if (auto vd = e.declaration ? e.declaration.isVarDeclaration() : null)
+                if (auto ei = vd._init ? vd._init.isExpInitializer() : null)
+                    if (ei.exp)
+                        walkPostorder(ei.exp, this);
+        }
+    }
+    scope v = new OuterScan();
+    v.f = f;
+    foreachExpAndVar(f.fbody, (Expression e) { if (!v.stop) walkPostorder(e, v); }, (VarDeclaration vd) {
+        if (auto ei = !v.stop && vd._init ? vd._init.isExpInitializer() : null)
+            if (ei.exp)
+                walkPostorder(ei.exp, v);
+    });
+    return v.stop;
 }
 
 private bool ipExprSupported(Expression e, out const(char)* why, VarDeclarations* declaredOut = null,
@@ -797,16 +863,71 @@ private Expression ipFallback(Expression e, const(char)* reason)
     }
     if (traceFallback)
         fprintf(stderr, "wasm-ctfe fallback %s: %s: %s\n", reason, e.loc.toChars(), e.toChars());
+    snprintf(ipLastReason.ptr, ipLastReason.length, "%s", reason);
     return null;
+}
+
+private __gshared char[128] ipLastReason;
+
+const(char)* wasmCtfeLastReason()
+{
+    return ipLastReason[0] ? ipLastReason.ptr : null;
+}
+
+bool wasmCtfeIsLiteral(Expression e)
+{
+    if (ipIsLiteral(e))
+        return true;
+    if (auto te = e.isTupleExp())
+    {
+        if (te.e0 && !ipIsLiteral(te.e0))
+            return false;
+        foreach (el; *te.exps)
+            if (!ipIsLiteral(el))
+                return false;
+        return true;
+    }
+    return false;
 }
 
 private bool ipIsLiteral(Expression e)
 {
-    return e.isIntegerExp() || e.isRealExp() || e.isComplexExp()
-        || e.isStringExp() || e.isNullExp() || e.isArrayLiteralExp()
-        || e.isStructLiteralExp() || e.isVarExp() || e.isSymOffExp()
-        || e.isFuncExp() || e.isClassReferenceExp() || e.isAssocArrayLiteralExp() || ipIsAddrLiteral(e)
-        || ipIsVectorLiteral(e);
+    return ipIsLiteralDeep(e, 0);
+}
+
+private bool ipIsLiteralElems(Expressions* es, int depth)
+{
+    if (es)
+        foreach (el; *es)
+            if (el && !ipIsLiteralDeep(el, depth + 1))
+                return false;
+    return true;
+}
+
+private bool ipIsLiteralDeep(Expression e, int depth)
+{
+    if (depth > 64)
+        return false;
+    if (e.isIntegerExp() || e.isRealExp() || e.isComplexExp()
+        || e.isStringExp() || e.isNullExp() || e.isSymOffExp()
+        || e.isFuncExp() || ipIsAddrLiteral(e) || ipIsVectorLiteral(e))
+        return true;
+    if (auto ve = e.isVarExp())
+        return !ve.var.isVarDeclaration();
+    if (auto te = e.isTypeidExp())
+    {
+        import dmd.dtemplate : isType;
+        return isType(te.obj) !is null;
+    }
+    if (auto ale = e.isArrayLiteralExp())
+        return (!ale.basis || ipIsLiteralDeep(ale.basis, depth + 1)) && ipIsLiteralElems(ale.elements, depth);
+    if (auto sle = e.isStructLiteralExp())
+        return ipIsLiteralElems(sle.elements, depth);
+    if (auto cre = e.isClassReferenceExp())
+        return ipIsLiteralElems(cre.value.elements, depth);
+    if (auto aae = e.isAssocArrayLiteralExp())
+        return ipIsLiteralElems(aae.keys, depth) && ipIsLiteralElems(aae.values, depth);
+    return false;
 }
 
 private bool ipIsVectorLiteral(Expression e)
@@ -833,8 +954,7 @@ private Expression ipFoldNoCall(Expression e)
     auto r = e.optimize(WANTvalue);
     if (global.endGagging(oldGagged))
         return null;
-    if (r && (r.isIntegerExp() || r.isRealExp() || r.isComplexExp()
-        || r.isStringExp() || r.isNullExp() || r.isSymOffExp()))
+    if (r && r !is e && r.type && ipIsLiteral(r))
         return r;
     return null;
 }
@@ -2927,6 +3047,17 @@ private extern (C) wasm_trap_t* ipHostExpandArray(void* env, wasmtime_caller_t* 
     return null;
 }
 
+private extern (C) wasm_trap_t* ipHostZero64(void* env, wasmtime_caller_t* caller,
+    const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
+{
+    if (nresults)
+    {
+        results[0].kind = WASMTIME_I64;
+        results[0].of.i64 = 0;
+    }
+    return null;
+}
+
 private extern (C) wasm_trap_t* ipHostShrinkArray(void* env, wasmtime_caller_t* caller,
     const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
 {
@@ -3357,6 +3488,8 @@ Expression tryWasmCtfeInproc(FuncDeclaration fd, Expression thisExp, Expression[
                 cb = &ipHostShrinkArray;
             else if (nm == "gc_query")
                 cb = &ipHostGcQuery;
+            else if (nm == "gc_allocatedInCurrentThread")
+                cb = &ipHostZero64;
             else if (nm == "_d_arraybounds_indexp")
                 cb = &ipHostBoundsIndex;
             else if (nm == "_d_arraybounds_slicep")
@@ -3412,8 +3545,8 @@ Expression tryWasmCtfeInproc(FuncDeclaration fd, Expression thisExp, Expression[
         || fnExt.kind != WASMTIME_EXTERN_FUNC)
     {
         if (verbose)
-            fprintf(stderr, "wasm-ctfe inproc: export %.*s not found for %s\n",
-                cast(int) im.exportName.length, im.exportName.ptr, fd.toPrettyChars());
+            fprintf(stderr, "wasm-ctfe inproc: export %.*s not found for %s at %s\n",
+                cast(int) im.exportName.length, im.exportName.ptr, fd.toPrettyChars(), fd.loc.toChars());
         return null;
     }
 

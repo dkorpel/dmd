@@ -264,6 +264,15 @@ struct Fixup
 }
 
 private __gshared Barray!Fixup fixups;
+private __gshared Barray!Fixup fixupsStash;
+
+@trusted
+void fixups_swap()
+{
+    auto t = fixups;
+    fixups = fixupsStash;
+    fixupsStash = t;
+}
 
 /****************************
  * Add to the fix list.

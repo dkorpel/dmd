@@ -184,11 +184,16 @@ void TypeInfo_toObjFile(Expression e, Loc loc, Type t)
         if (auto tc = t.isTypeClass())
             isUnqualifiedClassInfo = !tc.sym.isInterfaceDeclaration();
 
+    wasmCtfeHostRecord(t.vtinfo);
+
     if (!isUnqualifiedClassInfo && !builtinTypeInfo(t))
     {
         // Generate a COMDAT for other TypeInfos not available as builtins in druntime -
         // but only once per compiler run (into the first referencing object file).
-        toObjFile(t.vtinfo, global.params.multiobj);
+        if (hostFuncDepth && !wasmCtfeBuildActive)
+            hostDeferredTypeInfos ~= t.vtinfo;
+        else
+            toObjFile(t.vtinfo, global.params.multiobj);
     }
 }
 

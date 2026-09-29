@@ -13,6 +13,7 @@ experimental):
 |---|---|
 | `DMD_CTFE=wasm` | Use the wasm engine where possible, AST interpreter as fallback |
 | `DMD_CTFE=verify` | Run both engines, report result mismatches to stderr, use the AST result |
+| `DMD_CTFE=strict` | Engine only, also under `global.gag`; a non-literal the engine can't evaluate is an error (`wasm-ctfe cannot evaluate ... [reason]`) |
 | `DMD_CTFE_STATS=1` | Print counters at exit |
 | `DMD_CTFE_VERBOSE=1` | Log every attempt/success/failure |
 | `DMD_CTFE_DIR=path` | Work directory for generated files (default `./__wasmctfe`) |
@@ -624,6 +625,18 @@ stack temp for an array literal passed to a `scope` parameter.
 Otherwise they look like enclosing-frame variables, and `&(null ctx)`
 asserted in `cgcs`.
 
+`hasNestedFrameRefs()` is not enough on its own. References made from a
+ctfe-scope (`static foreach` aggregate lambdas, `enum` initializers)
+skip `checkNestedReference`, so the outer variable never lands in
+`closureVars`. `ipReadsOuterLocals` scans the nested body, including
+`DeclarationExp` initializers, for locals owned by another function.
+Without it, `static foreach (a, b; array)` over an enclosing
+`immutable int[32] array = 1` read garbage through the null context.
+When the poison fires on a struct or static-array variable, `visitSymbol`
+returns a dummy local of the right type, not an integer 0; the
+surrounding e2ir code asserts on a struct-typed non-lvalue before the
+poison takes effect.
+
 ### `a ~ f(a)` evaluation order
 
 `_d_arraycatnTX` takes `auto ref` operands, so an lvalue operand is
@@ -706,3 +719,73 @@ Table indices are mapped back to function symbols through the selflink
 table names and the list of functions built for the engine. A function
 literal becomes a `FuncExp`, a plain function a `SymOffExp`. Delegates
 with a non-null context pointer are not decoded yet.
+
+### Strict mode
+
+`DMD_CTFE=strict` is the no-fallback switch. The engine also runs under
+`global.gag` (inside `__traits(compiles)`, speculative instances), and
+whenever it returns nothing for a non-literal expression the compile
+fails with `wasm-ctfe cannot evaluate` and the last `ipFallback`
+reason. `tmp/ctfe2/strictsweep.sh` compiles every test file this way
+with `-o-`. Literal detection is now deep: an array, struct or AA
+literal counts only when its elements are literals. Constant folding
+results are accepted on the same condition, which avoids an engine
+build for most `enum` and `static if` conditions.
+
+### Engine builds run semantic3 between attempts
+
+A worklist function that has not had semantic3 used to be analysed in
+the middle of the engine build, and any CTFE it triggered was deferred
+to the AST interpreter. Now the build records such functions, returns,
+runs `ipForceSemantic3` on each (gagged, with a pre-semantic flag that
+still keeps new template instances off the host object), and retries.
+Nested CTFE during that pre-semantic phase gets its own engine build,
+because no build is in flight. After 64 attempts the build gives up.
+Errors that occurred before the build started no longer stop it:
+`glueHasErrors()` compares against the error count at build start.
+
+### Codegen-only functions are built too
+
+`static foreach` aggregate lambdas and `@__ctfe` functions are marked
+`skipCodegen`, and semantic skips the druntime hook lowerings in
+`sc.ctfe` scopes. With a CTFE mode active, array appends (`~=`) in ctfe
+scopes are lowered to `_d_arrayappendT`/`_d_arrayappendcTX` anyway,
+including the `__res ~= x` that builds the `static foreach` index array.
+The lowering only happens when `object` declares the hook, so custom
+runtimes without it are unaffected; an append left unlowered poisons the
+engine build instead of asserting. Other hooks stay unlowered in ctfe
+scopes: lowering them all breaks the AST interpreter (`__ArrayCast`
+reinterpret errors) and runtimes without the hooks. Engine builds
+ignore `skipCodegen`, `-profile` prologs and `-profile=gc` tracing.
+
+### CTFE during host codegen
+
+Host codegen runs semantic lazily: `finishVtbl` analyses virtual
+functions, and `TypeInfo_toDt` instantiates `RTInfo!T`. Both can call
+CTFE, which means an engine build while the host object file is half
+written. The backend is global state, so an engine build used to
+clobber it. The host's text segment index ended up in the wasm
+`SegData`, and host `csym`s were reused by the engine and then wiped
+(`barray.d` assert at `obj_end`, `test23166`). An engine build during
+host codegen now stashes and restores:
+
+- `objmod`, `SegData`, `cseg`, `funcsym_p` and `bzeroSymbol`
+- the fixup list, runtime-library symbols, `el` string table, readonly
+  cache, DWARF section handles and the string-literal table
+- every `csym`/`sinit`/`deferToObj` the host created, `PASS.obj`
+  markers (else the engine skips functions the host already emitted)
+  and `TypeInfoDeclaration.hadCodegen`
+- struct-literal symbols
+
+Per-function backend state (`globsym`, blocks) is not stashed. Instead,
+TypeInfo data requested while a host function is being generated is
+emitted after that function. An engine build that is still requested
+mid-function is refused. `-cov` counters are not emitted in engine
+builds, since they would reference the host's coverage symbol.
+
+### Array operations on integer arrays with a floating operand
+
+`enum r = A[] * 0.5;` with `int[] A` gives `[0, 0, ...]` in the AST
+interpreter, which multiplies as integers. The engine computes the
+element type from the expression (`double`), like compiled code does,
+and gives `[0.5, ...]`.

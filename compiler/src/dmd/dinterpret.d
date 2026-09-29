@@ -102,11 +102,18 @@ public Expression ctfeInterpret(Expression e)
     import dmd.wasmctfe;
     Expression wasmResult;
     const wmode = wasmCtfeMode();
-    if (wmode != WasmCtfeMode.off && !global.gag)
+    const wstrict = wmode == WasmCtfeMode.strict;
+    if (wmode != WasmCtfeMode.off && (!global.gag || wstrict))
     {
         wasmResult = tryWasmCtfe(e);
-        if ((wmode == WasmCtfeMode.wasm || wmode == WasmCtfeMode.inproc) && wasmResult !is null)
+        if ((wmode == WasmCtfeMode.wasm || wmode == WasmCtfeMode.inproc || wstrict) && wasmResult !is null)
             return scrubReturnValue(e.loc, wasmResult);
+        if (wstrict && !wasmCtfeIsLiteral(e))
+        {
+            const why = wasmCtfeLastReason();
+            global.errorSink.error(e.loc, "wasm-ctfe cannot evaluate `%s` [%s]", e.toChars(), why ? why : "run");
+            return ErrorExp.get();
+        }
     }
 
     auto rgnpos = ctfeGlobals.region.savePos();

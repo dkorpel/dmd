@@ -13808,7 +13808,8 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
 
         result = res;
 
-        if ((exp.op == EXP.concatenateAssign || exp.op == EXP.concatenateElemAssign) && sc.needsCodegen())
+        if ((exp.op == EXP.concatenateAssign || exp.op == EXP.concatenateElemAssign) &&
+            (sc.needsCodegen() || engineCtfeLowering(sc, exp.op == EXP.concatenateAssign ? Id._d_arrayappendT : Id._d_arrayappendcTX)))
         {
             // if aa ordering is triggered, `res` will be a CommaExp
             // and `.e2` will be the rewritten original expression.
@@ -13850,7 +13851,8 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
                 /* Do not lower concats to the indices array returned by
                  *`static foreach`, as this array is only used at compile-time.
                  */
-                if (auto ve = exp.e1.isVarExp)
+                import dmd.wasmctfe : wasmCtfeCtfeBlockLowering;
+                if (auto ve = wasmCtfeCtfeBlockLowering() && hookExistsQuiet(sc, Id._d_arrayappendcTX) ? null : exp.e1.isVarExp)
                 {
                     import core.stdc.ctype : isdigit;
                     // The name of the indices array that static foreach loops uses.
@@ -18236,6 +18238,23 @@ private VarDeclaration makeThis2Argument(Loc loc, Scope* sc, FuncDeclaration fd)
  * Returns:
  *      a `bool` indicating if the hook is present.
  */
+private bool engineCtfeLowering(Scope* sc, Identifier hook)
+{
+    import dmd.wasmctfe : wasmCtfeCtfeBlockLowering;
+    if (!sc.ctfe || sc.traitsCompiles || !wasmCtfeCtfeBlockLowering())
+        return false;
+    return hookExistsQuiet(sc, hook);
+}
+
+private bool hookExistsQuiet(Scope* sc, Identifier hook)
+{
+    Dsymbol pscopesym;
+    auto rootSymbol = search(sc, Loc.initial, Id.empty, pscopesym);
+    if (auto moduleSymbol = rootSymbol.search(Loc.initial, Id.object))
+        return moduleSymbol.search(Loc.initial, hook) !is null;
+    return false;
+}
+
 bool verifyHookExist(Loc loc, ref Scope sc, Identifier id, string description, Identifier module_ = Id.object)
 {
     Dsymbol pscopesym;

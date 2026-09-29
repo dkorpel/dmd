@@ -1193,6 +1193,23 @@ private __gshared
     Readonly[RMAX] readonly;
     size_t readonly_length;
     size_t readonly_i;
+    Readonly[RMAX] readonlyStash;
+    size_t readonly_lengthStash;
+    size_t readonly_iStash;
+}
+
+@trusted
+public void out_readonly_swap()
+{
+    auto t = readonly;
+    readonly = readonlyStash;
+    readonlyStash = t;
+    const l = readonly_length;
+    readonly_length = readonly_lengthStash;
+    readonly_lengthStash = l;
+    const i = readonly_i;
+    readonly_i = readonly_iStash;
+    readonly_iStash = i;
 }
 
 @trusted public

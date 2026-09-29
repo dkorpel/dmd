@@ -137,6 +137,22 @@ enum RTLSYM
 }
 
 private __gshared Symbol*[RTLSYM.max + 1] rtlsym;
+private __gshared Symbol*[RTLSYM.max + 1] rtlsymStash;
+private __gshared int clibInitedStash;
+
+@trusted
+void rtlsym_swap()
+{
+    foreach (i; 0 .. rtlsym.length)
+    {
+        auto t = rtlsym[i];
+        rtlsym[i] = rtlsymStash[i];
+        rtlsymStash[i] = t;
+    }
+    const c = clib_inited;
+    clib_inited = clibInitedStash;
+    clibInitedStash = c;
+}
 
 /******************************************
  * Get Symbol corresponding to Dwarf "personality" function.

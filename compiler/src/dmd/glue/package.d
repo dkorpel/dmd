@@ -130,6 +130,14 @@ public void generateCodeAndWrite(Module[] modules, const(char)*[] libmodules,
             library.addObject(p.toDString(), null);
     }
 
+    import dmd.wasmctfe : wasmCtfeLoweringActive;
+    hostGlueActive = obj && wasmCtfeLoweringActive();
+    wasmCtfeHostReset();
+    scope (exit)
+    {
+        hostGlueActive = false;
+        wasmCtfeHostReset();
+    }
     if (!obj)
     {
     }
@@ -453,8 +461,26 @@ bool obj_linkerdirective(scope const(char)* directive)
 }
 
 public __gshared FuncDeclaration[] wasmCtfeBuiltFuncs;
+package(dmd.glue) __gshared TypeInfoDeclaration[] hostDeferredTypeInfos;
 
 void FuncDeclaration_toObjFile(FuncDeclaration fd, bool multiobj)
+{
+    if (wasmCtfeBuildActive || !hostGlueActive)
+        return FuncDeclaration_toObjFileImpl(fd, multiobj);
+    ++hostFuncDepth;
+    FuncDeclaration_toObjFileImpl(fd, multiobj);
+    if (--hostFuncDepth == 0)
+    {
+        while (hostDeferredTypeInfos.length)
+        {
+            auto tid = hostDeferredTypeInfos[$ - 1];
+            hostDeferredTypeInfos = hostDeferredTypeInfos[0 .. $ - 1];
+            toObjFile(tid, global.params.multiobj);
+        }
+    }
+}
+
+private void FuncDeclaration_toObjFileImpl(FuncDeclaration fd, bool multiobj)
 {
     if (wasmCtfeBuildActive)
         wasmCtfeBuiltFuncs ~= fd;
@@ -490,13 +516,13 @@ void FuncDeclaration_toObjFile(FuncDeclaration fd, bool multiobj)
     if (fd.hasSemantic3Errors)
         return;
 
-    if (global.errors)
+    if (glueHasErrors())
         return;
 
     if (!fd.fbody)
         return;
 
-    if (fd.skipCodegen)
+    if (fd.skipCodegen && !wasmCtfeBuildActive)
         return;
 
     UnitTestDeclaration ud = fd.isUnitTestDeclaration();
@@ -550,7 +576,7 @@ void FuncDeclaration_toObjFile(FuncDeclaration fd, bool multiobj)
 
     Symbol* s = toSymbol(fd); // may set skipCodegen
     func_t* f = s.Sfunc;
-    if (fd.skipCodegen) // test it again, as toSymbol() might have set it
+    if (fd.skipCodegen && !wasmCtfeBuildActive)
         return;
 
     // start code generation
@@ -884,7 +910,7 @@ void FuncDeclaration_toObjFile(FuncDeclaration fd, bool multiobj)
      * 2. impact on function inlining
      * 3. what to do when writing out .di files, or other pretty printing
      */
-    if (global.params.trace && !fd.isCMain() && !fd.isNaked && !fd.hasInlineAsm)
+    if (global.params.trace && !wasmCtfeBuildActive && !fd.isCMain() && !fd.isNaked && !fd.hasInlineAsm)
     {
         /* The profiler requires TLS, and TLS may not be set up yet when C main()
          * gets control (i.e. OSX), leading to a crash.
@@ -946,7 +972,7 @@ void FuncDeclaration_toObjFile(FuncDeclaration fd, bool multiobj)
 
     Statement_toIR(sbody, irs);
 
-    if (global.errors)
+    if (glueHasErrors())
     {
         // Restore symbol table
         cstate.CSpsymtab = symtabsave;
@@ -1025,7 +1051,7 @@ void FuncDeclaration_toObjFile(FuncDeclaration fd, bool multiobj)
         glue.testNames.push(ud.ident);
     }
 
-    if (global.errors)
+    if (glueHasErrors())
     {
         // Restore symbol table
         cstate.CSpsymtab = symtabsave;
@@ -1393,7 +1419,56 @@ public const(char)* wasmCtfeLastPoison()
     return wasmCtfePoisoned;
 }
 
+private __gshared FuncDeclaration[] wasmCtfeNeedSem3;
+private __gshared uint wasmCtfeBaseErrors;
+
+private bool glueHasErrors()
+{
+    return wasmCtfeBuildActive ? global.errors != wasmCtfeBaseErrors : global.errors != 0;
+}
+private __gshared bool[void*] wasmCtfeSem3Tried;
+
 public bool wasmCtfeGenerate(FuncDeclaration root, ref OutBuffer objbuf, out const(char)[][] unresolved)
+{
+    import dmd.wasmctfe : ipForceSemantic3, wasmCtfePreSemEnter, wasmCtfePreSemLeave;
+
+    if (wasmCtfeBuildActive)
+        return false;
+    bool preSemErrors;
+    foreach (attempt; 0 .. 64)
+    {
+        wasmCtfeNeedSem3 = null;
+        objbuf.setsize(0);
+        auto ok = wasmCtfeGenerateOnce(root, objbuf, unresolved);
+        auto need = wasmCtfeNeedSem3;
+        wasmCtfeNeedSem3 = null;
+        if (!need.length)
+        {
+            if (preSemErrors && !wasmCtfePoisoned)
+            {
+                wasmCtfePoisoned = "gagged errors";
+                unresolved = null;
+                return false;
+            }
+            return ok;
+        }
+        const oldGag = global.startGagging();
+        wasmCtfePreSemEnter();
+        foreach (fd; need)
+        {
+            wasmCtfeSem3Tried[cast(void*) fd] = true;
+            ipForceSemantic3(fd);
+        }
+        wasmCtfePreSemLeave();
+        if (global.endGagging(oldGag))
+            preSemErrors = true;
+    }
+    wasmCtfePoisoned = "semantic3 retry limit";
+    unresolved = null;
+    return false;
+}
+
+private bool wasmCtfeGenerateOnce(FuncDeclaration root, ref OutBuffer objbuf, out const(char)[][] unresolved)
 {
     import dmd.dmsc : backend_init_wasm_ctfe, backend_reinit_host;
     import dmd.backend.wasm.selflink : wasmSelfLink, wasmSelfLinkUnresolved;
@@ -1404,7 +1479,63 @@ public bool wasmCtfeGenerate(FuncDeclaration root, ref OutBuffer objbuf, out con
     if (wasmCtfeBuildActive)
         return false;
 
+    if (hostGlueActive && hostFuncDepth)
+    {
+        if (getenv("DMD_CTFE_TRACEGEN"))
+            fprintf(stderr, "wasm-ctfe: refuse build inside host function codegen: %s\n", root.toPrettyChars());
+        return false;
+    }
+    const hostStash = hostGlueActive;
+    Obj hostObjmod;
+    typeof(SegData) hostSegs;
+    Symbol* hostBzero;
+    Symbol* hostFuncsym;
+    int hostCseg;
+    if (hostStash)
+    {
+        import dmd.backend.cgen : fixups_swap;
+        import dmd.backend.rtlsym : rtlsym_swap;
+        import dmd.backend.el : el_stable_swap;
+        import dmd.backend.dout : out_readonly_swap;
+        import dmd.backend.dwarfdbginf : debugSectionsSwap;
+        import dmd.glue.e2ir : stringTab_swap;
+        hostObjmod = objmod;
+        hostSegs = SegData;
+        SegData = typeof(SegData).init;
+        hostBzero = bzeroSymbol;
+        hostFuncsym = pstate.STfuncsym_p;
+        hostCseg = cseg;
+        fixups_swap();
+        rtlsym_swap();
+        el_stable_swap();
+        out_readonly_swap();
+        debugSectionsSwap();
+        stringTab_swap();
+        wasmCtfeStashHostSyms();
+    }
+    scope (exit) if (hostStash)
+    {
+        import dmd.backend.cgen : fixups_swap;
+        import dmd.backend.rtlsym : rtlsym_swap;
+        import dmd.backend.el : el_stable_swap;
+        import dmd.backend.dout : out_readonly_swap;
+        import dmd.backend.dwarfdbginf : debugSectionsSwap;
+        import dmd.glue.e2ir : stringTab_swap;
+        wasmCtfeUnstashHostSyms();
+        stringTab_swap();
+        debugSectionsSwap();
+        out_readonly_swap();
+        el_stable_swap();
+        rtlsym_swap();
+        fixups_swap();
+        cseg = hostCseg;
+        pstate.STfuncsym_p = hostFuncsym;
+        bzeroSymbol = hostBzero;
+        SegData = hostSegs;
+        objmod = hostObjmod;
+    }
     const startErrors = global.errors;
+    wasmCtfeBaseErrors = startErrors;
     ObjcGlue_initialize();
     backend_init_wasm_ctfe();
     const selfLinkSave = wasmSelfLink;
@@ -1433,13 +1564,10 @@ public bool wasmCtfeGenerate(FuncDeclaration root, ref OutBuffer objbuf, out con
                 if (ad.semanticRun < PASS.semanticdone)
                     continue;
             }
+            if (fd.semanticRun < PASS.semantic3done && !(cast(void*) fd in wasmCtfeSem3Tried))
             {
-                import dmd.wasmctfe : ipForceSemantic3;
-                const errsB = global.errors;
-                ipForceSemantic3(fd);
-                if (getenv("DMD_CTFE_TRACEGEN") && global.errors != errsB)
-                    fprintf(stderr, "wasm-ctfe sem3: %s raised %u errors\n",
-                        fd.toPrettyChars(), global.errors - errsB);
+                wasmCtfeNeedSem3 ~= fd;
+                continue;
             }
             if (fd.semanticRun < PASS.semantic3done)
             {

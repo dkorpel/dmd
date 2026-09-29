@@ -78,6 +78,8 @@ void Initializer_toDt(Initializer init, ref DtBuilder dtb, bool isCfile)
 
     void visitError(ErrorInitializer)
     {
+        if (wasmCtfeBuildActive)
+            return wasmCtfePoison("error initializer");
         assert(0);
     }
 
@@ -1256,11 +1258,21 @@ private extern (C++) class TypeInfoDtVisitor : Visitor
      */
     static void verifyStructSize(ClassDeclaration typeclass, size_t expected)
     {
+        if (wasmCtfeBuildActive && typeclass.sizeok != Sizeok.done)
+        {
+            import dmd.dsymbolsem : determineSize;
+            determineSize(typeclass, typeclass.loc);
+        }
         if (!typeclass.hasMonitor)
             expected -= target.ptrsize;
 
         if (typeclass.structsize != expected)
         {
+            if (wasmCtfeBuildActive)
+            {
+                wasmCtfePoison("TypeInfo class size mismatch");
+                return;
+            }
             debug
             {
                 printf("expected = x%x, %s.structsize = x%x\n", cast(uint)expected,
