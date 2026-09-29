@@ -522,13 +522,25 @@ import dmd.aggregate : AggregateDeclaration;
 import dmd.dclass : ClassDeclaration;
 
 
+private bool ipSoftReal()
+{
+    import dmd.target : target;
+    return real.mant_dig == 64 && target.realsize == 16 && target.realpad == 6;
+}
+
+private void ipPutReal(ubyte[] mem, ulong addr, real r)
+{
+    mem[cast(size_t) addr .. cast(size_t) addr + 16] = 0;
+    memcpy(mem.ptr + cast(size_t) addr, &r, 10);
+}
+
 private bool ipTypeBlocksEngine(Type t, int depth = 0)
 {
     import dmd.typesem : isComplex, isImaginary;
     if (!t || depth > 8)
         return false;
     auto tb = t.toBasetype();
-    if (tb.isComplex() || tb.isImaginary() || tb.ty == Tfloat80)
+    if (tb.isComplex() || tb.isImaginary() || (tb.ty == Tfloat80 && !ipSoftReal()))
         return true;
     if (auto ts = tb.isTypeStruct())
     {
@@ -2711,6 +2723,109 @@ private struct HostImport
 {
     char[128] name;
     size_t nameLen;
+    int softOp = -1;
+}
+
+private int ipRealRelop(int op, real a, real b) nothrow @nogc
+{
+    import dmd.backend.oper;
+    const un = a != a || b != b;
+    switch (op)
+    {
+        case OPeqeq: return a == b;
+        case OPne: return a != b;
+        case OPlt: return a < b;
+        case OPle: return a <= b;
+        case OPgt: return a > b;
+        case OPge: return a >= b;
+        case OPunord, OPnleg: return un;
+        case OPord, OPleg: return !un;
+        case OPlg, OPnue: return !un && a != b;
+        case OPue, OPnlg: return un || a == b;
+        case OPule, OPngt: return un || a <= b;
+        case OPul, OPnge: return un || a < b;
+        case OPuge, OPnlt: return un || a >= b;
+        case OPug, OPnle: return un || a > b;
+        case OPnule: return !un && a > b;
+        case OPnul: return !un && a >= b;
+        case OPnuge: return !un && a < b;
+        case OPnug: return !un && a <= b;
+        default: return 0;
+    }
+}
+
+private extern (C) wasm_trap_t* ipHostSoftReal(void* env, wasmtime_caller_t* caller,
+    const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
+{
+    import dmd.wasmtimec;
+    import dmd.backend.wasm.softreal : SR;
+    static import core.math;
+    auto hi = cast(HostImport*) env;
+    static real ar(ref const wasmtime_val_t v)
+    {
+        real r = 0;
+        memcpy(&r, v.of.v128.ptr, 10);
+        return r;
+    }
+    void setR(real r)
+    {
+        results[0].kind = WASMTIME_V128;
+        results[0].of.v128[] = 0;
+        memcpy(results[0].of.v128.ptr, &r, 10);
+    }
+    void setL(long v)
+    {
+        results[0].kind = WASMTIME_I64;
+        results[0].of.i64 = v;
+    }
+    void setI(int v)
+    {
+        results[0].kind = WASMTIME_I32;
+        results[0].of.i32 = v;
+    }
+    switch (cast(SR) hi.softOp)
+    {
+        case SR.add: setR(ar(args[0]) + ar(args[1])); break;
+        case SR.sub: setR(ar(args[0]) - ar(args[1])); break;
+        case SR.mul: setR(ar(args[0]) * ar(args[1])); break;
+        case SR.div: setR(ar(args[0]) / ar(args[1])); break;
+        case SR.mod: setR(ar(args[0]) % ar(args[1])); break;
+        case SR.neg: setR(-ar(args[0])); break;
+        case SR.abs: setR(CTFloat.fabs(ar(args[0]))); break;
+        case SR.sqrt: setR(CTFloat.sqrt(ar(args[0]))); break;
+        case SR.sin: setR(CTFloat.sin(ar(args[0]))); break;
+        case SR.cos: setR(CTFloat.cos(ar(args[0]))); break;
+        case SR.rint: setR(core.math.rint(ar(args[0]))); break;
+        case SR.rndtol: setL(core.math.rndtol(ar(args[0]))); break;
+        case SR.yl2x:
+        case SR.yl2xp1:
+        {
+            const x = ar(args[0]);
+            const y = ar(args[1]);
+            real r;
+            if (hi.softOp == SR.yl2x)
+                CTFloat.yl2x(&x, &y, &r);
+            else
+                CTFloat.yl2xp1(&x, &y, &r);
+            setR(r);
+            break;
+        }
+        case SR.scale: setR(CTFloat.ldexp(ar(args[0]), args[1].of.i32)); break;
+        case SR.cmp: setI(ipRealRelop(args[2].of.i32, ar(args[0]), ar(args[1]))); break;
+        case SR.fromF64: setR(args[0].of.f64); break;
+        case SR.toF64:
+            results[0].kind = WASMTIME_F64;
+            results[0].of.f64 = cast(double) ar(args[0]);
+            break;
+        case SR.fromI64: setR(cast(real) args[0].of.i64); break;
+        case SR.fromU64: setR(cast(real) cast(ulong) args[0].of.i64); break;
+        case SR.toI64: setL(cast(long) ar(args[0])); break;
+        case SR.toU64: setL(cast(long) cast(ulong) ar(args[0])); break;
+        case SR.toI32: setI(cast(int) ar(args[0])); break;
+        case SR.toU32: setI(cast(int) cast(uint) ar(args[0])); break;
+        default: return ipTrap("wasm-ctfe: bad soft real op");
+    }
+    return null;
 }
 
 private extern (C) wasm_trap_t* ipHostStub(void* env, wasmtime_caller_t* caller,
@@ -3543,6 +3658,16 @@ Expression tryWasmCtfeInproc(FuncDeclaration fd, Expression thisExp, Expression[
                 cb = &ipHostAssertMsg;
             else if (nm == "_d_arrayappendcd" || nm == "_d_arrayappendcw")
                 cb = &ipHostArrayAppendC;
+            else if (nm.length > 16 && nm[0 .. 16] == "__wasmctfe_real_")
+            {
+                import dmd.backend.wasm.softreal : softRealNames;
+                foreach (k, sn; softRealNames)
+                    if (sn == nm)
+                    {
+                        hi.softOp = cast(int) k;
+                        cb = &ipHostSoftReal;
+                    }
+            }
             else if (nm == "_d_eh_wasm_match")
             {
                 cb = &ipHostEhMatch;
@@ -3771,6 +3896,8 @@ private bool ipScalarType(Type t)
             return true;
         case Tfloat32, Tfloat64:
             return true;
+        case Tfloat80:
+            return ipSoftReal();
         default:
             return false;
     }
@@ -4321,6 +4448,14 @@ private Expression ipDecodeMem(const(ubyte)[] mem, ulong addr, Type type, Loc lo
         memcpy(&d, mem.ptr + cast(size_t) addr, 8);
         return new RealExp(loc, real_t(d), type);
     }
+    if (tb.ty == Tfloat80)
+    {
+        if (!ipSoftReal())
+            return null;
+        real r = 0;
+        memcpy(&r, mem.ptr + cast(size_t) addr, 10);
+        return new RealExp(loc, r, type);
+    }
     if (!ipScalarType(tb))
         return null;
     ulong v = ipRead(mem, addr, sz);
@@ -4405,6 +4540,8 @@ private bool ipEncodeArg(ubyte[] mem, ref ulong cur, Expression arg, out ulong l
                     memcpy(&u, &f, 4);
                     ipWrite(mem, cur + i * esz, u, 4);
                 }
+                else if (esz == 16)
+                    ipPutReal(mem, cur + i * esz, re.value);
                 else
                 {
                     const d = cast(double) re.value;
@@ -4456,6 +4593,11 @@ private bool ipEncodeVal(ubyte[] mem, ulong addr, Type t, Expression e, int dept
             ulong u;
             memcpy(&u, &d, 8);
             ipWrite(mem, addr, u, 8);
+            return true;
+        }
+        if (sz == 16 && tb.ty == Tfloat80 && ipSoftReal())
+        {
+            ipPutReal(mem, addr, re.value);
             return true;
         }
         return false;
@@ -4541,6 +4683,13 @@ private bool ipMarshalScalar(Expression arg, ref wasmtime_val_t val)
             val.kind = WASMTIME_F64;
             val.of.f64 = cast(double) re.value;
         }
+        else if (tb.ty == Tfloat80 && ipSoftReal())
+        {
+            const real r = re.value;
+            val.kind = WASMTIME_V128;
+            val.of.v128[] = 0;
+            memcpy(val.of.v128.ptr, &r, 10);
+        }
         else
             return false;
         return true;
@@ -4580,6 +4729,14 @@ private Expression ipDecodeScalar(ref wasmtime_val_t val, Type type, Loc loc)
             if (val.kind != WASMTIME_F64)
                 return null;
             return new RealExp(loc, real_t(val.of.f64), type);
+        case Tfloat80:
+        {
+            if (val.kind != WASMTIME_V128)
+                return null;
+            real r = 0;
+            memcpy(&r, val.of.v128.ptr, 10);
+            return new RealExp(loc, r, type);
+        }
         default:
             return null;
     }

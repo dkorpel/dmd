@@ -1590,10 +1590,11 @@ elem* el_convert(ref GlobalOptimizer go, elem* e)
         case OPadd:
         case OPmin:
             // For a*b,a+b,a-b,a/b, if a long double constant is involved, convert it to a double constant.
-            if (tyreal(e.Ety))
-                 shrinkLongDoubleConstantIfPossible(e.E1);
-            if (tyreal(e.Ety))
+            if (tyreal(e.Ety) && config.exe != EX_WASM)
+            {
+                shrinkLongDoubleConstantIfPossible(e.E1);
                 shrinkLongDoubleConstantIfPossible(e.E2);
+            }
             goto default;
 
         default:

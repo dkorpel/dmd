@@ -360,7 +360,7 @@ private type* wasmRtlsymType(RTLSYM i)
         case RTLSYM.MEMSET64:               return fn([ptrTo(tstypes[TYllong]), tstypes[TYllong], tsize], ptrTo(tstypes[TYllong]));
         case RTLSYM.MEMSETFLOAT:            return fn([ptrTo(tstypes[TYfloat]), tstypes[TYfloat], tsize], ptrTo(tstypes[TYfloat]));
         case RTLSYM.MEMSETDOUBLE:           return fn([ptrTo(tstypes[TYdouble]), tstypes[TYdouble], tsize], ptrTo(tstypes[TYdouble]));
-        case RTLSYM.MEMSET80:               return fn([ptrTo(tstypes[TYdouble]), tstypes[TYdouble], tsize], ptrTo(tstypes[TYdouble])); // D `real` is f64 on wasm32
+        case RTLSYM.MEMSET80:               return fn([ptrTo(tstypes[TYreal]), tstypes[TYreal], tsize], ptrTo(tstypes[TYreal]));
         case RTLSYM.MEMSET128:              return fn([voidPtr(), voidPtr(), tsize], voidPtr());
         case RTLSYM.MEMSET128ii:            return fn([voidPtr(), voidArr(), tsize], voidPtr());
         case RTLSYM.MEMSETN:                return fn([voidPtr(), voidPtr(), tsize, tsize], voidPtr());

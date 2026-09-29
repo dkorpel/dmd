@@ -789,3 +789,65 @@ builds, since they would reference the host's coverage symbol.
 interpreter, which multiplies as integers. The engine computes the
 element type from the expression (`double`), like compiled code does,
 and gives `[0.5, ...]`.
+
+### `real` is 80-bit, computed on the host
+
+Wasm has no 80-bit float, and the wasm backend normally treats `real`
+as `double`. That would change CTFE results. Engine builds instead keep
+the host layout: `real` takes 16 bytes in memory, holding the x87
+80-bit value followed by zero padding. In registers it is a `v128`.
+Every `real` operation becomes a call to a host import
+(`__wasmctfe_real_add`, `_cmp`, `_toI64`, ...). The host evaluates it
+with its own `real` and `CTFloat`, like the AST interpreter does, so
+results are bit-identical. The pieces:
+
+- `backend/wasm/softreal.d` holds the helper symbols.
+- `codgen.d` routes `real` binops, relops, conditions, unary math and
+  conversions to the helpers. Loads, stores and constants use `v128`.
+- `backend_init_wasm_ctfe` sets `_tysize[TYreal]` to the host size.
+- `el_bin` no longer shrinks `real` constants to `double` for wasm.
+  That x87-only optimization produced `real op double` trees.
+- `long`/`ulong` to `real` conversions skip the lossy `double` step
+  that e2ir emits (`OPd_ld(OPs64_d(x))` becomes `fromI64(x)`). Casts
+  from `real` to integers use `cast(int)`/`cast(uint)`/`cast(long)`,
+  the same as `constfold`.
+
+`core.math.rint` and `rndtol` have no body, so the AST interpreter
+rejects them. The engine evaluates them. This applies only when the
+host `real` is x87 and the target `realsize` is 16. On other hosts,
+`real` still blocks the engine. Complex and imaginary types are still
+blocked.
+
+### Forward-referenced field initializers are folded
+
+A class used before its declaration is analysed (`test19941`) can have
+fields whose initializer has not been through semantic2. For such a
+field, `wasmCtfeAggReady` folds the `ExpInitializer` itself. If the
+initializer does not fold to a literal, the aggregate stays blocked.
+
+### Static members of aggregates still in semantic
+
+Members that need `this`, and virtual members, of an aggregate that has
+not finished semantic are skipped. Static members are built. Sizing an
+aggregate whose `semanticRun` is still `PASS.semantic` would re-enter
+its semantic (`test23589`: circular `cols_two`, so `tstr` is marked as
+failed for good). `Type_toCtype` poisons the build instead of calling
+`determineSize` in that case. The debug-only `Fclass` ctype is not
+computed in engine builds.
+
+### Struct copies duplicated side effects
+
+`elstruct` rewrote `*alloc() = init` as a block copy that evaluated
+`alloc()` twice. This was an upstream backend bug that the x86 backend
+masks. `new Object` got a zero vptr from the second allocation. The copy
+now requires a side-effect-free lvalue.
+
+### Other decoding details
+
+- An integer cast to a pointer (`cast(int*) 8`) decodes back to an
+  integer-valued pointer, not a dereference.
+- A class result from a build without ClassInfo decodes by static type,
+  if the class has no subclasses in the build.
+- `noreturn` fields decode to their default initializer.
+- A nested function without a frame gets an explicit null context
+  argument when called directly.

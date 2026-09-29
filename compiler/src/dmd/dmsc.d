@@ -172,6 +172,22 @@ void backend_init_wasm_ctfe()
         cast(ErrorCallbackBackend) &errorBackend,
         cast(GetFileContentsCallback) &getFileContentsBackend,
     );
+    {
+        import dmd.backend.wasm.softreal : wasmSoftReal, softRealReset;
+        import dmd.backend.ty : _tysize, _tyalignsize, TYreal, TYireal, TYcreal;
+        import dmd.target : target;
+        softRealReset();
+        wasmSoftReal = real.mant_dig == 64 && target.realsize == 16 && target.realpad == 6;
+        if (wasmSoftReal)
+        {
+            _tysize[TYreal] = 16;
+            _tysize[TYireal] = 16;
+            _tysize[TYcreal] = 32;
+            _tyalignsize[TYreal] = 16;
+            _tyalignsize[TYireal] = 16;
+            _tyalignsize[TYcreal] = 16;
+        }
+    }
 }
 
 void backend_reinit_host()
@@ -180,7 +196,9 @@ void backend_reinit_host()
     import dmd.backend.cdef : Config;
     import dmd.target : target;
     import dmd.dmdparams : driverParams;
+    import dmd.backend.wasm.softreal : wasmSoftReal;
 
+    wasmSoftReal = false;
     config = Config.init;
     backend_init(global.params, driverParams, target);
 }
