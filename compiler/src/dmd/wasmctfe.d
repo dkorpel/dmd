@@ -361,6 +361,26 @@ private bool ipHasCall(Expression e)
     return walkPostorder(e, v);
 }
 
+private bool ipTypeBlocksEngine(Type t, int depth = 0)
+{
+    import dmd.typesem : isComplex, isImaginary;
+    if (!t || depth > 8)
+        return false;
+    auto tb = t.toBasetype();
+    if (tb.isComplex() || tb.isImaginary() || tb.ty == Tfloat80)
+        return true;
+    if (auto ts = tb.isTypeStruct())
+    {
+        foreach (f; ts.sym.fields)
+            if (ipTypeBlocksEngine(f.type, depth + 1))
+                return true;
+        return false;
+    }
+    if (tb.isTypeSArray())
+        return ipTypeBlocksEngine(tb.nextOf(), depth + 1);
+    return false;
+}
+
 private bool ipExprSupported(Expression e)
 {
     import dmd.visitor.postorder : walkPostorder;
@@ -388,8 +408,32 @@ private bool ipExprSupported(Expression e)
         {
             if (!e.type)
                 return;
-            const ty = e.type.toBasetype().ty;
-            if (ty == Tfloat80 || ty == Timaginary80 || ty == Tcomplex80)
+            if (ipTypeBlocksEngine(e.type))
+                stop = true;
+        }
+        override void visit(BinExp e)
+        {
+            import dmd.tokens : EXP;
+            visit(cast(Expression) e);
+            if (stop)
+                return;
+            switch (e.op)
+            {
+                case EXP.add, EXP.min, EXP.mul, EXP.div, EXP.mod, EXP.pow,
+                     EXP.and, EXP.or, EXP.xor,
+                     EXP.leftShift, EXP.rightShift, EXP.unsignedRightShift,
+                     EXP.lessThan, EXP.lessOrEqual, EXP.greaterThan, EXP.greaterOrEqual,
+                     EXP.addAssign, EXP.minAssign, EXP.mulAssign, EXP.divAssign,
+                     EXP.modAssign, EXP.powAssign, EXP.andAssign, EXP.orAssign,
+                     EXP.xorAssign, EXP.leftShiftAssign, EXP.rightShiftAssign,
+                     EXP.unsignedRightShiftAssign:
+                    break;
+                default:
+                    return;
+            }
+            auto t1 = e.e1.type ? e.e1.type.toBasetype() : null;
+            auto t2 = e.e2.type ? e.e2.type.toBasetype() : null;
+            if ((t1 && t1.isStaticOrDynamicArray()) || (t2 && t2.isStaticOrDynamicArray()))
                 stop = true;
         }
         override void visit(ArrayLiteralExp e)
@@ -521,29 +565,62 @@ private Expression ipFallback(Expression e, const(char)* reason)
     return null;
 }
 
+private bool ipIsLiteral(Expression e)
+{
+    return e.isIntegerExp() || e.isRealExp() || e.isComplexExp()
+        || e.isStringExp() || e.isNullExp() || e.isArrayLiteralExp()
+        || e.isStructLiteralExp() || e.isVarExp() || e.isSymOffExp()
+        || e.isFuncExp();
+}
+
 private Expression ipFoldNoCall(Expression e)
 {
     import dmd.optimize : optimize;
     const oldGagged = global.startGagging();
     auto r = e.optimize(WANTvalue);
     if (global.endGagging(oldGagged))
-        return ipFallback(e, "no call fold error");
+        return null;
     if (r && (r.isIntegerExp() || r.isRealExp() || r.isComplexExp()
         || r.isStringExp() || r.isNullExp() || r.isSymOffExp()))
         return r;
-    return ipFallback(e, "no call");
+    return null;
 }
 
 Expression tryWasmCtfeExpr(Expression e)
 {
-    if (e.isIntegerExp() || e.isRealExp() || e.isStringExp() || e.isNullExp()
-        || e.isArrayLiteralExp() || e.isStructLiteralExp() || e.isVarExp()
-        || e.isSymOffExp() || e.isFuncExp())
+    if (ipIsLiteral(e))
         return null;
+    if (auto te = e.isTupleExp())
+    {
+        if (te.e0 && !ipIsLiteral(te.e0))
+            return ipFallback(e, "tuple");
+        foreach (el; *te.exps)
+            if (!ipIsLiteral(el))
+                return ipFallback(e, "tuple");
+        return null;
+    }
     if (!e.type)
         return ipFallback(e, "expr type");
+    if (auto ie = e.isIdentityExp())
+    {
+        auto te1 = ie.e1.isTypeidExp();
+        auto te2 = ie.e2.isTypeidExp();
+        if (te1 && te2)
+        {
+            import dmd.dtemplate : isType;
+            import dmd.tokens : EXP;
+            Type t1 = isType(te1.obj);
+            Type t2 = isType(te2.obj);
+            if (t1 && t2)
+            {
+                const same = t1 is t2;
+                return new IntegerExp(e.loc, (ie.op == EXP.identity) == same ? 1 : 0, e.type);
+            }
+        }
+    }
     if (!ipHasCall(e))
-        return ipFoldNoCall(e);
+        if (auto r = ipFoldNoCall(e))
+            return r;
     if (!ipScalarType(e.type) && !ipMemType(e.type))
         return ipFallback(e, "expr type");
     if (!ipExprSupported(e))

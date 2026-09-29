@@ -49,7 +49,8 @@ void genTypeInfo(Expression e, Loc loc, Type torig, Scope* sc)
     if (!sc || !sc.ctfe)
     {
         import dmd.globals : global;
-        if (!global.params.useTypeInfo)
+        import dmd.wasmctfe : wasmCtfeBuildActiveNow;
+        if (!global.params.useTypeInfo && !wasmCtfeBuildActiveNow())
         {
             global.gag = 0;
             if (e)
