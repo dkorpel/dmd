@@ -525,8 +525,8 @@ extern (C++) struct Scope
             return false;
         if (this.ctfeBlock)
         {
-            import dmd.wasmctfe : wasmCtfeLoweringActive;
-            return wasmCtfeLoweringActive();
+            import dmd.wasmctfe : wasmCtfeCtfeBlockLowering;
+            return wasmCtfeCtfeBlockLowering();
         }
         return true;
     }

@@ -465,3 +465,89 @@ host-side AA implementation at all. Four blockers fell:
 With this, interpret3 under `DMD_CTFE=verify` reports **zero compile
 failures, zero runtime failures and zero mismatches** for every
 attempted engine evaluation.
+
+### Engine-build template instances went permanently speculative
+
+Instances created while the engine build is active get `minst = null`
+(so guest-only instantiations don't leak into native codegen). But
+`ipForceSemantic3` runs the deferred semantic3 of real runtime hooks
+like `_d_aaEqual` during the build, and *inner* instantiations made by
+those bodies (`impl_aaEqual!(K,V)` behind the `pure_aaEqual` cast)
+would natively run later, ungagged, with a real `minst`. Nulling their
+`minst` made the primary instance permanently speculative — nothing
+re-instantiates it, so `needsCodegen` elided it and the link failed
+with an undefined `impl_aaEqual`. Fix: a suspend counter turns off the
+`wasmCtfeBuildActiveNow()` minst-nulling for the duration of
+`ipForceSemantic3`, since anything instantiated inside a forced
+semantic3 would have been instantiated natively anyway. The forced
+deferred-3 semantic3 also runs with gag lifted, matching native
+`runDeferredSemantic3`.
+
+### AA insertion order at CTFE
+
+The AST interpreter's AAs preserve insertion order (they are literal
+lists), and tests observe it via `aa.keys`, `foreach`, `aa.values`.
+The `newaa` hash implementation iterates buckets. Under `if (__ctfe)`
+a side table in `newaa` (keyed by `Impl*`, holding `Entry*` in
+insertion order — entry pointers are stable across bucket resize)
+records append/replace/remove, and `_aaKeys`/`_aaValues`/`_d_aaApply`/
+`_aaRange` walk it at CTFE. The `__ctfe` branches must cast entries to
+`typeof(aa.buckets[0].entry)` (keeping `inout`), not a
+`substInout`-stripped type: for class keys the result array element
+type stays `inout(Object)` and `copyEmplace` requires source and
+target types to match. A void-returning `@trusted` lambda holds the
+inout-typed local (a lambda *returning* inout fails to compile).
+
+### `new seg_data()` in a raw-realloc array vs `-lowmem`
+
+`SegData` is an `Rarray!(seg_data*)` whose buffer grows with plain C
+`realloc` — the GC never scans it. The wasm object writer allocated
+its entries with `new seg_data()` (and `new OutBuffer()`), so under
+`-lowmem` (GC collections enabled in dmd) a collection could free
+live `seg_data` structs mid-build; the memory was then reused (e.g.
+by `symbol_calloc`) and later `Offset(seg) = offset` writes through
+the stale pointer corrupted whatever landed there — observed as a
+`Symbol.Sseg` turning into pointer-half garbage and a `SegData[seg]`
+bounds assert, ~50% reproducible on xtest46_gc, vanishing under gdb
+and valgrind (GC-heap reuse is invisible to both). Every other object
+writer allocates `seg_data` with `mem_calloc` and `SDbuf` with C
+`calloc`; the wasm writer now does the same.
+
+### `__ctfeGuest()` and `isIfCtfeBlock` dead-branch elision
+
+The AST interpreter must not see the CTFE order-table code in `newaa`
+(it chokes on the `__gshared` side table), so those branches are
+guarded by a guest discriminator `__ctfeGuest()`: a normal function
+returning `false` that the wasm-CTFE glue folds to `1` while an engine
+build is active. The guard must be written as nested statements,
+`if (__ctfe) if (__ctfeGuest()) ...`, never `if (__ctfe && __ctfeGuest())`:
+native codegen only skips `if (__ctfe)` bodies via
+`Statement.isIfCtfeBlock()`, which matches a bare `__ctfe` condition.
+With a compound condition e2ir still walks the (dead) branch, pushes
+any lambdas in it onto `deferToObj`, and the emitted lambdas reference
+`ctfeOrder*Impl` symbols that no runtime druntime defines — an
+undefined-reference link failure that only shows up in tests using
+those AA operations.
+
+### Forced `semantic3` and instance rooting
+
+The engine build forces `semantic3` on `deferred3` instances it needs
+(`ipForceSemantic3`). Nested instantiations made during that pass
+follow the engine-build `minst`-nulling by default, which is correct
+for engine-only helpers but wrong when the forced function is an
+instance the *host* also codegens: its nested instances (e.g.
+`impl_aaEqual` inside `_d_aaEqual`) must be host-real or the host link
+fails. Conversely, unconditionally suspending the nulling leaks
+engine-only instances (whole `newaa` TypeInfo families) into the host
+object — `compilable/ti_emission.sh` checks exactly that. The rule:
+suspend the nulling only when the forced function's enclosing
+`TemplateInstance` has a non-null `minst`.
+
+### `NoBackend` builds
+
+The unit-test runner builds the frontend with `-version=NoBackend`.
+`dmd.wasmctfe` is imported from frontend modules (`dinterpret`,
+`dscope`, `templatesem`) but itself imports the glue and backend, so
+it provides a `version (NoBackend)` stub section (mode always `off`,
+all entry points no-ops) and keeps the real implementation in the
+`else` branch.

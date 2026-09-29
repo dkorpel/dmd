@@ -1,5 +1,32 @@
 module dmd.wasmctfe;
 
+version (NoBackend)
+{
+    import dmd.expression;
+    import dmd.func;
+    import dmd.location;
+    import dmd.mtype;
+
+    enum WasmCtfeMode
+    {
+        off,
+        wasm,
+        verify,
+        codegen,
+        inproc,
+    }
+
+    WasmCtfeMode wasmCtfeMode() { return WasmCtfeMode.off; }
+    bool wasmCtfeBuildActiveNow() { return false; }
+    bool wasmCtfeCtfeBlockLowering() pure nothrow @nogc @trusted { return false; }
+    void wasmCtfeCompare(Expression e, Expression astResult, Expression wasmResult) { }
+    Expression tryWasmCtfe(Expression e) { return null; }
+    Expression tryWasmCtfeCall(FuncDeclaration fd, Expression[] args, Type resultType, Loc loc) { return null; }
+    bool wasmCtfeTakeForcedSem3Error(FuncDeclaration fd) { return false; }
+}
+else
+{
+
 import core.stdc.stdio;
 import core.stdc.string;
 import core.stdc.stdlib : getenv;
@@ -58,8 +85,12 @@ struct WasmCtfeStats
 
 __gshared WasmCtfeStats wasmCtfeStats;
 
+private __gshared uint buildActiveSuspended;
+
 bool wasmCtfeBuildActiveNow()
 {
+    if (buildActiveSuspended)
+        return false;
     if (wasmCtfeMode() == WasmCtfeMode.off)
         return false;
     import dmd.glue : wasmCtfeBuildInProgress;
@@ -71,6 +102,18 @@ bool wasmCtfeLoweringActive() pure nothrow @nogc @trusted
     alias FP = WasmCtfeMode function() pure nothrow @nogc;
     auto fp = cast(FP) &wasmCtfeMode;
     return fp() != WasmCtfeMode.off;
+}
+
+private bool wasmCtfeCtfeBlockLoweringImpl()
+{
+    return global.params.useGC && wasmCtfeMode() != WasmCtfeMode.off;
+}
+
+bool wasmCtfeCtfeBlockLowering() pure nothrow @nogc @trusted
+{
+    alias FP = bool function() pure nothrow @nogc;
+    auto fp = cast(FP) &wasmCtfeCtfeBlockLoweringImpl;
+    return fp();
 }
 
 private __gshared
@@ -447,21 +490,36 @@ private void ipAppendSymKey(Expression e, ref OutBuffer kb)
     walkPostorder(e, v);
 }
 
+private __gshared bool traceFallback = false;
+private __gshared bool traceFallbackChecked = false;
+
+private Expression ipFallback(Expression e, const(char)* reason)
+{
+    if (!traceFallbackChecked)
+    {
+        traceFallbackChecked = true;
+        traceFallback = getenv("DMD_CTFE_TRACEFB") !is null;
+    }
+    if (traceFallback)
+        fprintf(stderr, "wasm-ctfe fallback %s: %s: %s\n", reason, e.loc.toChars(), e.toChars());
+    return null;
+}
+
 Expression tryWasmCtfeExpr(Expression e)
 {
     if (!e.type || (!ipScalarType(e.type) && !ipMemType(e.type)))
-        return null;
+        return ipFallback(e, "expr type");
     if (e.isIntegerExp() || e.isRealExp() || e.isStringExp() || e.isNullExp()
         || e.isArrayLiteralExp() || e.isStructLiteralExp() || e.isVarExp()
         || e.isSymOffExp() || e.isFuncExp())
         return null;
     if (!ipHasCall(e))
-        return null;
+        return ipFallback(e, "no call");
     if (!ipExprSupported(e))
-        return null;
+        return ipFallback(e, "expr unsupported");
     auto mod = Module.rootModule;
     if (!mod)
-        return null;
+        return ipFallback(e, "no root module");
     OutBuffer kb;
     kb.writestring("expr:");
     kb.writestring(e.loc.toChars());
@@ -1000,13 +1058,29 @@ public void ipForceSemantic3(FuncDeclaration fd)
 {
     if (fd.semanticRun >= PASS.semantic3done)
         return;
+    bool hostRooted = false;
+    for (Dsymbol p = fd; p; p = p.parent)
+    {
+        if (auto ti = p.isTemplateInstance())
+        {
+            hostRooted = ti.minst !is null;
+            break;
+        }
+    }
+    if (hostRooted)
+        ++buildActiveSuspended;
     if (fd.deferred3 && fd._scope && fd.semanticRun < PASS.semantic3)
     {
         import dmd.semantic3 : semantic3;
+        const oldGag = global.gag;
+        global.gag = 0;
         semantic3(fd, fd._scope);
+        global.gag = oldGag;
     }
     else
         fd.functionSemantic3();
+    if (hostRooted)
+        --buildActiveSuspended;
     if (fd.errors || fd.hasSemantic3Errors)
         forcedSem3Errors[cast(void*) fd] = true;
 }
@@ -2955,6 +3029,14 @@ private Expression ipDecodeClassRef(const(ubyte)[] mem, ulong objAddr, Type type
         if (dbg) fprintf(stderr, "wasm-ctfe classref: no class for '%.*s'\n", cast(int) nlen, mem.ptr + nptr);
         return null;
     }
+    for (auto c = cd; c; c = c.baseClass)
+    {
+        if (c.ident == Id.TypeInfo)
+        {
+            if (dbg) fprintf(stderr, "wasm-ctfe classref: TypeInfo result\n");
+            return null;
+        }
+    }
     size_t total = 0;
     for (auto c = cd; c; c = c.baseClass)
         total += c.fields.length;
@@ -3345,4 +3427,6 @@ private Expression ipDecodeScalar(ref wasmtime_val_t val, Type type, Loc loc)
         default:
             return null;
     }
+}
+
 }

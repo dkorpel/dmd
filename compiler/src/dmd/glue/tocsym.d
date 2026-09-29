@@ -267,6 +267,8 @@ void wasmCtfeWipeCaches()
             ad.sinit = null;
         if (auto ed = d.isEnumDeclaration())
             ed.sinit = null;
+        if (auto fld = d.isFuncLiteralDeclaration())
+            fld.deferToObj = false;
     }
     wasmCtfeTouched.setDim(0);
     wasmCtfeSeenTouched.clear();

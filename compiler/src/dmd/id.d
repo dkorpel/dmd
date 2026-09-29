@@ -100,6 +100,7 @@ immutable Msgtable[] msgtable =
     { "funcptr" },
     { "dollar", "__dollar" },
     { "ctfe", "__ctfe" },
+    { "ctfeGuest", "__ctfeGuest" },
     { "offset" },
     { "offsetof" },
     { "bitoffsetof" },

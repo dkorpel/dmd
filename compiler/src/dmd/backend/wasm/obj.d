@@ -63,9 +63,32 @@ private void pushSegData(int idx)
     while (SegData.length <= idx)
     {
         seg_data** p = SegData.push();
-        *p = new seg_data();
-        (*p).SDseg = cast(int)(SegData.length - 1);
-        (*p).SDbuf = new OutBuffer();
+        seg_data* pseg = *p;
+        if (!pseg)
+        {
+            import dmd.backend.mem : mem_calloc;
+            pseg = cast(seg_data*) mem_calloc(seg_data.sizeof);
+            *p = pseg;
+        }
+        else
+        {
+            import core.stdc.string : memset;
+            const buf = pseg.SDbuf;
+            memset(pseg, 0, seg_data.sizeof);
+            pseg.SDbuf = cast(OutBuffer*) buf;
+        }
+        pseg.SDseg = cast(int)(SegData.length - 1);
+        if (pseg.SDbuf)
+            pseg.SDbuf.reset();
+        else
+        {
+            import core.stdc.stdlib : calloc;
+            import dmd.backend.global : err_nomem;
+            pseg.SDbuf = cast(OutBuffer*) calloc(1, OutBuffer.sizeof);
+            if (!pseg.SDbuf)
+                err_nomem();
+            pseg.SDbuf.reserve(1024);
+        }
     }
 }
 

@@ -769,7 +769,8 @@ elem* toElem(Expression e, ref IRState irs)
 
         const bool nrvo = fd && s == fd.shidden;
 
-        if (s.Sclass == SC.auto_ || s.Sclass == SC.parameter || s.Sclass == SC.shadowreg)
+        if (s.Sclass == SC.auto_ || s.Sclass == SC.parameter || s.Sclass == SC.shadowreg ||
+            s.Sclass == SC.fastpar || s.Sclass == SC.regpar)
         {
             if (fd && fd != irs.getFunc())
             {
@@ -6901,6 +6902,14 @@ elem* fillHole(Symbol* stmp, size_t poffset, size_t offset2, size_t maxoff)
 elem* toElemCall(CallExp ce, ref IRState irs, elem* ehidden = null)
 {
     assert(ce.e1.type);
+    if (auto ve = ce.e1.isVarExp())
+    {
+        if (auto cfd = ve.var.isFuncDeclaration())
+        {
+            if (cfd.ident == Id.ctfeGuest)
+                return el_long(totym(ce.type), wasmCtfeBuildActive ? 1 : 0);
+        }
+    }
     Type t1 = ce.e1.type.toBasetype();
     Type ectype = t1;
     elem* eeq = null;
