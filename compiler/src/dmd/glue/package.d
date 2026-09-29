@@ -1555,6 +1555,9 @@ private bool wasmCtfeGenerateOnce(FuncDeclaration root, ref OutBuffer objbuf, ou
     wasmSelfLink = true;
     wasmSelfLinkUnresolved = null;
     wasmCtfeBuildActive = true;
+    const oldCheckAction = global.params.checkAction;
+    if (oldCheckAction == CHECKACTION.C || oldCheckAction == CHECKACTION.halt)
+        global.params.checkAction = CHECKACTION.D;
     wasmCtfePoisoned = null;
     wasmCtfeBuiltFuncs = null;
     {
@@ -1664,6 +1667,7 @@ private bool wasmCtfeGenerateOnce(FuncDeclaration root, ref OutBuffer objbuf, ou
     unresolved = wasmSelfLinkUnresolved;
 
     wasmCtfeBuildActive = false;
+    global.params.checkAction = oldCheckAction;
     {
         import dmd.backend.wasm.codgen : wasmCGTolerateUnsupported;
         wasmCGTolerateUnsupported = false;

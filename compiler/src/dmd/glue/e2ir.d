@@ -1533,7 +1533,7 @@ elem* toElem(Expression e, ref IRState irs)
                     el_var(toInitializer(sd)), null, Type_toCtype(tclass));
                 ex = el_combine(el_combine(eeq, einit), el_var(tsi));
             }
-            else if (!irs.params.useGC)
+            else if (!irs.params.useGC && !wasmCtfeBuildActive)
             {
                 // new is allowed in CTFE, so this can only be checked at codegen
                 irs.eSink.error(ne.loc, "`new` expression `%s` requires the GC which is not available with `-betterC`", ne.toErrMsg());
@@ -1660,7 +1660,7 @@ elem* toElem(Expression e, ref IRState irs)
                     e = el_combine(e, el_var(ts));
                 }
             }
-            else if (!irs.params.useGC)
+            else if (!irs.params.useGC && !wasmCtfeBuildActive)
             {
                 irs.eSink.error(ne.loc, "`new` expression `%s` requires the GC which is not available with `-betterC`", ne.toErrMsg());
                 return el_long(TYnptr, 0);
@@ -1688,7 +1688,7 @@ elem* toElem(Expression e, ref IRState irs)
         }
         else if (auto taa = t.isTypeAArray())
         {
-            if (!irs.params.useGC)
+            if (!irs.params.useGC && !wasmCtfeBuildActive)
             {
                 irs.eSink.error(ne.loc, "`new` expression `%s` requires the GC which is not available with `-betterC`", ne.toErrMsg());
                 return el_long(TYnptr, 0);
@@ -2124,7 +2124,7 @@ elem* toElem(Expression e, ref IRState irs)
         /* Do this check during code gen rather than semantic() because concatenation is
          * allowed in CTFE, and cannot distinguish that in semantic().
          */
-        if (!irs.params.useGC)
+        if (!irs.params.useGC && !wasmCtfeBuildActive)
         {
             irs.eSink.error(ce.loc, "array concatenation of expression `%s` requires the GC which is not available with `-betterC`", ce.toErrMsg());
             return el_long(TYint, 0);
@@ -3299,7 +3299,7 @@ elem* toElem(Expression e, ref IRState irs)
                 /* Do this check during code gen rather than semantic because appending is
                 * allowed during CTFE, and we cannot distinguish that in semantic.
                 */
-                if (!irs.params.useGC)
+                if (!irs.params.useGC && !wasmCtfeBuildActive)
                 {
                     irs.eSink.error(ce.loc,
                         "appending to array in `%s` requires the GC which is not available with `-betterC`",
@@ -5916,8 +5916,8 @@ private ClassDeclaration scopeNewClass(Expression e)
     if (!ie)
         return null;
     Expression x = ie.exp;
-    if (auto ae = x.isAssignExp())
-        x = ae.e2;
+    if (x.op == EXP.construct || x.op == EXP.blit || x.op == EXP.assign)
+        x = (cast(BinExp) x).e2;
     while (auto ce = x.isCastExp())
         x = ce.e1;
     auto ne = x.isNewExp();

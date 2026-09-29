@@ -14234,7 +14234,8 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
         /* `_d_arraycatnTX` canot be used with `-betterC`, but `CatExp`s may be
          * used with `-betterC`, but only during CTFE.
          */
-        if (!global.params.useGC)
+        import dmd.wasmctfe : wasmCtfeLoweringActive;
+        if (!global.params.useGC && !wasmCtfeLoweringActive())
             return;
 
         if (auto ce = exp.isCatExp())
