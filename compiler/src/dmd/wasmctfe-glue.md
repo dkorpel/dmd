@@ -182,3 +182,12 @@ The `switch` statement's CTFE check shared its condition elem between the
 check and the jump, which is invalid in the backend's tree model and
 crashed `elem_debug` after the optimizer freed one of them. It is now
 copied with `el_copytree`.
+
+## 13. Link results are global too
+
+`wasmSelfLinkDataExtents`, like the table and vtable lists before it, is a
+global filled by each self-link. The engine caches modules and runs them
+long after the next link, so anything it reads from a link result has to
+be copied into the cached module. Resetting the global with
+`.length = 0` also reused the array the cached module still referenced;
+it is now reset with `= null`.

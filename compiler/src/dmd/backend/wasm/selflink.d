@@ -281,7 +281,7 @@ void selfLink(ref WasmModule wmod)
             wasmSelfLinkTableNames[i] = f.sym.identifier.idup;
     wasmSelfLinkProbeAddr = 0;
     wasmSelfLinkVtblAddrs = null;
-    wasmSelfLinkDataExtents.length = 0;
+    wasmSelfLinkDataExtents = null;
     foreach (ref const WasmDataSeg ds; wmod.dataSegs)
         if (ds.data && ds.data.length)
             wasmSelfLinkDataExtents ~= WasmDataExtent(ds.offset, cast(uint) ds.data.length,

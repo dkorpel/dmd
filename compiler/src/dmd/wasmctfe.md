@@ -370,6 +370,27 @@ array.length += n; (){ ... oldLen ... }()` in `std.array.insertInPlace`
 re-read the grown length. The initializer is now only used when the
 current function is not in the variable's `nestedrefs`.
 
+### Frameless context pointers are constants
+Without a frame, `getEthis` returns the constant `wasmCtfeNoFrame`.
+`setEthis` took its address when the target function has nested frame
+references, giving `&0xFF000000`, which trips the common-subexpression
+pass (`cgcs.d` assert) in debug builds. Release builds emitted it silently.
+Seen in `std.format` through `enum check = { ... use(S.init) ... }()`
+inside a function with a nested struct. The constant is now passed as is.
+
+### Data extents are per module
+Pointer-to-data lookups (`ipFindData`) used the self-link's global
+extent list, which describes the most recently linked module. When a
+cached module ran after a different one was built, lookups used the wrong
+table; `std.uni` read Unicode block names from the wrong offsets. Each
+cached `IpModule` now keeps its own extents, like its table and vtables.
+
+### Large argument lists live above the stack
+Arguments are copied into linear memory below the shadow stack top. A
+call whose arguments exceed the stack (large struct or array literals)
+now grows memory and places them in fresh pages, and the bump heap starts
+after them.
+
 ### `~= dchar` runs host-side
 `_d_arrayappendcd`/`_d_arrayappendwd` are implemented as host functions:
 decode the slice at the ref address, UTF-8/UTF-16-encode the code point,

@@ -492,7 +492,7 @@ elem* setEthis(Loc loc, ref IRState irs, elem* ey, AggregateDeclaration ad, bool
     {
         ethis = getEthis(loc, irs, adp);
         FuncDeclaration fdp = adp.isFuncDeclaration();
-        if (fdp && fdp.hasNestedFrameRefs())
+        if (fdp && fdp.hasNestedFrameRefs() && !(wasmCtfeBuildActive && ethis.Eoper == OPconst))
             ethis = el_una(OPaddr, TYnptr, ethis);
     }
 

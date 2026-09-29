@@ -2288,6 +2288,7 @@ extern (C++) final class LegalityScanner : SemanticTimeTransitiveVisitor
 private __gshared
 {
     import dmd.wasmtimec;
+    import dmd.backend.wasm.selflink : WasmDataExtent;
 
     wasm_engine_t* ipEngine;
 
@@ -2300,6 +2301,7 @@ private __gshared
         FuncDeclaration[] tableFuncs;
         ClassDeclaration[ulong] cppVtbls;
         uint[size_t] sites;
+        WasmDataExtent[] dataExtents;
     }
 
     IpModule*[void*] ipModuleCache;
@@ -2850,21 +2852,20 @@ private bool ipNotePoisonGlobal(VarDeclaration v)
 
 private bool ipFindData(ulong p, out ulong base, out ulong sz, out const(char)[] name) nothrow @nogc
 {
-    import dmd.backend.wasm.selflink : wasmSelfLinkDataExtents;
-    size_t lo = 0, hi = wasmSelfLinkDataExtents.length;
+    size_t lo = 0, hi = ipDataExtents.length;
     while (lo < hi)
     {
         const mid = (lo + hi) / 2;
-        if (wasmSelfLinkDataExtents[mid].start <= p)
+        if (ipDataExtents[mid].start <= p)
             lo = mid + 1;
         else
             hi = mid;
     }
     if (lo == 0)
         return false;
-    base = wasmSelfLinkDataExtents[lo - 1].start;
-    sz = wasmSelfLinkDataExtents[lo - 1].size;
-    name = wasmSelfLinkDataExtents[lo - 1].name;
+    base = ipDataExtents[lo - 1].start;
+    sz = ipDataExtents[lo - 1].size;
+    name = ipDataExtents[lo - 1].name;
     return p < base + sz;
 }
 
@@ -4387,6 +4388,8 @@ private IpModule* ipGetModule(FuncDeclaration fd)
     }
     {
         import dmd.glue : wasmCtfeBuiltFuncs;
+        import dmd.backend.wasm.selflink : wasmSelfLinkDataExtents;
+        im.dataExtents = wasmSelfLinkDataExtents;
         import dmd.backend.wasm.selflink : wasmSelfLinkTableNames;
         FuncDeclaration[const(char)[]] byName;
         foreach (bf; wasmCtfeBuiltFuncs)
@@ -5299,6 +5302,7 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
 
     wasmtime_memory_t mem;
     ulong sretAddr;
+    ulong argHeapPtr, argHeapEnd;
     const ulong thisSize = thisExp ? cast(ulong) thisSd.type.size() : 0;
     if (sret || memArgCount || thisExp || classResult || ptrResult)
     {
@@ -5318,12 +5322,30 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
         ulong need = (rsz + 15) & ~15UL;
         need += (memArgBytes + 15) & ~15UL;
         need += (thisSize + 15) & ~15UL;
-        const base = (ipValP(spVal) - need) & ~15UL;
-        ipSetP(spVal, base);
-        if (auto err = wasmtime_global_set(ctx, &spExt.of.global, &spVal))
+        import dmd.backend.wasm.selflink : wasmSelfLinkStackSize;
+        ulong base;
+        if (need + 65536 > wasmSelfLinkStackSize)
         {
-            wasmtime_error_delete(err);
-            return bail(fd, "stack pointer set");
+            const ulong pages = (need >> 16) + 1;
+            ulong prevPages;
+            if (auto err = wasmtime_memory_grow(ctx, &mem, pages, &prevPages))
+            {
+                wasmtime_error_delete(err);
+                return bail(fd, "arg memory");
+            }
+            base = prevPages << 16;
+            argHeapPtr = (base + need + 15) & ~15UL;
+            argHeapEnd = (prevPages + pages) << 16;
+        }
+        else
+        {
+            base = (ipValP(spVal) - need) & ~15UL;
+            ipSetP(spVal, base);
+            if (auto err = wasmtime_global_set(ctx, &spExt.of.global, &spVal))
+            {
+                wasmtime_error_delete(err);
+                return bail(fd, "stack pointer set");
+            }
         }
         auto data = wasmtime_memory_data(ctx, &mem);
         const dataLen = wasmtime_memory_data_size(ctx, &mem);
@@ -5364,17 +5386,18 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
         }
     }
 
-    ipHeapPtr = 0;
+    ipHeapPtr = argHeapPtr;
     ipErrKind = IpErrKind.none;
     ipErrNoBody = false;
     ipThrowCount = 0;
     ipErrnoCell = 0;
-    ipHeapEnd = 0;
+    ipHeapEnd = argHeapEnd;
     ipAllocCount = 0;
     ipUnionTagCount = 0;
     ipDecodeMemo.setDim(0);
     ipCtfeOrdersAddr = im.ctfeOrdersAddr;
     ipTableFuncs = im.tableFuncs;
+    ipDataExtents = im.dataExtents;
     ipCppVtbls = im.cppVtbls;
     if (auto err = wasmtime_context_set_fuel(ctx, 2_000_000_000))
         wasmtime_error_delete(err);
@@ -5752,6 +5775,7 @@ private enum ipDecodeMaxDepth = 400;
 private __gshared ulong ipCtfeOrdersAddr;
 private __gshared ClassDeclaration[ulong] ipCppVtbls;
 private __gshared FuncDeclaration[] ipTableFuncs;
+private __gshared WasmDataExtent[] ipDataExtents;
 
 private Expression ipDecodeFuncPtr(ulong slot, ulong ctx, Type type, Loc loc)
 {
