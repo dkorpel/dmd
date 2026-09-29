@@ -3,7 +3,9 @@
 `dmd.wasmctfe` evaluates CTFE by compiling the expression and everything it
 calls to WebAssembly with dmd's own glue layer and backend, and running the
 result in wasmtime through its C API, inside the compiler process. It is
-meant to replace the AST interpreter in `dmd.dinterpret`.
+meant to replace the AST interpreter in `dmd.dinterpret`. The problems caused
+by running the glue layer and backend during semantic analysis are collected in
+`wasmctfe-glue.md`.
 
 ## Activation
 
