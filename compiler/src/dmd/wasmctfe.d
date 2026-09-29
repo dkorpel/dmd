@@ -23,6 +23,8 @@ version (NoBackend)
     Expression tryWasmCtfe(Expression e) { return null; }
     Expression tryWasmCtfeCall(FuncDeclaration fd, Expression[] args, Type resultType, Loc loc) { return null; }
     bool wasmCtfeTakeForcedSem3Error(FuncDeclaration fd) { return false; }
+    void wasmCtfeSuspendMinstNull() { }
+    void wasmCtfeResumeMinstNull() { }
 }
 else
 {
@@ -86,6 +88,16 @@ struct WasmCtfeStats
 __gshared WasmCtfeStats wasmCtfeStats;
 
 private __gshared uint buildActiveSuspended;
+
+public void wasmCtfeSuspendMinstNull()
+{
+    ++buildActiveSuspended;
+}
+
+public void wasmCtfeResumeMinstNull()
+{
+    --buildActiveSuspended;
+}
 
 bool wasmCtfeBuildActiveNow()
 {
@@ -361,6 +373,17 @@ private bool ipHasCall(Expression e)
     return walkPostorder(e, v);
 }
 
+import dmd.dclass : ClassDeclaration;
+
+private bool ipClassDecodable(ClassDeclaration cd)
+{
+    for (auto c = cd; c; c = c.baseClass)
+        foreach (v; c.fields)
+            if (v.overlapped)
+                return false;
+    return true;
+}
+
 private bool ipTypeBlocksEngine(Type t, int depth = 0)
 {
     import dmd.typesem : isComplex, isImaginary;
@@ -468,6 +491,33 @@ private bool ipExprSupported(Expression e)
         override void visit(FuncExp)
         {
             stop = true;
+        }
+        int classRefDepth;
+        override void visit(ClassReferenceExp e)
+        {
+            visit(cast(Expression) e);
+            if (stop)
+                return;
+            if (classRefDepth >= 8)
+            {
+                stop = true;
+                return;
+            }
+            ++classRefDepth;
+            auto sle = e.value;
+            if (sle && sle.elements)
+                foreach (el; *sle.elements)
+                    if (el && !stop)
+                        el.accept(this);
+            --classRefDepth;
+        }
+        override void visit(AssocArrayLiteralExp e)
+        {
+            visit(cast(Expression) e);
+            if (stop)
+                return;
+            if (!e.loweringCtfe)
+                stop = true;
         }
         override void visit(ThisExp)
         {
@@ -621,7 +671,11 @@ Expression tryWasmCtfeExpr(Expression e)
     if (!ipHasCall(e))
         if (auto r = ipFoldNoCall(e))
             return r;
-    if (!ipScalarType(e.type) && !ipMemType(e.type))
+    auto etb = e.type.toBasetype();
+    const classExprResult = etb.ty == Tclass
+        && !etb.isTypeClass().sym.isInterfaceDeclaration()
+        && ipClassDecodable(etb.isTypeClass().sym);
+    if (!ipScalarType(e.type) && !ipMemType(e.type) && !classExprResult)
         return ipFallback(e, "expr type");
     if (!ipExprSupported(e))
         return ipFallback(e, "expr unsupported");
@@ -668,7 +722,10 @@ void wasmCtfeCodegenTest(FuncDeclaration fd)
 
     OutBuffer buf;
     const(char)[][] unresolved;
+    const savedSuspend = buildActiveSuspended;
+    buildActiveSuspended = 0;
     const ok = wasmCtfeGenerate(fd, buf, unresolved);
+    buildActiveSuspended = savedSuspend;
     char[256] name = void;
     snprintf(name.ptr, name.length, "wasmctfe_%u.wasm", seq);
     seq++;
@@ -1166,7 +1223,8 @@ public void ipForceSemantic3(FuncDeclaration fd)
 {
     if (fd.semanticRun >= PASS.semantic3done)
         return;
-    bool hostRooted = false;
+    auto fdMod = fd.getModule();
+    bool hostRooted = fdMod && fdMod.isRoot();
     for (Dsymbol p = fd; p; p = p.parent)
     {
         if (auto ti = p.isTemplateInstance())
@@ -1420,15 +1478,13 @@ extern (C++) final class LegalityScanner : SemanticTimeTransitiveVisitor
         if (bad)
             return;
         if (e.var && e.var.ident == Id.ctfe)
-        {
-            reject("__ctfe");
             return;
-        }
         if (auto v = e.var ? e.var.isVarDeclaration() : null)
         {
             if (v.isDataseg() && !(v.storage_class & STC.manifest))
             {
-                if (!v.type || !(v.type.isImmutable() || v.type.isConst()) || !v._init)
+                if (!v.type || !(v.type.isImmutable() || v.type.isConst()) || !v._init
+                    || !v._init.semanticDone)
                 {
                     reject("mutable global");
                     return;
@@ -1449,8 +1505,12 @@ extern (C++) final class LegalityScanner : SemanticTimeTransitiveVisitor
         }
         if (v.isDataseg() && !(v.storage_class & STC.manifest))
         {
-            reject("static local");
-            return;
+            if (!v.type || !(v.type.isImmutable() || v.type.isConst()) || !v._init
+                || !v._init.semanticDone)
+            {
+                reject("static local");
+                return;
+            }
         }
         if (badType(v.type))
         {
@@ -2553,7 +2613,11 @@ private IpModule* ipGetModule(FuncDeclaration fd)
 
     OutBuffer buf;
     const(char)[][] unresolved;
-    if (!wasmCtfeGenerate(fd, buf, unresolved))
+    const savedSuspend = buildActiveSuspended;
+    buildActiveSuspended = 0;
+    const genOk = wasmCtfeGenerate(fd, buf, unresolved);
+    buildActiveSuspended = savedSuspend;
+    if (!genOk)
     {
         if (verbose)
         {
@@ -2661,7 +2725,8 @@ Expression tryWasmCtfeInproc(FuncDeclaration fd, Expression thisExp, Expression[
         return bail(fd, "arg count");
     const bool sret = !isCtor && !ipScalarType(resultType) && ipMemType(resultType);
     const bool classResult = !isCtor && !sret && resultType.toBasetype().ty == Tclass
-        && !resultType.toBasetype().isTypeClass().sym.isInterfaceDeclaration();
+        && !resultType.toBasetype().isTypeClass().sym.isInterfaceDeclaration()
+        && ipClassDecodable(resultType.toBasetype().isTypeClass().sym);
     if (isCtor)
     {
         if (!ipMemType(resultType))

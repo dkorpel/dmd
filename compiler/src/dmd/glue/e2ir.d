@@ -1523,8 +1523,27 @@ elem* toElem(Expression e, ref IRState irs)
             elem* ezprefix = ne.argprefix ? toElem(ne.argprefix, irs) : null;
 
             assert(ne.arguments && ne.arguments.length >= 1);
-            assert(ne.lowering);
-            e = toElem(ne.lowering, irs);
+            if (!ne.lowering && wasmCtfeBuildActive && ne.arguments.length == 1)
+            {
+                Type tn = tda.next.toBasetype();
+                const sz = tn.size(ne.loc);
+                elem* edim = toElem((*ne.arguments)[0], irs);
+                elem* edimT = el_same(edim);
+                elem* ealloc = el_bin(OPcall, TYnptr, el_var(getRtlsym(RTLSYM.ALLOCMEMORY)),
+                    el_bin(OPmul, TYsize_t, el_copytree(edimT), el_long(TYsize_t, sz)));
+                elem* eallocT = el_same(ealloc);
+                elem* evalue = toElem(tn.defaultInitLiteral(ne.loc), irs);
+                elem* efill = setArray(ne, el_copytree(eallocT), el_copytree(edimT),
+                    tn, evalue, irs, EXP.blit);
+                e = el_combine(edim, ealloc);
+                e = el_combine(e, efill);
+                e = el_combine(e, el_pair(TYdarray, el_copytree(edimT), el_copytree(eallocT)));
+            }
+            else
+            {
+                assert(ne.lowering);
+                e = toElem(ne.lowering, irs);
+            }
             e = el_combine(ezprefix, e);
         }
         else if (auto tp = t.isTypePointer())

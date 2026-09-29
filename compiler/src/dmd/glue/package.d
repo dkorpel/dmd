@@ -1479,7 +1479,10 @@ public bool wasmCtfeGenerate(FuncDeclaration root, ref OutBuffer objbuf, out con
             if (vd._init)
             {
                 auto ai = vd._init.isArrayInitializer();
-                if ((ai && !ai.type) || vd._init.isStructInitializer())
+                auto ei = vd._init.isExpInitializer();
+                auto vi = vd._init.isVoidInitializer();
+                if ((ai && !ai.type) || vd._init.isStructInitializer()
+                    || (ei && ei.exp && !ei.exp.type) || (vi && !vi.type))
                 {
                     wasmCtfePoison("unresolved initializer");
                     continue;

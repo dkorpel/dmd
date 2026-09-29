@@ -18904,6 +18904,11 @@ private bool modifyFieldVar(Loc loc, Scope* sc, VarDeclaration var, Expression e
  */
 void semanticTypeInfo(Scope* sc, Type t)
 {
+    {
+        import dmd.wasmctfe : wasmCtfeBuildActiveNow;
+        if (wasmCtfeBuildActiveNow())
+            return;
+    }
     if (sc)
     {
         if (sc.intypeof)

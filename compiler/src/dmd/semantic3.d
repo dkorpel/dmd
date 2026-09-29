@@ -244,6 +244,12 @@ private extern(C++) final class Semantic3Visitor : Visitor
         timeTraceBeginEvent(TimeTraceEventType.sema3);
         scope (exit) timeTraceEndEvent(TimeTraceEventType.sema3, funcdecl);
 
+        import dmd.wasmctfe : wasmCtfeSuspendMinstNull, wasmCtfeResumeMinstNull;
+        const hostScope = sc && sc.minst && sc.minst.isRoot();
+        if (hostScope)
+            wasmCtfeSuspendMinstNull();
+        scope (exit) if (hostScope) wasmCtfeResumeMinstNull();
+
         VarDeclaration _arguments = null;
 
         if (!funcdecl.parent)

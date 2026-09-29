@@ -1168,6 +1168,17 @@ void templateInstanceSemantic(TemplateInstance tempinst, Scope* sc, ArgumentList
             }
 
             assert(tempinst.inst.memberOf && tempinst.inst.memberOf.isRoot(), "no codegen chances");
+            unparkWasmCtfe(tempinst.inst);
+        }
+        else if (!global.params.allInst && !tempinst.minst && !tempinst.inst.minst &&
+                 tempinst.inst.memberOf && !tempinst.inst.memberOf.isRoot())
+        {
+            import dmd.wasmctfe : wasmCtfeBuildActiveNow;
+            if (!wasmCtfeBuildActiveNow() && tempinst.inst.tempdecl)
+            {
+                tempinst.inst.appendToModuleMember();
+                unparkWasmCtfe(tempinst.inst);
+            }
         }
 
         // modules imported by an existing instance should be added to the module
@@ -1767,6 +1778,44 @@ private struct MATCHpair
     }
 }
 
+private __gshared TemplateInstance[] wasmCtfeParked;
+
+private void unparkWasmCtfe(TemplateInstance ti)
+{
+    import dmd.wasmctfe : wasmCtfeBuildActiveNow;
+    if (!wasmCtfeParked.length || wasmCtfeBuildActiveNow())
+        return;
+    bool[void*] live;
+    live[cast(void*) ti] = true;
+    bool changed = true;
+    while (changed)
+    {
+        changed = false;
+        foreach (ref p; wasmCtfeParked)
+        {
+            if (!p)
+                continue;
+            for (auto t = p.tinst; t; t = t.tinst)
+            {
+                if (cast(void*) t in live || (t.inst && cast(void*) t.inst in live))
+                {
+                    live[cast(void*) p] = true;
+                    if (!p.minst && p.memberOf && !p.memberOf.isRoot())
+                        p.appendToModuleMember();
+                    p = null;
+                    changed = true;
+                    break;
+                }
+            }
+        }
+    }
+    size_t j;
+    foreach (p; wasmCtfeParked)
+        if (p)
+            wasmCtfeParked[j++] = p;
+    wasmCtfeParked.length = j;
+}
+
 /*****************************************
  * Append `ti` to the specific module `ti.members[]`
  */
@@ -1812,6 +1861,8 @@ private Dsymbols* appendToModuleMember(TemplateInstance ti)
                 mi = mi.importedFrom;
                 assert(mi.isRoot());
             }
+            else if (keepNonRoot && mi.importedFrom)
+                wasmCtfeParked ~= ti;
             else
             {
                 // This can happen when using the frontend as a library.

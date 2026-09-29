@@ -156,6 +156,10 @@ package(dmd.glue)
 void TypeInfo_toObjFile(Expression e, Loc loc, Type t)
 {
     // printf("TypeInfo_toObjFIle() %s\n", torig.toChars());
+    import dmd.wasmctfe : wasmCtfeSuspendMinstNull, wasmCtfeResumeMinstNull;
+    wasmCtfeSuspendMinstNull();
+    scope (exit) wasmCtfeResumeMinstNull();
+
     genTypeInfo(e, loc, t, null);
 
     if (t.vtinfo.hadCodegen)

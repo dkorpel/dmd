@@ -312,6 +312,21 @@ variable whose ArrayInitializer has no type yet (or a StructInitializer).
 Natively the test errors out ("static variable `mh` cannot be read at
 compile time") before ever touching the initializer.
 
+The same family shows up with other initializer kinds. An ExpInitializer
+whose expression is still untyped trips `todt` `visitNull`'s
+`assert(e.type)`. A VoidInitializer with no type segfaults in `size()`.
+Both now poison the build as well. The legality scan's
+const/immutable-global and static-local acceptance also requires
+`_init.semanticDone`, so an unanalyzed initializer is rejected before
+the worklist ever sees it.
+
+### `?:` arms that don't produce the result type
+The backend's `OPcond` can have an arm that produces nothing, a void arm
+(`TYvoid`), or a scalar arm under a `v128` result. Coercing such arms
+asserted in `emitCoerce`/`wasmType`. Arms are now fitted: drop what
+was pushed, then pad with a zero of the result type (`v128.const 0`
+for vectors).
+
 ### Expr wrappers must not capture their enclosing frame
 `static assert`/`enum` expressions inside function or method bodies can
 reference nested functions or frame temps (the `$` of `(f())[0 .. $]`
@@ -541,7 +556,44 @@ fails. Conversely, unconditionally suspending the nulling leaks
 engine-only instances (whole `newaa` TypeInfo families) into the host
 object — `compilable/ti_emission.sh` checks exactly that. The rule:
 suspend the nulling only when the forced function's enclosing
-`TemplateInstance` has a non-null `minst`.
+`TemplateInstance` has a non-null `minst`, or, for a non-template
+function, when it lives in a root module.
+
+That rule is not enough on its own; compiling dmd's own unit-test
+runner under `DMD_CTFE=verify` found four more leak paths:
+
+- **Attribute inference through host code.** An engine-only function
+  calls a host-rooted template function whose attributes are still
+  being inferred, so `functionParameters` runs its `semantic3` during
+  the build, and its instantiations (`peekSlice!`) got nulled.
+  `Semantic3Visitor.visit(FuncDeclaration)` now suspends the nulling
+  whenever its scope's `minst` is a root module. The host would have
+  analyzed that body anyway.
+- **Suspension inherited across CTFE.** Host `semantic3` of a root
+  function can itself trigger CTFE, so the engine build would start
+  with the nulling already suspended. Every build entry saves the
+  suspend counter, zeroes it, and restores it afterwards.
+- **TypeInfo generation.** Engine `e2ir` `typeid` goes through
+  `TypeInfo_toObjFile` → struct `TypeInfo` `toDt` → `semantic` of
+  `__xopEquals` and friends, which instantiates `__equals!`,
+  `_d_aaEqual!`, and `RTInfoImpl!` for *host* structs.
+  `TypeInfo_toObjFile` suspends the nulling. Conversely,
+  `semanticTypeInfo` is a no-op during a build. Otherwise an engine-only
+  `in` expression queues a `TypeInfoAssociativeArrayDeclaration` into
+  host `deferred3`, and that declaration's `semantic3` forces its
+  `Entry!` instance into the root module
+  (`tmpl.minst = importedFrom`).
+- **Parked instances.** `appendToModuleMember` keeps build-created
+  speculative instances in their non-root module ("parked"), so
+  engine-only instances never reach root codegen or `-vcg-ast` output.
+  In stock dmd a speculative instance lands in root members, and
+  `needsCodegen` later resolves it through `tinst`/`tnext`. When the
+  host reuses a parked instance speculatively, or promotes it to root,
+  the instance is re-appended to root members. Parked instances whose
+  `tinst` chain reaches it are re-appended transitively; without that,
+  `dstrcmp!` inside an engine-analyzed `__cmp!char` stays undefined.
+  Host reuse from a *non-root* scope does not unpark, because stock
+  dmd would keep that instance non-root too.
 
 ### `NoBackend` builds
 

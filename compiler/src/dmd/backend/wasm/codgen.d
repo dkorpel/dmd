@@ -2159,6 +2159,18 @@ bool genElem(ref WasmCG cg, elem* e)
         //       Bar[string] bars;
         //       bars["test"] = Bar(42);
         //   }
+        void padZero()
+        {
+            if (e.wasmType == WASM_TYPE.V128)
+            {
+                ubyte[16] zero;
+                cg.emit(OP.FD_PREFIX, Uleb(WASM_SIMD.V128_CONST), zero);
+                return;
+            }
+            cg.emit(OP.I32_CONST, Sleb(0));
+            cg.emitCoerce(WASM_I32, e.wasmType);
+        }
+
         void fitArm(bool pushed, elem* arm)
         {
             if (voidCond)
@@ -2169,11 +2181,23 @@ bool genElem(ref WasmCG cg, elem* e)
             }
             if (!pushed)
             {
-                cg.emit(OP.I32_CONST, Sleb(0));
-                cg.emitCoerce(WASM_I32, e.wasmType);
+                padZero();
                 return;
             }
-            cg.emitCoerce(wasmType(arm.Ety), e.wasmType);
+            if (tybasic(arm.Ety) == TYvoid)
+            {
+                cg.emit(OP.DROP);
+                padZero();
+                return;
+            }
+            const ft = wasmType(arm.Ety);
+            if ((ft == WASM_TYPE.V128) != (e.wasmType == WASM_TYPE.V128))
+            {
+                cg.emit(OP.DROP);
+                padZero();
+                return;
+            }
+            cg.emitCoerce(ft, e.wasmType);
         }
 
         fitArm(cg.genElem(e.E2.E1), e.E2.E1);
