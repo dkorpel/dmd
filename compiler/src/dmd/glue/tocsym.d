@@ -126,14 +126,13 @@ public __gshared FuncDeclaration[const(char)[]] wasmCtfeNoBodyFuncs;
 public __gshared Expression[][] wasmCtfeSiteArgCalls;
 public __gshared Array!Expression wasmCtfeArgCallStack;
 
-private __gshared Array!ClassDeclaration wasmCtfeClasses;
 public __gshared ClassDeclaration[const(char)[]] wasmCtfeVtblClasses;
 
 package(dmd.glue)
 void wasmCtfeRecordClass(ClassDeclaration cd)
 {
     import dmd.common.outbuffer : OutBuffer;
-    if (!wasmCtfeBuildActive || cd is null)
+    if (!wasmCtfeBuildActive)
         return;
     OutBuffer vb;
     vb.writestring("_D");
@@ -142,13 +141,12 @@ void wasmCtfeRecordClass(ClassDeclaration cd)
     if (vb[] in wasmCtfeVtblClasses)
         return;
     wasmCtfeVtblClasses[cast(const(char)[]) vb.extractSlice()] = cd;
-    wasmCtfeClasses.push(cd);
 }
 
 public ClassDeclaration wasmCtfeFindClass(const(char)[] name)
 {
     import core.stdc.string : strlen;
-    foreach (cd; wasmCtfeClasses[])
+    foreach (cd; wasmCtfeVtblClasses.byValue)
     {
         const p = cd.toPrettyChars(true, true);
         if (name == p[0 .. strlen(p)])
@@ -159,7 +157,7 @@ public ClassDeclaration wasmCtfeFindClass(const(char)[] name)
 
 public bool wasmCtfeHasSubclass(ClassDeclaration cd)
 {
-    foreach (c; wasmCtfeClasses[])
+    foreach (c; wasmCtfeVtblClasses.byValue)
         if (c !is cd && cd.isBaseOf(c, null))
             return true;
     return false;
@@ -785,10 +783,11 @@ Symbol* toSymbol(Dsymbol s)
             const(char)* id = mangleExact(fd);
             {
                 import dmd.wasmctfe : wasmCtfeHostBuiltin, wasmCtfeBuiltinFds;
+                import dmd.root.string : toDString;
                 if (wasmCtfeBuildActive && wasmCtfeHostBuiltin(fd))
                 {
-                    auto nm = "__wasmctfe_bi_" ~ id[0 .. strlen(id)] ~ "\0";
-                    wasmCtfeBuiltinFds[cast(string) nm[0 .. $ - 1]] = fd;
+                    auto nm = "__wasmctfe_bi_" ~ id.toDString ~ "\0";
+                    wasmCtfeBuiltinFds[cast(const(char)[]) nm[0 .. $ - 1]] = fd;
                     id = nm.ptr;
                 }
             }

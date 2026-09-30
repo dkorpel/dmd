@@ -688,10 +688,9 @@ private bool ipHasCall(Expression e)
     return walkPostorder(e, v);
 }
 
-import dmd.aggregate : AggregateDeclaration;
+import dmd.aggregate : AggregateDeclaration, ClassKind;
 import dmd.dclass : ClassDeclaration, InterfaceDeclaration;
 import dmd.dtemplate : TemplateDeclaration, TemplateInstance;
-import dmd.aggregate : ClassKind;
 import dmd.dmsc : wasmCtfeSoftRealTarget;
 import dmd.glue.e2ir : wasmCtfeDollarInit;
 
@@ -1004,8 +1003,7 @@ private bool ipExprSupported(Expression e, out const(char)* why, VarDeclarations
             {
                 auto ct = tb.isTypeClass().sym;
                 auto cf = fb.isTypeClass().sym;
-                if (ct.classKind == ClassKind.cpp && cf.classKind == ClassKind.cpp
-                    && !ct.isInterfaceDeclaration() && !cf.isInterfaceDeclaration())
+                if (wasmCtfeCppDowncast(cf, ct))
                     return;
                 if (!ct.isBaseOf(cf, null))
                     fail("class or array cast");
@@ -1897,6 +1895,16 @@ bool insideTemplateInstance(Dsymbol s)
 __gshared byte[void*] legalityVerdicts;
 __gshared bool[void*] forcedSem3Errors;
 
+public bool ipForceSemantic3Gagged(scope FuncDeclaration[] fds)
+{
+    const oldGag = global.startGagging();
+    wasmCtfePreSemEnter();
+    foreach (fd; fds)
+        ipForceSemantic3(fd);
+    wasmCtfePreSemLeave();
+    return global.endGagging(oldGag);
+}
+
 public void ipForceSemantic3(FuncDeclaration fd)
 {
     if (fd.semanticRun >= PASS.semantic3done)
@@ -1959,7 +1967,7 @@ int scanLegalityImpl(FuncDeclaration fd, ref bool[void*] inProgress)
     }
     if (!fd.fbody || fd.errors)
     {
-        const ok = isBuiltin(fd) != BUILTIN.unimp || (!fd.fbody && !fd.errors);
+        const ok = !fd.errors;
         legalityVerdicts[cast(void*) fd] = ok ? 1 : 0;
         return ok ? 1 : 0;
     }
@@ -2070,6 +2078,16 @@ private bool ipTrustedName(const(char)[] name)
     return false;
 }
 
+private bool ipStaticVar(VarDeclaration v)
+{
+    return v.isDataseg() && !(v.storage_class & (STC.manifest | STC.temp));
+}
+
+private bool ipMutableStatic(VarDeclaration v)
+{
+    return v.type && !v.type.isImmutable() && !v.type.isConst() && !ipZeroSizeArray(v.type);
+}
+
 extern (C++) final class LegalityScanner : SemanticTimeTransitiveVisitor
 {
     alias visit = SemanticTimeTransitiveVisitor.visit;
@@ -2124,10 +2142,10 @@ extern (C++) final class LegalityScanner : SemanticTimeTransitiveVisitor
                 ie.accept(this);
                 return;
             }
-            if (v.isDataseg() && !(v.storage_class & STC.manifest) && !(v.storage_class & STC.temp))
+            if (ipStaticVar(v))
             {
                 ipInitConstInitializer(v);
-                if (v.type && !v.type.isImmutable() && !v.type.isConst() && !ipZeroSizeArray(v.type))
+                if (ipMutableStatic(v))
                 {
                     if (!ipNotePoisonGlobal(v))
                         reject("mutable global");
@@ -2173,12 +2191,10 @@ extern (C++) final class LegalityScanner : SemanticTimeTransitiveVisitor
 
     override void visit(IfStatement s)
     {
-        int ctfeCond = s.isIfCtfeBlock() ? 1 : 0;
-        if (!ctfeCond)
-            ctfeCond = ipCtfeCond(s.condition);
-        if (!ctfeCond)
+        const c = ipCtfeCond(s.condition);
+        if (!c)
             return super.visit(s);
-        if (auto live = ctfeCond > 0 ? s.ifbody : s.elsebody)
+        if (auto live = c > 0 ? s.ifbody : s.elsebody)
             live.accept(this);
     }
 
@@ -2203,9 +2219,9 @@ extern (C++) final class LegalityScanner : SemanticTimeTransitiveVisitor
             reject("unresolved declaration");
             return;
         }
-        if (v.isDataseg() && !(v.storage_class & STC.manifest) && !(v.storage_class & STC.temp))
+        if (ipStaticVar(v))
         {
-            if (v.type && !v.type.isImmutable() && !v.type.isConst() && !ipZeroSizeArray(v.type))
+            if (ipMutableStatic(v))
             {
                 if (!ipNotePoisonGlobal(v))
                     reject("static local");
@@ -2223,7 +2239,7 @@ extern (C++) final class LegalityScanner : SemanticTimeTransitiveVisitor
     override void visit(SymOffExp e)
     {
         if (auto v = e.var ? e.var.isVarDeclaration() : null)
-            if (v.isDataseg() && !(v.storage_class & STC.manifest) && !(v.storage_class & STC.temp))
+            if (ipStaticVar(v))
             {
                 if (v.type && !v.type.isImmutable() && !v.type.isConst() && !ipNotePoisonGlobal(v))
                     reject("address of global");
@@ -2310,8 +2326,7 @@ private struct HostImport
     char[128] name;
     size_t nameLen;
     int softOp = -1;
-    FuncDeclaration builtinFd;
-    FuncDeclaration lazyFd;
+    FuncDeclaration fd;
     CAlloc cAlloc;
     const(char)* stubWhy;
     bool noBody;
@@ -2332,7 +2347,7 @@ private extern (C) wasm_trap_t* ipHostErrorFunc(void* env, wasmtime_caller_t* ca
 {
     auto hi = cast(HostImport*) env;
     ipErrKind = IpErrKind.errorFunc;
-    ipErrFunc = hi.lazyFd;
+    ipErrFunc = hi.fd;
     ipErrNoBody = hi.noBody;
     return ipTrap(hi.noBody ? "$nobody$callee has no body" : "$sem3$callee has semantic errors");
 }
@@ -2343,16 +2358,21 @@ private extern (C) wasm_trap_t* ipHostLazy(void* env, wasmtime_caller_t* caller,
     const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
 {
     auto hi = cast(HostImport*) env;
-    ipLazyHit = hi.lazyFd;
+    ipLazyHit = hi.fd;
     return ipTrap("wasm-ctfe: virtual function needs semantic");
 }
 
-public __gshared FuncDeclaration[string] wasmCtfeBuiltinFds;
+public __gshared FuncDeclaration[const(char)[]] wasmCtfeBuiltinFds;
+
+public bool wasmCtfeCppDowncast(ClassDeclaration from, ClassDeclaration to)
+{
+    return from.classKind == ClassKind.cpp && to.classKind == ClassKind.cpp
+        && !from.isInterfaceDeclaration() && !to.isInterfaceDeclaration();
+}
 
 public bool wasmCtfeHostBuiltin(FuncDeclaration fd)
 {
-    const b = isBuiltin(fd);
-    return b != BUILTIN.unimp && b != BUILTIN.unknown;
+    return isBuiltin(fd) != BUILTIN.unimp;
 }
 
 private extern (C) wasm_trap_t* ipHostAppend(void* env, wasmtime_caller_t* caller,
@@ -2452,7 +2472,7 @@ private wasm_trap_t* ipHostBuiltinImpl(HostImport* hi, const(wasmtime_val_t)* ar
     wasmtime_val_t* results, size_t nresults)
 {
     import dmd.builtin : eval_builtin;
-    auto fd = hi.builtinFd;
+    auto fd = hi.fd;
     auto tf = fd.type.isTypeFunction();
     const n = tf.parameterList.length;
     if (n != nargs)
@@ -3643,9 +3663,9 @@ private wasm_trap_t* ipHostCppCastImpl(wasmtime_caller_t* caller, const(wasmtime
     ulong r = 0;
     if (o)
     {
-        if (o + ipPS > mem.length)
+        ulong vtbl;
+        if (!ipRdP(mem, o, vtbl))
             return ipTrap("wasm-ctfe: cast out of bounds");
-        const vtbl = ipLdP(mem.ptr + o);
         auto dyn = vtbl in ipVtbls;
         auto to = ipValP(args[1]) in ipVtbls;
         if (!dyn || !to)
@@ -4207,15 +4227,15 @@ private IpModule* ipGetModule(FuncDeclaration fd)
     }
     {
         import dmd.glue.tocsym : wasmCtfeVtblClasses;
-        import dmd.backend.wasm.selflink : wasmSelfLinkVtblAddrs;
-        foreach (name, addr; wasmSelfLinkVtblAddrs)
-            if (auto cd = name in wasmCtfeVtblClasses)
-                im.vtbls[addr] = *cd;
+        import dmd.backend.wasm.selflink : wasmSelfLinkDataExtents;
+        im.dataExtents = wasmSelfLinkDataExtents;
+        foreach (ref x; im.dataExtents)
+            if (auto cd = x.name in wasmCtfeVtblClasses)
+                im.vtbls[x.start] = *cd;
     }
     {
         import dmd.glue : wasmCtfeBuiltFuncs;
-        import dmd.backend.wasm.selflink : wasmSelfLinkDataExtents, wasmSelfLinkTableNames;
-        im.dataExtents = wasmSelfLinkDataExtents;
+        import dmd.backend.wasm.selflink : wasmSelfLinkTableNames;
         FuncDeclaration[const(char)[]] byName;
         foreach (bf; wasmCtfeBuiltFuncs)
         {
@@ -4693,7 +4713,7 @@ private Expression ipReportTrap(const(wasm_trap_t)* trap, const(wasmtime_error_t
 
 Expression tryWasmCtfeInproc(FuncDeclaration fd, Expression thisExp, Expression[] args, Type resultType, Loc loc)
 {
-    foreach (attempt; 0 .. 32)
+    foreach (_; 0 .. 32)
     {
         ipLazyHit = null;
         ipReplayPending = 0;
@@ -4711,12 +4731,7 @@ Expression tryWasmCtfeInproc(FuncDeclaration fd, Expression thisExp, Expression[
         ipLazyHit = null;
         if (!lf || lf.semanticRun >= PASS.semantic3done)
             return r;
-        const oldGag = global.startGagging();
-        wasmCtfePreSemEnter();
-        ipForceSemantic3(lf);
-        wasmCtfePreSemLeave();
-        const failed = global.endGagging(oldGag) || lf.semanticRun < PASS.semantic3done || lf.errors;
-        if (failed)
+        if (ipForceSemantic3Gagged((&lf)[0 .. 1]) || lf.semanticRun < PASS.semantic3done || lf.errors)
             return r;
         ipModuleCache.remove(cast(void*) fd);
         ipModuleFailed.remove(cast(void*) fd);
@@ -4748,9 +4763,8 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
             if (wasmCtfeMode() == WasmCtfeMode.verify)
                 return CTFEExp.voidexp;
         }
-        auto exps = new Expressions(args.length);
-        foreach (i, a; args)
-            (*exps)[i] = a;
+        auto exps = new Expressions();
+        exps.pushSlice(args);
         if (auto r = eval_builtin(loc, fd, exps))
             return r;
     }
@@ -4928,7 +4942,7 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
             else
                 wasm_valtype_vec_new_empty(&rvec);
             auto ft = wasm_functype_new(&pvec, &rvec);
-            import dmd.glue.tocsym : wasmCtfeLazyFuncs, wasmCtfeStubFuncs, wasmCtfeErrorFuncs;
+            import dmd.glue.tocsym : wasmCtfeLazyFuncs, wasmCtfeStubFuncs, wasmCtfeErrorFuncs, wasmCtfeNoBodyFuncs;
             wasmtime_func_callback_t cb = &ipHostStub;
             const nm = name.data[0 .. name.size];
             if (nm == "gc_malloc" || nm == "_d_allocmemory" || nm == "gc_mallocTrace" || nm == "gc_calloc" || nm == "gc_callocTrace")
@@ -5008,13 +5022,10 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
                 cb = &ipHostInvariant;
                 ipComputeTIOffsets();
             }
-            else if (nm.length > 14 && nm[0 .. 14] == "__wasmctfe_bi_")
+            else if (auto bp = nm in wasmCtfeBuiltinFds)
             {
-                if (auto bp = (cast(string) nm) in wasmCtfeBuiltinFds)
-                {
-                    hi.builtinFd = *bp;
-                    cb = isBuiltin(*bp) == BUILTIN.ctfeWrite ? &ipHostCtfeWrite : &ipHostBuiltin;
-                }
+                hi.fd = *bp;
+                cb = isBuiltin(*bp) == BUILTIN.ctfeWrite ? &ipHostCtfeWrite : &ipHostBuiltin;
             }
             else if (nm.length > 16 && nm[0 .. 16] == "__wasmctfe_real_")
             {
@@ -5033,12 +5044,12 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
             }
             else if (auto ep = nm in wasmCtfeErrorFuncs)
             {
-                hi.lazyFd = *ep;
+                hi.fd = *ep;
                 cb = &ipHostErrorFunc;
             }
             else if (auto lp = nm in wasmCtfeLazyFuncs)
             {
-                hi.lazyFd = *lp;
+                hi.fd = *lp;
                 cb = &ipHostLazy;
             }
             else if (nm == "__wasmctfe_cppcast")
@@ -5048,15 +5059,11 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
                 cb = &ipHostEhMatch;
                 ipComputeTIOffsets();
             }
-            else if (cb is &ipHostStub)
+            else if (auto np = nm in wasmCtfeNoBodyFuncs)
             {
-                import dmd.glue.tocsym : wasmCtfeNoBodyFuncs;
-                if (auto np = nm in wasmCtfeNoBodyFuncs)
-                {
-                    hi.lazyFd = *np;
-                    hi.noBody = true;
-                    cb = &ipHostErrorFunc;
-                }
+                hi.fd = *np;
+                hi.noBody = true;
+                cb = &ipHostErrorFunc;
             }
             auto err = wasmtime_linker_define_func(linker,
                 modName.data, modName.size, name.data, name.size,
@@ -5482,7 +5489,7 @@ private Expression ipDecodeClassRef(const(ubyte)[] mem, ulong objAddr, Type type
         }
         cd = wasmCtfeFindClass(cast(const(char)[]) mem[cast(size_t) nptr .. cast(size_t)(nptr + nlen)]);
     }
-    else if (!cpp || !wasmCtfeHasSubclass(tc.sym))
+    else if (!wasmCtfeHasSubclass(tc.sym))
         cd = tc.sym;
     if (!cd)
     {
@@ -6220,8 +6227,7 @@ private Expression ipDecodeScalar(ref wasmtime_val_t val, Type type, Loc loc)
 private Expressions* ipNewExps(size_t n)
 {
     auto a = new Expressions(n);
-    foreach (ref x; *a)
-        x = null;
+    a.zero();
     return a;
 }
 }

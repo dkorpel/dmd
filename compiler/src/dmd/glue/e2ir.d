@@ -5493,11 +5493,10 @@ public elem* toElemCast(CastExp ce, elem* e, bool isLvalue, ref IRState irs)
         }
         else if (cdfrom.classKind == cdto.classKind)
         {
-            if (wasmCtfeBuildActive && cdfrom.classKind == ClassKind.cpp
-                && !cdfrom.isInterfaceDeclaration() && !cdto.isInterfaceDeclaration())
+            import dmd.wasmctfe : wasmCtfeCppDowncast;
+            if (wasmCtfeBuildActive && wasmCtfeCppDowncast(cdfrom, cdto))
             {
-                import dmd.backend.wasm.softreal : cppCastSym;
-                e = el_bin(OPcall, TYnptr, el_var(cppCastSym()), el_param(el_ptr(toVtblSymbol(cdto)), e));
+                e = el_bin(OPcall, TYnptr, el_var(getRtlsym(RTLSYM.WASMCTFECPPCAST)), el_param(el_ptr(toVtblSymbol(cdto)), e));
             }
             /* Casting from a non-D linkage class/interface to a unrelated class/interface
              * is always a 'paint' operation (for dmd, other backends might use RTTI
@@ -6204,10 +6203,6 @@ public elem* toElemCast(CastExp ce, elem* e, bool isLvalue, ref IRState irs)
     }
 }
 
-/************************************
- * Call a function.
- */
-
 private ClassDeclaration scopeNewClass(Expression e)
 {
     auto ve = e.isVarExp();
@@ -6228,6 +6223,10 @@ private ClassDeclaration scopeNewClass(Expression e)
     auto cd = ne.newtype.toBasetype().isClassHandle();
     return cd && !cd.isInterfaceDeclaration() ? cd : null;
 }
+
+/************************************
+ * Call a function.
+ */
 
 elem* callfunc(Loc loc,
         ref IRState irs,

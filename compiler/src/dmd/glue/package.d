@@ -1471,7 +1471,7 @@ private void wasmCtfeStubFunc(FuncDeclaration fd, const(char)* why)
 
 public bool wasmCtfeGenerate(FuncDeclaration root, ref OutBuffer objbuf, out const(char)[][] unresolved)
 {
-    import dmd.wasmctfe : ipForceSemantic3, wasmCtfePreSemEnter, wasmCtfePreSemLeave;
+    import dmd.wasmctfe : ipForceSemantic3Gagged;
 
     if (wasmCtfeBuildActive)
         return false;
@@ -1499,15 +1499,9 @@ public bool wasmCtfeGenerate(FuncDeclaration root, ref OutBuffer objbuf, out con
             return ok;
         }
         auto stubs = wasmCtfeStubFuncs;
-        const oldGag = global.startGagging();
-        wasmCtfePreSemEnter();
         foreach (fd; need)
-        {
             wasmCtfeSem3Tried[cast(void*) fd] = true;
-            ipForceSemantic3(fd);
-        }
-        wasmCtfePreSemLeave();
-        if (global.endGagging(oldGag))
+        if (ipForceSemantic3Gagged(need))
             preSemErrors = true;
         wasmCtfeStubFuncs = stubs;
     }
@@ -1591,7 +1585,7 @@ private bool wasmCtfeGenerateOnce(FuncDeclaration root, ref OutBuffer objbuf, ou
     wasmSelfLinkUnresolved = null;
     wasmCtfeBuildActive = true;
     const oldCheckAction = global.params.checkAction;
-    if (oldCheckAction == CHECKACTION.C || oldCheckAction == CHECKACTION.halt)
+    if (oldCheckAction != CHECKACTION.context)
         global.params.checkAction = CHECKACTION.D;
     const oldBounds = global.params.useArrayBounds;
     const oldAssert = global.params.useAssert;
@@ -1603,6 +1597,7 @@ private bool wasmCtfeGenerateOnce(FuncDeclaration root, ref OutBuffer objbuf, ou
     wasmCtfeBuiltFuncs = null;
 
     const showGag = getenv("DMD_CTFE_SHOWGAG") !is null;
+    const trace = getenv("DMD_CTFE_TRACEGEN") !is null;
     const oldGag = showGag ? global.gag : global.startGagging();
     obj_start(objbuf, "__wasmctfe.d");
     const id = mangleExact(root);
@@ -1616,7 +1611,7 @@ private bool wasmCtfeGenerateOnce(FuncDeclaration root, ref OutBuffer objbuf, ou
             {
                 if (ad.semanticRun < PASS.semanticdone && (fd.needThis() || fd.isVirtual()))
                 {
-                    if (getenv("DMD_CTFE_TRACEGEN"))
+                    if (trace)
                         fprintf(stderr, "wasm-ctfe skip member of unfinished agg: %s\n", fd.toPrettyChars());
                     continue;
                 }
@@ -1628,7 +1623,7 @@ private bool wasmCtfeGenerateOnce(FuncDeclaration root, ref OutBuffer objbuf, ou
             }
             if (fd.semanticRun < PASS.semantic3done)
             {
-                if (getenv("DMD_CTFE_TRACEGEN"))
+                if (trace)
                     fprintf(stderr, "wasm-ctfe skip func not sem3: %s (run=%d body=%d)\n",
                         fd.toPrettyChars(), cast(int) fd.semanticRun, fd.fbody !is null);
                 continue;
@@ -1649,7 +1644,7 @@ private bool wasmCtfeGenerateOnce(FuncDeclaration root, ref OutBuffer objbuf, ou
             }
             if (!wasmCtfeAggReady(ad))
             {
-                if (getenv("DMD_CTFE_TRACEGEN"))
+                if (trace)
                     fprintf(stderr, "wasm-ctfe skip agg not ready: %s\n", ad.toPrettyChars());
                 continue;
             }
@@ -1680,7 +1675,7 @@ private bool wasmCtfeGenerateOnce(FuncDeclaration root, ref OutBuffer objbuf, ou
                 }
             }
         }
-        if (getenv("DMD_CTFE_TRACEGEN"))
+        if (trace)
         {
             auto gfd = d.isFuncDeclaration();
             fprintf(stderr, "wasm-ctfe gen: %s %s\n", d.toPrettyChars(), gfd ? mangleExact(gfd) : "".ptr);
@@ -1692,7 +1687,7 @@ private bool wasmCtfeGenerateOnce(FuncDeclaration root, ref OutBuffer objbuf, ou
         if (auto sfd = d.isFuncDeclaration())
             if (sfd !is root && (newPoison || global.errors != errsBefore))
                 wasmCtfeStubFunc(sfd, newPoison ? newPoison : "gagged errors");
-        if (getenv("DMD_CTFE_TRACEGEN") && global.errors != errsBefore)
+        if (trace && global.errors != errsBefore)
             fprintf(stderr, "wasm-ctfe gen: %s raised %u errors\n",
                 d.toPrettyChars(), global.errors - errsBefore);
     }

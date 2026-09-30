@@ -66,26 +66,10 @@ immutable string[SR.max + 1] softRealNames = [
 ];
 
 private __gshared Symbol*[SR.max + 1] softRealSyms;
-private __gshared Symbol* cppCastSymbol;
 
 void softRealReset()
 {
     softRealSyms[] = null;
-    cppCastSymbol = null;
-}
-
-Symbol* cppCastSym()
-{
-    if (cppCastSymbol)
-        return cppCastSymbol;
-    type* tp = type_allocn(TYnptr, tstypes[TYvoid]);
-    Symbol* s = symbol_calloc("__wasmctfe_cppcast");
-    s.Stype = type_function(TYnfunc, [tp, tp], false, tp);
-    s.Ssymnum = SYMIDX.max;
-    s.Sclass = SC.extern_;
-    s.Sfl = FL.func;
-    cppCastSymbol = s;
-    return s;
 }
 
 bool isSoftRealTy(tym_t ty)
