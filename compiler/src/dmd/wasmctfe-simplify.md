@@ -521,7 +521,7 @@ after the call and no longer pile up in the cached module.
 - **"Memory or trap" prologue of the host hooks.** See the batch above; the
   hooks that only format a message now share `ipCallerMem` and `ipTrapf`.
 
-## ef17b5f61f, a68516fa69, 4cb4ea763d, 12d7c683ba, 7d8d2e855d (fixes in the commit that adds this section)
+## ef17b5f61f, a68516fa69, 4cb4ea763d, 12d7c683ba, 7d8d2e855d (fixes in ecdc3fc9a5)
 
 Three fixes repair leftovers of the self-link port (4cb4ea763d). The
 merge-conflict marker in a doc comment of `link.d` is gone, together with the
