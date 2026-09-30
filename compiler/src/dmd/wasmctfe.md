@@ -116,6 +116,19 @@ is off (see "No fuel"). ctRegex builds 39 modules, the `format` workload 20
 and importing Phobos 23 (it was 700 before constant globals were folded on
 the host).
 
+The buildkite project tester (`tmp/bkci/ctfecmp.sh`, 65 projects, both
+modes built from the same commit and run side by side) was last run on
+2026-10-01 at `d4d6975e76`. Six projects fail in both modes for
+environment reasons (missing libraries, D-Scanner's timeout). Of the
+rest, 57 pass in both modes and two fail only with the engine, from the
+floating point difference described in "`float` and `double` round in the
+engine" (ggplotd, serialized). Summed over the projects that pass, dmd
+takes 1235 s with the AST interpreter and 1313 s with the engine (1.06
+times). CTFE-heavy projects are faster with the engine: mir 0.63, sdc
+0.64, mir-optim 0.66, Higgs 0.69 and lubeck 0.69 times the AST time. The
+slowest ratio is dagon at 1.44. The timings are noisy, because both modes
+run at the same time.
+
 Profiling tips: `-ftime-trace -ftime-trace-granularity=0` shows each CTFE
 call. `perf` sees only on-CPU time, and Cranelift runs on worker threads, so
 time the phases with a clock instead.
@@ -1817,4 +1830,9 @@ The AST interpreter computes `float` and `double` expressions in `real`
 without rounding intermediate results, so `f(1) == 1.0 / 3` can hold for
 a `float` function `f`. The engine computes in IEEE `float` and `double`,
 like the program would at run time. This makes ggplotd's test fail in
-engine mode. The difference is intentional and won't be fixed.
+engine mode. serialized fails the same way: its JSON lexer builds a table
+of powers of ten with `m *= 0.1` at compile time. The AST interpreter
+computes the entries in `real` and rounds each once when the table is
+emitted, the engine rounds after every multiplication, and a test expects
+the round trip that the more precise table gives. The difference is intentional and won't
+be fixed.
