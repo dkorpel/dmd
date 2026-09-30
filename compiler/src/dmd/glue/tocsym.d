@@ -127,15 +127,21 @@ public __gshared Expression[][] wasmCtfeSiteArgCalls;
 public __gshared Array!Expression wasmCtfeArgCallStack;
 
 private __gshared Array!ClassDeclaration wasmCtfeClasses;
+public __gshared ClassDeclaration[const(char)[]] wasmCtfeVtblClasses;
 
 package(dmd.glue)
 void wasmCtfeRecordClass(ClassDeclaration cd)
 {
+    import dmd.common.outbuffer : OutBuffer;
     if (!wasmCtfeBuildActive || cd is null)
         return;
-    foreach (c; wasmCtfeClasses[])
-        if (c is cd)
-            return;
+    OutBuffer vb;
+    vb.writestring("_D");
+    mangleToBuffer(cd, vb);
+    vb.writestring("6__vtblZ");
+    if (vb[] in wasmCtfeVtblClasses)
+        return;
+    wasmCtfeVtblClasses[cast(const(char)[]) vb.extractSlice()] = cd;
     wasmCtfeClasses.push(cd);
 }
 
@@ -144,22 +150,11 @@ public ClassDeclaration wasmCtfeFindClass(const(char)[] name)
     import core.stdc.string : strlen;
     foreach (cd; wasmCtfeClasses[])
     {
-        const p = cd.toPrettyChars();
-        if (name == p[0 .. strlen(p)])
-            return cd;
-    }
-    foreach (cd; wasmCtfeClasses[])
-    {
-        const p = cd.toPrettyChars(true);
+        const p = cd.toPrettyChars(true, true);
         if (name == p[0 .. strlen(p)])
             return cd;
     }
     return null;
-}
-
-public ClassDeclaration[] wasmCtfeClassList()
-{
-    return wasmCtfeClasses[];
 }
 
 public bool wasmCtfeHasSubclass(ClassDeclaration cd)

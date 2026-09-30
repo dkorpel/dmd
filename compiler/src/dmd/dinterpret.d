@@ -119,7 +119,7 @@ public Expression ctfeInterpret(Expression e)
         }
         else
             wasmResult = tryWasmCtfe(e);
-        if ((wmode == WasmCtfeMode.inproc || wstrict) && wasmResult !is null)
+        if (wmode != WasmCtfeMode.verify && wasmResult !is null)
             return scrubReturnValue(e.loc, wasmResult);
         if (wstrict)
         {
