@@ -2537,10 +2537,7 @@ bool genElem(ref WasmCG cg, elem* e)
     case OPf16p_np:
     case OPoffset:
         if (wasmCGCtfeBuild)
-        {
-            cg.emit(OP.UNREACHABLE);
-            return true;
-        }
+            goto default;
         printf("wasm codegen non-goal Eoper: %s\n", oper_str(e.Eoper));
         elem_print(e);
         assert(0);

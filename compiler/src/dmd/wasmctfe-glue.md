@@ -61,12 +61,12 @@ clears it.
 
 ## 4. The host target leaks into the build
 
-The engine builds for wasm64, but `target.*` still describes the host.
+The engine builds for wasm, but `target.*` still describes the host.
 
-- `-m32` hits an assert in the virtual call path of e2ir
-  (`tysize(TYnptr) == 4` when `target.isX86`). It is skipped during builds,
-  but the frontend's `size_t` is still 32-bit while the guest is 64-bit, so
-  `-m32` is not supported yet (`test9565`, `diag7420`).
+- The pointer size has to match, because the frontend's `size_t` follows the
+  host target. A 32-bit target therefore gets a wasm32 module (section 11),
+  which also satisfies the assert in the virtual call path of e2ir
+  (`tysize(TYnptr) == 4` when `target.isX86`).
 - Any OS or target predicate consulted during a build, such as `retStyle`,
   answers for the host.
 

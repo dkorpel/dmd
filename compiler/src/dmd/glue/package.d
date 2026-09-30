@@ -574,7 +574,7 @@ void FuncDeclaration_toObjFile(FuncDeclaration fd, bool multiobj)
     wasmCtfeRecordObjPass(fd, fd.semanticRun);
     fd.semanticRun = PASS.obj;
 
-    if (global.params.v.verbose && !wasmCtfeBuildActive)
+    if (global.params.v.verbose)
     {
         auto eSink = global.errorSink;
         eSink.message(Loc.init, "function  %s", fd.toPrettyChars());
@@ -1423,11 +1423,6 @@ private bool wasmCtfeAggReady(AggregateDeclaration ad)
     return true;
 }
 
-public bool wasmCtfeBuildInProgress()
-{
-    return wasmCtfeBuildActive;
-}
-
 public const(char)* wasmCtfeLastPoison()
 {
     return wasmCtfePoisoned;
@@ -1563,6 +1558,8 @@ private bool wasmCtfeGenerateOnce(FuncDeclaration root, ref OutBuffer objbuf, ou
     const oldBounds = global.params.useArrayBounds;
     const oldAssert = global.params.useAssert;
     const oldNullCheck = global.params.useNullCheck;
+    const oldVerbose = global.params.v.verbose;
+    global.params.v.verbose = false;
     global.params.useNullCheck = CHECKENABLE.on;
     global.params.useArrayBounds = CHECKENABLE.on;
     global.params.useAssert = CHECKENABLE.on;
@@ -1589,14 +1586,11 @@ private bool wasmCtfeGenerateOnce(FuncDeclaration root, ref OutBuffer objbuf, ou
                     continue;
                 }
             }
-            if (fd.semanticRun < PASS.semantic3done && !(cast(void*) fd in wasmCtfeSem3Tried))
-            {
-                needSem3 ~= fd;
-                continue;
-            }
             if (fd.semanticRun < PASS.semantic3done)
             {
-                if (trace)
+                if (!(cast(void*) fd in wasmCtfeSem3Tried))
+                    needSem3 ~= fd;
+                else if (trace)
                     fprintf(stderr, "wasm-ctfe skip func not sem3: %s (run=%d body=%d)\n",
                         fd.toPrettyChars(), cast(int) fd.semanticRun, fd.fbody !is null);
                 continue;
@@ -1681,6 +1675,7 @@ private bool wasmCtfeGenerateOnce(FuncDeclaration root, ref OutBuffer objbuf, ou
     global.params.useArrayBounds = oldBounds;
     global.params.useAssert = oldAssert;
     global.params.useNullCheck = oldNullCheck;
+    global.params.v.verbose = oldVerbose;
     wasmCtfeWipeCaches();
     wasmCtfeWipeCtypes();
     wasmSelfLink = selfLinkSave;

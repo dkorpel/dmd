@@ -64,6 +64,25 @@ These came up during the reviews. None of them was verified or fixed.
 - **`compiler/src/dmd/link.d` line 322 holds a leftover merge-conflict marker**
   (`>>>>>>> a3372b503c ...`) inside a doc comment. It comes from the wasm
   backend commits, not from the CTFE commits, so it was left alone.
+- **Verify mode skips the comparison whenever the AST interpreter errored.**
+  `wasmctfe.md` calls this a stop-gap until the legality scan runs in the
+  in-process path, which it does since 7b2efa852e. "The interpreter errored
+  and the engine returned a value" is the accepts-invalid case verify mode
+  should report. Removing the skip needs a triage of the new mismatch lines in
+  `fail_compilation`.
+- **The wasm signature of `_memsetn` follows the glue, not druntime.** The
+  count is `size_t` in the runtime-symbol table since e40df7f3ca, while
+  `rt/memset.d` declares `int count`. Changing druntime to `size_t` would make
+  all three agree.
+- **Float fills go through a host hook with a guessed stride.**
+  `ipHostMemsetT` takes the element size from the wasm value kind. A soft
+  `real` is 12 bytes under `-m32` but is passed as a 16-byte value, so a
+  `real[]` fill there may use the wrong stride. `_memsetSIMD` has no hook, and
+  the hook names `_memset16ii` to `_memset128ii` cannot be reached.
+- **Temporary symbol numbers in host object files depend on engine builds.**
+  The `_TMP` counter is shared, so a change in how many temporaries an engine
+  build creates renumbers the host's symbols. The object files are otherwise
+  identical.
 - **`sqrt(double) + fabs(sin(double))` in a loop fails** with "wasm-ctfe cannot
   evaluate". It fails the same way before the simplification commits.
 - **A ctfe-only lambda that loops over an outer const array fails.**
@@ -334,7 +353,7 @@ mode).
   They cannot fail with the single caller they have now; kept for future
   callers.
 
-## d3f170a527, 0da34a1ed1, 54527b69ff, f530c3c97a, b8b37777c2, 80e704019e, 3ccbb61acb, b0fd813fbf, 64eecd12f9, b43ad693e1, b45f7f59b6, 50d81ec66f, 296cc8cca7, 5c152935ae (fixes in the commit that adds this section)
+## d3f170a527, 0da34a1ed1, 54527b69ff, f530c3c97a, b8b37777c2, 80e704019e, 3ccbb61acb, b0fd813fbf, 64eecd12f9, b43ad693e1, b45f7f59b6, 50d81ec66f, 296cc8cca7, 5c152935ae (fixes in c1ba8dbc1a)
 
 One fix repairs a regression from e404b6f5c3. That commit marked every
 function of a retry round as "semantic3 tried" before forcing any of them. A
@@ -381,3 +400,39 @@ are marked one at a time again.
   commits.
 - **Typeid fold in glue.** Moving the fold out of `tryWasmCtfeExpr` changes
   which expressions reach the engine.
+
+## c185ce6596, 7b2efa852e, abacf08325, 53c6f80de0, dbc78f622f, 3d4fa81d8d, e40df7f3ca, ddae26a150 (fixes in the commit that adds this section)
+
+The virtual call path in `e2ir.d` has its upstream assert back
+(`tysize(TYnptr) == 4` on 32-bit x86). It holds during engine builds because a
+32-bit target gets a wasm32 module.
+
+- **A "caller memory or trap" helper for the host hooks.** Every hook fetches
+  the memory and returns a trap when there is none. A helper saves no lines,
+  because each hook still needs its own early return.
+- **One fill routine behind `ipHostMemsetn` and `ipHostMemsetT`.** The two
+  check bounds in a different order, treat a zero element size differently
+  and print different trap texts.
+- **Filling by doubling the copied prefix.** Both hooks copy one element at a
+  time. Doubling is wrong when the value of `_memsetn` lies inside the
+  destination, and the cost was not measured.
+- **Removing `ipHostMemsetT`.** `setArray` could send float and `real` fills
+  to the inline `OPmemset` loop of the wasm backend. That changes the
+  generated code of engine builds and of real wasm builds.
+- **One error path in the epilogue of `wasmCtfeGenerateOnce`.** The gagged and
+  the `DMD_CTFE_SHOWGAG` branch both end in "poison when errors were raised",
+  but `endGagging` counts gagged errors and the other branch counts reported
+  ones. They are not equal when a nested build reports an error ungagged.
+- **No result cache for expression wrappers.** Each wrapped expression stores
+  a cache entry that is rarely hit. Opting out needs a parameter through two
+  functions, and the cost was not measured.
+- **Raw locations and length-prefixed strings in cache keys.** Both would make
+  keys shorter to build, but they change which calls share an entry.
+- **A `wide` flag in `HostImport`.** `ipHostArrayAppendC` compares the import
+  name on every call to tell `_d_arrayappendwd` from `_d_arrayappendcd`. A
+  flag saves one string compare per append.
+- **`elAssign` in `Dsymbol_toElem`.** The initializer copy builds `OPstreq` by
+  hand; `elAssign` produces a different element for static arrays.
+- **The re-append condition in `templateInstanceSemantic`.** Two tests cover
+  what one invariant ("the primary instance sits in a non-root module") could
+  express. The rewrite touches upstream logic.

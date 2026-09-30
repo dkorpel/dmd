@@ -93,8 +93,7 @@ bool wasmCtfeBuildActiveNow()
         return false;
     if (preSemDepth)
         return true;
-    import dmd.glue : wasmCtfeBuildInProgress;
-    return wasmCtfeBuildInProgress();
+    return wasmCGCtfeBuild;
 }
 
 bool wasmCtfeLoweringActive() pure nothrow @nogc @trusted
@@ -113,7 +112,6 @@ private __gshared
     bool traceFallback = false;
     uint seq = 0;
     StringTable!(Expression) ipResultCache;
-    bool ipCacheInit = false;
 }
 
 WasmCtfeMode wasmCtfeMode()
@@ -138,6 +136,7 @@ WasmCtfeMode wasmCtfeMode()
         {
             import core.stdc.stdlib : atexit;
             atexit(&wasmCtfeAtExit);
+            ipResultCache._init(64);
         }
         keepFiles = getenv("DMD_CTFE_KEEP") !is null;
         traceFallback = getenv("DMD_CTFE_TRACEFB") !is null;
@@ -265,52 +264,21 @@ private bool ipResultEqual(Expression astResult, Expression wasmResult, int dept
             if (se.len == 0)
                 return true;
     }
-    if (auto wse = wasmResult.isStringExp())
+    static bool stringEqualsLiteral(StringExp se, ArrayLiteralExp ale)
     {
-        if (auto ale = astResult.isArrayLiteralExp())
+        if (!se || !ale || (ale.elements ? ale.elements.length : 0) != se.len)
+            return false;
+        foreach (i; 0 .. se.len)
         {
-            const n = ale.elements ? ale.elements.length : 0;
-            if (n == wse.len)
-            {
-                bool same = true;
-                foreach (i; 0 .. n)
-                {
-                    auto el = ale[i];
-                    auto ie = el ? el.isIntegerExp() : null;
-                    if (!ie || cast(ulong) ie.toInteger() != wse.getIndex(i))
-                    {
-                        same = false;
-                        break;
-                    }
-                }
-                if (same)
-                    return true;
-            }
+            auto ie = ale[i] ? ale[i].isIntegerExp() : null;
+            if (!ie || cast(ulong) ie.toInteger() != se.getIndex(i))
+                return false;
         }
+        return true;
     }
-    if (auto ase = astResult.isStringExp())
-    {
-        if (auto wale = wasmResult.isArrayLiteralExp())
-        {
-            const n = wale.elements ? wale.elements.length : 0;
-            if (n == ase.len)
-            {
-                bool same = true;
-                foreach (i; 0 .. n)
-                {
-                    auto el = wale[i];
-                    auto ie = el ? el.isIntegerExp() : null;
-                    if (!ie || cast(ulong) ie.toInteger() != ase.getIndex(i))
-                    {
-                        same = false;
-                        break;
-                    }
-                }
-                if (same)
-                    return true;
-            }
-        }
-    }
+    if (stringEqualsLiteral(wasmResult.isStringExp(), astResult.isArrayLiteralExp())
+        || stringEqualsLiteral(astResult.isStringExp(), wasmResult.isArrayLiteralExp()))
+        return true;
     if (auto wsl = wasmResult.isStructLiteralExp())
     {
         auto asl = astResult.isStructLiteralExp();
@@ -331,34 +299,27 @@ private bool ipResultEqual(Expression astResult, Expression wasmResult, int dept
             if (ipEncodeVal(ab, 0, wsl.type, asl) && ipEncodeVal(wb, 0, wsl.type, wsl))
                 return ab == wb;
         }
-        if (asl)
+        if (asl && asl.sd is wsl.sd)
         {
-            if (asl.sd is wsl.sd)
-            {
-                foreach (p; ipCmpStack)
-                    if (p.ast is asl && p.wasm is wsl)
-                        return true;
-                ipCmpStack.push(IpCmpPair(asl, wsl));
-                scope (exit) ipCmpStack.pop();
-                const n = wsl.elements ? wsl.elements.length : 0;
-                const na = asl.elements ? asl.elements.length : 0;
-                bool same = na <= n;
-                foreach (i; 0 .. n)
-                {
-                    auto ael = i < na ? (*asl.elements)[i] : null;
-                    if (!ael || !(*wsl.elements)[i] || ael.isVoidInitExp())
-                        continue;
-                    if (ael.isNullExp() && ipIsVthisField(wsl.sd, i, n))
-                        continue;
-                    if (!same || !ipResultEqual(ael, (*wsl.elements)[i], depth + 1))
-                    {
-                        same = false;
-                        break;
-                    }
-                }
-                if (same)
+            foreach (p; ipCmpStack)
+                if (p.ast is asl && p.wasm is wsl)
                     return true;
+            ipCmpStack.push(IpCmpPair(asl, wsl));
+            scope (exit) ipCmpStack.pop();
+            const n = wsl.elements ? wsl.elements.length : 0;
+            const na = asl.elements ? asl.elements.length : 0;
+            bool same = na <= n;
+            for (size_t i = 0; same && i < n; i++)
+            {
+                auto ael = i < na ? (*asl.elements)[i] : null;
+                if (!ael || !(*wsl.elements)[i] || ael.isVoidInitExp())
+                    continue;
+                if (ael.isNullExp() && ipIsVthisField(wsl.sd, i, n))
+                    continue;
+                same = ipResultEqual(ael, (*wsl.elements)[i], depth + 1);
             }
+            if (same)
+                return true;
         }
     }
     if (auto wal = wasmResult.isArrayLiteralExp())
@@ -372,23 +333,11 @@ private bool ipResultEqual(Expression astResult, Expression wasmResult, int dept
         if (auto aal = astResult.isArrayLiteralExp())
         {
             const n = wal.elements ? wal.elements.length : 0;
-            const na = aal.elements ? aal.elements.length : 0;
-            if (n == na)
-            {
-                bool same = true;
-                foreach (i; 0 .. n)
-                {
-                    auto ael = aal[i];
-                    auto wel = wal[i];
-                    if (!ael || !wel || !ipResultEqual(ael, wel, depth + 1))
-                    {
-                        same = false;
-                        break;
-                    }
-                }
-                if (same)
-                    return true;
-            }
+            bool same = n == (aal.elements ? aal.elements.length : 0);
+            for (size_t i = 0; same && i < n; i++)
+                same = aal[i] && wal[i] && ipResultEqual(aal[i], wal[i], depth + 1);
+            if (same)
+                return true;
         }
     }
     if (auto aie = astResult.isIntegerExp())
@@ -676,6 +625,7 @@ import dmd.dclass : ClassDeclaration, InterfaceDeclaration;
 import dmd.dtemplate : TemplateDeclaration, TemplateInstance;
 import dmd.dmsc : wasmCtfeSoftRealTarget;
 import dmd.backend.barray : Barray;
+import dmd.backend.wasm.codgen : wasmCGCtfeBuild;
 import dmd.backend.wasm.softreal : SR, softRealNames, softRealPrefix;
 import dmd.glue.e2ir : wasmCtfeDollarInit;
 
@@ -1059,9 +1009,12 @@ private bool ipHoistEnclosing(VarDeclaration vd, out const(char)* why, VarDeclar
     return true;
 }
 
-private void ipAppendSymKey(Expression e, ref OutBuffer kb)
+private void ipAppendExpKey(Expression e, ref OutBuffer kb)
 {
+    import dmd.hdrgen : toCBuffer, HdrGenState;
     import dmd.visitor.postorder : walkPostorder;
+    HdrGenState hgs;
+    toCBuffer(e, kb, hgs);
     extern (C++) final class SymKey : StoppableVisitor
     {
         OutBuffer* kb;
@@ -1730,18 +1683,9 @@ Expression tryWasmCtfeExpr(Expression e)
     kb.writestring("expr:");
     kb.writestring(e.loc.toChars());
     kb.writeByte(0);
-    kb.writestring(e.toChars());
-    ipAppendSymKey(e, kb);
-    if (!ipCacheInit)
-    {
-        ipResultCache._init(64);
-        ipCacheInit = true;
-    }
-    if (auto sv = ipResultCache.lookup(kb[]))
-    {
-        wasmCtfeStats.cacheHits++;
+    ipAppendExpKey(e, kb);
+    if (auto sv = ipCacheFind(kb[]))
         return sv.value;
-    }
     auto tf = new TypeFunction(ParameterList(), voidWrap ? Type.tvoid : e.type, LINK.d);
     auto fd = new FuncDeclaration(e.loc, e.loc, Identifier.generateId("__wasmctfe_expr"), STC.none, tf);
     fd.parent = mod;
@@ -1877,12 +1821,7 @@ public void ipForceSemantic3(FuncDeclaration fd)
 
 public bool wasmCtfeTakeForcedSem3Error(FuncDeclaration fd)
 {
-    if (cast(void*) fd in forcedSem3Errors)
-    {
-        forcedSem3Errors.remove(cast(void*) fd);
-        return true;
-    }
-    return false;
+    return forcedSem3Errors.remove(cast(void*) fd);
 }
 
 int scanLegalityImpl(FuncDeclaration fd, ref bool[void*] inProgress)
@@ -2358,6 +2297,14 @@ private extern (C) wasm_trap_t* ipHostAppend(void* env, wasmtime_caller_t* calle
 }
 
 private __gshared size_t ipCtfeWrites;
+
+private StringValue!(Expression)* ipCacheFind(const(char)[] key)
+{
+    auto sv = ipResultCache.lookup(key);
+    if (sv)
+        wasmCtfeStats.cacheHits++;
+    return sv;
+}
 
 private void ipCacheStore(const(char)[] key, Expression r, size_t writesBefore)
 {
@@ -2932,7 +2879,7 @@ private wasm_trap_t* ipBumpAlloc(wasmtime_caller_t* caller, ref wasmtime_memory_
 {
     auto ctx = wasmtime_caller_context(caller);
     const reqSz = sz;
-    sz = (sz + 15) & ~15UL;
+    sz = ipAlign16(sz);
     if (!sz)
         sz = 16;
     if (sz > (1UL << 32))
@@ -4039,14 +3986,11 @@ private IpModule* ipGetModule(FuncDeclaration fd)
         return *p;
     if (cast(void*) fd in ipModuleFailed)
         return null;
+    if (wasmCGCtfeBuild)
     {
-        import dmd.glue : wasmCtfeBuildInProgress;
-        if (wasmCtfeBuildInProgress())
-        {
-            if (verbose)
-                fprintf(stderr, "wasm-ctfe inproc: nested build for %s deferred\n", fd.toPrettyChars());
-            return null;
-        }
+        if (verbose)
+            fprintf(stderr, "wasm-ctfe inproc: nested build for %s deferred\n", fd.toPrettyChars());
+        return null;
     }
 
     OutBuffer buf;
@@ -4691,13 +4635,6 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
     const bool zeroResult = !isCtor && rty == Tsarray && resultType.size() == 0;
     const bool sret = !isCtor && !zeroResult && (rty == Tstruct || rty == Tarray || rty == Tsarray || rty == Tdelegate);
     const bool refResult = !isCtor && (rty == Tclass || rty == Tpointer || rty == Taarray);
-    foreach (size_t i, Parameter p; tf.parameterList)
-    {
-        if (p.storageClass & (STC.ref_ | STC.out_ | STC.lazy_))
-            return bail(fd, "param storage class");
-        if (!ipScalarType(p.type) && !ipArgType(p.type) && !ipPtrArgType(p.type))
-            return bail(fd, "param type");
-    }
 
     wasmtime_val_t[32] vals;
     const bool nullCtx = !thisExp && fd.isNested();
@@ -4711,18 +4648,20 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
     size_t nvals = argBase;
     size_t memArgCount = 0;
     ulong memArgBytes = 0;
-    auto memArgVal = new size_t[](args.length);
-    auto ptrArg = new bool[](args.length);
+    enum ArgKind : ubyte { scalar, slice, block }
+    ArgKind[vals.length] argKind;
     foreach (i, arg; args)
     {
         Parameter p = tf.parameterList[i];
+        if (p.storageClass & (STC.ref_ | STC.out_ | STC.lazy_))
+            return bail(fd, "param storage class");
         if (nvals + 2 > vals.length)
             return bail(fd, "too many args");
         if (ipArgType(p.type))
         {
             if (!ipArgMemSize(arg, memArgBytes))
                 return bail(fd, "arg not literal");
-            memArgVal[i] = nvals;
+            argKind[i] = ArgKind.slice;
             memArgCount++;
             nvals += 2;
         }
@@ -4730,19 +4669,15 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
         {
             if (!arg.isStructLiteralExp() && !arg.isArrayLiteralExp() && !arg.isStringExp())
                 return bail(fd, "arg not literal");
-            memArgBytes += (cast(ulong) p.type.size() + 15) & ~15UL;
-            memArgVal[i] = nvals;
-            ptrArg[i] = true;
+            memArgBytes += ipAlign16(p.type.size());
+            argKind[i] = ArgKind.block;
             memArgCount++;
             nvals += 1;
         }
-        else
-        {
-            memArgVal[i] = size_t.max;
-            if (!ipMarshalScalar(arg, vals[nvals]))
-                return bail(fd, "arg not literal scalar");
-            nvals++;
-        }
+        else if (!ipScalarType(p.type))
+            return bail(fd, "param type");
+        else if (!ipMarshalScalar(arg, vals[nvals++]))
+            return bail(fd, "arg not literal scalar");
     }
 
     OutBuffer keyBuf;
@@ -4750,26 +4685,16 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
     keyBuf.writeByte(0);
     if (thisExp)
     {
-        keyBuf.writestring(thisExp.toChars());
-        ipAppendSymKey(thisExp, keyBuf);
+        ipAppendExpKey(thisExp, keyBuf);
         keyBuf.writeByte(0);
     }
     foreach (arg; args)
     {
-        keyBuf.writestring(arg.toChars());
-        ipAppendSymKey(arg, keyBuf);
+        ipAppendExpKey(arg, keyBuf);
         keyBuf.writeByte(0);
     }
-    if (!ipCacheInit)
-    {
-        ipResultCache._init(64);
-        ipCacheInit = true;
-    }
-    if (auto sv = ipResultCache.lookup(keyBuf[]))
-    {
-        wasmCtfeStats.cacheHits++;
+    if (auto sv = ipCacheFind(keyBuf[]))
         return sv.value;
-    }
     const writesBefore = ipCtfeWrites;
 
     wasmCtfeStats.attempts++;
@@ -5004,9 +4929,7 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
         if (!ipIsP(spVal))
             return bail(fd, "stack pointer kind");
         const size_t rsz = sret ? cast(size_t) resultType.size() : 0;
-        ulong need = (rsz + 15) & ~15UL;
-        need += (memArgBytes + 15) & ~15UL;
-        need += (thisSize + 15) & ~15UL;
+        const need = ipAlign16(rsz) + memArgBytes + ipAlign16(thisSize);
         import dmd.backend.wasm.selflink : wasmSelfLinkStackSize;
         ulong base;
         if (need + 65536 > wasmSelfLinkStackSize)
@@ -5014,7 +4937,7 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
             if (!ipGrowHeap(ctx, mem, (need >> 16) + 1))
                 return bail(fd, "arg memory");
             base = ipHeapPtr;
-            ipHeapPtr = (base + need + 15) & ~15UL;
+            ipHeapPtr = ipAlign16(base + need);
         }
         else
         {
@@ -5035,32 +4958,37 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
         {
             if (!ipEncodeVal(data[0 .. dataLen], base, thisExp.type, thisExp))
                 return bail(fd, "this encode");
-            cur = base + ((thisSize + 15) & ~15UL);
+            cur = base + ipAlign16(thisSize);
             ipSetP(vals[0], base);
         }
+        size_t slot = argBase;
         foreach (i, arg; args)
         {
-            if (memArgVal[i] == size_t.max)
-                continue;
-            if (ptrArg[i])
+            final switch (argKind[i])
             {
-                auto pt = tf.parameterList[i].type;
-                if (!ipEncodeVal(data[0 .. dataLen], cur, pt, arg))
-                    return bail(fd, "arg encode");
-                ipSetP(vals[memArgVal[i]], cur);
-                cur += (cast(ulong) pt.size() + 15) & ~15UL;
-                continue;
+                case ArgKind.scalar:
+                    slot++;
+                    break;
+                case ArgKind.block:
+                    auto pt = tf.parameterList[i].type;
+                    if (!ipEncodeVal(data[0 .. dataLen], cur, pt, arg))
+                        return bail(fd, "arg encode");
+                    ipSetP(vals[slot++], cur);
+                    cur += ipAlign16(pt.size());
+                    break;
+                case ArgKind.slice:
+                    ulong alen, aptr;
+                    if (!ipEncodeArg(data[0 .. dataLen], cur, arg, alen, aptr))
+                        return bail(fd, "arg encode");
+                    cur = ipAlign16(cur);
+                    ipSetP(vals[slot++], alen);
+                    ipSetP(vals[slot++], aptr);
+                    break;
             }
-            ulong alen, aptr;
-            if (!ipEncodeArg(data[0 .. dataLen], cur, arg, alen, aptr))
-                return bail(fd, "arg encode");
-            cur = (cur + 15) & ~15UL;
-            ipSetP(vals[memArgVal[i]], alen);
-            ipSetP(vals[memArgVal[i] + 1], aptr);
         }
         if (sret)
         {
-            sretAddr = base + ((thisSize + 15) & ~15UL) + ((memArgBytes + 15) & ~15UL);
+            sretAddr = cur;
             ipSetP(vals[sretSlot], sretAddr);
         }
     }
@@ -5282,9 +5210,7 @@ private bool ipPtrArgType(Type t, int depth = 0)
     auto tb = t.toBasetype();
     if (auto ts = tb.isTypeStruct())
     {
-        if (!ts.sym.isPOD())
-            return false;
-        return ipMemType(tb);
+        return ts.sym.isPOD() && ipMemType(tb);
     }
     if (tb.ty == Tsarray)
     {
@@ -5833,13 +5759,18 @@ private Expression ipDecodeMem(const(ubyte)[] mem, ulong addr, Type type, Loc lo
     return new IntegerExp(loc, v, type);
 }
 
+private ulong ipAlign16(ulong n) nothrow @nogc
+{
+    return (n + 15) & ~15UL;
+}
+
 private bool ipArgMemSize(Expression arg, ref ulong total)
 {
     if (arg.isNullExp())
         return true;
     if (auto se = arg.isStringExp())
     {
-        total += ((cast(ulong) se.len * se.sz) + 15) & ~15UL;
+        total += ipAlign16(cast(ulong) se.len * se.sz);
         return true;
     }
     if (auto ale = arg.isArrayLiteralExp())
@@ -5853,7 +5784,7 @@ private bool ipArgMemSize(Expression arg, ref ulong total)
             if (!el || (!el.isIntegerExp() && !el.isRealExp()))
                 return false;
         }
-        total += ((n * esz) + 15) & ~15UL;
+        total += ipAlign16(n * esz);
         return true;
     }
     return false;
@@ -5876,8 +5807,7 @@ private bool ipEncodeArg(ubyte[] mem, ref ulong cur, Expression arg, out ulong l
         const sz = se.sz;
         if (cur + len * sz > mem.length)
             return false;
-        foreach (i; 0 .. se.len)
-            ipWrite(mem, cur + i * sz, se.getIndex(i), sz);
+        mem[cast(size_t) cur .. cast(size_t)(cur + len * sz)] = se.peekData();
         cur += len * sz;
         return true;
     }
@@ -5891,15 +5821,8 @@ private bool ipEncodeArg(ubyte[] mem, ref ulong cur, Expression arg, out ulong l
         if (cur + n * esz > mem.length)
             return false;
         foreach (i; 0 .. n)
-        {
-            auto el = ale[i];
-            if (auto ie = el.isIntegerExp())
-                ipWrite(mem, cur + i * esz, ie.toInteger(), esz);
-            else if (auto re = el.isRealExp())
-                ipPutFloat(mem, cur + i * esz, esz, re.value);
-            else
+            if (!ipEncodeVal(mem, cur + i * esz, etb, ale[i]))
                 return false;
-        }
         cur += n * esz;
         return true;
     }
@@ -5956,8 +5879,7 @@ private bool ipEncodeVal(ubyte[] mem, ulong addr, Type t, Expression e, int dept
         const esz = se.sz;
         if (se.len * esz > sz)
             return false;
-        foreach (i; 0 .. se.len)
-            ipWrite(mem, addr + i * esz, se.getIndex(i), esz);
+        mem[cast(size_t) addr .. cast(size_t) addr + se.len * esz] = se.peekData();
         return true;
     }
     if (auto ale = e.isArrayLiteralExp())

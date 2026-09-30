@@ -4936,9 +4936,6 @@ elem* toElemRVO(Expression e, elem* ehidden, ref IRState irs, Type forceType = n
     }
 }
 
-/**************************************
- * Mirrors logic in Dsymbol_canThrow().
- */
 private bool wasmCtfeExpReferencesVar(Expression ex, VarDeclaration vd)
 {
     import dmd.visitor.postorder : walkPostorder;
@@ -4956,6 +4953,9 @@ private bool wasmCtfeExpReferencesVar(Expression ex, VarDeclaration vd)
     return walkPostorder(ex, rs);
 }
 
+/**************************************
+ * Mirrors logic in Dsymbol_canThrow().
+ */
 elem* Dsymbol_toElem(Dsymbol s, ref IRState irs)
 {
     //printf("Dsymbol_toElem() %s\n", s.toChars());
@@ -6564,7 +6564,7 @@ elem* callfunc(Loc loc,
             assert(cast(int)vindex >= 0);
 
             // Build *(ev + vindex * 4)
-            if (target.isX86 && !wasmCtfeBuildActive)
+            if (target.isX86)
                 assert(tysize(TYnptr) == 4);
             ec = el_bin(OPadd,TYnptr,ev,el_long(TYsize_t, vindex * tysize(TYnptr)));
             ec = el_una(OPind,TYnptr,ec);
