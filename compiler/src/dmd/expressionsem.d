@@ -3605,12 +3605,9 @@ private bool checkNogc(FuncDeclaration f, ref Loc loc, Scope* sc)
     if (f.ident == Id._d_newitemT || f.ident == Id._d_newarrayT || f.ident == Id._d_newarraymTX)
         return false;
 
-    {
-        import dmd.wasmctfe : wasmCtfeLoweringActive;
-        const id = f.ident.toString();
-        if (!global.params.useGC && wasmCtfeLoweringActive() && id.length > 3 && id[0 .. 3] == "_d_")
-            return false;
-    }
+    import dmd.wasmctfe : wasmCtfeLoweringActive;
+    if (!global.params.useGC && f.ident.toString().startsWith("_d_") && wasmCtfeLoweringActive())
+        return false;
 
     if (f.isNogc())
         return false;
@@ -13869,8 +13866,8 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
                 /* Do not lower concats to the indices array returned by
                  *`static foreach`, as this array is only used at compile-time.
                  */
-                import dmd.wasmctfe : wasmCtfeCtfeBlockLowering;
-                if (auto ve = wasmCtfeCtfeBlockLowering() && hookExistsQuiet(sc, Id._d_arrayappendcTX) ? null : exp.e1.isVarExp)
+                import dmd.wasmctfe : wasmCtfeLoweringActive;
+                if (auto ve = wasmCtfeLoweringActive() && hookExistsQuiet(sc, Id._d_arrayappendcTX) ? null : exp.e1.isVarExp)
                 {
                     import core.stdc.ctype : isdigit;
                     // The name of the indices array that static foreach loops uses.
@@ -18259,8 +18256,8 @@ private VarDeclaration makeThis2Argument(Loc loc, Scope* sc, FuncDeclaration fd)
  */
 private bool engineCtfeLowering(Scope* sc, Identifier hook)
 {
-    import dmd.wasmctfe : wasmCtfeCtfeBlockLowering;
-    if (!sc.ctfe || sc.traitsCompiles || !wasmCtfeCtfeBlockLowering())
+    import dmd.wasmctfe : wasmCtfeLoweringActive;
+    if (!sc.ctfe || sc.traitsCompiles || !wasmCtfeLoweringActive())
         return false;
     return hookExistsQuiet(sc, hook);
 }

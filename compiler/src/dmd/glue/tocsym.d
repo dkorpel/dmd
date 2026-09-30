@@ -63,6 +63,7 @@ import dmd.backend.oper;
 import dmd.backend.cgcv;
 import dmd.backend.symbol;
 import dmd.backend.ty;
+import dmd.backend.wasm.codgen : wasmCGCtfeBuild;
 
 /*************************************
  * Create a backend symbol from a D symbol.
@@ -118,7 +119,7 @@ void resetCtfeSymbolCache()
     ctfeSymbolLiterals.setDim(0);
 }
 
-package(dmd.glue) __gshared bool wasmCtfeBuildActive;
+package(dmd.glue) alias wasmCtfeBuildActive = wasmCGCtfeBuild;
 public __gshared Module[] wasmCtfeCovModules;
 public __gshared Expression[] wasmCtfeSites;
 public __gshared FuncDeclaration[const(char)[]] wasmCtfeNoBodyFuncs;

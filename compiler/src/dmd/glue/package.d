@@ -1613,10 +1613,6 @@ private bool wasmCtfeGenerateOnce(FuncDeclaration root, ref OutBuffer objbuf, ou
     global.params.useAssert = CHECKENABLE.on;
     wasmCtfePoisoned = null;
     wasmCtfeBuiltFuncs = null;
-    {
-        import dmd.backend.wasm.codgen : wasmCGCtfeBuild;
-        wasmCGCtfeBuild = true;
-    }
 
     const showGag = getenv("DMD_CTFE_SHOWGAG") !is null;
     const oldGag = showGag ? global.gag : global.startGagging();
@@ -1728,10 +1724,6 @@ private bool wasmCtfeGenerateOnce(FuncDeclaration root, ref OutBuffer objbuf, ou
     global.params.useArrayBounds = oldBounds;
     global.params.useAssert = oldAssert;
     global.params.useNullCheck = oldNullCheck;
-    {
-        import dmd.backend.wasm.codgen : wasmCGCtfeBuild;
-        wasmCGCtfeBuild = false;
-    }
     wasmCtfeWipeCaches();
     wasmCtfeWipeCtypes();
     wasmSelfLink = selfLinkSave;

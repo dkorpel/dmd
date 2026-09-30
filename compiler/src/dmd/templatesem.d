@@ -943,13 +943,9 @@ void templateInstanceSemantic(TemplateInstance tempinst, Scope* sc, ArgumentList
     }
     {
         import dmd.wasmctfe : wasmCtfeBuildActiveNow, wasmCtfeLoweringActive;
-        if (tempinst.minst && wasmCtfeBuildActiveNow())
+        tempinst.ctfeOnly = sc.ctfeBlock && wasmCtfeLoweringActive();
+        if (tempinst.ctfeOnly || wasmCtfeBuildActiveNow())
             tempinst.minst = null;
-        if (sc.ctfeBlock && wasmCtfeLoweringActive())
-        {
-            tempinst.minst = null;
-            tempinst.ctfeOnly = true;
-        }
     }
 
     tempinst.gagged = (global.gag > 0);
@@ -3425,7 +3421,7 @@ bool needsCodegen(TemplateInstance ti)
     // Don't do codegen if the instance has errors,
     // is a dummy instance (see evaluateConstraint),
     // or is determined to be discardable.
-    if (ti.errors || ti.inst is null || ti.inst.isDiscardable() || ti.ctfeOnly)
+    if (ti.errors || ti.ctfeOnly || ti.inst is null || ti.inst.isDiscardable())
     {
         ti.minst = null; // mark as speculative
         return false;

@@ -19,7 +19,6 @@ version (NoBackend)
     bool wasmCtfeIsLiteral(Expression e) { return true; }
     const(char)* wasmCtfeLastReason() { return null; }
     bool wasmCtfeBuildActiveNow() { return false; }
-    bool wasmCtfeCtfeBlockLowering() pure nothrow @nogc @trusted { return false; }
     bool wasmCtfeLoweringActive() pure nothrow @nogc @trusted { return false; }
     void wasmCtfeCompare(Expression e, Expression astResult, Expression wasmResult) { }
     Expression tryWasmCtfe(Expression e) { return null; }
@@ -135,18 +134,6 @@ bool wasmCtfeLoweringActive() pure nothrow @nogc @trusted
     return fp() != WasmCtfeMode.off;
 }
 
-private bool wasmCtfeCtfeBlockLoweringImpl()
-{
-    return wasmCtfeMode() != WasmCtfeMode.off;
-}
-
-bool wasmCtfeCtfeBlockLowering() pure nothrow @nogc @trusted
-{
-    alias FP = bool function() pure nothrow @nogc;
-    auto fp = cast(FP) &wasmCtfeCtfeBlockLoweringImpl;
-    return fp();
-}
-
 private __gshared
 {
     WasmCtfeMode mode = WasmCtfeMode.off;
@@ -202,7 +189,12 @@ void wasmCtfePrintStats()
             calls, attempts, successes, compileFailures, unsupported, illegal, cacheHits, mismatches);
 }
 
-private __gshared StructLiteralExp[2][] ipCmpStack;
+private struct IpCmpPair
+{
+    StructLiteralExp ast, wasm;
+}
+
+private __gshared Array!IpCmpPair ipCmpStack;
 
 private bool ipIsVthisField(AggregateDeclaration ad, size_t i, size_t n)
 {
@@ -213,8 +205,8 @@ private bool ipIsVthisField(AggregateDeclaration ad, size_t i, size_t n)
     for (auto c = cd; c; c = c.baseClass)
     {
         soFar -= c.fields.length;
-        if (cast(ptrdiff_t) i >= soFar && i < soFar + c.fields.length)
-            return c.fields[i - soFar] is c.vthis || c.fields[i - soFar] is c.vthis2;
+        if (cast(ptrdiff_t) i >= soFar)
+            return c.fields[i - soFar].isThisDeclaration() !is null;
     }
     return false;
 }
@@ -351,11 +343,6 @@ private bool ipResultEqual(Expression astResult, Expression wasmResult, int dept
     if (auto wsl = wasmResult.isStructLiteralExp())
     {
         auto asl = astResult.isStructLiteralExp();
-        foreach (p; ipCmpStack)
-            if (p[0] is asl && p[1] is wsl)
-                return true;
-        ipCmpStack ~= [asl, wsl];
-        scope (exit) ipCmpStack.length--;
         if (asl && asl.sd is wsl.sd && wsl.sd.isClassDeclaration())
         {
             auto cd = wsl.sd.isClassDeclaration();
@@ -377,6 +364,11 @@ private bool ipResultEqual(Expression astResult, Expression wasmResult, int dept
         {
             if (asl.sd is wsl.sd)
             {
+                foreach (p; ipCmpStack)
+                    if (p.ast is asl && p.wasm is wsl)
+                        return true;
+                ipCmpStack.push(IpCmpPair(asl, wsl));
+                scope (exit) ipCmpStack.pop();
                 const n = wsl.elements ? wsl.elements.length : 0;
                 const na = asl.elements ? asl.elements.length : 0;
                 bool same = na <= n;
@@ -704,7 +696,7 @@ private bool ipHasCall(Expression e)
 
 import dmd.aggregate : AggregateDeclaration;
 import dmd.dclass : ClassDeclaration, InterfaceDeclaration;
-import dmd.dtemplate : TemplateDeclaration;
+import dmd.dtemplate : TemplateDeclaration, TemplateInstance;
 import dmd.aggregate : ClassKind;
 import dmd.dmsc : wasmCtfeSoftRealTarget;
 import dmd.glue.e2ir : wasmCtfeDollarInit;
@@ -1105,19 +1097,18 @@ private void ipAppendSymKey(Expression e, ref OutBuffer kb)
         override void visit(DotVarExp e) { put(e.var); }
         override void visit(FuncExp e) { put(e.fd); }
         override void visit(CallExp e) { if (e.f) put(e.f); }
-        override void visit(StringExp e) { lit(e); }
+        override void visit(StringExp e) { kb.writeByte(0); kb.write(e.peekData()); }
         override void visit(IntegerExp e) { lit(e); }
         override void visit(RealExp e) { lit(e); }
         extern (D) void lit(Expression e)
         {
             kb.writeByte(0);
-            kb.writestring(e.toChars());
+            mangleToBuffer(e, *kb);
         }
         extern (D) void put(Dsymbol s)
         {
             kb.writeByte(0);
-            kb.writestring(s.toPrettyChars());
-            kb.printf("@%p", cast(void*) s);
+            kb.write(&s, s.sizeof);
         }
     }
     scope v = new SymKey();
@@ -1832,11 +1823,9 @@ Expression tryWasmCtfeExpr(Expression e)
     fd.fbody = ret;
     fd.semanticRun = PASS.semantic3done;
     Dsymbols savedParents;
-    ubyte[] savedDataseg;
     foreach (vd; declaredVars)
     {
         savedParents.push(vd.parent);
-        savedDataseg ~= vd.isdataseg;
         vd.parent = fd;
         vd.isdataseg = 0;
     }
@@ -1858,7 +1847,7 @@ Expression tryWasmCtfeExpr(Expression e)
     foreach (i, vd; declaredVars)
     {
         vd.parent = savedParents[i];
-        vd.isdataseg = savedDataseg[i];
+        vd.isdataseg = 0;
     }
     foreach (i, vd; enclosingVars)
         vd.parent = savedParents[declaredVars.length + i];

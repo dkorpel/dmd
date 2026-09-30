@@ -462,7 +462,6 @@ public WasmFuncType buildFuncType(type* t, Symbol* sfunc, uint hiddenLeadingPtrs
 {
     WasmFuncType ft;
 
-    import dmd.backend.wasm.codgen : wasmCGCtfeBuild;
     if (sfunc && !wasmCGCtfeBuild)
     {
         if (sfunc.identifier == "_Dmain")
