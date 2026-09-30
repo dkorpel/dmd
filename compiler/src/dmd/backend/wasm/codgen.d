@@ -1158,14 +1158,9 @@ private void genCommaSpine(ref WasmCG cg, elem* e)
 {
     import dmd.backend.barray : Barray;
     Barray!(elem*) spine;
-    for (elem* c = e.E1; c && c.Eoper == OPcomma; c = c.E1)
-        spine.push(c);
-    if (!spine.length)
-    {
-        cg.genElemDiscard(e.E1);
-        return;
-    }
-    cg.genElemDiscard(spine[$ - 1].E1);
+    for (; e.Eoper == OPcomma; e = e.E1)
+        spine.push(e);
+    cg.genElemDiscard(e);
     foreach_reverse (c; spine[])
         cg.genElemDiscard(c.E2);
     spine.dtor();
@@ -1175,7 +1170,7 @@ private elem* unwrapComma(ref WasmCG cg, elem* e)
 {
     while (e && e.Eoper == OPcomma)
     {
-        cg.genElemDiscard(e.E1);
+        genCommaSpine(cg, e.E1);
         e = e.E2;
     }
     return e;
@@ -1540,11 +1535,7 @@ bool genElem(ref WasmCG cg, elem* e, WASM_TYPE type)
 /// Returns: true if a value was produced (and dropped).
 bool genElemDiscard(ref WasmCG cg, elem* e)
 {
-    if (e && e.Eoper == OPcomma && e.E1 && e.E1.Eoper == OPcomma)
-    {
-        genCommaSpine(cg, e);
-        return cg.genElemDiscard(e.E2);
-    }
+    e = unwrapComma(cg, e);
     if (!el_sideeffect(e))
         return false;
     cg.discardResult = true;
@@ -2199,12 +2190,7 @@ bool genElem(ref WasmCG cg, elem* e)
 
     case OPcomma:
     {
-        elem* c = e;
-        while (c.Eoper == OPcomma)
-        {
-            genCommaSpine(cg, c);
-            c = c.E2;
-        }
+        elem* c = unwrapComma(cg, e);
         if (discard)
         {
             cg.genElemDiscard(c);
@@ -2627,12 +2613,8 @@ private void emitBitTestOp(ref WasmCG cg, uint op, elem* ptrE, elem* bitnumE)
     const uint bitTmp = cg.allocTemp(wide ? WASM_I64 : WASM_I32);
     const uint wordTmp = cg.allocTemp(WASM_I32);
     const uint maskTmp = cg.allocTemp(WASM_I32);
-    const uint resultTmp = cg.allocTemp(WASM_I32);
 
-    cg.emit(ptrE);
-    cg.emit(OP.LOCAL_SET, Uleb(addrTmp));
-    cg.emit(bitnumE);
-    cg.emit(OP.LOCAL_SET, Uleb(bitTmp), OP.LOCAL_GET, Uleb(addrTmp), OP.LOCAL_GET, Uleb(bitTmp));
+    cg.emit(ptrE, bitnumE, OP.LOCAL_TEE, Uleb(bitTmp));
     if (wide)
         cg.emit(OP.I64_CONST, Sleb(5), OP.I64_SHR_U, OP.I64_CONST, Sleb(2), OP.I64_SHL);
     else
@@ -2650,14 +2632,11 @@ private void emitBitTestOp(ref WasmCG cg, uint op, elem* ptrE, elem* bitnumE)
     cg.emit(
         OP.I32_CONST, Sleb(31), OP.I32_AND, OP.I32_SHL,
         OP.LOCAL_TEE, Uleb(maskTmp),
-        OP.LOCAL_GET, Uleb(wordTmp), OP.I32_AND, OP.I32_CONST, Sleb(0), OP.I32_NE,
-        OP.LOCAL_SET, Uleb(resultTmp));
+        OP.LOCAL_GET, Uleb(wordTmp), OP.I32_AND, OP.I32_CONST, Sleb(0), OP.I32_NE);
     if (op == OPbt)
-    {
-        cg.emit(OP.LOCAL_GET, Uleb(resultTmp));
         return;
-    }
-    cg.emit(OP.LOCAL_GET, Uleb(addrTmp), OP.LOCAL_GET, Uleb(wordTmp), OP.LOCAL_GET, Uleb(maskTmp));
+    const uint resultTmp = cg.allocTemp(WASM_I32);
+    cg.emit(OP.LOCAL_SET, Uleb(resultTmp), OP.LOCAL_GET, Uleb(addrTmp), OP.LOCAL_GET, Uleb(wordTmp), OP.LOCAL_GET, Uleb(maskTmp));
 
     switch (op)
     {

@@ -830,14 +830,9 @@ elem* toElem(Expression e, ref IRState irs)
                 if (wasmCtfeBuildActive)
                 {
                     import dmd.wasmctfe : wasmCtfeOuterConstInit;
-                    bool framed;
-                    if (auto nv = se.var.isVarDeclaration())
-                        foreach (f; nv.nestedrefs)
-                            if (f is irs.getFunc())
-                                framed = true;
-                    if (auto ce = framed ? null : wasmCtfeOuterConstInit(se.var.isVarDeclaration()))
+                    auto cv = se.var.isVarDeclaration();
+                    if (auto ce = wasmCtfeOuterConstInit(cv, irs.getFunc()))
                     {
-                        auto cv = se.var.isVarDeclaration();
                         cv.inuse++;
                         scope (exit) cv.inuse--;
                         type* tv = Type_toCtype(cv.type);
@@ -6680,13 +6675,8 @@ elem* callfunc(Loc loc,
                 e.E2 = et;
                 assert(!(config.exe == EX_OSX64 && target.isAArch64)); // TODO AArch64
             }
-            else if (op == OPyl2x || op == OPyl2xp1)
-            {
-                elem* et = e.E1;
-                e.E1 = e.E2;
-                e.E2 = et;
-            }
-            else if ((op == OPbtc || op == OPbtr || op == OPbts) && wasmGlue() && !typtr(e.E1.Ety) && typtr(e.E2.Ety))
+            else if (op == OPyl2x || op == OPyl2xp1 ||
+                (op == OPbtc || op == OPbtr || op == OPbts) && wasmGlue() && typtr(e.E2.Ety))
             {
                 elem* et = e.E1;
                 e.E1 = e.E2;

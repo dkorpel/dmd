@@ -165,19 +165,20 @@ private Expression ctfeLiteral(Expression e)
 
 private Expression ctfeFillHidden(Expression e)
 {
-    Expressions* own(Expressions* exps)
+    static T owned(T)(T x)
     {
-        if (!exps)
-            return exps;
-        foreach (ref el; *exps)
-            if (el)
-                el = ctfeFillHidden(el);
-        return exps;
+        return x.ownedByCtfe == OwnedBy.ctfe ? x : cast(T) copyLiteral(x).copy();
+    }
+    void own(Expressions* exps)
+    {
+        if (exps)
+            foreach (ref el; *exps)
+                if (el)
+                    el = ctfeFillHidden(el);
     }
     if (auto sle = e.isStructLiteralExp())
     {
-        if (sle.ownedByCtfe != OwnedBy.ctfe)
-            sle = copyLiteral(sle).copy().isStructLiteralExp();
+        sle = owned(sle);
         const nvthis = sle.sd.fields.length - sle.elements.length;
         foreach (i; 0 .. nvthis)
         {
@@ -190,8 +191,7 @@ private Expression ctfeFillHidden(Expression e)
     }
     if (auto ale = e.isArrayLiteralExp())
     {
-        if (ale.ownedByCtfe != OwnedBy.ctfe)
-            ale = copyLiteral(ale).copy().isArrayLiteralExp();
+        ale = owned(ale);
         if (ale.basis)
             ale.basis = ctfeFillHidden(ale.basis);
         own(ale.elements);
@@ -199,8 +199,7 @@ private Expression ctfeFillHidden(Expression e)
     }
     if (auto aae = e.isAssocArrayLiteralExp())
     {
-        if (aae.ownedByCtfe != OwnedBy.ctfe)
-            aae = copyLiteral(aae).copy().isAssocArrayLiteralExp();
+        aae = owned(aae);
         own(aae.keys);
         own(aae.values);
         return aae;

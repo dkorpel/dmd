@@ -829,10 +829,12 @@ private bool ipReadsOuterLocals(FuncDeclaration f)
     return v.stop;
 }
 
-Expression wasmCtfeOuterConstInit(VarDeclaration v)
+Expression wasmCtfeOuterConstInit(VarDeclaration v, FuncDeclaration reader = null)
 {
     import dmd.tokens : EXP;
     if (!v || !(v.isConst() || v.isImmutable()) || v.isReference() || v.isDataseg() || v.inuse)
+        return null;
+    if (reader && v.nestedrefs.contains(reader))
         return null;
     if (!v._init || v._init.isVoidInitializer() || !v.type || v.type.ty == Terror)
         return null;
@@ -2737,11 +2739,14 @@ private __gshared
     ulong ipHeapPtr;
     ulong ipHeapEnd;
     ulong ipErrnoCell;
-    ulong* ipAllocBase;
-    ulong* ipAllocSize;
-    ulong* ipAllocUsed;
+    IpAlloc* ipAllocs;
     size_t ipAllocCount;
     size_t ipAllocCap;
+}
+
+private struct IpAlloc
+{
+    ulong base, size, used;
 }
 
 private void ipRecordAlloc(ulong base, ulong sz) nothrow @nogc
@@ -2750,14 +2755,23 @@ private void ipRecordAlloc(ulong base, ulong sz) nothrow @nogc
     if (ipAllocCount == ipAllocCap)
     {
         ipAllocCap = ipAllocCap ? ipAllocCap * 2 : 256;
-        ipAllocBase = cast(ulong*) realloc(ipAllocBase, ipAllocCap * ulong.sizeof);
-        ipAllocSize = cast(ulong*) realloc(ipAllocSize, ipAllocCap * ulong.sizeof);
-        ipAllocUsed = cast(ulong*) realloc(ipAllocUsed, ipAllocCap * ulong.sizeof);
+        ipAllocs = cast(IpAlloc*) realloc(ipAllocs, ipAllocCap * IpAlloc.sizeof);
     }
-    ipAllocBase[ipAllocCount] = base;
-    ipAllocSize[ipAllocCount] = sz;
-    ipAllocUsed[ipAllocCount] = sz;
-    ipAllocCount++;
+    ipAllocs[ipAllocCount++] = IpAlloc(base, sz, sz);
+}
+
+private IpAlloc* ipAllocAt(ulong p) nothrow @nogc
+{
+    size_t lo = 0, hi = ipAllocCount;
+    while (lo < hi)
+    {
+        const mid = (lo + hi) / 2;
+        if (ipAllocs[mid].base <= p)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    return lo ? &ipAllocs[lo - 1] : null;
 }
 
 private int ipCtfeCond(Expression e)
@@ -3024,19 +3038,11 @@ private bool ipAllZero(const(ubyte)[] b) nothrow @nogc
 
 private bool ipFindAlloc(ulong p, out ulong base, out ulong sz) nothrow @nogc
 {
-    size_t lo = 0, hi = ipAllocCount;
-    while (lo < hi)
-    {
-        const mid = (lo + hi) / 2;
-        if (ipAllocBase[mid] <= p)
-            lo = mid + 1;
-        else
-            hi = mid;
-    }
-    if (lo == 0)
+    auto a = ipAllocAt(p);
+    if (!a)
         return false;
-    base = ipAllocBase[lo - 1];
-    sz = ipAllocSize[lo - 1];
+    base = a.base;
+    sz = a.size;
     return p < base + sz || p == base;
 }
 
@@ -3966,7 +3972,7 @@ private extern (C) wasm_trap_t* ipHostArrayAppendC(void* env, wasmtime_caller_t*
 {
     import dmd.wasmtimec;
     auto hi = cast(HostImport*) env;
-    const wide = hi.nameLen > 2 && hi.name[hi.nameLen - 2] == 'w';
+    const wide = hi.name[0 .. hi.nameLen] == "_d_arrayappendwd";
     wasmtime_memory_t m;
     if (!ipCallerMemory(caller, m))
         return ipTrap("wasm-ctfe: no memory export");
@@ -4164,43 +4170,37 @@ private extern (C) wasm_trap_t* ipHostMemcmp(void* env, wasmtime_caller_t* calle
     return null;
 }
 
-private size_t ipFindArrayBlock(ulong len, ulong ptr, out ulong off) nothrow @nogc
+private IpAlloc* ipArrayBlock(ulong len, ulong ptr, out ulong off) nothrow @nogc
 {
-    if (!ptr)
-        return size_t.max;
-    size_t lo = 0, hi = ipAllocCount;
-    while (lo < hi)
-    {
-        const mid = (lo + hi) / 2;
-        if (ipAllocBase[mid] <= ptr)
-            lo = mid + 1;
-        else
-            hi = mid;
-    }
-    if (lo == 0)
-        return size_t.max;
-    const i = lo - 1;
-    off = ptr - ipAllocBase[i];
-    if (off >= ipAllocSize[i] || ipAllocUsed[i] != off + len)
-        return size_t.max;
-    return i;
+    auto a = ptr ? ipAllocAt(ptr) : null;
+    if (!a)
+        return null;
+    off = ptr - a.base;
+    return off < a.size && a.used == off + len ? a : null;
+}
+
+private bool ipSetUsed(ulong len, ulong ptr, ulong newLen) nothrow @nogc
+{
+    ulong off;
+    auto a = ipArrayBlock(len, ptr, off);
+    if (!a || newLen > a.size - off)
+        return false;
+    a.used = off + newLen;
+    return true;
 }
 
 private wasm_trap_t* ipGrowArray(wasmtime_caller_t* caller, ref wasmtime_memory_t m,
     ulong ptr, ulong oldBytes, ulong addBytes, out ulong r) nothrow @nogc
 {
-    ulong off;
-    const i = ipFindArrayBlock(oldBytes, ptr, off);
-    if (i != size_t.max && addBytes <= ipAllocSize[i] - off - oldBytes)
+    if (ipSetUsed(oldBytes, ptr, oldBytes + addBytes))
     {
-        ipAllocUsed[i] = off + oldBytes + addBytes;
         r = ptr;
         return null;
     }
     const need = oldBytes + addBytes;
     if (auto trap = ipBumpAlloc(caller, m, need + (need >> 1), r))
         return trap;
-    ipAllocUsed[ipAllocCount - 1] = need;
+    ipAllocs[ipAllocCount - 1].used = need;
     auto mem = ipMemSlice(caller, m);
     memmove(mem.ptr + r, mem.ptr + ptr, cast(size_t) oldBytes);
     return null;
@@ -4209,14 +4209,8 @@ private wasm_trap_t* ipGrowArray(wasmtime_caller_t* caller, ref wasmtime_memory_
 private extern (C) wasm_trap_t* ipHostExpandArray(void* env, wasmtime_caller_t* caller,
     const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
 {
-    ulong off;
-    const i = ipFindArrayBlock(ipValP(args[0]), ipValP(args[1]), off);
-    const n = ipValP(args[2]);
-    const ok = i != size_t.max && n <= ipAllocSize[i] - off;
-    if (ok)
-        ipAllocUsed[i] = off + n;
     results[0].kind = WASMTIME_I32;
-    results[0].of.i32 = ok;
+    results[0].of.i32 = ipSetUsed(ipValP(args[0]), ipValP(args[1]), ipValP(args[2]));
     return null;
 }
 
@@ -4224,8 +4218,8 @@ private extern (C) wasm_trap_t* ipHostReserveArray(void* env, wasmtime_caller_t*
     const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
 {
     ulong off;
-    const i = ipFindArrayBlock(ipValP(args[0]), ipValP(args[1]), off);
-    ulong cap = i == size_t.max ? 0 : ipAllocSize[i] - off;
+    auto a = ipArrayBlock(ipValP(args[0]), ipValP(args[1]), off);
+    ulong cap = a ? a.size - off : 0;
     if (ipValP(args[2]) > cap)
         cap = 0;
     ipSetP(results[0], cap);
@@ -4243,14 +4237,8 @@ private extern (C) wasm_trap_t* ipHostZero64(void* env, wasmtime_caller_t* calle
 private extern (C) wasm_trap_t* ipHostShrinkArray(void* env, wasmtime_caller_t* caller,
     const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
 {
-    ulong off;
-    const len = ipValP(args[0]);
-    const i = ipFindArrayBlock(ipValP(args[2]), ipValP(args[1]), off);
-    const ok = i != size_t.max && len <= ipAllocSize[i] - off;
-    if (ok)
-        ipAllocUsed[i] = off + len;
     results[0].kind = WASMTIME_I32;
-    results[0].of.i32 = ok;
+    results[0].of.i32 = ipSetUsed(ipValP(args[2]), ipValP(args[1]), ipValP(args[0]));
     return null;
 }
 
