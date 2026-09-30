@@ -550,8 +550,6 @@ private void emitStore(ref WasmCG cg, tym_t ty, uint offset = 0)
     cg.emit(m.storeOp, Uleb(naturalAlign(m.storeOp)), Uleb(offset));
 }
 
-__gshared Symbol*[const(Symbol)*] wasmExnPayloadVar;
-
 /// Store the caught exception payload (i32 on the value stack) into the
 /// try's jcatchvar shadow slot. Called by the block structurer right after
 /// a catch landing frame's OP.END.

@@ -6242,8 +6242,9 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
         auto values = aaExp.values;
         {
             import dmd.wasmctfe : wasmCtfeLoweringActive;
+            Expressions*[2] kvs = [keys, values];
             if (wasmCtfeLoweringActive())
-                foreach (kv; [keys, values])
+                foreach (kv; kvs)
                     if (kv)
                         foreach (ref el; *kv)
                             if (auto inner = el ? el.isAssocArrayLiteralExp() : null)

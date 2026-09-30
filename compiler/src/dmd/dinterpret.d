@@ -109,7 +109,16 @@ public Expression ctfeInterpret(Expression e)
     const wstrict = wmode == WasmCtfeMode.strict;
     if (wmode != WasmCtfeMode.off && (!global.gag || wstrict))
     {
-        wasmResult = tryWasmCtfeTraced(e);
+        auto ce = e.isCallExp();
+        if (ce && ce.f)
+        {
+            scope dlg = () => ctfeCallDetail(ce.f, ce.arguments);
+            timeTraceBeginEvent(TimeTraceEventType.ctfeCall);
+            scope (exit) timeTraceEndEvent(TimeTraceEventType.ctfeCall, ce.f, dlg);
+            wasmResult = tryWasmCtfe(e);
+        }
+        else
+            wasmResult = tryWasmCtfe(e);
         if ((wmode == WasmCtfeMode.inproc || wstrict) && wasmResult !is null)
             return scrubReturnValue(e.loc, wasmResult);
         if (wstrict)
@@ -497,6 +506,25 @@ private struct InterState
     Statement gotoTarget;
 }
 
+private const(char)[] ctfeCallDetail(FuncDeclaration fd, Expressions* arguments)
+{
+    import dmd.common.outbuffer;
+    auto strbuf = OutBuffer(20);
+    strbuf.writestring(fd.toPrettyChars());
+    strbuf.write("(");
+    if (arguments)
+    {
+        foreach (i, arg; *arguments)
+        {
+            if (i > 0)
+                strbuf.write(", ");
+            strbuf.writestring(arg.toChars());
+        }
+    }
+    strbuf.write(")");
+    return strbuf.extractSlice();
+}
+
 /*************************************
  * Attempt to interpret a function given the arguments.
  * Params:
@@ -517,23 +545,7 @@ private Expression interpretFunction(UnionExp* pue, FuncDeclaration fd, InterSta
         printf("\n********\n%s FuncDeclaration::interpret(istate = %p) %s\n", fd.loc.toChars(), istate, fd.toChars());
     }
 
-    scope dlg = () {
-        import dmd.common.outbuffer;
-        auto strbuf = OutBuffer(20);
-        strbuf.writestring(fd.toPrettyChars());
-        strbuf.write("(");
-        if (arguments)
-        {
-            foreach (i, arg; *arguments)
-            {
-                if (i > 0)
-                    strbuf.write(", ");
-                strbuf.writestring(arg.toChars());
-            }
-        }
-        strbuf.write(")");
-        return strbuf.extractSlice();
-    };
+    scope dlg = () => ctfeCallDetail(fd, arguments);
     import dmd.timetrace;
     timeTraceBeginEvent(TimeTraceEventType.ctfeCall);
     scope (exit) timeTraceEndEvent(TimeTraceEventType.ctfeCall, fd, dlg);

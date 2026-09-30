@@ -23,7 +23,6 @@ version (NoBackend)
     bool wasmCtfeLoweringActive() pure nothrow @nogc @trusted { return false; }
     void wasmCtfeCompare(Expression e, Expression astResult, Expression wasmResult) { }
     Expression tryWasmCtfe(Expression e) { return null; }
-    Expression tryWasmCtfeTraced(Expression e) { return null; }
     bool wasmCtfeTakeForcedSem3Error(FuncDeclaration fd) { return false; }
     void wasmCtfeSuspendMinstNull() { }
     void wasmCtfeResumeMinstNull() { }
@@ -707,14 +706,9 @@ import dmd.aggregate : AggregateDeclaration;
 import dmd.dclass : ClassDeclaration, InterfaceDeclaration;
 import dmd.dtemplate : TemplateDeclaration;
 import dmd.aggregate : ClassKind;
+import dmd.dmsc : wasmCtfeSoftRealTarget;
+import dmd.glue.e2ir : wasmCtfeDollarInit;
 
-
-private bool ipSoftReal()
-{
-    import dmd.target : target;
-    return real.mant_dig == 64 && (target.realsize == 16 && target.realpad == 6
-        || target.realsize == 12 && target.realpad == 2);
-}
 
 private void ipPutReal(ubyte[] mem, ulong addr, real r)
 {
@@ -729,7 +723,7 @@ private bool ipTypeBlocksEngine(Type t, int depth = 0)
     if (!t || depth > 8)
         return false;
     auto tb = t.toBasetype();
-    if (tb.isComplex() || tb.isImaginary() || (tb.ty == Tfloat80 && !ipSoftReal()))
+    if (tb.isComplex() || tb.isImaginary() || (tb.ty == Tfloat80 && !wasmCtfeSoftRealTarget()))
         return true;
     if (auto ts = tb.isTypeStruct())
     {
@@ -1868,9 +1862,7 @@ Expression tryWasmCtfeExpr(Expression e)
     }
     foreach (i, vd; enclosingVars)
         vd.parent = savedParents[declaredVars.length + i];
-    if (writesBefore == ipCtfeWrites)
-        if (auto sv = ipResultCache.insert(kb[], null))
-            sv.value = r;
+    ipCacheStore(kb[], r, writesBefore);
     return r;
 }
 
@@ -1900,22 +1892,23 @@ private void ipInitConstInitializer(VarDeclaration v)
         v._init = ni;
 }
 
-private bool ipInstanceReady(Dsymbol s)
+private TemplateInstance ipEnclosingInstance(Dsymbol s)
 {
     for (Dsymbol p = s; p; p = p.parent)
         if (auto ti = p.isTemplateInstance())
-            return ti.semanticRun >= PASS.semanticdone && !ti.errors;
-    return false;
+            return ti;
+    return null;
+}
+
+private bool ipInstanceReady(Dsymbol s)
+{
+    auto ti = ipEnclosingInstance(s);
+    return ti && ti.semanticRun >= PASS.semanticdone && !ti.errors;
 }
 
 bool insideTemplateInstance(Dsymbol s)
 {
-    for (Dsymbol p = s; p; p = p.parent)
-    {
-        if (p.isTemplateInstance())
-            return true;
-    }
-    return false;
+    return ipEnclosingInstance(s) !is null;
 }
 
 __gshared byte[void*] legalityVerdicts;
@@ -2198,13 +2191,10 @@ extern (C++) final class LegalityScanner : SemanticTimeTransitiveVisitor
             return;
         if (auto v = e.var ? e.var.isVarDeclaration() : null)
         {
-            if (v.ident == Id.dollar && (v.storage_class & STC.ctfe) && v.isDataseg() && v._init)
+            if (auto ie = wasmCtfeDollarInit(v))
             {
-                if (auto ie = v._init.isExpInitializer())
-                {
-                    ie.exp.accept(this);
-                    return;
-                }
+                ie.accept(this);
+                return;
             }
             if (v.isDataseg() && !(v.storage_class & STC.manifest) && !(v.storage_class & STC.temp))
             {
@@ -2419,7 +2409,7 @@ private __gshared
 
     char[512] ipTrapBuf;
 
-    enum IpErrKind : ubyte { none, index, shift, nullp, slice, assert_, assertMsg, errorFunc, uncaught, siteError }
+    enum IpErrKind : ubyte { none, index, nullp, slice, assert_, assertMsg, errorFunc, uncaught, siteError }
     IpErrKind ipErrKind;
     ulong[3] ipErrVals;
     char[512] ipErrMsg;
@@ -2487,7 +2477,7 @@ private extern (C) wasm_trap_t* ipHostAppend(void* env, wasmtime_caller_t* calle
     const src = ipValP(args[1]);
     const esz = ipValP(args[2]);
     const isElem = ipValP(args[3]) != 0;
-    if (dst > mem.length || 16 > mem.length - dst || src > mem.length)
+    if (dst > mem.length || 2 * ipPS > mem.length - dst || src > mem.length)
         return ipTrap("wasm-ctfe: append out of bounds");
     ulong n, sptr;
     ulong len = ipLdP(mem.ptr + dst);
@@ -2499,7 +2489,7 @@ private extern (C) wasm_trap_t* ipHostAppend(void* env, wasmtime_caller_t* calle
     }
     else
     {
-        if (16 > mem.length - src)
+        if (2 * ipPS > mem.length - src)
             return ipTrap("wasm-ctfe: append out of bounds");
         n = ipLdP(mem.ptr + src);
         sptr = ipLdP(mem.ptr + src + ipPS);
@@ -2522,6 +2512,13 @@ private extern (C) wasm_trap_t* ipHostAppend(void* env, wasmtime_caller_t* calle
 
 private __gshared size_t ipCtfeWrites;
 
+private void ipCacheStore(const(char)[] key, Expression r, size_t writesBefore)
+{
+    if (writesBefore == ipCtfeWrites)
+        if (auto sv = ipResultCache.insert(key, null))
+            sv.value = r;
+}
+
 private extern (C) wasm_trap_t* ipHostCtfeWrite(void* env, wasmtime_caller_t* caller,
     const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
 {
@@ -2540,7 +2537,7 @@ private extern (C) wasm_trap_t* ipHostCtfeWrite(void* env, wasmtime_caller_t* ca
     else if (nargs == 1)
     {
         const a = ipValP(args[0]);
-        if (a > mem.length || 16 > mem.length - a)
+        if (a > mem.length || 2 * ipPS > mem.length - a)
             return ipTrap("wasm-ctfe: __ctfeWrite out of bounds");
         len = ipLdP(mem.ptr + a);
         ptr = ipLdP(mem.ptr + a + ipPS);
@@ -2550,8 +2547,7 @@ private extern (C) wasm_trap_t* ipHostCtfeWrite(void* env, wasmtime_caller_t* ca
     if (ptr > mem.length || len > mem.length - ptr)
         return ipTrap("wasm-ctfe: __ctfeWrite out of bounds");
     ipCtfeWrites++;
-    alias ModeFn = WasmCtfeMode function() nothrow @nogc;
-    if ((cast(ModeFn) &wasmCtfeMode)() != WasmCtfeMode.verify)
+    if (mode != WasmCtfeMode.verify)
         fprintf(stderr, "%.*s", cast(int) len, cast(const(char)*) mem.ptr + ptr);
     return null;
 }
@@ -2765,16 +2761,18 @@ private int ipCtfeCond(Expression e)
 
 private __gshared VarDeclaration[string] ipAddrGlobals;
 
-private __gshared bool[VarDeclaration] ipAddrNoted;
+private __gshared string[VarDeclaration] ipAddrNoted;
 
-private void ipNoteAddrGlobal(VarDeclaration v)
+private string ipNoteAddrGlobal(VarDeclaration v)
 {
-    if (v in ipAddrNoted)
-        return;
-    ipAddrNoted[v] = true;
+    if (auto p = v in ipAddrNoted)
+        return *p;
     OutBuffer buf;
     mangleToBuffer(v, buf);
-    ipAddrGlobals[cast(string) buf.extractSlice()] = v;
+    auto m = cast(string) buf.extractSlice();
+    ipAddrNoted[v] = m;
+    ipAddrGlobals[m] = v;
+    return m;
 }
 
 public enum CtfeSiteErr : uint
@@ -2802,6 +2800,7 @@ public enum CtfeSiteErr : uint
     ptrSliceBounds,
     nullSliceBounds,
     unionReinterpret,
+    shiftRange,
 }
 
 private __gshared bool[VarDeclaration] ipPoisonNoted;
@@ -2984,10 +2983,7 @@ private bool ipNotePoisonGlobal(VarDeclaration v)
     if (trustedModule(v))
         return false;
     ipPoisonNoted[v] = true;
-    ipNoteAddrGlobal(v);
-    OutBuffer buf;
-    mangleToBuffer(v, buf);
-    wasmSelfLinkPoisonNames[cast(string) buf.extractSlice()] = true;
+    wasmSelfLinkPoisonNames[ipNoteAddrGlobal(v)] = true;
     return true;
 }
 
@@ -3015,11 +3011,6 @@ private bool ipZeroSizeArray(Type t)
 {
     auto tsa = t ? t.toBasetype().isTypeSArray() : null;
     return tsa && tsa.dim && tsa.dim.isIntegerExp() && tsa.dim.toInteger() == 0;
-}
-
-private bool ipIsCharType(Type t)
-{
-    return t.ty == Tchar || t.ty == Twchar || t.ty == Tdchar;
 }
 
 private bool ipAllZero(const(ubyte)[] b) nothrow @nogc
@@ -3077,6 +3068,14 @@ private ulong ipLdP(const(ubyte)* p) nothrow @nogc
     ulong v = 0;
     memcpy(&v, p, ipPS);
     return v;
+}
+
+private bool ipRdP(const(ubyte)[] mem, ulong addr, out ulong v) nothrow @nogc
+{
+    if (addr > mem.length || ipPS > mem.length - addr)
+        return false;
+    v = ipLdP(mem.ptr + addr);
+    return true;
 }
 
 private void ipStP(ubyte* p, ulong v) nothrow @nogc
@@ -3380,24 +3379,23 @@ private __gshared ulong ipTIBaseOffset;
 private __gshared ulong ipTINameOffset;
 private __gshared ulong ipTIInvOffset;
 
+private ulong ipFieldOffset(ClassDeclaration cd, string name) nothrow
+{
+    if (cd)
+        foreach (v; cd.fields)
+            if (v.ident && v.ident.toString() == name)
+                return v.offset;
+    return 0;
+}
+
 private void ipComputeTIOffsets() nothrow
 {
     if (ipTIBaseOffset || ipTINameOffset)
         return;
     auto cd = Type.typeinfoclass;
-    if (!cd)
-        return;
-    foreach (v; cd.fields)
-    {
-        if (!v.ident)
-            continue;
-        if (strcmp(v.ident.toChars(), "base") == 0)
-            ipTIBaseOffset = v.offset;
-        else if (strcmp(v.ident.toChars(), "name") == 0)
-            ipTINameOffset = v.offset;
-        else if (strcmp(v.ident.toChars(), "classInvariant") == 0)
-            ipTIInvOffset = v.offset;
-    }
+    ipTIBaseOffset = ipFieldOffset(cd, "base");
+    ipTINameOffset = ipFieldOffset(cd, "name");
+    ipTIInvOffset = ipFieldOffset(cd, "classInvariant");
 }
 
 private __gshared ulong ipThrowNextOffset;
@@ -3408,14 +3406,8 @@ private void ipComputeThrowOffsets() nothrow
     ipComputeTIOffsets();
     if (ipThrowNextOffset)
         return;
-    if (auto cd = ClassDeclaration.throwable)
-        foreach (v; cd.fields)
-            if (v.ident && strcmp(v.ident.toChars(), "_nextInChainPtr") == 0)
-                ipThrowNextOffset = v.offset;
-    if (auto cd = ClassDeclaration.errorException)
-        foreach (v; cd.fields)
-            if (v.ident && strcmp(v.ident.toChars(), "bypassedException") == 0)
-                ipErrorBypassOffset = v.offset;
+    ipThrowNextOffset = ipFieldOffset(ClassDeclaration.throwable, "_nextInChainPtr");
+    ipErrorBypassOffset = ipFieldOffset(ClassDeclaration.errorException, "bypassedException");
 }
 
 private __gshared bool ipDiscardRun;
@@ -3740,28 +3732,21 @@ private extern (C) wasm_trap_t* ipHostChain(void* env, wasmtime_caller_t* caller
     if (!ipCallerMemory(caller, m))
         return ipTrap("wasm-ctfe: no memory export");
     auto mem = ipMemSlice(caller, m);
-    bool rd(ulong addr, out ulong v) nothrow @nogc
-    {
-        if (addr + ipPS > mem.length)
-            return false;
-        v = ipLdP(mem.ptr + addr);
-        return true;
-    }
     int isError(ulong o) nothrow @nogc
     {
         ulong vtbl, ci;
-        if (!rd(o, vtbl) || !rd(vtbl, ci))
+        if (!ipRdP(mem, o, vtbl) || !ipRdP(mem, vtbl, ci))
             return -1;
         enum name = "object.Error";
         while (ci)
         {
             ulong nlen, nptr;
-            if (!rd(ci + ipTINameOffset, nlen) || !rd(ci + ipTINameOffset + ipPS, nptr))
+            if (!ipRdP(mem, ci + ipTINameOffset, nlen) || !ipRdP(mem, ci + ipTINameOffset + ipPS, nptr))
                 return -1;
             if (nlen == name.length && nptr <= mem.length - nlen
                 && mem[cast(size_t) nptr .. cast(size_t) (nptr + nlen)] == name)
                 return 1;
-            if (!rd(ci + ipTIBaseOffset, ci))
+            if (!ipRdP(mem, ci + ipTIBaseOffset, ci))
                 return -1;
         }
         return 0;
@@ -3771,7 +3756,7 @@ private extern (C) wasm_trap_t* ipHostChain(void* env, wasmtime_caller_t* caller
         return ipTrap("wasm-ctfe: exception chaining out of bounds");
     if (err2 && !err1)
     {
-        if (e2 + ipErrorBypassOffset + 8 > mem.length)
+        if (e2 + ipErrorBypassOffset + ipPS > mem.length)
             return ipTrap("wasm-ctfe: exception chaining out of bounds");
         ipStP(mem.ptr + e2 + ipErrorBypassOffset, e1);
         ipSetP(results[0], e2);
@@ -3781,7 +3766,7 @@ private extern (C) wasm_trap_t* ipHostChain(void* env, wasmtime_caller_t* caller
     foreach (_; 0 .. 1 << 20)
     {
         ulong next;
-        if (!rd(e + ipThrowNextOffset, next))
+        if (!ipRdP(mem, e + ipThrowNextOffset, next))
             return ipTrap("wasm-ctfe: exception chaining out of bounds");
         next &= ~1UL;
         if (!next)
@@ -3811,21 +3796,13 @@ private extern (C) wasm_trap_t* ipHostInvariant(void* env, wasmtime_caller_t* ca
     if (!wasmtime_caller_export_get(caller, "__indirect_function_table".ptr, "__indirect_function_table".length, &ext)
         || ext.kind != WASMTIME_EXTERN_TABLE)
         return ipTrap("wasm-ctfe: no table export");
-    bool rd(ulong addr, out ulong v) nothrow @nogc
-    {
-        auto mem = ipMemSlice(caller, m);
-        if (addr + ipPS > mem.length)
-            return false;
-        v = ipLdP(mem.ptr + addr);
-        return true;
-    }
     ulong vtbl, ci;
-    if (!rd(o, vtbl) || !rd(vtbl, ci))
+    if (!ipRdP(ipMemSlice(caller, m), o, vtbl) || !ipRdP(ipMemSlice(caller, m), vtbl, ci))
         return ipTrap("wasm-ctfe: invariant check out of bounds");
     while (ci)
     {
         ulong fidx;
-        if (!rd(ci + ipTIInvOffset, fidx))
+        if (!ipRdP(ipMemSlice(caller, m), ci + ipTIInvOffset, fidx))
             return ipTrap("wasm-ctfe: invariant check out of bounds");
         if (fidx)
         {
@@ -3843,7 +3820,7 @@ private extern (C) wasm_trap_t* ipHostInvariant(void* env, wasmtime_caller_t* ca
             if (trap)
                 return trap;
         }
-        if (!rd(ci + ipTIBaseOffset, ci))
+        if (!ipRdP(ipMemSlice(caller, m), ci + ipTIBaseOffset, ci))
             return ipTrap("wasm-ctfe: invariant check out of bounds");
     }
     return null;
@@ -3893,15 +3870,8 @@ private extern (C) wasm_trap_t* ipHostEhMatch(void* env, wasmtime_caller_t* call
     int found = 0;
     if (o && ipTIBaseOffset)
     {
-        bool rd(ulong addr, out ulong v) nothrow @nogc
-        {
-            if (addr + ipPS > mem.length)
-                return false;
-            v = ipLdP(mem.ptr + addr);
-            return true;
-        }
         ulong vtbl, oc;
-        if (!rd(o, vtbl) || !rd(vtbl, oc))
+        if (!ipRdP(mem, o, vtbl) || !ipRdP(mem, vtbl, oc))
             return ipTrap("wasm-ctfe: eh match out of bounds");
         while (oc)
         {
@@ -3910,7 +3880,7 @@ private extern (C) wasm_trap_t* ipHostEhMatch(void* env, wasmtime_caller_t* call
                 found = 1;
                 break;
             }
-            if (!rd(oc + ipTIBaseOffset, oc))
+            if (!ipRdP(mem, oc + ipTIBaseOffset, oc))
                 return ipTrap("wasm-ctfe: eh match out of bounds");
         }
     }
@@ -3932,7 +3902,7 @@ private extern (C) wasm_trap_t* ipHostArrayAppendC(void* env, wasmtime_caller_t*
     const sret = ipValP(args[0]);
     const xptr = ipValP(args[1]);
     const c = cast(uint) args[2].of.i32;
-    if (xptr + 16 > mem.length || sret + 16 > mem.length)
+    if (xptr + 2 * ipPS > mem.length || sret + 2 * ipPS > mem.length)
         return ipTrap("wasm-ctfe: appendc out of bounds");
     ulong len = ipLdP(mem.ptr + xptr);
     ulong ptr = ipLdP(mem.ptr + xptr + ipPS);
@@ -4232,23 +4202,6 @@ private extern (C) wasm_trap_t* ipHostBoundsIndex(void* env, wasmtime_caller_t* 
         "$bounds$%s(%d): array index %llu exceeds array length %llu",
         ipMemString(mem, ipValP(args[0])), args[1].of.i32,
         ipValP(args[2]), ipValP(args[3]));
-    return wasmtime_trap_new(ipTrapBuf.ptr, n);
-}
-
-private extern (C) wasm_trap_t* ipHostShiftError(void* env, wasmtime_caller_t* caller,
-    const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
-{
-    wasmtime_memory_t m;
-    ubyte[] mem;
-    if (ipCallerMemory(caller, m))
-        mem = ipMemSlice(caller, m);
-    ipErrKind = IpErrKind.shift;
-    ipErrVals[0] = args[2].of.i64;
-    ipErrVals[1] = args[3].of.i64;
-    const n = snprintf(ipTrapBuf.ptr, ipTrapBuf.length,
-        "$shift$%s(%d): shift by %lld is outside the range 0..%lld",
-        ipMemString(mem, ipValP(args[0])), args[1].of.i32,
-        cast(long) args[2].of.i64, cast(long) args[3].of.i64);
     return wasmtime_trap_new(ipTrapBuf.ptr, n);
 }
 
@@ -4614,6 +4567,15 @@ private Expression ipReportSiteError(const(uint)[] chain)
         case CtfeSiteErr.initSymAddr:
             eSink.error(site.loc, "cannot determine the address of the initializer symbol during CTFE");
             break;
+        case CtfeSiteErr.shiftRange:
+        {
+            auto be = site.isBinExp();
+            if (!be)
+                return null;
+            eSink.error(be.loc, "shift by %lld is outside the range 0..%llu",
+                cast(long) ipErrArgs[0], be.e1.type.size() * 8 - 1);
+            break;
+        }
         case CtfeSiteErr.unionReinterpret:
         {
             auto dve = site.isDotVarExp();
@@ -4885,10 +4847,6 @@ private Expression ipReportTrap(const(wasm_trap_t)* trap, const(wasmtime_error_t
             eSink.error(site.loc, "slice `[%llu..%llu]` exceeds array bounds `[0..%llu]`",
                 ipErrVals[0], ipErrVals[1], ipErrVals[2]);
             break;
-        case IpErrKind.shift:
-            eSink.error(site.loc, "shift by %lld is outside the range 0..%llu",
-                cast(long) ipErrVals[0], ipErrVals[1]);
-            break;
         case IpErrKind.nullp:
             if (auto te = site.isTypeidExp())
             {
@@ -4937,32 +4895,6 @@ private Expression ipReportTrap(const(wasm_trap_t)* trap, const(wasmtime_error_t
     }
     ipPrintChain(chain[0], chain[1 .. $]);
     return ErrorExp.get();
-}
-
-public Expression tryWasmCtfeTraced(Expression e)
-{
-    import dmd.timetrace;
-    auto ce = e.isCallExp();
-    if (!ce || !ce.f)
-        return tryWasmCtfe(e);
-    scope dlg = () {
-        import dmd.common.outbuffer;
-        auto buf = OutBuffer(20);
-        buf.writestring(ce.f.toPrettyChars());
-        buf.writeByte('(');
-        if (ce.arguments)
-            foreach (i, arg; *ce.arguments)
-            {
-                if (i > 0)
-                    buf.writestring(", ");
-                buf.writestring(arg.toChars());
-            }
-        buf.writeByte(')');
-        return buf.extractSlice();
-    };
-    timeTraceBeginEvent(TimeTraceEventType.ctfeCall);
-    scope (exit) timeTraceEndEvent(TimeTraceEventType.ctfeCall, ce.f, dlg);
-    return tryWasmCtfe(e);
 }
 
 Expression tryWasmCtfeInproc(FuncDeclaration fd, Expression thisExp, Expression[] args, Type resultType, Loc loc)
@@ -5259,7 +5191,7 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
                 cb = &ipHostAppend;
             else if (nm == "_d_nullpointerp")
                 cb = &ipHostNullPointer;
-            else if (nm == "__wasmctfe_error" || nm == "__wasmctfe_error2" || nm == "__wasmctfe_switcherr"
+            else if (nm == "__wasmctfe_error" || nm == "__wasmctfe_error2" || nm == "__wasmctfe_error64"
                 || nm == "__wasmctfe_slicecopy")
                 cb = &ipHostSiteError;
             else if (nm == "__wasmctfe_ptrslice")
@@ -5280,8 +5212,6 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
                 cb = &ipHostInvariant;
                 ipComputeTIOffsets();
             }
-            else if (nm == "__wasmctfe_shift_error")
-                cb = &ipHostShiftError;
             else if (nm.length > 14 && nm[0 .. 14] == "__wasmctfe_bi_")
             {
                 if (auto bp = (cast(string) nm) in wasmCtfeBuiltinFds)
@@ -5570,9 +5500,7 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
         return null;
     }
     wasmCtfeStats.successes++;
-    if (writesBefore == ipCtfeWrites)
-        if (auto sv = ipResultCache.insert(keyBuf[], null))
-            sv.value = resultExp;
+    ipCacheStore(keyBuf[], resultExp, writesBefore);
     if (verbose)
         fprintf(stderr, "wasm-ctfe inproc: ok %s -> %s\n", fd.toPrettyChars(), resultExp.toChars());
     return resultExp;
@@ -5591,7 +5519,7 @@ private bool ipScalarType(Type t)
         case Tfloat32, Tfloat64:
             return true;
         case Tfloat80:
-            return ipSoftReal();
+            return wasmCtfeSoftRealTarget();
         default:
             return false;
     }
@@ -5731,19 +5659,12 @@ private Expression ipDecodeClassRef(const(ubyte)[] mem, ulong objAddr, Type type
         if (dbg) fprintf(stderr, "wasm-ctfe classref: no name offset\n");
         return null;
     }
-    bool rd(ulong a, out ulong v)
-    {
-        if (a > mem.length || ipPS > mem.length - a)
-            return false;
-        v = ipRead(mem, a, ipPS);
-        return true;
-    }
     if (tc.sym.isInterfaceDeclaration())
     {
         if (tc.sym.isCPPinterface() || tc.sym.isCOMinterface())
             return null;
         ulong ivt, ii, off;
-        if (!rd(objAddr, ivt) || !rd(ivt, ii) || !rd(ii + 3 * ipPS, off) || off > objAddr)
+        if (!ipRdP(mem, objAddr, ivt) || !ipRdP(mem, ivt, ii) || !ipRdP(mem, ii + 3 * ipPS, off) || off > objAddr)
             return null;
         objAddr -= off;
     }
@@ -5751,7 +5672,7 @@ private Expression ipDecodeClassRef(const(ubyte)[] mem, ulong objAddr, Type type
     ClassDeclaration cd;
     if (cpp)
     {
-        if (!rd(objAddr, vtbl))
+        if (!ipRdP(mem, objAddr, vtbl))
             return null;
         if (auto p = vtbl in ipCppVtbls)
             cd = *p;
@@ -5760,11 +5681,11 @@ private Expression ipDecodeClassRef(const(ubyte)[] mem, ulong objAddr, Type type
     }
     else if (!ipTINameOffset)
     {
-        if (!rd(objAddr, vtbl) || !vtbl)
+        if (!ipRdP(mem, objAddr, vtbl) || !vtbl)
             return null;
     }
-    else if (!rd(objAddr, vtbl) || !rd(vtbl, ci)
-        || !rd(ci + ipTINameOffset, nlen) || !rd(ci + ipTINameOffset + ipPS, nptr))
+    else if (!ipRdP(mem, objAddr, vtbl) || !ipRdP(mem, vtbl, ci)
+        || !ipRdP(mem, ci + ipTINameOffset, nlen) || !ipRdP(mem, ci + ipTINameOffset + ipPS, nptr))
     {
         if (dbg) fprintf(stderr, "wasm-ctfe classref: read fail obj=%llx vtbl=%llx ci=%llx\n", objAddr, vtbl, ci);
         return null;
@@ -5881,32 +5802,25 @@ private Expression ipDecodeAA(const(ubyte)[] mem, ulong impl, Type type, Loc loc
         return new NullExp(loc, type);
     if (auto memo = ipMemoFind(impl, taa))
         return memo;
-    bool rd(ulong a, out ulong v)
-    {
-        if (a > mem.length || ipPS > mem.length - a)
-            return false;
-        v = ipRead(mem, a, ipPS);
-        return true;
-    }
     ulong[] ents;
     bool found;
     ulong olen, optr;
-    if (ipCtfeOrdersAddr && rd(ipCtfeOrdersAddr, olen) && rd(ipCtfeOrdersAddr + ipPS, optr))
+    if (ipCtfeOrdersAddr && ipRdP(mem, ipCtfeOrdersAddr, olen) && ipRdP(mem, ipCtfeOrdersAddr + ipPS, optr))
     {
         foreach (i; 0 .. olen)
         {
             ulong oimpl;
-            if (!rd(optr + i * 3 * ipPS, oimpl))
+            if (!ipRdP(mem, optr + i * 3 * ipPS, oimpl))
                 return null;
             if (oimpl == impl)
             {
                 ulong elen, eptr;
-                if (!rd(optr + i * 3 * ipPS + ipPS, elen) || !rd(optr + i * 3 * ipPS + 2 * ipPS, eptr))
+                if (!ipRdP(mem, optr + i * 3 * ipPS + ipPS, elen) || !ipRdP(mem, optr + i * 3 * ipPS + 2 * ipPS, eptr))
                     return null;
                 foreach (k; 0 .. elen)
                 {
                     ulong ent;
-                    if (!rd(eptr + k * ipPS, ent))
+                    if (!ipRdP(mem, eptr + k * ipPS, ent))
                         return null;
                     if (ent)
                         ents ~= ent;
@@ -5919,12 +5833,12 @@ private Expression ipDecodeAA(const(ubyte)[] mem, ulong impl, Type type, Loc loc
     if (!found)
     {
         ulong blen, bptr;
-        if (!rd(impl, blen) || !rd(impl + ipPS, bptr))
+        if (!ipRdP(mem, impl, blen) || !ipRdP(mem, impl + ipPS, bptr))
             return null;
         foreach (k; 0 .. blen)
         {
             ulong hash, ent;
-            if (!rd(bptr + k * 2 * ipPS, hash) || !rd(bptr + k * 2 * ipPS + ipPS, ent))
+            if (!ipRdP(mem, bptr + k * 2 * ipPS, hash) || !ipRdP(mem, bptr + k * 2 * ipPS + ipPS, ent))
                 return null;
             if (ent && cast(long) hash < 0)
                 ents ~= ent;
@@ -6001,6 +5915,16 @@ private bool ipFillStruct(const(ubyte)[] mem, ulong addr, StructDeclaration sd, 
     return true;
 }
 
+private Expression ipGlobalRef(const(char)[] name, ulong off, Type type, Loc loc)
+{
+    auto pv = cast(string) name in ipAddrGlobals;
+    if (!pv)
+        return null;
+    auto soe = new SymOffExp(loc, *pv, off);
+    soe.type = type;
+    return soe;
+}
+
 private Expression ipDecodePtr(const(ubyte)[] mem, ulong p, Type type, Loc loc, int depth)
 {
     if (depth > ipDecodeMaxDepth)
@@ -6014,13 +5938,9 @@ private Expression ipDecodePtr(const(ubyte)[] mem, ulong p, Type type, Loc loc, 
         ulong base, asz;
         const(char)[] name;
         if (ipFindData(p, base, asz, name))
-            if (auto pv = cast(string) name in ipAddrGlobals)
-            {
-                auto soe = new SymOffExp(loc, *pv, p - base);
-                soe.type = type;
-                return soe;
-            }
-        return new IntegerExp(loc, (ipPS == 4 ? p >= 0xF800_0000 : p >> 32 != 0) ? p ^ wasmCtfeIntPtrTag(ipPS) : p, type);
+            if (auto g = ipGlobalRef(name, p - base, type, loc))
+                return g;
+        return new IntegerExp(loc, (ipPS == 4 ? p >= wasmCtfeIntPtrTag(4) : p >> 32 != 0) ? p ^ wasmCtfeIntPtrTag(ipPS) : p, type);
     }
     auto et = tb.nextOf();
     if (!et)
@@ -6039,30 +5959,25 @@ private Expression ipDecodePtr(const(ubyte)[] mem, ulong p, Type type, Loc loc, 
         if (!ipFindData(p, base, asz, name))
             return null;
         isData = true;
-        if (auto pv = cast(string) name in ipAddrGlobals)
-        {
-            auto soe = new SymOffExp(loc, *pv, p - base);
-            soe.type = type;
-            return soe;
-        }
+        if (auto g = ipGlobalRef(name, p - base, type, loc))
+            return g;
     }
     if ((p - base) % esz)
         return null;
     if (base > mem.length || asz > mem.length - base)
         return null;
-    if (isData && ipIsCharType(etb) && asz >= esz + (p - base) && ipAllZero(mem[cast(size_t) (base + asz - esz) .. cast(size_t) (base + asz)]))
+    if (isData && etb.ty.isSomeChar() && asz >= esz + (p - base) && ipAllZero(mem[cast(size_t) (base + asz - esz) .. cast(size_t) (base + asz)]))
     {
         auto bytes = mem[cast(size_t) base .. cast(size_t) (base + asz)].dup;
         asz -= esz;
         auto se = new StringExp(loc, bytes[0 .. cast(size_t) asz], cast(size_t) (asz / esz), cast(ubyte) esz);
-        se.type = et.immutableOf().arrayOf();
         se.ownedByCtfe = OwnedBy.ctfe;
         if (p == base)
         {
-            auto pse = cast(StringExp) se.copy();
-            pse.type = type;
-            return pse;
+            se.type = type;
+            return se;
         }
+        se.type = et.immutableOf().arrayOf();
         auto ie = new IndexExp(loc, se, new IntegerExp(loc, (p - base) / esz, Type.tsize_t));
         ie.type = et;
         return new AddrExp(loc, ie, type);
@@ -6227,7 +6142,7 @@ private Expression ipDecodeMem(const(ubyte)[] mem, ulong addr, Type type, Loc lo
     }
     if (tb.ty == Tfloat80)
     {
-        if (!ipSoftReal())
+        if (!wasmCtfeSoftRealTarget())
             return null;
         real r = 0;
         memcpy(&r, mem.ptr + cast(size_t) addr, 10);
@@ -6372,7 +6287,7 @@ private bool ipEncodeVal(ubyte[] mem, ulong addr, Type t, Expression e, int dept
             ipWrite(mem, addr, u, 8);
             return true;
         }
-        if (sz > 8 && tb.ty == Tfloat80 && ipSoftReal())
+        if (sz > 8 && tb.ty == Tfloat80 && wasmCtfeSoftRealTarget())
         {
             ipPutReal(mem, addr, re.value);
             return true;
@@ -6460,7 +6375,7 @@ private bool ipMarshalScalar(Expression arg, ref wasmtime_val_t val)
             val.kind = WASMTIME_F64;
             val.of.f64 = cast(double) re.value;
         }
-        else if (tb.ty == Tfloat80 && ipSoftReal())
+        else if (tb.ty == Tfloat80 && wasmCtfeSoftRealTarget())
         {
             const real r = re.value;
             val.kind = WASMTIME_V128;

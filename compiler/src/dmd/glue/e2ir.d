@@ -726,12 +726,9 @@ elem* toElem(Expression e, ref IRState irs)
             return el_long(TYsize_t, 0);
         }
 
-        if (wasmCtfeBuildActive && se.op == EXP.variable && v && v.ident == Id.dollar
-            && (v.storage_class & STC.ctfe) && v.isDataseg() && v._init)
-        {
-            if (auto ie = v._init.isExpInitializer())
-                return toElem(ie.exp, irs);
-        }
+        if (wasmCtfeBuildActive && se.op == EXP.variable && v)
+            if (auto ie = wasmCtfeDollarInit(v))
+                return toElem(ie, irs);
 
         if (wasmCtfeBuildActive && se.op == EXP.variable && se.var.isSymbolDeclaration())
         {
@@ -2010,28 +2007,27 @@ elem* toElem(Expression e, ref IRState irs)
 
     /********************************************
      */
-    elem* wasmCtfeShiftGuard(BinExp be, int op, ref elem* er, ref elem* check)
+    elem* wasmCtfeShiftGuard(BinExp be, int op, ref elem* er)
     {
         if (!wasmCtfeBuildActive || er.Eoper == OPconst)
-            return er;
+            return null;
         if (op != OPshl && op != OPshr && op != OPashr && op != OPshlass && op != OPshrass && op != OPashrass)
-            return er;
+            return null;
         const csz = tysize(er.Ety);
         const bits = be.e1.type.toBasetype().size() * 8;
         if ((csz != 4 && csz != 8) || (bits != 32 && bits != 64))
-            return er;
-        const ctym = er.Ety;
+            return null;
+        elem* widen(elem* x)
+        {
+            x = csz == 8 ? x : el_una(tyuns(x.Ety) ? OPu32_64 : OPs32_64, TYullong, x);
+            x.Ety = TYullong;
+            return x;
+        }
         elem* ec = el_same(er);
-        elem* cnt = csz == 8 ? el_copytree(ec)
-            : el_una(tyuns(ctym) ? OPu32_64 : OPs32_64, TYllong, el_copytree(ec));
-        const efile = irs.locToFileElem(be.loc);
-        elem* call = el_bin(OPcall, TYvoid, el_var(getRtlsym(RTLSYM.WASMCTFESHIFTERR)),
-            el_params(el_long(TYllong, bits - 1), cnt, el_long(TYuint, be.loc.linnum), efile, null));
-        elem* neg = el_bin(OPlt, TYint, er, el_long(ctym, 0));
-        elem* big = el_bin(OPgt, TYint, el_copytree(ec), el_long(ctym, bits - 1));
-        check = el_bin(OPandand, TYvoid, el_bin(OPoror, TYint, neg, big), call);
+        elem* call = wasmCtfeErrorCall(CtfeSiteErr.shiftRange, be, RTLSYM.WASMCTFEERROR64, widen(el_copytree(ec)));
+        elem* big = el_combine(er, el_bin(OPgt, TYint, widen(el_copytree(ec)), el_long(TYullong, bits - 1)));
         er = ec;
-        return er;
+        return el_bin(OPandand, TYvoid, big, call);
     }
 
     elem* toElemBin(BinExp be, int op)
@@ -2049,8 +2045,7 @@ elem* toElem(Expression e, ref IRState irs)
 
         elem* el = toElem(be.e1, irs);
         elem* er = toElem(be.e2, irs);
-        elem* check;
-        wasmCtfeShiftGuard(be, op, er, check);
+        elem* check = wasmCtfeShiftGuard(be, op, er);
 
         elem* e = el_bin(op,tym,el,er);
         e = el_combine(check, e);
@@ -2122,8 +2117,7 @@ elem* toElem(Expression e, ref IRState irs)
             ev = el_una(OPind, tym, ev);
         }
         elem* er = toElem(be.e2, irs);
-        elem* shiftCheck;
-        wasmCtfeShiftGuard(be, op, er, shiftCheck);
+        elem* shiftCheck = wasmCtfeShiftGuard(be, op, er);
 
         if (tybasic(er.Ety) == TYnoreturn)
             op = OPcomma;
@@ -3596,8 +3590,7 @@ elem* toElem(Expression e, ref IRState irs)
         elem* eleft  = toElem(se.e1, irs);
         eleft.Ety = touns(eleft.Ety);
         elem* eright = toElem(se.e2, irs);
-        elem* check;
-        wasmCtfeShiftGuard(se, OPshr, eright, check);
+        elem* check = wasmCtfeShiftGuard(se, OPshr, eright);
         elem* e = el_combine(check, el_bin(OPshr, totym(se.type), eleft, eright));
         elem_setLoc(e, se.loc);
         return e;
@@ -5315,6 +5308,14 @@ private elem* wasmCtfeSiteOf(elem* e, Expression site)
     if (wasmCtfeBuildActive && e && site && (e.Eoper == OPcall || e.Eoper == OPucall))
         e.Esite = wasmCtfeAddSite(site);
     return e;
+}
+
+public Expression wasmCtfeDollarInit(VarDeclaration v)
+{
+    if (v.ident == Id.dollar && (v.storage_class & STC.ctfe) && v.isDataseg() && v._init)
+        if (auto ie = v._init.isExpInitializer())
+            return ie.exp;
+    return null;
 }
 
 public ulong wasmCtfeIntPtrTag(uint ptrsize) nothrow @nogc { return ptrsize == 4 ? 0xF800_0000 : 1UL << 48; }

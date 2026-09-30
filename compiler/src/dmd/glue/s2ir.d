@@ -590,7 +590,7 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
             elem* ev = toElemCast(ce, el_copytree(sc.cond), false, irs);
             import dmd.wasmctfe : CtfeSiteErr;
             block_appendexp(blx.curblock, wasmCtfeErrorCall(CtfeSiteErr.switchNoCase, sc.sw.condition,
-                RTLSYM.WASMCTFESWITCHERR, ev));
+                RTLSYM.WASMCTFEERROR64, ev));
             return;
         }
         block_appendexp(blx.curblock, toElemDtor(s.exp, irs));
@@ -1398,7 +1398,8 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
 
             landingPad.Belem = el_bin(OPeq, TYvoid, el_var(sflag), el_long(TYint, 0)); // __flag = 0;
 
-            if (config.ehmethod == EHmethod.EH_WASM && !(blx.funcsym.Sfunc.Fflags & Feh_none))
+            const wasmEh = config.ehmethod == EHmethod.EH_WASM && !(blx.funcsym.Sfunc.Fflags & Feh_none);
+            if (wasmEh)
             {
                 elem* er = el_calloc();
                 er.Eoper = OPrethrow;
@@ -1412,12 +1413,10 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
             StmtState finallyState = StmtState(stmtstate, s);
 
             setScopeIndex(blx, blx.curblock, previndex);
-            if (config.ehmethod == EHmethod.EH_WASM && wasmCtfeBuildActive
-                && !(blx.funcsym.Sfunc.Fflags & Feh_none) && s.finalbody)
+            if (wasmEh && wasmCtfeBuildActive && s.finalbody)
             {
-                import dmd.backend.wasm.codgen : wasmExnPayloadVar;
                 Symbol* sexn = symbol_genauto(type_fake(mTYvolatile | TYnptr));
-                wasmExnPayloadVar[sflag] = sexn;
+                tryblock.jcatchvar = sexn;
 
                 block* ftry = block_goto(blx, BC.goto_, null);
                 const fprev = blx.scope_index;

@@ -22,7 +22,7 @@ import dmd.backend.symbol;
 import dmd.backend.wasm.enums;
 import dmd.backend.wasm.obj;
 import dmd.backend.ty : I64;
-import dmd.backend.wasm.util : patchLE32, patchLE64, patchLEB5, patchLEB10, patchSLEB5;
+import dmd.backend.wasm.util : patchLE32, patchLE64, patchLEB5, patchLEB10;
 import dmd.common.outbuffer;
 
 nothrow:
@@ -345,7 +345,7 @@ void patchSelfLinkCodeRelocs(ref WasmModule wmod, ref WasmFuncBody fb, ubyte[] c
             else if (I64())
                 patchLEB10(code, r.offset, addr + r.addend);
             else if (r.offset && code[r.offset - 1] == OP.I32_CONST)
-                patchSLEB5(code, r.offset, cast(int)(addr + r.addend));
+                patchLEB5(code, r.offset, cast(int)(addr + r.addend));
             else
                 patchLEB5(code, r.offset, addr + r.addend);
         }
@@ -376,16 +376,12 @@ bool emitMemorySection(ref OutBuffer out_, ref WasmModule wmod)
     s.writeuLEB128(1);
     import dmd.backend.wasm.codgen : wasmCGCtfeBuild;
     if (wasmCGCtfeBuild)
-    {
         s.writeByte(I64() ? WASM_LIMITS.MEM64_HAS_MAX : WASM_LIMITS.HAS_MAX);
-        s.writeuLEB128(wmod.memPages);
-        s.writeuLEB128(wasmSelfLinkPoisonBase >> 16);
-    }
     else
-    {
         s.writeByte(I64() ? WASM_LIMITS.MEM64_NO_MAX : WASM_LIMITS.NO_MAX);
-        s.writeuLEB128(wmod.memPages);
-    }
+    s.writeuLEB128(wmod.memPages);
+    if (wasmCGCtfeBuild)
+        s.writeuLEB128(wasmSelfLinkPoisonBase >> 16);
     writeSection(out_, WASM_SECTION.memory, s);
     return true;
 }

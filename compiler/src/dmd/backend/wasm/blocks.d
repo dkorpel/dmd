@@ -626,7 +626,7 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
                 Symbol* flag = tryRegs[f.tryIdx].tryBlock.Bsucc[1].flag;
                 const uint exn = cg.exnLocalFor(flag);
                 cg.emit(OP.LOCAL_SET, Uleb(exn));
-                if (auto pv = flag in wasmExnPayloadVar)
+                if (Symbol* pv = tryRegs[f.tryIdx].tryBlock.jcatchvar)
                 {
                     cg.noteTagUse();
                     cg.emit(OP.BLOCK, WASM_PTR);
@@ -637,7 +637,7 @@ void genBlocksProper(ref WasmCG cg, block* startblock, bool hasReturn)
                     cg.emit(OP.END);
                     cg.emit(OP.UNREACHABLE);
                     cg.emit(OP.END);
-                    cg.emitCaughtStore(*pv);
+                    cg.emitCaughtStore(pv);
                 }
             }
             cg.reachable = true;

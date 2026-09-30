@@ -223,8 +223,8 @@ private uint pushDataSeg(uint size, uint align_, Symbol* sym, const(char)[] name
 {
     const bool poison = sym && wasmCGCtfeBuild && wasmSelfLinkPoisonNames.length
         && (cast(string) sym.identifier) in wasmSelfLinkPoisonNames;
-    const uint heap = poison ? wmod.poisonHeap : wmod.dataHeap;
-    const uint base = (heap + (align_ - 1)) & ~(align_ - 1);
+    uint* heap = poison ? &wmod.poisonHeap : &wmod.dataHeap;
+    const uint base = (*heap + (align_ - 1)) & ~(align_ - 1);
     WasmDataSeg ds;
     ds.data = new OutBuffer();
     ds.offset = base;
@@ -243,10 +243,7 @@ private uint pushDataSeg(uint size, uint align_, Symbol* sym, const(char)[] name
         checkSegFull(wmod.dataSegs[$ - 1]);
     wmod.dataSegs ~= ds;
     wmod.segOpen = true;
-    if (poison)
-        wmod.poisonHeap = base + size;
-    else
-        wmod.dataHeap = base + size;
+    *heap = base + size;
     return base;
 }
 
@@ -784,13 +781,13 @@ private bool emitDataSection(ref OutBuffer out_, ref WasmModule wmod)
     foreach (ref WasmDataSeg ds; wmod.dataSegs)
     {
         const bool poison = ds.offset >= wasmSelfLinkPoisonBase;
+        const data = poison ? null : ds.data.peekSlice();
         s.writeByte(0x00);
         s.writeByte(I64() ? OP.I64_CONST : OP.I32_CONST);
         s.writesLEB128(poison ? 0 : cast(int) ds.offset);
         s.writeByte(OP.END);
-        s.writeuLEB128(poison ? 0 : cast(uint) ds.data.length());
-        if (!poison)
-            s.write(ds.data.peekSlice());
+        s.writeuLEB128(cast(uint) data.length);
+        s.write(data);
     }
     writeSection(out_, WASM_SECTION.data, s);
     return true;
