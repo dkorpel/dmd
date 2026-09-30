@@ -56,7 +56,42 @@ environment variables (kept out of the CLI while experimental):
 
 ## Results
 
-To be measured against the AST interpreter (baseline `12d7c683ba`).
+Measured on 2026-09-30 (commit `6cfaa2bd1f`) against the AST interpreter at
+baseline `12d7c683ba`. Both compilers are release builds (`ENABLE_RELEASE=1`),
+all runs use `-o-`, and each time is the best of three runs. The harness is
+`tmp/ctfebench/bench.sh`. The `real/` workloads import Phobos
+(`EXTRA=-I<phobos>`).
+
+| Workload | AST (base) | AST (`DMD_CTFE=off`) | wasm engine |
+|---|---|---|---|
+| `aa` (AA insert/lookup, n=20000) | 7.35 s / 43 MB | 7.12 s / 45 MB | 0.11 s / 84 MB |
+| `fib` (recursion) | 0.39 s / 47 MB | 0.39 s / 49 MB | 0.01 s / 32 MB |
+| `manysmall` (3000 small CTFE calls) | 2.77 s / 345 MB | 2.83 s / 346 MB | 0.20 s / 77 MB |
+| `sieve` | 7.45 s / 1256 MB | 7.89 s / 1258 MB | 0.07 s / 53 MB |
+| `sort` | 2.52 s / 372 MB | 2.80 s / 374 MB | 0.06 s / 52 MB |
+| `strings` (append/concat) | 2.40 s / 4023 MB | 2.40 s / 4025 MB | 0.18 s / 69 MB |
+| `structs` | 0.99 s / 337 MB | 1.05 s / 337 MB | 0.04 s / 44 MB |
+| `ctRegex` (two patterns) | 1.25 s / 302 MB | 1.26 s / 303 MB | 1.86 s / 689 MB |
+| `format`/`to`/`sort` enums | 0.23 s / 98 MB | 0.24 s / 100 MB | 0.46 s / 205 MB |
+| import 12 Phobos modules | 0.18 s / 85 MB | 0.19 s / 87 MB | 0.29 s / 142 MB |
+
+Compute-heavy CTFE is 13–100 times faster and uses 5–60 times less memory.
+The AST interpreter is unchanged: `DMD_CTFE=off` matches the baseline.
+
+Code with many small CTFE calls is slower. Every call that is not folded on
+the host builds, compiles and instantiates a module. For a tiny module this
+costs about 0.2 ms in `wasmtime_module_new` alone: Cranelift compiles the
+function, its entry trampoline and the required builtin trampolines. Opt
+level, Winch, Pulley, parallel compilation and unwind info make no
+measurable difference. Glue and backend code generation adds 0.1–7 ms per
+module, depending on how many callees the module contains. Modules are
+cached per function, but callees are compiled again in every module that
+reaches them. ctRegex builds 198 modules. Importing Phobos builds 58 (it was
+700 before constant globals were folded on the host).
+
+Profiling tips: `-ftime-trace -ftime-trace-granularity=0` shows each CTFE
+call. `perf` sees only on-CPU time, and Cranelift runs on worker threads, so
+time the phases with a clock instead.
 
 ## Bugs and quirks discovered
 
@@ -384,6 +419,36 @@ extent list, which describes the most recently linked module. When a
 cached module ran after a different one was built, lookups used the wrong
 table; `std.uni` read Unicode block names from the wrong offsets. Each
 cached `IpModule` now keeps its own extents, like its table and vtables.
+
+### Constant globals are folded on the host
+`std.internal.unicode_tables` initializes an array of about 650
+`UnicodeProperty("Name", Name)` literals, where `Name` is a
+`static immutable ubyte[]`. Each element is its own CTFE call, and each
+built a module. Expressions without calls now have `const`/`immutable`
+data-segment variables with literal initializers substituted, including
+inside struct and array literals, slices and index expressions. The
+result is then optimized. If that gives a literal, it is deep-copied with
+`copyLiteral` and returned without a module. `optimize` leaves slices of
+string constants as a bounds-free `"..."[]`, which is unwrapped. The result
+is the same as the AST interpreter's, which also reads the initializer.
+
+### Copy-on-write memory images are disabled
+With `memory_init_cow` enabled (the default), wasmtime creates a memory
+image (a memfd) for every module's data segments. That made instantiation
+cost about 85 µs. With it disabled, the data is copied in on each
+instantiation, which costs about 15 µs for CTFE-sized data.
+
+### Selflink rebuilt the data map per function
+`patchSelfLinkCodeRelocs` built a name-to-address map of all data segments
+for every function body. That is O(functions × segments), and it took 11% of
+a ctRegex compile. The map is now built once per code section.
+
+### Time traces crash on enum values printed mid-evaluation
+`-ftime-trace` prints each CTFE expression. For `access = front | back |
+opIndex`, `optimize` had folded `front | back` in place into an `IntegerExp`
+of the enum type. `hdrgen` looked the value up among the enum members and
+dereferenced `access.value`, which was still unevaluated. Unmatched members
+are now skipped.
 
 ### Large argument lists live above the stack
 Arguments are copied into linear memory below the shadow stack top. A

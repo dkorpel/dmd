@@ -191,3 +191,13 @@ long after the next link, so anything it reads from a link result has to
 be copied into the cached module. Resetting the global with
 `.length = 0` also reused the array the cached module still referenced;
 it is now reset with `= null`.
+
+## 14. Object-writer work that scales with the link
+
+The object writer was written for one link per compilation. Selflink runs
+once per CTFE module, so per-link costs become per-call costs.
+`patchSelfLinkCodeRelocs` rebuilt a map of every data segment for every
+function body. Before the map was built once per code section, it took 11%
+of a ctRegex compile. Every callee is also compiled again for each module
+that reaches it. That repeated work is now the largest cost for code that
+makes many small CTFE calls (see "Results" in wasmctfe.md).
