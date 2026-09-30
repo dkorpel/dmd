@@ -191,15 +191,21 @@ private __gshared HostSymSave[] hostSaved;
 private __gshared StructLiteralExp[] hostSles;
 private __gshared void*[] hostSleSyms;
 
+private __gshared void*[256] hostRecent;
+
 package(dmd.glue)
 void wasmCtfeHostRecord(Dsymbol d)
 {
     if (!hostGlueActive || wasmCtfeBuildActive || d is null)
         return;
-    if (cast(void*) d in hostSeenTouched)
+    const slot = (cast(size_t) cast(void*) d >> 4) & 255;
+    if (hostRecent[slot] is cast(void*) d)
         return;
+    hostRecent[slot] = cast(void*) d;
+    const n = hostSeenTouched.length;
     hostSeenTouched[cast(void*) d] = true;
-    hostTouched.push(d);
+    if (hostSeenTouched.length != n)
+        hostTouched.push(d);
 }
 
 package(dmd.glue)
@@ -207,6 +213,24 @@ void wasmCtfeHostReset()
 {
     hostTouched.setDim(0);
     hostSeenTouched.clear();
+    hostRecent[] = null;
+}
+
+private void hostSymExchange(Dsymbol d, ref HostSymSave h)
+{
+    static void xchg(T)(ref T a, ref T b) { T t = a; a = b; b = t; }
+    xchg(d.csym, h.csym);
+    if (auto ad = d.isAggregateDeclaration())
+        xchg(ad.sinit, h.sinit);
+    else if (auto ed = d.isEnumDeclaration())
+        xchg(ed.sinit, h.sinit);
+    if (auto fld = d.isFuncLiteralDeclaration())
+        xchg(fld.deferToObj, h.deferToObj);
+    if (auto tid = d.isTypeInfoDeclaration())
+        xchg(tid.hadCodegen, h.hadCodegen);
+    const run = d.semanticRun;
+    d.semanticRun = h.run;
+    h.run = run;
 }
 
 package(dmd.glue)
@@ -215,35 +239,11 @@ void wasmCtfeStashHostSyms()
     hostSaved.length = hostTouched.length;
     foreach (i, d; hostTouched[])
     {
-        auto h = &hostSaved[i];
-        h.csym = d.csym;
-        d.csym = null;
-        h.sinit = null;
-        if (auto ad = d.isAggregateDeclaration())
-        {
-            h.sinit = ad.sinit;
-            ad.sinit = null;
-        }
-        else if (auto ed = d.isEnumDeclaration())
-        {
-            h.sinit = ed.sinit;
-            ed.sinit = null;
-        }
-        h.deferToObj = false;
-        if (auto fld = d.isFuncLiteralDeclaration())
-        {
-            h.deferToObj = fld.deferToObj;
-            fld.deferToObj = false;
-        }
-        h.run = d.semanticRun;
-        if (d.semanticRun >= PASS.obj)
-            d.semanticRun = d.isFuncDeclaration() ? PASS.semantic3done : PASS.semanticdone;
-        h.hadCodegen = false;
-        if (auto tid = d.isTypeInfoDeclaration())
-        {
-            h.hadCodegen = tid.hadCodegen;
-            tid.hadCodegen = false;
-        }
+        HostSymSave h;
+        h.run = d.semanticRun < PASS.obj ? d.semanticRun
+            : d.isFuncDeclaration() ? PASS.semantic3done : PASS.semanticdone;
+        hostSymExchange(d, h);
+        hostSaved[i] = h;
     }
     hostSles.length = ctfeSymbolLiterals.length;
     hostSleSyms.length = ctfeSymbolLiterals.length;
@@ -260,19 +260,7 @@ package(dmd.glue)
 void wasmCtfeUnstashHostSyms()
 {
     foreach (i, ref h; hostSaved)
-    {
-        auto d = hostTouched[i];
-        d.csym = h.csym;
-        if (auto ad = d.isAggregateDeclaration())
-            ad.sinit = h.sinit;
-        else if (auto ed = d.isEnumDeclaration())
-            ed.sinit = h.sinit;
-        if (auto fld = d.isFuncLiteralDeclaration())
-            fld.deferToObj = h.deferToObj;
-        d.semanticRun = h.run;
-        if (auto tid = d.isTypeInfoDeclaration())
-            tid.hadCodegen = h.hadCodegen;
-    }
+        hostSymExchange(hostTouched[i], h);
     hostSaved.length = 0;
     resetCtfeSymbolCache();
     foreach (i, sle; hostSles)

@@ -540,22 +540,10 @@ static if (1)
     }
 
     public
-    void debugSectionsSwap()
-    {
-        __gshared Section[8] stash;
-        Section*[8] cur = [&debug_pubnames, &debug_aranges, &debug_ranges, &debug_loc,
-            &debug_abbrev, &debug_info, &debug_str, &debug_line];
-        foreach (i, p; cur)
-        {
-            auto t = *p;
-            *p = stash[i];
-            stash[i] = t;
-        }
-    }
-
-    public
     void machDebugSectionsInit()
     {
+        if (debug_info.name)
+            return;
         debug_pubnames = Section("__debug_pubnames");
         debug_aranges  = Section("__debug_aranges");
         debug_ranges   = Section("__debug_ranges");
@@ -569,6 +557,8 @@ static if (1)
     public
     void elfDebugSectionsInit()
     {
+        if (debug_info.name)
+            return;
         debug_pubnames = Section(".debug_pubnames");
         debug_aranges  = Section(".debug_aranges");
         debug_ranges   = Section(".debug_ranges");

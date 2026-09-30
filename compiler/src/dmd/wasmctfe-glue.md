@@ -49,7 +49,7 @@ instantiations do not end up in the host object file. When the build forces
 semantic3 on real druntime hooks such as `_d_aaEqual`, the inner
 instantiations they make became permanently speculative and later failed to
 link. `wasmCtfeSuspendMinstNull` and a separate pre-semantic state
-(`wasmCtfePreSemEnter`) restore normal rooting for those cases.
+(`ipForceSemantic3Gagged`) restore normal rooting for those cases.
 
 The opposite problem appears when the frontend lowers druntime hooks only
 for the engine, as it does inside `if (__ctfe)` blocks. The resulting

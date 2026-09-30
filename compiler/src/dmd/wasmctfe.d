@@ -14,8 +14,6 @@ version (NoBackend)
     }
 
     WasmCtfeMode wasmCtfeMode() { return WasmCtfeMode.off; }
-    bool wasmCtfeIsLiteral(Expression e) { return true; }
-    const(char)* wasmCtfeLastReason() { return null; }
     bool wasmCtfeBuildActiveNow() { return false; }
     bool wasmCtfeLoweringActive() pure nothrow @nogc @trusted { return false; }
     void wasmCtfeCompare(Expression e, Expression astResult, Expression wasmResult) { }
@@ -93,21 +91,6 @@ public void wasmCtfeResumeMinstNull()
 }
 
 private __gshared uint preSemDepth;
-private __gshared uint[] preSemSavedSuspend;
-
-public void wasmCtfePreSemEnter()
-{
-    preSemSavedSuspend ~= buildActiveSuspended;
-    buildActiveSuspended = 0;
-    ++preSemDepth;
-}
-
-public void wasmCtfePreSemLeave()
-{
-    --preSemDepth;
-    buildActiveSuspended = preSemSavedSuspend[$ - 1];
-    preSemSavedSuspend = preSemSavedSuspend[0 .. $ - 1];
-}
 
 bool wasmCtfeBuildActiveNow()
 {
@@ -155,8 +138,6 @@ WasmCtfeMode wasmCtfeMode()
                 mode = WasmCtfeMode.verify;
             else if (strcmp(p, "inproc") == 0)
                 mode = WasmCtfeMode.inproc;
-            else if (strcmp(p, "strict") == 0)
-                mode = WasmCtfeMode.strict;
         }
         verbose = getenv("DMD_CTFE_VERBOSE") !is null;
         if (mode != WasmCtfeMode.off)
@@ -531,6 +512,12 @@ Expression tryWasmCtfe(Expression e)
     ipRootCall = outerRoot;
     if (!r && mode != WasmCtfeMode.verify)
         r = ipReportCircularCall(e, true);
+    if (!r && mode == WasmCtfeMode.strict && !wasmCtfeIsLiteral(e))
+    {
+        global.errorSink.error(e.loc, "wasm-ctfe cannot evaluate `%s` [%s]", e.toChars(),
+            ipLastReason[0] ? ipLastReason.ptr : "run");
+        return ErrorExp.get();
+    }
     return r;
 }
 
@@ -746,17 +733,15 @@ private bool ipTypeBlocksEngine(Type t, int depth = 0)
 private bool ipNestedFrameFree(FuncDeclaration f)
 {
     import dmd.funcsem : hasNestedFrameRefs;
-    if (f.hasDualContext || f.needThis() || ipReadsOuterLocals(f))
+    if (f.hasDualContext || f.needThis())
         return false;
     for (Dsymbol p = f.toParent2(); p; p = p.toParent2())
     {
         auto pf = p.isFuncDeclaration();
-        if (!pf)
-            return true;
-        if (pf.hasNestedFrameRefs() || pf.hasDualContext)
+        if (pf && (pf.hasNestedFrameRefs() || pf.hasDualContext))
             return false;
-        if (!pf.isNested())
-            return true;
+        if (!pf || !pf.isNested())
+            return !ipReadsOuterLocals(f);
     }
     return false;
 }
@@ -1214,12 +1199,7 @@ private Expression ipFallback(Expression e, const(char)* reason)
 
 private __gshared char[128] ipLastReason;
 
-const(char)* wasmCtfeLastReason()
-{
-    return ipLastReason[0] ? ipLastReason.ptr : null;
-}
-
-bool wasmCtfeIsLiteral(Expression e)
+private bool wasmCtfeIsLiteral(Expression e)
 {
     if (ipIsLiteral(e))
         return true;
@@ -1235,21 +1215,16 @@ bool wasmCtfeIsLiteral(Expression e)
     return false;
 }
 
-private bool ipIsLiteral(Expression e)
-{
-    return ipIsLiteralDeep(e, 0);
-}
-
 private bool ipIsLiteralElems(Expressions* es, int depth)
 {
     if (es)
         foreach (el; *es)
-            if (el && !ipIsLiteralDeep(el, depth + 1))
+            if (el && !ipIsLiteral(el, depth + 1))
                 return false;
     return true;
 }
 
-private bool ipIsLiteralDeep(Expression e, int depth)
+private bool ipIsLiteral(Expression e, int depth = 0)
 {
     if (depth > 64)
         return false;
@@ -1269,7 +1244,7 @@ private bool ipIsLiteralDeep(Expression e, int depth)
         return isType(te.obj) !is null;
     }
     if (auto ale = e.isArrayLiteralExp())
-        return (!ale.basis || ipIsLiteralDeep(ale.basis, depth + 1)) && ipIsLiteralElems(ale.elements, depth);
+        return (!ale.basis || ipIsLiteral(ale.basis, depth + 1)) && ipIsLiteralElems(ale.elements, depth);
     if (auto sle = e.isStructLiteralExp())
         return ipIsLiteralElems(sle.elements, depth);
     if (auto cre = e.isClassReferenceExp())
@@ -1676,18 +1651,12 @@ private Expression ipLowerArrayOp(Expression e)
 
 Expression tryWasmCtfeExpr(Expression e)
 {
-    if (ipIsLiteral(e))
+    if (wasmCtfeIsLiteral(e))
         return null;
     if (auto te = e.isTupleExp())
     {
         if (te.e0 && !ipIsLiteral(te.e0))
             return ipFallback(e, "tuple");
-        bool allLit = true;
-        foreach (el; *te.exps)
-            if (!ipIsLiteral(el))
-                allLit = false;
-        if (allLit)
-            return null;
         auto exps = new Expressions(te.exps.length);
         foreach (i, el; *te.exps)
         {
@@ -1912,10 +1881,13 @@ __gshared bool[void*] forcedSem3Errors;
 public bool ipForceSemantic3Gagged(scope FuncDeclaration[] fds)
 {
     const oldGag = global.startGagging();
-    wasmCtfePreSemEnter();
+    const savedSuspend = buildActiveSuspended;
+    buildActiveSuspended = 0;
+    ++preSemDepth;
     foreach (fd; fds)
         ipForceSemantic3(fd);
-    wasmCtfePreSemLeave();
+    --preSemDepth;
+    buildActiveSuspended = savedSuspend;
     return global.endGagging(oldGag);
 }
 
@@ -4955,7 +4927,7 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
                 cb = &ipHostErrno;
             else if (nm == "free" || nm == "gc_addRange" || nm == "gc_removeRange"
                 || nm == "_d_criticalenter2" || nm == "_d_criticalexit"
-                || nm == "_d_monitorenter" || nm == "_d_monitorexit")
+                || nm == "_d_monitorenter" || nm == "_d_monitorexit" || nm == "gc_allocatedInCurrentThread")
                 cb = &ipHostZero64;
             else if (nm.length >= 10 && nm[0 .. 7] == "_aApply" && (nm[$ - 1] == '1' || nm[$ - 1] == '2')
                 && (nm.length == 10 || (nm.length == 11 && nm[7] == 'R')))
@@ -4980,8 +4952,6 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
                 cb = &ipHostReserveArray;
             else if (nm == "gc_query")
                 cb = &ipHostGcQuery;
-            else if (nm == "gc_allocatedInCurrentThread")
-                cb = &ipHostZero64;
             else if (nm == "_d_arraybounds_indexp")
                 cb = &ipHostBoundsIndex;
             else if (nm == "_d_arraybounds_slicep")

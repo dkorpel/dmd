@@ -190,8 +190,8 @@ void TypeInfo_toObjFile(Expression e, Loc loc, Type t)
     {
         // Generate a COMDAT for other TypeInfos not available as builtins in druntime -
         // but only once per compiler run (into the first referencing object file).
-        if (hostFuncDepth && !wasmCtfeBuildActive)
-            hostDeferredTypeInfos ~= t.vtinfo;
+        if (hostFuncDepth)
+            hostDeferredTypeInfos.push(t.vtinfo);
         else
             toObjFile(t.vtinfo, global.params.multiobj);
     }

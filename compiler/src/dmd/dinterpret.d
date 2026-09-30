@@ -122,13 +122,7 @@ public Expression ctfeInterpret(Expression e)
         if (wmode != WasmCtfeMode.verify && wasmResult !is null)
             return scrubReturnValue(e.loc, wasmResult);
         if (wstrict)
-        {
-            if (wasmCtfeIsLiteral(e))
-                return ctfeLiteral(e);
-            const why = wasmCtfeLastReason();
-            global.errorSink.error(e.loc, "wasm-ctfe cannot evaluate `%s` [%s]", e.toChars(), why ? why : "run");
-            return ErrorExp.get();
-        }
+            return ctfeLiteral(e);
     }
 
     auto rgnpos = ctfeGlobals.region.savePos();

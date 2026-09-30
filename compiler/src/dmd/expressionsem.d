@@ -18243,17 +18243,6 @@ private VarDeclaration makeThis2Argument(Loc loc, Scope* sc, FuncDeclaration fd)
     return vthis2;
 }
 
-/*******************************
- * Make sure that the runtime hook `id` exists.
- * Params:
- *      loc = location to use for error messages
- *      sc = current scope
- *      id = the hook identifier
- *      description = what the hook does
- *      module_ = what module the hook is located in
- * Returns:
- *      a `bool` indicating if the hook is present.
- */
 private bool engineCtfeLowering(Scope* sc, Identifier hook)
 {
     import dmd.wasmctfe : wasmCtfeLoweringActive;
@@ -18271,6 +18260,17 @@ private bool hookExistsQuiet(Scope* sc, Identifier hook)
     return false;
 }
 
+/*******************************
+ * Make sure that the runtime hook `id` exists.
+ * Params:
+ *      loc = location to use for error messages
+ *      sc = current scope
+ *      id = the hook identifier
+ *      description = what the hook does
+ *      module_ = what module the hook is located in
+ * Returns:
+ *      a `bool` indicating if the hook is present.
+ */
 bool verifyHookExist(Loc loc, ref Scope sc, Identifier id, string description, Identifier module_ = Id.object)
 {
     Dsymbol pscopesym;

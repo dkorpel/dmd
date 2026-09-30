@@ -43,6 +43,16 @@ These came up during the reviews. None of them was verified or fixed.
 - **A nested static array outer const may be filled only in its outer
   dimension.** `visitSymbol` in `e2ir.d` passes the outer `dim` with the
   scalar's type to `setArray` for `const int[2][3] a = 0`.
+- **Engine builds are refused for everything a host function defers.**
+  `hostFuncDepth` is non-zero for the whole of `FuncDeclaration_toObjFile`,
+  including the loop that emits function-local classes and structs after
+  `writefunc`. A local class whose `finishVtbl` needs CTFE is therefore refused
+  and the root function stays failed.
+- **Runtime-library symbols created by an engine build are reused by the
+  host.** Only builds during host codegen get their own `rtlsym` table. A
+  symbol first created by an earlier engine build keeps the wasm type, name
+  and saved-register mask. ELF on x86-64 does not notice; Mach-O and AArch64
+  hosts might.
 - **The `hdrgen.d` null guard fixes a bug that also exists on master.**
   `-ftime-trace` prints an enum while its members are still being analysed. It
   could go upstream as its own fix.
@@ -193,7 +203,7 @@ These came up during the reviews. None of them was verified or fixed.
 - **Moving the builtin shortcut out of `tryWasmCtfeInprocOnce`.** Changes the
   order of checks.
 
-## b183f6379f, b770e0e760, bbfee4f85a (fixes in the "soft-real" simplification commit)
+## b183f6379f, b770e0e760, bbfee4f85a (fixes in ca077f4d65)
 
 - **Materializing an outer const once per function instead of once per
   reference (`visitSymbol` in `e2ir.d`).** Every reference builds a fresh
@@ -225,3 +235,29 @@ These came up during the reviews. None of them was verified or fixed.
   host still needs the name table.
 - **`ipEncodeArg` calling `ipEncodeVal` per element.** Not needed after both
   got the shared `ipPutFloat`.
+
+## a1e6f6a051 (fixes in the commit that adds this section)
+
+- **Tracking the live per-function backend state instead of the call depth, and
+  reusing the function's own `deferToObj` list for deferred TypeInfos.** The
+  right depth for the refusal (see the open question above), but it makes
+  engine builds accepted in places where they are refused today, and it changes
+  the order of TypeInfo data in the host object.
+- **Stashing the host backend tables for every engine build, not only during
+  host codegen.** Removes the second code path, but moves all builds during
+  semantic to separate tables and changes which `rtlsym` symbols the host gets.
+- **Recording host symbols only where they are created.** Changes which symbols
+  are stashed in multi-object builds.
+- **Keeping the capacity of the stash scratch arrays and swapping `SegData`
+  instead of starting from `.init`.** The allocation only leaks on the rare
+  host-codegen path.
+- **One `takeGlueCaches` helper shared with `wasmCtfeWipeCaches`.** The stash
+  and unstash pair became one exchange function instead.
+- **`verifyHookExist` calling the new quiet hook lookup.** Touches an upstream
+  function. The lookup also still runs up to three times for one `~=`.
+- **Returning "already a literal" from the engine instead of walking the
+  expression again on the `null` path.** The strict-mode decision now sits at
+  the single exit of `tryWasmCtfe`, but the walk is still a second one.
+- **Finding all functions that need semantic3 in one build attempt.** Each
+  attempt finds only the next layer, so a call chain of depth k needs k+1
+  builds (limit 64). Redesign.

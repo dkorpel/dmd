@@ -876,12 +876,16 @@ clobber it. The host's text segment index ended up in the wasm
 host codegen now stashes and restores:
 
 - `objmod`, `SegData`, `cseg`, `funcsym_p` and `bzeroSymbol`
-- the fixup list, runtime-library symbols, `el` string table, readonly
-  cache, DWARF section handles and the string-literal table
+- runtime-library symbols, `el` string table, readonly cache and the
+  string-literal table
 - every `csym`/`sinit`/`deferToObj` the host created, `PASS.obj`
   markers (else the engine skips functions the host already emitted)
   and `TypeInfoDeclaration.hadCodegen`
 - struct-literal symbols
+
+The fixup list needs no stash, since only the ELF, Mach-O and COFF
+writers use it. The DWARF section handles survive because restoring the
+host backend does not set them up a second time.
 
 Per-function backend state (`globsym`, blocks) is not stashed. Instead,
 TypeInfo data requested while a host function is being generated is

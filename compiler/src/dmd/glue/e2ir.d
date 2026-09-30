@@ -864,7 +864,7 @@ elem* toElem(Expression e, ref IRState irs)
                 if (wasmCtfeBuildActive && !irs.sthis)
                 {
                     wasmCtfePoison("enclosing frame variable");
-                    if (se.op == EXP.variable && (tb.ty == Tstruct || tb.ty == Tsarray))
+                    if (se.op == EXP.variable)
                         return typedVar(symbol_genauto(Type_toCtype(se.type)), se.type);
                     return el_long(totym(se.type), 0);
                 }
