@@ -2027,19 +2027,25 @@ private TemplateInstance ipEnclosingInstance(Dsymbol s)
 __gshared bool[void*] legalityVerdicts;
 __gshared bool[void*] forcedSem3Errors;
 
-public bool ipForceSemantic3Gagged(FuncDeclaration fd)
+private void ipTypeInfoMember(ref FuncDeclaration fd, FuncDeclaration errFd)
+{
+    if (fd && fd._scope && fd.semanticRun < PASS.semantic3done && ipForceSemantic3Gagged(fd, true))
+        fd = errFd;
+}
+
+public bool ipForceSemantic3Gagged(FuncDeclaration fd, bool keepGag = false)
 {
     const oldGag = global.startGagging();
     const savedSuspend = buildActiveSuspended;
     buildActiveSuspended = 0;
     ++preSemDepth;
-    ipForceSemantic3(fd);
+    ipForceSemantic3(fd, keepGag);
     --preSemDepth;
     buildActiveSuspended = savedSuspend;
     return global.endGagging(oldGag);
 }
 
-public void ipForceSemantic3(FuncDeclaration fd)
+public void ipForceSemantic3(FuncDeclaration fd, bool keepGag = false)
 {
     if (fd.semanticRun >= PASS.semantic3done)
         return;
@@ -2048,11 +2054,12 @@ public void ipForceSemantic3(FuncDeclaration fd)
     const hostRooted = ti ? ti.minst !is null : fdMod && fdMod.isRoot();
     if (hostRooted)
         ++buildActiveSuspended;
-    if (fd.deferred3 && fd._scope && fd.semanticRun < PASS.semantic3)
+    if ((keepGag || fd.deferred3) && fd._scope && fd.semanticRun < PASS.semantic3)
     {
         import dmd.semantic3 : semantic3;
         const oldGag = global.gag;
-        global.gag = 0;
+        if (!keepGag)
+            global.gag = 0;
         semantic3(fd, fd._scope);
         global.gag = oldGag;
     }
@@ -2306,6 +2313,8 @@ extern (C++) final class PreSemScanner : CalleeScanner
             auto sd = ts.sym;
             if (seen(sd))
                 return;
+            ipTypeInfoMember(sd.xeq, sd.xerreq);
+            ipTypeInfoMember(sd.xcmp, sd.xerrcmp);
             foreach (f; [sd.xhash, sd.xeq, sd.xcmp, sd.tidtor, sd.postblit])
                 if (f)
                     callees.push(f);
@@ -5977,6 +5986,8 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
     }
     else if (rty == Tvoid)
         resultExp = CTFEExp.voidexp;
+    else if (rty == Tnull)
+        resultExp = new NullExp(loc, resultType);
     else if (rty == Tvector)
     {
         if (results[0].kind == WASMTIME_V128)
@@ -6065,12 +6076,16 @@ private bool ipResultTypeAt(Type t, int depth)
             if (n.ty == Tvoid || n.ty == Tfunction)
                 return true;
             return ipResultTypeAt(n, depth + 1);
-        case Tdelegate:
+        case Tdelegate, Tnull:
             return true;
         case Tclass:
             auto cd = tb.isTypeClass().sym;
             return !cd.isCPPinterface() && !cd.isCOMinterface();
-        case Tarray, Tsarray:
+        case Tarray:
+            if (tb.nextOf().toBasetype().ty == Tvoid)
+                return true;
+            goto case Tsarray;
+        case Tsarray:
             return ipResultTypeAt(tb.nextOf(), depth + 1);
         case Taarray:
             return ipResultTypeAt(tb.isTypeAArray().index, depth + 1) && ipResultTypeAt(tb.nextOf(), depth + 1);
@@ -6572,6 +6587,8 @@ private Expression ipDecodeMem(const(ubyte)[] mem, ulong addr, Type type, Loc lo
         import dmd.typesem : defaultInit;
         return defaultInit(type, loc);
     }
+    if (tb.ty == Tnull)
+        return ipRead(mem, addr, ipPS) ? null : new NullExp(loc, type);
     if (tb.ty == Tclass || tb.ty == Tpointer || tb.ty == Taarray)
         return ipDecodeRef(mem, ipRead(mem, addr, ipPS), type, loc, depth + 1);
     if (tb.ty == Tdelegate)
@@ -6604,7 +6621,7 @@ private Expression ipDecodeMem(const(ubyte)[] mem, ulong addr, Type type, Loc lo
         const total = len * esz;
         if (ptr > mem.length || total > mem.length - ptr)
             return null;
-        if (etb.ty.isSomeChar())
+        if (etb.ty.isSomeChar() || etb.ty == Tvoid)
         {
             auto bytes = cast(ubyte*) dmd.root.rmem.mem.xmalloc(cast(size_t) total + esz);
             bytes[0 .. cast(size_t) total] = mem[cast(size_t) ptr .. cast(size_t)(ptr + total)];

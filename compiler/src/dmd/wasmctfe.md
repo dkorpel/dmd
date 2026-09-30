@@ -1672,3 +1672,73 @@ imports (`ipHostLibm`) that compute in `real`, as the AST interpreter's
 builtins do, and round to the argument type. `rint` and `rndtol` have no
 source for the AST interpreter, so the engine now evaluates calls that
 `DMD_CTFE=off` rejects. Test: `compilable/ctfe_libm.d`.
+
+### Negative floating point values cast to `uint`
+
+`cast(uint)` of a `double` used `i32.trunc_sat_f64_u`, which turns every
+negative value into 0. The host compiles the conversion with a 64-bit
+signed truncation and keeps the low 32 bits, so `cast(uint) -128.0` is
+`0xFFFFFF80`, and the AST interpreter agrees. The `color` package used by
+ggplotd packs signed normalized integers that way
+(`floatToNormBits!(9, true)(-0.5) == 0x180`). `OPd_u32` is now
+`i64.trunc_sat_f64_s` followed by `i32.wrap_i64`.
+Test: `compilable/ctfe_neg_to_uint.d`.
+
+### `void[]` results
+
+A `void[]` result, such as `cast(immutable(void)[]) import("file")` passed
+through a function, was rejected as a result type. The AST interpreter
+represents it as a `StringExp` of bytes, and the engine now decodes it
+the same way. dwt stores its resource files like this.
+Test: `compilable/ctfe_void_array_result.d`.
+
+### Slice assignment order in the wasm backend
+
+For `a = [len(a)]` the wasm backend stored the length half of the new
+slice into `a` before evaluating the pointer half, which contains the
+call, so `len` saw the new length. Both halves of an `OPpair` are now
+evaluated into locals before either is stored. This affected the wasm
+target as well as the engine. diet-ng generated a filter chain without its
+interpolation because of it. Test: `compilable/ctfe_slice_assign_order.d`.
+
+### Members of a struct that is still in semantic
+
+A member function that needs `this` was not built while its aggregate was
+still in semantic, because the layout could change. For a struct whose
+size is already determined the layout is final, so its members are now
+built. mir's `Date` computes `enum _startDict = Date(1900, 1, 1)._dayNumber`
+inside `Date`. Test: `compilable/ctfe_unfinished_struct_ctor.d`.
+
+### `typeof(null)` results
+
+A function returning `typeof(null)`, as the lambda in
+`std.format.checkFormatException` does for arguments that cannot throw,
+was rejected as a result type. It is now decoded as `null`, and only from
+a zero pointer, so it never claims the bytes of another union member.
+Test: `compilable/ctfe_null_result.d`.
+
+### Generated `opCmp` and `opEquals` of TypeInfo
+
+The legality scan queues `xeq` and `xcmp` of every struct type it meets.
+`functionSemantic3` lifts the gag for functions outside speculative
+instances, so the scan reported the error of a generated `__xopCmp` whose
+`opCmp` template does not match, such as `Tuple` with a member without
+`opCmp` (dxml). The host runs these through `semanticTypeInfoMembers`,
+which keeps the gag and falls back to `xerrcmp`, and the scan now does the
+same. Test: `compilable/ctfe_typeinfo_opcmp.d`.
+
+### Template instance cycles
+
+When a `ctfeOnly` instance is used again outside CTFE, the frontend moves
+the new instance's `tinst` to it. With the engine forcing semantic3 of the
+instance's functions, that reuse can happen inside the instance itself, and
+`tinst` pointed to the instance, which the nesting check reports as
+recursive expansion (Pegged). The move now skips a `tinst` chain that
+already contains the instance.
+
+### Open: active union member
+
+The AST interpreter knows which member of a union was written last. The
+engine decodes a union from its bytes and picks the widest member, so a
+tagged union holding a smaller member fails to decode (mir `Algebraic`,
+`std.json.JSONValue`, `std.sumtype.SumType` in argparse and serialized).

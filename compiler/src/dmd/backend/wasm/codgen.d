@@ -1709,10 +1709,13 @@ bool genElem(ref WasmCG cg, elem* e)
                     cg.genElemDiscard(c.E1);
                 uint addrTmp = cg.allocTemp(WASM_PTR);
                 cg.emit(OP.LOCAL_SET, Uleb(addrTmp));
-                elem* lo = (rhsTail.Eoper == OPpair) ? rhsTail.E1 : rhsTail.E2;
-                elem* hi = (rhsTail.Eoper == OPpair) ? rhsTail.E2 : rhsTail.E1;
-                cg.emit(OP.LOCAL_GET, Uleb(addrTmp), lo, OP_PTR_STORE, Uleb(PTR_ALIGN), Uleb(0));
-                cg.emit(OP.LOCAL_GET, Uleb(addrTmp), hi, OP_PTR_STORE, Uleb(PTR_ALIGN), Uleb(PTRSIZE));
+                uint t1 = cg.allocTemp(WASM_PTR);
+                uint t2 = cg.allocTemp(WASM_PTR);
+                cg.emit(rhsTail.E1, OP.LOCAL_SET, Uleb(t1), rhsTail.E2, OP.LOCAL_SET, Uleb(t2));
+                const lo = rhsTail.Eoper == OPpair ? t1 : t2;
+                const hi = rhsTail.Eoper == OPpair ? t2 : t1;
+                cg.emit(OP.LOCAL_GET, Uleb(addrTmp), OP.LOCAL_GET, Uleb(lo), OP_PTR_STORE, Uleb(PTR_ALIGN), Uleb(0));
+                cg.emit(OP.LOCAL_GET, Uleb(addrTmp), OP.LOCAL_GET, Uleb(hi), OP_PTR_STORE, Uleb(PTR_ALIGN), Uleb(PTRSIZE));
                 return false;
             }
             const bool needValue = typeHasValue(e.Ety) && !discard;
@@ -2108,7 +2111,10 @@ bool genElem(ref WasmCG cg, elem* e)
     case OPd_f: return unaryOp(OP.F32_DEMOTE_F64);
     case OPf_d: return unaryOp(OP.F64_PROMOTE_F32);
     case OPd_s32: return truncSat(WASM_FC.I32_TRUNC_SAT_F64_S);
-    case OPd_u32: return truncSat(WASM_FC.I32_TRUNC_SAT_F64_U);
+    case OPd_u32:
+        cg.genElem(e.E1);
+        cg.emit(OP.FC_PREFIX, Uleb(WASM_FC.I64_TRUNC_SAT_F64_S), OP.I32_WRAP_I64);
+        return true;
     case OPd_s64: return truncSat(WASM_FC.I64_TRUNC_SAT_F64_S);
     case OPd_u64: return truncSat(WASM_FC.I64_TRUNC_SAT_F64_U);
     case OPs32_d: return unaryOp(OP.F64_CONVERT_I32_S);

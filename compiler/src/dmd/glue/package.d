@@ -1456,10 +1456,15 @@ private bool wasmCtfeNeedsSemantic3(FuncDeclaration fd)
 {
     if (fd.semanticRun >= PASS.semantic3done)
         return false;
-    if (auto ad = fd.isMember())
-        if (ad.semanticRun < PASS.semanticdone && (fd.needThis() || fd.isVirtual()))
-            return false;
-    return true;
+    return !wasmCtfeUnfinishedMember(fd);
+}
+
+private bool wasmCtfeUnfinishedMember(FuncDeclaration fd)
+{
+    auto ad = fd.isMember();
+    if (!ad || ad.semanticRun >= PASS.semanticdone || !fd.needThis() && !fd.isVirtual())
+        return false;
+    return !ad.isStructDeclaration() || ad.sizeok != Sizeok.done;
 }
 
 private bool wasmCtfePreSemantic3(FuncDeclaration root)
@@ -1619,14 +1624,11 @@ private bool wasmCtfeGenerateOnce(FuncDeclaration root, ref OutBuffer objbuf, ou
     {
         if (auto fd = d.isFuncDeclaration())
         {
-            if (auto ad = fd.isMember())
+            if (wasmCtfeUnfinishedMember(fd))
             {
-                if (ad.semanticRun < PASS.semanticdone && (fd.needThis() || fd.isVirtual()))
-                {
-                    if (trace)
-                        fprintf(stderr, "wasm-ctfe skip member of unfinished agg: %s\n", fd.toPrettyChars());
-                    continue;
-                }
+                if (trace)
+                    fprintf(stderr, "wasm-ctfe skip member of unfinished agg: %s\n", fd.toPrettyChars());
+                continue;
             }
             if (fd.semanticRun < PASS.semantic3done)
             {

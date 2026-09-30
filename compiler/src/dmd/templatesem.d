@@ -1069,7 +1069,7 @@ void templateInstanceSemantic(TemplateInstance tempinst, Scope* sc, ArgumentList
         if (tempinst.inst.ctfeOnly && !tempinst.ctfeOnly)
         {
             tempinst.inst.ctfeOnly = false;
-            if (!tempinst.minst)
+            if (!tempinst.minst && !isInstantiatedBy(tempinst.tinst, tempinst.inst))
                 tempinst.inst.tinst = tempinst.tinst;
         }
 
@@ -1625,6 +1625,14 @@ void templateInstanceSemantic3(TemplateInstance tempinst, Scope* sc, Scope* sc2)
  * generation of the TemplateDeclaration.
  * Sets enclosing property if so, and returns != 0;
  */
+private bool isInstantiatedBy(TemplateInstance ti, TemplateInstance by)
+{
+    for (int n; ti && n <= global.recursionLimit; ti = ti.tinst, n++)
+        if (ti is by)
+            return true;
+    return false;
+}
+
 private bool hasNestedArgs(TemplateInstance _this, Objects* args, bool isstatic)
 {
     int nested = 0;
