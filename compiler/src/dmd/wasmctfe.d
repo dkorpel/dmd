@@ -51,7 +51,7 @@ import dmd.mtype;
 import dmd.root.array;
 import dmd.root.ctfloat;
 import dmd.root.rmem;
-import dmd.root.string : toDString;
+import dmd.root.string : startsWith, toDString;
 import dmd.root.stringtable;
 import dmd.statement;
 import dmd.typesem : toBasetype, size, nextOf, defaultInitLiteral, arrayOf, equivalent, immutableOf;
@@ -692,14 +692,35 @@ import dmd.aggregate : AggregateDeclaration, ClassKind;
 import dmd.dclass : ClassDeclaration, InterfaceDeclaration;
 import dmd.dtemplate : TemplateDeclaration, TemplateInstance;
 import dmd.dmsc : wasmCtfeSoftRealTarget;
+import dmd.backend.wasm.softreal : SR, softRealNames, softRealPrefix;
 import dmd.glue.e2ir : wasmCtfeDollarInit;
 
 
-private void ipPutReal(ubyte[] mem, ulong addr, real r)
+private void ipPutFloat(ubyte[] mem, ulong addr, size_t sz, real r)
 {
-    import dmd.target : target;
-    mem[cast(size_t) addr .. cast(size_t) addr + target.realsize] = 0;
-    memcpy(mem.ptr + cast(size_t) addr, &r, 10);
+    auto p = mem.ptr + cast(size_t) addr;
+    if (sz == 4)
+    {
+        const f = cast(float) r;
+        memcpy(p, &f, 4);
+    }
+    else if (sz == 8)
+    {
+        const d = cast(double) r;
+        memcpy(p, &d, 8);
+    }
+    else
+    {
+        p[0 .. sz] = 0;
+        memcpy(p, &r, 10);
+    }
+}
+
+private real ipLdReal(const(void)* p) nothrow @nogc
+{
+    real r = 0;
+    memcpy(&r, p, 10);
+    return r;
 }
 
 private bool ipTypeBlocksEngine(Type t, int depth = 0)
@@ -765,18 +786,24 @@ private bool ipReadsOuterLocals(FuncDeclaration f)
     {
         alias visit = typeof(super).visit;
         FuncDeclaration f;
-        bool collect;
-        bool[void*] declared;
+        VarDeclarations declared;
+        VarDeclarations suspects;
         extern (D) void check(Declaration d)
         {
             auto v = d ? d.isVarDeclaration() : null;
-            if (collect || !v || v.isDataseg() || (v.storage_class & STC.manifest))
-                return;
-            if (cast(void*) v in declared || wasmCtfeOuterConstInit(v))
+            if (!v || v.isDataseg() || (v.storage_class & STC.manifest))
                 return;
             auto p = v.toParent2();
-            if (p && p.isFuncDeclaration() && p !is f)
-                stop = true;
+            if (p && p.isFuncDeclaration() && p !is f && !wasmCtfeOuterConstInit(v))
+                suspects.push(v);
+        }
+        extern (D) void declare(VarDeclaration vd)
+        {
+            if (vd.toParent2() !is f)
+                declared.push(vd);
+            if (auto ei = vd._init ? vd._init.isExpInitializer() : null)
+                if (ei.exp)
+                    walkPostorder(ei.exp, this);
         }
         override void visit(Expression) {}
         override void visit(VarExp e) { check(e.var); }
@@ -784,29 +811,16 @@ private bool ipReadsOuterLocals(FuncDeclaration f)
         override void visit(DeclarationExp e)
         {
             if (auto vd = e.declaration ? e.declaration.isVarDeclaration() : null)
-            {
-                if (collect)
-                    declared[cast(void*) vd] = true;
-                if (auto ei = vd._init ? vd._init.isExpInitializer() : null)
-                    if (ei.exp)
-                        walkPostorder(ei.exp, this);
-            }
+                declare(vd);
         }
     }
     scope v = new OuterScan();
     v.f = f;
-    foreach (collect; [true, false])
-    {
-        v.collect = collect;
-        foreachExpAndVar(f.fbody, (Expression e) { if (!v.stop) walkPostorder(e, v); }, (VarDeclaration vd) {
-            if (collect)
-                v.declared[cast(void*) vd] = true;
-            if (auto ei = !v.stop && vd._init ? vd._init.isExpInitializer() : null)
-                if (ei.exp)
-                    walkPostorder(ei.exp, v);
-        });
-    }
-    return v.stop;
+    foreachExpAndVar(f.fbody, (Expression e) { walkPostorder(e, v); }, (VarDeclaration vd) { v.declare(vd); });
+    foreach (s; v.suspects[])
+        if (!v.declared.contains(s))
+            return true;
+    return false;
 }
 
 Expression wasmCtfeOuterConstInit(VarDeclaration v, FuncDeclaration reader = null)
@@ -2325,7 +2339,7 @@ private struct HostImport
 {
     char[128] name;
     size_t nameLen;
-    int softOp = -1;
+    SR softOp;
     FuncDeclaration fd;
     CAlloc cAlloc;
     const(char)* stubWhy;
@@ -2497,8 +2511,10 @@ private wasm_trap_t* ipHostBuiltinImpl(HostImport* hi, const(wasmtime_val_t)* ar
 private int ipRealRelop(int op, real a, real b) nothrow @nogc
 {
     import dmd.backend.oper;
-    const un = a != a || b != b;
-    switch (op)
+    if (a != a || b != b)
+        return rel_unord(op);
+    const iop = rel_integral(op);
+    switch (iop)
     {
         case OPeqeq: return a == b;
         case OPne: return a != b;
@@ -2506,19 +2522,7 @@ private int ipRealRelop(int op, real a, real b) nothrow @nogc
         case OPle: return a <= b;
         case OPgt: return a > b;
         case OPge: return a >= b;
-        case OPunord, OPnleg: return un;
-        case OPord, OPleg: return !un;
-        case OPlg, OPnue: return !un && a != b;
-        case OPue, OPnlg: return un || a == b;
-        case OPule, OPngt: return un || a <= b;
-        case OPul, OPnge: return un || a < b;
-        case OPuge, OPnlt: return un || a >= b;
-        case OPug, OPnle: return un || a > b;
-        case OPnule: return !un && a > b;
-        case OPnul: return !un && a >= b;
-        case OPnuge: return !un && a < b;
-        case OPnug: return !un && a <= b;
-        default: return 0;
+        default: return iop;
     }
 }
 
@@ -2526,21 +2530,10 @@ private extern (C) wasm_trap_t* ipHostSoftReal(void* env, wasmtime_caller_t* cal
     const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
 {
     import dmd.wasmtimec;
-    import dmd.backend.wasm.softreal : SR;
     static import core.math;
     auto hi = cast(HostImport*) env;
-    static real ar(ref const wasmtime_val_t v)
-    {
-        real r = 0;
-        memcpy(&r, v.of.v128.ptr, 10);
-        return r;
-    }
-    void setR(real r)
-    {
-        results[0].kind = WASMTIME_V128;
-        results[0].of.v128[] = 0;
-        memcpy(results[0].of.v128.ptr, &r, 10);
-    }
+    static real ar(ref const wasmtime_val_t v) { return ipLdReal(v.of.v128.ptr); }
+    void setR(real r) { ipSetReal(results[0], r); }
     void setL(long v)
     {
         results[0].kind = WASMTIME_I64;
@@ -2551,7 +2544,7 @@ private extern (C) wasm_trap_t* ipHostSoftReal(void* env, wasmtime_caller_t* cal
         results[0].kind = WASMTIME_I32;
         results[0].of.i32 = v;
     }
-    switch (cast(SR) hi.softOp)
+    final switch (hi.softOp)
     {
         case SR.add: setR(ar(args[0]) + ar(args[1])); break;
         case SR.sub: setR(ar(args[0]) - ar(args[1])); break;
@@ -2591,7 +2584,6 @@ private extern (C) wasm_trap_t* ipHostSoftReal(void* env, wasmtime_caller_t* cal
         case SR.toU64: setL(cast(long) cast(ulong) ar(args[0])); break;
         case SR.toI32: setI(cast(int) ar(args[0])); break;
         case SR.toU32: setI(cast(int) cast(uint) ar(args[0])); break;
-        default: return ipTrap("wasm-ctfe: bad soft real op");
     }
     return null;
 }
@@ -2951,6 +2943,13 @@ private __gshared uint ipPS = 8;
 private ulong ipValP(ref const wasmtime_val_t v) nothrow @nogc
 {
     return v.kind == WASMTIME_I32 ? cast(ulong) cast(uint) v.of.i32 : cast(ulong) v.of.i64;
+}
+
+private void ipSetReal(ref wasmtime_val_t v, real r) nothrow @nogc
+{
+    v.kind = WASMTIME_V128;
+    v.of.v128[] = 0;
+    memcpy(v.of.v128.ptr, &r, 10);
 }
 
 private void ipSetP(ref wasmtime_val_t v, ulong x) nothrow @nogc
@@ -5027,14 +5026,14 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
                 hi.fd = *bp;
                 cb = isBuiltin(*bp) == BUILTIN.ctfeWrite ? &ipHostCtfeWrite : &ipHostBuiltin;
             }
-            else if (nm.length > 16 && nm[0 .. 16] == "__wasmctfe_real_")
+            else if (nm.startsWith(softRealPrefix))
             {
-                import dmd.backend.wasm.softreal : softRealNames;
                 foreach (k, sn; softRealNames)
                     if (sn == nm)
                     {
-                        hi.softOp = cast(int) k;
+                        hi.softOp = cast(SR) k;
                         cb = &ipHostSoftReal;
+                        break;
                     }
             }
             else if (auto sp = nm in wasmCtfeStubFuncs)
@@ -5934,9 +5933,7 @@ private Expression ipDecodeMem(const(ubyte)[] mem, ulong addr, Type type, Loc lo
     {
         if (!wasmCtfeSoftRealTarget())
             return null;
-        real r = 0;
-        memcpy(&r, mem.ptr + cast(size_t) addr, 10);
-        return new RealExp(loc, r, type);
+        return new RealExp(loc, ipLdReal(mem.ptr + cast(size_t) addr), type);
     }
     if (!ipScalarType(tb))
         return null;
@@ -6014,24 +6011,7 @@ private bool ipEncodeArg(ubyte[] mem, ref ulong cur, Expression arg, out ulong l
             if (auto ie = el.isIntegerExp())
                 ipWrite(mem, cur + i * esz, ie.toInteger(), esz);
             else if (auto re = el.isRealExp())
-            {
-                if (esz == 4)
-                {
-                    const f = cast(float) re.value;
-                    uint u;
-                    memcpy(&u, &f, 4);
-                    ipWrite(mem, cur + i * esz, u, 4);
-                }
-                else if (esz > 8)
-                    ipPutReal(mem, cur + i * esz, re.value);
-                else
-                {
-                    const d = cast(double) re.value;
-                    ulong u;
-                    memcpy(&u, &d, 8);
-                    ipWrite(mem, cur + i * esz, u, 8);
-                }
-            }
+                ipPutFloat(mem, cur + i * esz, esz, re.value);
             else
                 return false;
         }
@@ -6061,28 +6041,10 @@ private bool ipEncodeVal(ubyte[] mem, ulong addr, Type t, Expression e, int dept
     }
     if (auto re = e.isRealExp())
     {
-        if (sz == 4)
-        {
-            const f = cast(float) re.value;
-            uint u;
-            memcpy(&u, &f, 4);
-            ipWrite(mem, addr, u, 4);
-            return true;
-        }
-        if (sz == 8)
-        {
-            const d = cast(double) re.value;
-            ulong u;
-            memcpy(&u, &d, 8);
-            ipWrite(mem, addr, u, 8);
-            return true;
-        }
-        if (sz > 8 && tb.ty == Tfloat80 && wasmCtfeSoftRealTarget())
-        {
-            ipPutReal(mem, addr, re.value);
-            return true;
-        }
-        return false;
+        if (sz > 8 && !(tb.ty == Tfloat80 && wasmCtfeSoftRealTarget()))
+            return false;
+        ipPutFloat(mem, addr, sz, re.value);
+        return true;
     }
     if (auto sle = e.isStructLiteralExp())
     {
@@ -6166,12 +6128,7 @@ private bool ipMarshalScalar(Expression arg, ref wasmtime_val_t val)
             val.of.f64 = cast(double) re.value;
         }
         else if (tb.ty == Tfloat80 && wasmCtfeSoftRealTarget())
-        {
-            const real r = re.value;
-            val.kind = WASMTIME_V128;
-            val.of.v128[] = 0;
-            memcpy(val.of.v128.ptr, &r, 10);
-        }
+            ipSetReal(val, re.value);
         else
             return false;
         return true;
@@ -6212,13 +6169,9 @@ private Expression ipDecodeScalar(ref wasmtime_val_t val, Type type, Loc loc)
                 return null;
             return new RealExp(loc, real_t(val.of.f64), type);
         case Tfloat80:
-        {
             if (val.kind != WASMTIME_V128)
                 return null;
-            real r = 0;
-            memcpy(&r, val.of.v128.ptr, 10);
-            return new RealExp(loc, r, type);
-        }
+            return new RealExp(loc, ipLdReal(val.of.v128.ptr), type);
         default:
             return null;
     }

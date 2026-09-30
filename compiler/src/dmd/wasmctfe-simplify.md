@@ -36,6 +36,13 @@ These came up during the reviews. None of them was verified or fixed.
   shift-range errors.
 - **`sqrt(double) + fabs(sin(double))` in a loop fails** with "wasm-ctfe cannot
   evaluate". It fails the same way before the simplification commits.
+- **A ctfe-only lambda that loops over an outer const array fails.**
+  `enum e = (() { int t; foreach (x; array) t += x; return t; })();` inside a
+  function with `immutable int[4] array = 3;` gives "wasm-ctfe cannot
+  evaluate". Indexing the array from such a lambda works.
+- **A nested static array outer const may be filled only in its outer
+  dimension.** `visitSymbol` in `e2ir.d` passes the outer `dim` with the
+  scalar's type to `setArray` for `const int[2][3] a = 0`.
 - **The `hdrgen.d` null guard fixes a bug that also exists on master.**
   `-ftime-trace` prints an enum while its members are still being analysed. It
   could go upstream as its own fix.
@@ -185,3 +192,36 @@ These came up during the reviews. None of them was verified or fixed.
   Redesigns.
 - **Moving the builtin shortcut out of `tryWasmCtfeInprocOnce`.** Changes the
   order of checks.
+
+## b183f6379f, b770e0e760, bbfee4f85a (fixes in the "soft-real" simplification commit)
+
+- **Materializing an outer const once per function instead of once per
+  reference (`visitSymbol` in `e2ir.d`).** Every reference builds a fresh
+  temporary and re-evaluates the initializer, so a loop over an outer const
+  array is quadratic. Hoisting the initializer to function entry changes when
+  it runs, and an initializer that traps would then fail calls that never read
+  the variable.
+- **`wasmCtfeOuterConstInit` returning a complete value (array literal for a
+  scalar-initialized static array) so the glue only calls `toElem` and
+  `addressElem`.** A plain read would yield an rvalue instead of
+  `(tmp = init, tmp)`, and a large `const T[N] a = x` would allocate an
+  N-element literal.
+- **A synthetic `VarDeclaration` plus `visitAssign` for the same code.**
+  `visitAssign` constructs struct literals in place and may call constructors
+  where the current code copies a value.
+- **`v._init.semanticDone` in `wasmCtfeAggReady` instead of re-folding the
+  initializer and checking for five literal kinds.** Looks like the right test,
+  but it makes more aggregates ready on a repeat visit (array initializers, AA
+  literals, `&global`, function pointers).
+- **Inline `v128.xor`/`v128.and` for soft-real negation, `fabs` and the truth
+  test.** They only touch the sign bit, so the host call is avoidable, but it
+  changes codegen and the padding bytes of the result.
+- **Only the interface part of the early return in `ipDecodeClassRef`.** The
+  exact vtbl lookup could then decode classes with subclasses in builds without
+  `TypeInfo_Class`, which is a behaviour change. The `wasmCtfeHasSubclass` scan
+  can also run twice there.
+- **The soft-real imports as 24 `RTLSYM` entries instead of the cache in
+  `softreal.d`.** One mechanism instead of two, but no fewer lines, and the
+  host still needs the name table.
+- **`ipEncodeArg` calling `ipEncodeVal` per element.** Not needed after both
+  got the shared `ipPutFloat`.

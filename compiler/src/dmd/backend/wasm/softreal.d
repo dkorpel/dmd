@@ -38,32 +38,14 @@ enum SR : ubyte
     toU32,
 }
 
-immutable string[SR.max + 1] softRealNames = [
-    "__wasmctfe_real_add",
-    "__wasmctfe_real_sub",
-    "__wasmctfe_real_mul",
-    "__wasmctfe_real_div",
-    "__wasmctfe_real_mod",
-    "__wasmctfe_real_neg",
-    "__wasmctfe_real_abs",
-    "__wasmctfe_real_sqrt",
-    "__wasmctfe_real_sin",
-    "__wasmctfe_real_cos",
-    "__wasmctfe_real_rint",
-    "__wasmctfe_real_rndtol",
-    "__wasmctfe_real_yl2x",
-    "__wasmctfe_real_yl2xp1",
-    "__wasmctfe_real_scale",
-    "__wasmctfe_real_cmp",
-    "__wasmctfe_real_fromF64",
-    "__wasmctfe_real_toF64",
-    "__wasmctfe_real_fromI64",
-    "__wasmctfe_real_fromU64",
-    "__wasmctfe_real_toI64",
-    "__wasmctfe_real_toU64",
-    "__wasmctfe_real_toI32",
-    "__wasmctfe_real_toU32",
-];
+enum softRealPrefix = "__wasmctfe_real_";
+
+immutable string[SR.max + 1] softRealNames = () {
+    string[SR.max + 1] names;
+    foreach (i, m; __traits(allMembers, SR))
+        names[i] = softRealPrefix ~ m;
+    return names;
+}();
 
 private __gshared Symbol*[SR.max + 1] softRealSyms;
 

@@ -1582,12 +1582,8 @@ bool genElem(ref WasmCG cg, elem* e)
         return true;
     }
 
-    if (wasmSoftReal)
-    {
-        const sr = cg.genSoftReal(e);
-        if (sr >= 0)
-            return sr != 0;
-    }
+    if (wasmSoftReal && cg.genSoftReal(e))
+        return true;
 
     switch (op)
     {
@@ -2061,6 +2057,9 @@ bool genElem(ref WasmCG cg, elem* e)
         case WASM_I32: cg.emit(OP.I32_SUB); break;
         case WASM_I64: cg.emit(OP.I64_SUB); break;
         case WASM_TYPE.V128:
+            assert(isSoftRealTy(e.E1.Ety));
+            cg.emitSoftRealCall(SR.neg);
+            break;
         case WASM_TYPE.EXNREF: assert(0);
         }
         cg.maskSmallInt(e.E1.Ety);
@@ -2690,137 +2689,79 @@ private void emitSoftRealConst(ref WasmCG cg, targ_real v)
     cg.emit(OP.FD_PREFIX, Uleb(WASM_SIMD.V128_CONST), b);
 }
 
-private int genSoftReal(ref WasmCG cg, elem* e)
+private bool genSoftReal(ref WasmCG cg, elem* e)
 {
-    int call1(SR sr)
+    bool call1(SR sr, elem* arg)
     {
-        cg.genElem(e.E1);
+        cg.genElem(arg);
         cg.emitSoftRealCall(sr);
-        return 1;
+        return true;
     }
+    bool unary(SR sr) { return isSoftRealTy(e.Ety) && call1(sr, e.E1); }
+    bool fromLd(SR sr) { return e.E1.Eoper == OPld_d && call1(sr, e.E1.E1); }
 
     switch (e.Eoper)
     {
-    case OPneg:
-    case OPabs:
-    case OPsqrt:
-    case OPsin:
-    case OPcos:
-    case OPrint:
-        if (!isSoftRealTy(e.Ety))
-            return -1;
-        switch (e.Eoper)
-        {
-        case OPneg:  return call1(SR.neg);
-        case OPabs:  return call1(SR.abs);
-        case OPsqrt: return call1(SR.sqrt);
-        case OPsin:  return call1(SR.sin);
-        case OPcos:  return call1(SR.cos);
-        default:     return call1(SR.rint);
-        }
+    case OPneg:   return unary(SR.neg);
+    case OPabs:   return unary(SR.abs);
+    case OPsqrt:  return unary(SR.sqrt);
+    case OPsin:   return unary(SR.sin);
+    case OPcos:   return unary(SR.cos);
+    case OPrint:  return unary(SR.rint);
 
     case OPrndtol:
         if (!isSoftRealTy(e.E1.Ety))
-            return -1;
-        call1(SR.rndtol);
+            return false;
+        call1(SR.rndtol, e.E1);
         cg.emitCoerce(WASM_I64, wasmType(e.Ety));
-        return 1;
+        return true;
 
     case OPyl2x:
     case OPyl2xp1:
         if (!isSoftRealTy(e.Ety))
-            return -1;
+            return false;
         cg.genElem(e.E1);
-        cg.genElem(e.E2);
-        cg.emitSoftRealCall(e.Eoper == OPyl2x ? SR.yl2x : SR.yl2xp1);
-        return 1;
+        return call1(e.Eoper == OPyl2x ? SR.yl2x : SR.yl2xp1, e.E2);
 
     case OPscale:
     {
         if (!isSoftRealTy(e.Ety))
-            return -1;
+            return false;
         elem* sig = isSoftRealTy(e.E1.Ety) ? e.E1 : e.E2;
         elem* expo = sig is e.E1 ? e.E2 : e.E1;
         cg.genElem(sig);
         cg.genElem(expo);
-        if (isSoftRealTy(expo.Ety))
-        {
-            cg.emitSoftRealCall(SR.toI64);
-            cg.emit(OP.I32_WRAP_I64);
-        }
-        else
-            cg.emitCoerce(expo.wasmType, WASM_I32);
+        cg.emitCoerce(expo.wasmType, WASM_I32);
         cg.emitSoftRealCall(SR.scale);
-        return 1;
+        return true;
     }
 
     case OPd_ld:
         if (e.E1.Eoper == OPs64_d || e.E1.Eoper == OPu64_d)
-        {
-            cg.genElem(e.E1.E1);
-            cg.emitSoftRealCall(e.E1.Eoper == OPs64_d ? SR.fromI64 : SR.fromU64);
-            return 1;
-        }
-        return call1(SR.fromF64);
+            return call1(e.E1.Eoper == OPs64_d ? SR.fromI64 : SR.fromU64, e.E1.E1);
+        return call1(SR.fromF64, e.E1);
 
-    case OPld_d:
-        return call1(SR.toF64);
+    case OPld_d:   return call1(SR.toF64, e.E1);
+    case OPld_u64: return call1(SR.toU64, e.E1);
+    case OPd_s64:  return fromLd(SR.toI64);
+    case OPd_u64:  return fromLd(SR.toU64);
+    case OPd_s32:  return fromLd(SR.toI32);
+    case OPd_u32:  return fromLd(SR.toU32);
 
-    case OPld_u64:
-        return call1(SR.toU64);
-
-    case OPd_s64:
-    case OPd_u64:
-    case OPd_s32:
-    case OPd_u32:
     case OPd_s16:
-    case OPd_u16:
-        if (e.E1.Eoper != OPld_d)
-            return -1;
-        cg.genElem(e.E1.E1);
-        switch (e.Eoper)
-        {
-        case OPd_s64:
-            cg.emitSoftRealCall(SR.toI64);
-            break;
-        case OPd_u64:
-            cg.emitSoftRealCall(SR.toU64);
-            break;
-        case OPd_s32:
-            cg.emitSoftRealCall(SR.toI32);
-            break;
-        case OPd_u32:
-            cg.emitSoftRealCall(SR.toU32);
-            break;
-        case OPd_s16:
-            cg.emitSoftRealCall(SR.toI64);
-            cg.emit(OP.I32_WRAP_I64, OP.I32_EXTEND16_S);
-            break;
-        default:
-            cg.emitSoftRealCall(SR.toU64);
-            cg.emit(OP.I32_WRAP_I64, OP.I32_CONST, Sleb(0xFFFF), OP.I32_AND);
-            break;
-        }
-        return 1;
+        if (!fromLd(SR.toI64))
+            return false;
+        cg.emit(OP.I32_WRAP_I64, OP.I32_EXTEND16_S);
+        return true;
 
-    case OPnegass:
-    {
-        if (!isSoftRealTy(e.E1.Ety))
-            return -1;
-        auto lv = saveLValueAddr(cg, e.E1);
-        const uint storeOff = replayAddr(cg, lv);
-        const uint loadOff = replayAddr(cg, lv);
-        cg.emitLoad(e.E1.Ety, loadOff);
-        cg.emitSoftRealCall(SR.neg);
-        const uint vTmp = cg.allocTemp(WASM_TYPE.V128);
-        cg.emit(OP.LOCAL_TEE, Uleb(vTmp));
-        cg.emitStore(e.E1.Ety, storeOff);
-        cg.emit(OP.LOCAL_GET, Uleb(vTmp));
-        return 1;
-    }
+    case OPd_u16:
+        if (!fromLd(SR.toU64))
+            return false;
+        cg.emit(OP.I32_WRAP_I64, OP.I32_CONST, Sleb(0xFFFF), OP.I32_AND);
+        return true;
 
     default:
-        return -1;
+        return false;
     }
 }
 
@@ -3077,8 +3018,7 @@ void emitCondToI32(ref WasmCG cg, elem* condElem, bool invert = false)
     if (isSoftRealTy(tb))
     {
         cg.emitSoftRealConst(0);
-        cg.emit(OP.I32_CONST, Sleb(invert ? OPeqeq : OPne));
-        return cg.emitSoftRealCall(SR.cmp);
+        return cg.emitRelop(invert ? OPeqeq : OPne, tb);
     }
 
     switch (condElem.wasmType)

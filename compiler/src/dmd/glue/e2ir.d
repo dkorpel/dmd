@@ -824,6 +824,14 @@ elem* toElem(Expression e, ref IRState irs)
             if (fd && fd != irs.getFunc() &&
                 !(wasmCtfeBuildActive && s.Ssymnum < (*cstate.CSpsymtab).length && (*cstate.CSpsymtab)[s.Ssymnum] is s))
             {
+                static elem* typedVar(Symbol* s, Type t)
+                {
+                    elem* e = el_var(s);
+                    e.Ety = totym(t);
+                    if (tybasic(e.Ety) == TYstruct || tybasic(e.Ety) == TYarray)
+                        e.ET = Type_toCtype(t);
+                    return e;
+                }
                 if (wasmCtfeBuildActive)
                 {
                     import dmd.wasmctfe : wasmCtfeOuterConstInit;
@@ -840,21 +848,10 @@ elem* toElem(Expression e, ref IRState irs)
                             einit = setArray(ce, el_ptr(stmp), el_long(TYsize_t, tvb.isTypeSArray().dim.toInteger()),
                                 ce.type, toElem(ce, irs), irs, EXP.blit);
                         else
-                        {
-                            elem* ev = el_var(stmp);
-                            ev.Ety = totym(cv.type);
-                            if (tybasic(ev.Ety) == TYstruct || tybasic(ev.Ety) == TYarray)
-                                ev.ET = tv;
-                            einit = elAssign(ev, toElem(ce, irs), cv.type, tv);
-                        }
+                            einit = elAssign(typedVar(stmp, cv.type), toElem(ce, irs), cv.type, tv);
                         elem* er;
                         if (se.op == EXP.variable)
-                        {
-                            er = el_var(stmp);
-                            er.Ety = totym(se.type);
-                            if (tybasic(er.Ety) == TYstruct || tybasic(er.Ety) == TYarray)
-                                er.ET = Type_toCtype(se.type);
-                        }
+                            er = typedVar(stmp, se.type);
                         else
                         {
                             er = el_ptr(stmp);
@@ -868,13 +865,7 @@ elem* toElem(Expression e, ref IRState irs)
                 {
                     wasmCtfePoison("enclosing frame variable");
                     if (se.op == EXP.variable && (tb.ty == Tstruct || tb.ty == Tsarray))
-                    {
-                        elem* ev = el_var(symbol_genauto(Type_toCtype(se.type)));
-                        ev.Ety = totym(se.type);
-                        if (tybasic(ev.Ety) == TYstruct || tybasic(ev.Ety) == TYarray)
-                            ev.ET = Type_toCtype(se.type);
-                        return ev;
-                    }
+                        return typedVar(symbol_genauto(Type_toCtype(se.type)), se.type);
                     return el_long(totym(se.type), 0);
                 }
                 // 'var' is a variable in an enclosing function.

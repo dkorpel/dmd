@@ -1406,7 +1406,9 @@ private bool wasmCtfeAggReady(AggregateDeclaration ad)
     {
         if (v.semanticRun < PASS.semantic2done && v._init)
         {
-            if (!v._scope && !v.inuse)
+            if (v.inuse)
+                return false;
+            if (!v._scope)
             {
                 auto ei = v._init.isExpInitializer();
                 if (!ei || !ei.exp)
@@ -1419,8 +1421,6 @@ private bool wasmCtfeAggReady(AggregateDeclaration ad)
                 ei.exp = e;
                 continue;
             }
-            if (!v._scope || v.inuse)
-                return false;
             import dmd.initsem : initializerSemantic;
             import dmd.init : NeedInterpret;
             const errs = global.errors;
