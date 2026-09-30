@@ -324,9 +324,13 @@ void selfLink(ref WasmModule wmod)
 /// index they need (there is exactly one table, one global and one tag). That
 /// leaves function-pointer constants and the addresses of data symbols that
 /// this module does not itself define.
-void patchSelfLinkCodeRelocs(ref WasmModule wmod, ref WasmFuncBody fb, ubyte[] code)
+uint[string] selfLinkDataAddrByName(ref WasmModule wmod)
 {
-    uint[string] byName = buildDataAddrByName(wmod);
+    return buildDataAddrByName(wmod);
+}
+
+void patchSelfLinkCodeRelocs(ref WasmModule wmod, ref WasmFuncBody fb, ubyte[] code, uint[string] byName)
+{
     foreach (ref const WasmReloc r; fb.relocs)
     {
         if (r.type == R_WASM.TABLE_INDEX_SLEB)

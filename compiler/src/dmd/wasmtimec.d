@@ -156,6 +156,7 @@ void wasmtime_config_wasm_memory64_set(wasm_config_t*, bool);
 void wasmtime_config_wasm_exceptions_set(wasm_config_t*, bool);
 void wasmtime_config_wasm_multi_memory_set(wasm_config_t*, bool);
 void wasmtime_config_consume_fuel_set(wasm_config_t*, bool);
+void wasmtime_config_memory_init_cow_set(wasm_config_t*, bool);
 wasm_engine_t* wasm_engine_new();
 wasm_engine_t* wasm_engine_new_with_config(wasm_config_t*);
 void wasm_engine_delete(wasm_engine_t*);

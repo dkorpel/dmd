@@ -1350,6 +1350,144 @@ private Expression ipFoldNoCall(Expression e)
     return null;
 }
 
+private Expression ipFoldConstVars(Expression e)
+{
+    import dmd.optimize : optimize;
+    import dmd.typesem : equivalent;
+    bool changed;
+    auto x = ipSubstConstVars(e, 0, changed);
+    if (!x || !changed)
+        return null;
+    const oldGagged = global.startGagging();
+    auto r = x.optimize(WANTvalue);
+    if (global.endGagging(oldGagged))
+        return null;
+    if (auto se = r ? r.isSliceExp() : null)
+        if (!se.lwr && !se.upr && se.type && se.e1.type && (se.e1.isStringExp() || se.e1.isArrayLiteralExp())
+            && se.e1.type.toBasetype().ty == Tarray && equivalent(se.e1.type, se.type))
+        {
+            r = se.e1.copy();
+            r.type = se.type;
+        }
+    if (!r || !r.type || !ipIsLiteral(r))
+        return null;
+    import dmd.ctfeexpr : copyLiteral;
+    return copyLiteral(r).copy();
+}
+
+private Expression ipSubstConstVars(Expression e, int depth, ref bool changed)
+{
+    import dmd.typesem : equivalent;
+    if (depth > 64)
+        return null;
+    if (auto ve = e.isVarExp())
+    {
+        auto v = ve.var.isVarDeclaration();
+        if (!v)
+            return e;
+        if (!v.isDataseg() || !(v.isConst() || v.isImmutable()) || !v._init || !v._init.semanticDone)
+            return null;
+        auto ei = v._init.isExpInitializer();
+        if (!ei || !ei.exp || !ei.exp.type || !ve.type || !ipIsLiteral(ei.exp) || !equivalent(ei.exp.type, ve.type))
+            return null;
+        changed = true;
+        auto r = ei.exp.copy();
+        r.type = ve.type;
+        return r;
+    }
+    Expressions* substElems(Expressions* es)
+    {
+        if (!es)
+            return es;
+        Expressions* res = es;
+        foreach (i, el; *es)
+        {
+            if (!el)
+                continue;
+            auto x = ipSubstConstVars(el, depth + 1, changed);
+            if (!x)
+                return null;
+            if (x is el)
+                continue;
+            if (res is es)
+                res = es.copy();
+            (*res)[i] = x;
+        }
+        return res;
+    }
+    if (auto se = e.isSliceExp())
+    {
+        auto x = ipSubstConstVars(se.e1, depth + 1, changed);
+        auto l = se.lwr ? ipSubstConstVars(se.lwr, depth + 1, changed) : null;
+        auto u = se.upr ? ipSubstConstVars(se.upr, depth + 1, changed) : null;
+        if (!x || (se.lwr && !l) || (se.upr && !u))
+            return null;
+        if (x is se.e1 && l is se.lwr && u is se.upr)
+            return e;
+        auto n = cast(SliceExp) se.copy();
+        n.e1 = x;
+        n.lwr = l;
+        n.upr = u;
+        n.lengthVar = null;
+        return n;
+    }
+    if (auto ie = e.isIndexExp())
+    {
+        auto x = ipSubstConstVars(ie.e1, depth + 1, changed);
+        auto i = ipSubstConstVars(ie.e2, depth + 1, changed);
+        if (!x || !i)
+            return null;
+        if (x is ie.e1 && i is ie.e2)
+            return e;
+        auto n = cast(IndexExp) ie.copy();
+        n.e1 = x;
+        n.e2 = i;
+        n.lengthVar = null;
+        return n;
+    }
+    if (auto ce = e.isCastExp())
+    {
+        auto x = ipSubstConstVars(ce.e1, depth + 1, changed);
+        if (!x || x is ce.e1)
+            return x ? e : null;
+        auto n = cast(CastExp) ce.copy();
+        n.e1 = x;
+        return n;
+    }
+    if (auto sle = e.isStructLiteralExp())
+    {
+        auto es = substElems(sle.elements);
+        if (!es)
+            return null;
+        if (es is sle.elements)
+            return e;
+        auto n = cast(StructLiteralExp) sle.copy();
+        n.elements = es;
+        n.origin = n;
+        return n;
+    }
+    if (auto ale = e.isArrayLiteralExp())
+    {
+        Expression basis = ale.basis;
+        if (basis)
+        {
+            basis = ipSubstConstVars(basis, depth + 1, changed);
+            if (!basis)
+                return null;
+        }
+        auto es = substElems(ale.elements);
+        if (!es)
+            return null;
+        if (es is ale.elements && basis is ale.basis)
+            return e;
+        auto n = cast(ArrayLiteralExp) ale.copy();
+        n.elements = es;
+        n.basis = basis;
+        return n;
+    }
+    return ipIsLiteral(e) ? e : null;
+}
+
 private Expression ipFoldLiteralCompare(Expression e)
 {
     import dmd.optimize : optimize;
@@ -1618,12 +1756,9 @@ Expression tryWasmCtfeExpr(Expression e)
     if (auto ne = e.isNotExp())
         if (ne.e1.isTypeExp())
             return IntegerExp.createBool(false);
-    if (auto ve = e.isVarExp())
-        if (auto v = ve.var.isVarDeclaration())
-            if (v.isDataseg() && (v.isConst() || v.isImmutable()) && v._init && v._init.semanticDone)
-                if (auto ei = v._init.isExpInitializer())
-                    if (ei.exp && ei.exp.isStringExp() && ei.exp.type && ei.exp.type.equals(e.type))
-                        return ei.exp.copy();
+    if (!ipHasCall(e))
+        if (auto r = ipFoldConstVars(e))
+            return r;
     if (auto ae = e.isAddrExp())
         if (ae.e1.isThisExp())
             return e;
@@ -4278,6 +4413,7 @@ private wasm_engine_t* ipGetEngine()
     wasmtime_config_wasm_memory64_set(cfg, true);
     wasmtime_config_wasm_exceptions_set(cfg, true);
     wasmtime_config_consume_fuel_set(cfg, true);
+    wasmtime_config_memory_init_cow_set(cfg, false);
     ipEngine = wasm_engine_new_with_config(cfg);
     return ipEngine;
 }

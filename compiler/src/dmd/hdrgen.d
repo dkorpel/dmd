@@ -2240,7 +2240,9 @@ private void expressionPrettyPrint(Expression e, ref OutBuffer buf, ref HdrGenSt
                     {
                         foreach (em; *sym.members)
                         {
-                            if ((cast(EnumMember)em).value.isIntegerExp().value == v)
+                            auto emv = (cast(EnumMember)em).value;
+                            auto ie = emv ? emv.isIntegerExp() : null;
+                            if (ie && ie.value == v)
                             {
                                 const id = em.ident.toString();
                                 buf.printf("%s.%.*s", sym.toChars(), cast(int)id.length, id.ptr);

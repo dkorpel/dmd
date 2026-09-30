@@ -674,6 +674,9 @@ private bool emitCodeSection(ref OutBuffer out_, ref WasmModule wmod)
     s.writeuLEB128(defined);
 
     uint payloadOffset = ulebSize(defined);
+    uint[string] selfLinkNames;
+    if (wasmSelfLink)
+        selfLinkNames = selfLinkDataAddrByName(wmod);
 
     foreach (size_t fi, ref const WasmFunc f; wmod.funcs[wmod.numImports .. $])
     {
@@ -704,7 +707,7 @@ private bool emitCodeSection(ref OutBuffer out_, ref WasmModule wmod)
                 }
             }
             if (wasmSelfLink)
-                patchSelfLinkCodeRelocs(wmod, *fb, codeBytes);
+                patchSelfLinkCodeRelocs(wmod, *fb, codeBytes, selfLinkNames);
         }
 
         OutBuffer locBuf;
