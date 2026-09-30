@@ -1338,13 +1338,17 @@ private bool ipIsAddrLiteral(Expression e)
     return ie && ie.e1.isArrayLiteralExp() && ie.e2.isIntegerExp();
 }
 
-private Expression ipFoldNoCall(Expression e)
+private Expression ipOptimizeGagged(Expression e)
 {
     import dmd.optimize : optimize;
     const oldGagged = global.startGagging();
     auto r = e.optimize(WANTvalue);
-    if (global.endGagging(oldGagged))
-        return null;
+    return global.endGagging(oldGagged) ? null : r;
+}
+
+private Expression ipFoldNoCall(Expression e)
+{
+    auto r = ipOptimizeGagged(e);
     if (r && r !is e && r.type && ipIsLiteral(r))
         return r;
     return null;
@@ -1352,18 +1356,14 @@ private Expression ipFoldNoCall(Expression e)
 
 private Expression ipFoldConstVars(Expression e)
 {
-    import dmd.optimize : optimize;
+    import dmd.ctfeexpr : copyLiteral;
     import dmd.typesem : equivalent;
-    bool changed;
-    auto x = ipSubstConstVars(e, 0, changed);
-    if (!x || !changed)
+    auto x = ipSubstConstVars(e, 0);
+    if (!x || x is e)
         return null;
-    const oldGagged = global.startGagging();
-    auto r = x.optimize(WANTvalue);
-    if (global.endGagging(oldGagged))
-        return null;
+    auto r = ipOptimizeGagged(x);
     if (auto se = r ? r.isSliceExp() : null)
-        if (!se.lwr && !se.upr && se.type && se.e1.type && (se.e1.isStringExp() || se.e1.isArrayLiteralExp())
+        if (!se.lwr && !se.upr && se.type && se.e1.type && se.e1.isArrayLiteralExp()
             && se.e1.type.toBasetype().ty == Tarray && equivalent(se.e1.type, se.type))
         {
             r = se.e1.copy();
@@ -1371,11 +1371,10 @@ private Expression ipFoldConstVars(Expression e)
         }
     if (!r || !r.type || !ipIsLiteral(r))
         return null;
-    import dmd.ctfeexpr : copyLiteral;
     return copyLiteral(r).copy();
 }
 
-private Expression ipSubstConstVars(Expression e, int depth, ref bool changed)
+private Expression ipSubstConstVars(Expression e, int depth)
 {
     import dmd.typesem : equivalent;
     if (depth > 64)
@@ -1390,7 +1389,6 @@ private Expression ipSubstConstVars(Expression e, int depth, ref bool changed)
         auto ei = v._init.isExpInitializer();
         if (!ei || !ei.exp || !ei.exp.type || !ve.type || !ipIsLiteral(ei.exp) || !equivalent(ei.exp.type, ve.type))
             return null;
-        changed = true;
         auto r = ei.exp.copy();
         r.type = ve.type;
         return r;
@@ -1404,7 +1402,7 @@ private Expression ipSubstConstVars(Expression e, int depth, ref bool changed)
         {
             if (!el)
                 continue;
-            auto x = ipSubstConstVars(el, depth + 1, changed);
+            auto x = ipSubstConstVars(el, depth + 1);
             if (!x)
                 return null;
             if (x is el)
@@ -1417,9 +1415,9 @@ private Expression ipSubstConstVars(Expression e, int depth, ref bool changed)
     }
     if (auto se = e.isSliceExp())
     {
-        auto x = ipSubstConstVars(se.e1, depth + 1, changed);
-        auto l = se.lwr ? ipSubstConstVars(se.lwr, depth + 1, changed) : null;
-        auto u = se.upr ? ipSubstConstVars(se.upr, depth + 1, changed) : null;
+        auto x = ipSubstConstVars(se.e1, depth + 1);
+        auto l = se.lwr ? ipSubstConstVars(se.lwr, depth + 1) : null;
+        auto u = se.upr ? ipSubstConstVars(se.upr, depth + 1) : null;
         if (!x || (se.lwr && !l) || (se.upr && !u))
             return null;
         if (x is se.e1 && l is se.lwr && u is se.upr)
@@ -1433,8 +1431,8 @@ private Expression ipSubstConstVars(Expression e, int depth, ref bool changed)
     }
     if (auto ie = e.isIndexExp())
     {
-        auto x = ipSubstConstVars(ie.e1, depth + 1, changed);
-        auto i = ipSubstConstVars(ie.e2, depth + 1, changed);
+        auto x = ipSubstConstVars(ie.e1, depth + 1);
+        auto i = ipSubstConstVars(ie.e2, depth + 1);
         if (!x || !i)
             return null;
         if (x is ie.e1 && i is ie.e2)
@@ -1447,9 +1445,11 @@ private Expression ipSubstConstVars(Expression e, int depth, ref bool changed)
     }
     if (auto ce = e.isCastExp())
     {
-        auto x = ipSubstConstVars(ce.e1, depth + 1, changed);
-        if (!x || x is ce.e1)
-            return x ? e : null;
+        auto x = ipSubstConstVars(ce.e1, depth + 1);
+        if (!x)
+            return null;
+        if (x is ce.e1)
+            return e;
         auto n = cast(CastExp) ce.copy();
         n.e1 = x;
         return n;
@@ -1471,7 +1471,7 @@ private Expression ipSubstConstVars(Expression e, int depth, ref bool changed)
         Expression basis = ale.basis;
         if (basis)
         {
-            basis = ipSubstConstVars(basis, depth + 1, changed);
+            basis = ipSubstConstVars(basis, depth + 1);
             if (!basis)
                 return null;
         }
@@ -1490,16 +1490,14 @@ private Expression ipSubstConstVars(Expression e, int depth, ref bool changed)
 
 private Expression ipFoldLiteralCompare(Expression e)
 {
-    import dmd.optimize : optimize;
     import dmd.tokens : EXP;
     auto be = e.isBinExp();
     if (!be || !(e.isIdentityExp() || e.isEqualExp()))
         return null;
     const identity = e.isIdentityExp() !is null;
-    const oldGagged = global.startGagging();
-    auto e1 = be.e1.optimize(WANTvalue);
-    auto e2 = be.e2.optimize(WANTvalue);
-    if (global.endGagging(oldGagged))
+    auto e1 = ipOptimizeGagged(be.e1);
+    auto e2 = e1 ? ipOptimizeGagged(be.e2) : null;
+    if (!e2)
         return null;
     const r = ipLiteralCompare(e1, e2, identity);
     if (r < 0)
@@ -1756,9 +1754,8 @@ Expression tryWasmCtfeExpr(Expression e)
     if (auto ne = e.isNotExp())
         if (ne.e1.isTypeExp())
             return IntegerExp.createBool(false);
-    if (!ipHasCall(e))
-        if (auto r = ipFoldConstVars(e))
-            return r;
+    if (auto r = ipFoldConstVars(e))
+        return r;
     if (auto ae = e.isAddrExp())
         if (ae.e1.isThisExp())
             return e;
@@ -1793,11 +1790,12 @@ Expression tryWasmCtfeExpr(Expression e)
         }
     }
     if (!ipHasCall(e))
+    {
         if (auto r = ipFoldNoCall(e))
             return r;
-    if (!ipHasCall(e))
         if (auto r = ipFoldLiteralCompare(e))
             return r;
+    }
     const isNoreturn = e.type.toBasetype().isTypeNoreturn() !is null;
     const discard = !ipResultType(e.type) && e.type.toBasetype().ty != Tvoid && !isNoreturn;
     char[160] typeWhy = void;
@@ -2998,9 +2996,10 @@ private bool ipFindData(ulong p, out ulong base, out ulong sz, out const(char)[]
     }
     if (lo == 0)
         return false;
-    base = ipDataExtents[lo - 1].start;
-    sz = ipDataExtents[lo - 1].size;
-    name = ipDataExtents[lo - 1].name;
+    const ext = ipDataExtents[lo - 1];
+    base = ext.start;
+    sz = ext.size;
+    name = ext.name;
     return p < base + sz;
 }
 
@@ -3096,6 +3095,20 @@ private bool ipCallerMemory(wasmtime_caller_t* caller, out wasmtime_memory_t m) 
     return true;
 }
 
+private bool ipGrowHeap(wasmtime_context_t* ctx, ref wasmtime_memory_t m, ulong pages) nothrow @nogc
+{
+    import dmd.wasmtimec;
+    ulong prevPages;
+    if (auto err = wasmtime_memory_grow(ctx, &m, pages, &prevPages))
+    {
+        wasmtime_error_delete(err);
+        return false;
+    }
+    ipHeapPtr = prevPages << 16;
+    ipHeapEnd = (prevPages + pages) << 16;
+    return true;
+}
+
 private wasm_trap_t* ipBumpAlloc(wasmtime_caller_t* caller, ref wasmtime_memory_t m, ulong sz, out ulong r) nothrow @nogc
 {
     import dmd.wasmtimec;
@@ -3107,17 +3120,8 @@ private wasm_trap_t* ipBumpAlloc(wasmtime_caller_t* caller, ref wasmtime_memory_
     if (sz > (1UL << 32))
         return ipTrap("wasm-ctfe: allocation too large");
     if (!ipHeapPtr || ipHeapPtr + sz > ipHeapEnd)
-    {
-        ulong pages = (sz >> 16) + 16;
-        ulong prevPages;
-        if (auto err = wasmtime_memory_grow(ctx, &m, pages, &prevPages))
-        {
-            wasmtime_error_delete(err);
+        if (!ipGrowHeap(ctx, m, (sz >> 16) + 16))
             return ipTrap("wasm-ctfe: out of memory");
-        }
-        ipHeapPtr = prevPages << 16;
-        ipHeapEnd = (prevPages + pages) << 16;
-    }
     r = ipHeapPtr;
     ipHeapPtr += sz;
     ipRecordAlloc(r, reqSz);
@@ -4524,9 +4528,8 @@ private IpModule* ipGetModule(FuncDeclaration fd)
     }
     {
         import dmd.glue : wasmCtfeBuiltFuncs;
-        import dmd.backend.wasm.selflink : wasmSelfLinkDataExtents;
+        import dmd.backend.wasm.selflink : wasmSelfLinkDataExtents, wasmSelfLinkTableNames;
         im.dataExtents = wasmSelfLinkDataExtents;
-        import dmd.backend.wasm.selflink : wasmSelfLinkTableNames;
         FuncDeclaration[const(char)[]] byName;
         foreach (bf; wasmCtfeBuiltFuncs)
         {
@@ -5438,7 +5441,8 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
 
     wasmtime_memory_t mem;
     ulong sretAddr;
-    ulong argHeapPtr, argHeapEnd;
+    ipHeapPtr = 0;
+    ipHeapEnd = 0;
     const ulong thisSize = thisExp ? cast(ulong) thisSd.type.size() : 0;
     if (sret || memArgCount || thisExp || classResult || ptrResult)
     {
@@ -5462,16 +5466,10 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
         ulong base;
         if (need + 65536 > wasmSelfLinkStackSize)
         {
-            const ulong pages = (need >> 16) + 1;
-            ulong prevPages;
-            if (auto err = wasmtime_memory_grow(ctx, &mem, pages, &prevPages))
-            {
-                wasmtime_error_delete(err);
+            if (!ipGrowHeap(ctx, mem, (need >> 16) + 1))
                 return bail(fd, "arg memory");
-            }
-            base = prevPages << 16;
-            argHeapPtr = (base + need + 15) & ~15UL;
-            argHeapEnd = (prevPages + pages) << 16;
+            base = ipHeapPtr;
+            ipHeapPtr = (base + need + 15) & ~15UL;
         }
         else
         {
@@ -5522,12 +5520,10 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
         }
     }
 
-    ipHeapPtr = argHeapPtr;
     ipErrKind = IpErrKind.none;
     ipErrNoBody = false;
     ipThrowCount = 0;
     ipErrnoCell = 0;
-    ipHeapEnd = argHeapEnd;
     ipAllocCount = 0;
     ipUnionTagCount = 0;
     ipDecodeMemo.setDim(0);

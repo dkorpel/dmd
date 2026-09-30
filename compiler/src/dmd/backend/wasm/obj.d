@@ -676,7 +676,7 @@ private bool emitCodeSection(ref OutBuffer out_, ref WasmModule wmod)
     uint payloadOffset = ulebSize(defined);
     uint[string] selfLinkNames;
     if (wasmSelfLink)
-        selfLinkNames = selfLinkDataAddrByName(wmod);
+        selfLinkNames = buildDataAddrByName(wmod);
 
     foreach (size_t fi, ref const WasmFunc f; wmod.funcs[wmod.numImports .. $])
     {
