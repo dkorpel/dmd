@@ -1735,7 +1735,7 @@ the new instance's `tinst` to it. With the engine forcing semantic3 of the
 instance's functions, that reuse can happen inside the instance itself, and
 `tinst` pointed to the instance, which the nesting check reports as
 recursive expansion (Pegged). The move now skips a `tinst` chain that
-already contains the instance.
+already contains the instance. Test: `compilable/ctfe_tinst_cycle.d`.
 
 ### Active union members
 
@@ -1787,6 +1787,29 @@ wrapper's arguments are literals. `sqrt(sqrt(16.0))` passed a call
 expression, which `eval_sqrt` asserted on (mir-random). The host path now
 requires every argument to be a literal. Test:
 `compilable/ctfe_nested_builtin.d`.
+
+### Callees whose `semantic3` is in progress
+
+`std.format.checkFormatException` for sdc's `Value.dump` formats
+`Args.init` of a `MapResult` whose `front` calls `Value.dump` again,
+which is still in `semantic3`. The legality scan rejected the whole
+evaluation because a callee was pending. The AST interpreter never calls
+`front` on the empty range. A pending callee now leaves the caller
+pending instead of rejected, and the root is accepted when its own
+`semantic3` is done. The build skips the pending function, so calling it
+traps as an unresolved import. Test: `compilable/ctfe_pending_callee.d`.
+
+### Appends lowered only for the engine
+
+The AST interpreter evaluates `~=` directly, so the frontend lowers it to
+`_d_arrayappendcTX` only in code that is generated, and never for the
+index array of a `static foreach` over a range. Engine builds lower it in
+both places. The hook instances took the root module as `minst` and were
+emitted into the host object, together with the `TypeInfo` of the
+`static foreach` tuple, whose `__xopEquals` and `__xtoHash` were never
+generated (serialized failed to link). Such lowerings now run with
+`ctfeBlock` set, so their instances are `ctfeOnly`. Test:
+`compilable/ctfe_static_foreach_link.d`.
 
 ### `float` and `double` round in the engine
 

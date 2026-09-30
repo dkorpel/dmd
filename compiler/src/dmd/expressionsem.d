@@ -13826,6 +13826,11 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
         if ((exp.op == EXP.concatenateAssign || exp.op == EXP.concatenateElemAssign) &&
             (sc.needsCodegen() || engineCtfeLowering(sc, exp.op == EXP.concatenateAssign ? Id._d_arrayappendT : Id._d_arrayappendcTX)))
         {
+            const savedCtfeBlock = sc.ctfeBlock;
+            if (!sc.needsCodegen() || exp.op == EXP.concatenateElemAssign && isStaticForeachIndices(exp.e1))
+                sc.ctfeBlock = true;
+            scope (exit)
+                sc.ctfeBlock = savedCtfeBlock;
             // if aa ordering is triggered, `res` will be a CommaExp
             // and `.e2` will be the rewritten original expression.
 
@@ -13867,17 +13872,8 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
                  *`static foreach`, as this array is only used at compile-time.
                  */
                 import dmd.wasmctfe : wasmCtfeLoweringActive;
-                if (auto ve = wasmCtfeLoweringActive() && hookExistsQuiet(sc, Id._d_arrayappendcTX) ? null : exp.e1.isVarExp)
-                {
-                    import core.stdc.ctype : isdigit;
-                    // The name of the indices array that static foreach loops uses.
-                    // See dmd.cond.lowerNonArrayAggregate
-                    enum varName = "__res";
-                    const(char)[] id = ve.var.ident.toString;
-                    if (ve.var.storage_class & STC.temp && id.length > varName.length &&
-                        id[0 .. varName.length] == varName && id[varName.length].isdigit)
-                        return;
-                }
+                if (!(wasmCtfeLoweringActive() && hookExistsQuiet(sc, Id._d_arrayappendcTX)) && isStaticForeachIndices(exp.e1))
+                    return;
 
                 Identifier hook = Id._d_arrayappendcTX;
                 if (!verifyHookExist(exp.loc, *sc, hook, "appending element to arrays", Id.object))
@@ -18241,6 +18237,20 @@ private VarDeclaration makeThis2Argument(Loc loc, Scope* sc, FuncDeclaration fd)
     // add `fd` to the nested refs
     vthis2.nestedrefs.push(fd);
     return vthis2;
+}
+
+private bool isStaticForeachIndices(Expression e)
+{
+    import core.stdc.ctype : isdigit;
+    auto ve = e.isVarExp();
+    if (!ve)
+        return false;
+    // The name of the indices array that static foreach loops uses.
+    // See dmd.cond.lowerNonArrayAggregate
+    enum varName = "__res";
+    const(char)[] id = ve.var.ident.toString;
+    return ve.var.storage_class & STC.temp && id.length > varName.length &&
+        id[0 .. varName.length] == varName && id[varName.length].isdigit;
 }
 
 private bool engineCtfeLowering(Scope* sc, Identifier hook)

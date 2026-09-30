@@ -2013,7 +2013,8 @@ private:
 bool scanLegality(FuncDeclaration fd)
 {
     bool[void*] inProgress;
-    return scanLegalityImpl(fd, inProgress) == 1;
+    const v = scanLegalityImpl(fd, inProgress);
+    return v == 1 || v == 2 && fd.semanticRun >= PASS.semantic3done;
 }
 
 private void ipInitConstInitializer(VarDeclaration v)
@@ -2142,16 +2143,22 @@ int scanLegalityImpl(FuncDeclaration fd, ref bool[void*] inProgress)
             fprintf(stderr, "wasm-ctfe: reject %s: %s\n", fd.toPrettyChars(), scanner.why);
         return settle(false);
     }
+    bool calleePending;
     foreach (callee; scanner.callees)
     {
         const cv = scanLegalityImpl(callee, inProgress);
         if (cv == 1)
             continue;
+        if (cv == 2)
+        {
+            calleePending = true;
+            continue;
+        }
         if (verbose)
-            fprintf(stderr, "wasm-ctfe: reject %s: callee %s%s\n", fd.toPrettyChars(), callee.toPrettyChars(), cv == 2 ? " (pending)".ptr : "".ptr);
-        return cv == 2 ? pending() : settle(false);
+            fprintf(stderr, "wasm-ctfe: reject %s: callee %s\n", fd.toPrettyChars(), callee.toPrettyChars());
+        return settle(false);
     }
-    return settle(true);
+    return calleePending ? pending() : settle(true);
 }
 
 __gshared bool[void*] overlapVerdicts;
