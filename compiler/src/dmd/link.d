@@ -276,16 +276,14 @@ private void splitWords(ref Strings argv, const(char)* cmd) nothrow
 
 /***********************************
  * Finish a `-mwasm-selflink` build: the object file already is a complete
- * module, so there is nothing to link. Move it to the output name and hand it
- * to wasm-opt if `-O` asked for optimized output.
+ * module, so there is nothing to link. Move it to the output name.
  *
  * Params:
- *   verbose = print the wasm-opt command before executing
  *   params  = compiler parameters (objfiles, exefile, ...)
  *   eSink   = sink for error messages
  * Returns: 0 on success, non-zero on failure
  */
-private int finishWasmSelfLink(bool verbose, ref Param params, ErrorSink eSink)
+private int finishWasmSelfLink(ref Param params, ErrorSink eSink)
 {
     if (params.objfiles.length != 1)
     {
@@ -302,7 +300,7 @@ private int finishWasmSelfLink(bool verbose, ref Param params, ErrorSink eSink)
     }
     const(char)[] obj = params.objfiles[0].toDString;
     if (!params.exefile)
-        params.exefile = FileName.forceExt(FileName.name(obj), "wasm");
+        params.exefile = FileName.forceExt(FileName.name(obj), target.dll_ext);
     if (!ensurePathToNameExists(Loc.initial, params.exefile))
         return STATUS_FAILED;
     if (FileName.equals(obj, params.exefile))
@@ -319,7 +317,6 @@ private int finishWasmSelfLink(bool verbose, ref Param params, ErrorSink eSink)
 
 /***********************************
  * Link WebAssembly object files with wasm-ld.
->>>>>>> a3372b503c (wasm: -mwasm-selflink, a final-link mode in the backend)
  *
  * By default wasm-ld is invoked directly with the WASI libc from the dmd
  * installation. When `WASM_CC` is set, or when targeting Emscripten (`emcc`),
@@ -336,7 +333,7 @@ private int runWasmLINK(bool verbose, ref Param params, ErrorSink eSink)
 {
     import dmd.backend.wasm.selflink : wasmSelfLink;
     if (wasmSelfLink)
-        return finishWasmSelfLink(verbose, params, eSink);
+        return finishWasmSelfLink(params, eSink);
 
     if (target.os == Target.OS.WASI && target.osMajor == 2)
     {

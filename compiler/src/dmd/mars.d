@@ -1028,15 +1028,9 @@ bool parseCommandLine(const ref Strings arguments, const size_t argc, out Param 
             target.setArch(Target.Arch.x86_64);
         else if (arg == "-m32mscoff") // https://dlang.org/dmd.html#switch-m32mscoff
             target.setArch(Target.Arch.x86);
-        else if (arg == "-mwasm32")
+        else if (arg == "-mwasm32" || arg == "-mwasm64")
         {
-            target.setArch(Target.Arch.wasm32);
-            if (!(target.os & (Target.OS.WASI | Target.OS.Emscripten)))
-                target.os = Target.OS.WASI;
-        }
-        else if (arg == "-mwasm64")
-        {
-            target.setArch(Target.Arch.wasm64);
+            target.setArch(arg == "-mwasm64" ? Target.Arch.wasm64 : Target.Arch.wasm32);
             if (!(target.os & (Target.OS.WASI | Target.OS.Emscripten)))
                 target.os = Target.OS.WASI;
         }
@@ -2043,26 +2037,6 @@ bool createModule(const(char)* file, ref Strings libmodules, ref Param params, c
 }
 
 /**
-Creates the list of modules based on the files provided
-
-Files are dispatched in the various arrays
-(global.params.{ddocfiles,dllfiles,jsonfiles,etc...})
-according to their extension.
-Binary files are added to libmodules.
-
-Params:
-  files = File names to dispatch
-  libmodules = Array to which binaries (shared/static libs and object files)
-               will be appended
-  params = command line params
-  target = target system
-  eSink = error message sink
-  modules = uninitialized array of modules to be filled in
-
-Returns:
-  true on error
-*/
-/**
  * Add the druntime modules a `-mwasm-selflink` build cannot discover by itself.
  *
  * Self-linking has no archive to pull members from, so every symbol the program
@@ -2101,18 +2075,30 @@ void addWasmSelfLinkRuntimeRoots(ref Strings files)
         "core/internal/gc/impl/proto/gc.d",
     ];
     foreach (r; roots)
-    {
-        foreach (ref ip; global.path[])
-        {
-            if (const(char)[] found = FileName.searchPath(ip.path, r, false))
-            {
-                files.push(found.xarraydup.ptr);
-                break;
-            }
-        }
-    }
+        if (const(char)[] found = FileName.searchPath(global.importPaths[], r, false))
+            files.push(found.xarraydup.ptr);
 }
 
+/**
+Creates the list of modules based on the files provided
+
+Files are dispatched in the various arrays
+(global.params.{ddocfiles,dllfiles,jsonfiles,etc...})
+according to their extension.
+Binary files are added to libmodules.
+
+Params:
+  files = File names to dispatch
+  libmodules = Array to which binaries (shared/static libs and object files)
+               will be appended
+  params = command line params
+  target = target system
+  eSink = error message sink
+  modules = uninitialized array of modules to be filled in
+
+Returns:
+  true on error
+*/
 bool createModules(ref Strings files, ref Strings libmodules, ref Param params, const ref Target target,
     ErrorSink eSink, out Modules modules)
 {

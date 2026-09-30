@@ -22,7 +22,8 @@ import dmd.backend.symbol;
 import dmd.backend.wasm.enums;
 import dmd.backend.wasm.obj;
 import dmd.backend.ty : I64;
-import dmd.backend.wasm.util : patchLE32, patchLE64, patchLEB5, patchLEB10;
+import dmd.backend.wasm.codgen : memLimits, OP_PTR_CONST, WASM_PTR, wasmCGCtfeBuild;
+import dmd.backend.wasm.util : patchLE, patchLEB;
 import dmd.common.outbuffer;
 
 nothrow:
@@ -84,7 +85,7 @@ private uint linkerSymbolAddr(ref WasmModule wmod, const(char)[] name)
         case "__data_end":      return wmod.dataEnd;
         case "__stack_low":     return wmod.dataEnd;
         case "__stack_high":    return wmod.stackHigh;
-        case "__heap_base":     return wmod.heapBase;
+        case "__heap_base":     return wmod.stackHigh;
         case "__heap_end":      return wmod.memPages * 65536;
         case "__start_minfo":   return wmod.minfoStart;
         case "__stop_minfo":    return wmod.minfoStop;
@@ -95,21 +96,21 @@ private uint linkerSymbolAddr(ref WasmModule wmod, const(char)[] name)
 /// Address of a data symbol: its own segment if it has one, else the segment of
 /// an identically named definition (the `extern` declaration in one module and
 /// the definition in another are distinct Symbols), else a linker symbol.
-private uint dataSymAddr(ref WasmModule wmod, const(Symbol)* sym, ref uint[string] byName)
+private uint dataSymAddr(ref WasmModule wmod, const(Symbol)* sym, ref DataAddrIndex ix)
 {
     if (!sym)
         return uint.max;
-    foreach (ref const WasmDataSeg ds; wmod.dataSegs)
-        if (ds.sym is sym)
-            return ds.offset;
+    if (auto p = sym in ix.bySym)
+        return *p;
     if (sym.Sident.ptr)
     {
-        if (auto p = cast(string) sym.identifier in byName)
+        const name = cast(string) sym.identifier;
+        if (auto p = name in ix.byName)
             return *p;
-        const uint la = linkerSymbolAddr(wmod, sym.identifier);
+        const uint la = linkerSymbolAddr(wmod, name);
         if (la != uint.max)
             return la;
-        if (auto p = cast(string) sym.identifier in wasmSelfLinkDataSymbols)
+        if (auto p = name in wasmSelfLinkDataSymbols)
             return *p;
     }
     if (sym.Soffset)
@@ -117,35 +118,52 @@ private uint dataSymAddr(ref WasmModule wmod, const(Symbol)* sym, ref uint[strin
     return uint.max;
 }
 
-uint[string] buildDataAddrByName(ref WasmModule wmod)
+struct DataAddrIndex
 {
+    uint[const(Symbol)*] bySym;
     uint[string] byName;
+}
+
+DataAddrIndex buildDataAddrIndex(ref WasmModule wmod)
+{
+    DataAddrIndex ix;
     foreach (ref const WasmDataSeg ds; wmod.dataSegs)
     {
-        if (!ds.sym || !ds.sym.Sident.ptr)
+        if (!ds.sym)
+            continue;
+        if (ds.sym !in ix.bySym)
+            ix.bySym[ds.sym] = ds.offset;
+        if (!ds.sym.Sident.ptr)
             continue;
         string name = cast(string) ds.sym.identifier;
-        if (name !in byName)
-            byName[name] = ds.offset;
+        if (name !in ix.byName)
+            ix.byName[name] = ds.offset;
     }
-    return byName;
+    return ix;
 }
 
 void noteUnresolved(const(Symbol)* sym)
 {
     if (!sym || !sym.Sident.ptr)
         return;
+    const name = sym.identifier;
     foreach (n; wasmSelfLinkUnresolved)
-        if (n == sym.identifier)
+        if (n == name)
             return;
-    wasmSelfLinkUnresolved ~= sym.identifier;
+    wasmSelfLinkUnresolved ~= name;
+}
+
+private uint tableSlot(ref WasmModule wmod, const(Symbol)* sym)
+{
+    const uint fi = funcIdxBySymOrName(wmod, sym);
+    return fi == uint.max ? 0 : fi + 1;
 }
 
 /// Write the resolved values of the data-section relocations into the segment
 /// bytes, where a relocatable object leaves zeros for wasm-ld.
 private void applyDataRelocs(ref WasmModule wmod)
 {
-    uint[string] byName = buildDataAddrByName(wmod);
+    DataAddrIndex ix = buildDataAddrIndex(wmod);
     foreach (ref WasmModule.DataReloc rel; wmod.dataRelocations)
     {
         if (rel.segIdx >= wmod.dataSegs.length)
@@ -153,21 +171,16 @@ private void applyDataRelocs(ref WasmModule wmod)
         ubyte[] seg = wmod.dataSegs[rel.segIdx].data.peekSlice();
         uint v;
         if (isTableIndexReloc(rel.type))
-        {
-            const uint fi = funcIdxBySymOrName(wmod, rel.sym);
-            v = fi == uint.max ? 0 : fi + 1;
-        }
+            v = tableSlot(wmod, rel.sym);
         else
         {
-            const uint addr = dataSymAddr(wmod, rel.sym, byName);
+            const uint addr = dataSymAddr(wmod, rel.sym, ix);
             if (addr == uint.max)
                 noteUnresolved(rel.sym);
             v = addr == uint.max ? 0 : addr + rel.addend;
         }
-        if (rel.type == R_WASM.TABLE_INDEX_I64 || rel.type == R_WASM.MEMORY_ADDR_I64)
-            patchLE64(seg, rel.dataByteOffset, v);
-        else
-            patchLE32(seg, rel.dataByteOffset, v);
+        const wide = rel.type == R_WASM.TABLE_INDEX_I64 || rel.type == R_WASM.MEMORY_ADDR_I64;
+        patchLE(seg, rel.dataByteOffset, v, wide ? 8 : 4);
     }
 }
 
@@ -205,23 +218,8 @@ private void gatherMinfo(ref WasmModule wmod)
 /// a call to each of them.
 private void fillCallCtors(ref WasmModule wmod)
 {
-    if (!wmod.initFuncs.length)
-        return;
-
-    uint idx = uint.max;
-    foreach (i; wmod.numImports .. wmod.funcs.length)
-    {
-        const Symbol* fs = wmod.funcs[i].sym;
-        if (fs && fs.Sident.ptr && fs.identifier == "__wasm_call_ctors")
-        {
-            idx = cast(uint) i;
-            break;
-        }
-    }
-    if (idx == uint.max)
-        return;
-    const size_t bodyIdx = idx - wmod.numImports;
-    if (bodyIdx >= wasmFuncBodies.length)
+    uint bodyIdx;
+    if (!wmod.initFuncs.length || !lookupDefinedFuncBody("__wasm_call_ctors", bodyIdx))
         return;
 
     OutBuffer* code = new OutBuffer();
@@ -247,10 +245,9 @@ private void computeLayout(ref WasmModule wmod)
 {
     wmod.dataEnd = (wmod.dataHeap + 15) & ~15;
     wmod.stackHigh = wmod.dataEnd + wasmSelfLinkStackSize;
-    wmod.heapBase = wmod.stackHigh;
     // A page of headroom above the heap base so a module that never grows
     // memory still has somewhere to put its first allocation.
-    wmod.memPages = (wmod.heapBase + 65535) / 65536 + 1;
+    wmod.memPages = (wmod.stackHigh + 65535) / 65536 + 1;
 }
 
 /// Turn the relocatable object into a self-contained module: resolve the data
@@ -288,30 +285,22 @@ void selfLink(ref WasmModule wmod)
 /// index they need (there is exactly one table, one global and one tag). That
 /// leaves function-pointer constants and the addresses of data symbols that
 /// this module does not itself define.
-void patchSelfLinkCodeRelocs(ref WasmModule wmod, ref WasmFuncBody fb, ubyte[] code, uint[string] byName)
+void patchSelfLinkCodeRelocs(ref WasmModule wmod, ref WasmFuncBody fb, ubyte[] code, ref DataAddrIndex ix)
 {
+    const uint n = I64() ? 10 : 5;
     foreach (ref const WasmReloc r; fb.relocs)
     {
         if (r.type == R_WASM.TABLE_INDEX_SLEB)
-        {
-            const uint fi = funcIdxBySymOrName(wmod, r.sym);
-            const uint v = fi == uint.max ? 0 : fi + 1;
-            if (I64())
-                patchLEB10(code, r.offset, v);
-            else
-                patchLEB5(code, r.offset, v);
-        }
+            patchLEB(code, r.offset, tableSlot(wmod, r.sym), n);
         else if (r.type == R_WASM.MEMORY_ADDR_LEB)
         {
-            const uint addr = dataSymAddr(wmod, r.sym, byName);
+            const uint addr = dataSymAddr(wmod, r.sym, ix);
             if (addr == uint.max)
                 noteUnresolved(r.sym);
-            else if (I64())
-                patchLEB10(code, r.offset, addr + r.addend);
-            else if (r.offset && code[r.offset - 1] == OP.I32_CONST)
-                patchLEB5(code, r.offset, cast(int)(addr + r.addend));
+            else if (!I64() && r.offset && code[r.offset - 1] == OP.I32_CONST)
+                patchLEB(code, r.offset, cast(int)(addr + r.addend), n);
             else
-                patchLEB5(code, r.offset, addr + r.addend);
+                patchLEB(code, r.offset, addr + r.addend, n);
         }
     }
 }
@@ -319,7 +308,7 @@ void patchSelfLinkCodeRelocs(ref WasmModule wmod, ref WasmFuncBody fb, ubyte[] c
 /// Table section (id 4): the indirect function table wasm-ld would import.
 /// Slot 0 is left empty so a null function pointer traps instead of calling
 /// whatever happens to be function 0.
-bool emitTableSection(ref OutBuffer out_, ref WasmModule wmod)
+void emitTableSection(ref OutBuffer out_, ref WasmModule wmod)
 {
     OutBuffer* s = &wmod.scratch;
     s.reset();
@@ -330,48 +319,41 @@ bool emitTableSection(ref OutBuffer out_, ref WasmModule wmod)
     s.writeuLEB128(n);
     s.writeuLEB128(n);
     writeSection(out_, WASM_SECTION.table, s);
-    return true;
 }
 
-bool emitMemorySection(ref OutBuffer out_, ref WasmModule wmod)
+void emitMemorySection(ref OutBuffer out_, ref WasmModule wmod)
 {
     OutBuffer* s = &wmod.scratch;
     s.reset();
     s.writeuLEB128(1);
-    import dmd.backend.wasm.codgen : wasmCGCtfeBuild;
-    if (wasmCGCtfeBuild)
-        s.writeByte(I64() ? WASM_LIMITS.MEM64_HAS_MAX : WASM_LIMITS.HAS_MAX);
-    else
-        s.writeByte(I64() ? WASM_LIMITS.MEM64_NO_MAX : WASM_LIMITS.NO_MAX);
+    s.writeByte(memLimits(wasmCGCtfeBuild));
     s.writeuLEB128(wmod.memPages);
     if (wasmCGCtfeBuild)
         s.writeuLEB128(wasmSelfLinkPoisonBase >> 16);
     writeSection(out_, WASM_SECTION.memory, s);
-    return true;
 }
 
 /// Global section (id 6): `__stack_pointer` only, at index 0 — the index the
 /// GLOBAL_INDEX_LEB placeholders already carry.
-bool emitGlobalSection(ref OutBuffer out_, ref WasmModule wmod)
+void emitGlobalSection(ref OutBuffer out_, ref WasmModule wmod)
 {
     OutBuffer* s = &wmod.scratch;
     s.reset();
     s.writeuLEB128(1);
-    s.writeByte(I64() ? WASM_I64 : WASM_I32);
+    s.writeByte(WASM_PTR);
     s.writeByte(WASM_MUT.VAR);
-    s.writeByte(I64() ? OP.I64_CONST : OP.I32_CONST);
+    s.writeByte(OP_PTR_CONST);
     s.writesLEB128(cast(int) wmod.stackHigh);
     s.writeByte(OP.END);
     writeSection(out_, WASM_SECTION.global, s);
-    return true;
 }
 
 /// Element section (id 9): identity mapping of table slot `i + 1` onto function
 /// `i`, matching the `funcIdx + 1` written into the TABLE_INDEX relocations.
-bool emitElemSection(ref OutBuffer out_, ref WasmModule wmod)
+void emitElemSection(ref OutBuffer out_, ref WasmModule wmod)
 {
     if (!wmod.funcs.length)
-        return false;
+        return;
     OutBuffer* s = &wmod.scratch;
     s.reset();
     s.writeuLEB128(1);
@@ -383,5 +365,4 @@ bool emitElemSection(ref OutBuffer out_, ref WasmModule wmod)
     foreach (uint i; 0 .. cast(uint) wmod.funcs.length)
         s.writeuLEB128(i);
     writeSection(out_, WASM_SECTION.element, s);
-    return true;
 }

@@ -8,43 +8,35 @@ import dmd.common.outbuffer;
 
 // Note: outbuffer already contains members writesLEB128 and writeuLEB128
 
-/// Emit a 5-byte padded ULEB128 (fixed-width, allowing linker relocation patching)
-void writeuLEB128_5(ref OutBuffer buf, uint v) nothrow @safe
+/// Emit an `n`-byte padded ULEB128 (fixed-width, allowing linker relocation patching)
+void writeuLEB128Padded(ref OutBuffer buf, ulong v, uint n) nothrow @safe
 {
-    buf.writeByte((v & 0x7F) | 0x80);
-    buf.writeByte(((v >> 7) & 0x7F) | 0x80);
-    buf.writeByte(((v >> 14) & 0x7F) | 0x80);
-    buf.writeByte(((v >> 21) & 0x7F) | 0x80);
-    buf.writeByte((v >> 28) & 0x0F);
-}
-
-/// Emit a 10-byte padded ULEB128 (fixed-width, for patchable 64-bit operands)
-void writeuLEB128_10(ref OutBuffer buf, ulong v) nothrow @safe
-{
-    foreach (b; 0 .. 10)
+    foreach (b; 0 .. n)
     {
-        buf.writeByte(cast(ubyte)((v & 0x7F) | (b < 9 ? 0x80 : 0)));
+        buf.writeByte(cast(ubyte)((v & 0x7F) | (b + 1 < n ? 0x80 : 0)));
         v >>= 7;
     }
 }
 
-/// Overwrite a little-endian 64-bit value in place.
-void patchLE64(ubyte[] buf, uint off, ulong v) nothrow @safe
+/// Overwrite an `n`-byte little-endian value in place.
+void patchLE(ubyte[] buf, uint off, ulong v, uint n) nothrow @safe
 {
-    if (off + 8 > buf.length)
+    if (off + n > buf.length)
         return;
-    foreach (b; 0 .. 8)
+    foreach (b; 0 .. n)
         buf[off + b] = cast(ubyte)(v >> (8 * b));
 }
 
-/// Overwrite a 10-byte padded LEB128 operand in place.
-void patchLEB10(ubyte[] buf, uint off, ulong v) nothrow @safe
+/// Overwrite an `n`-byte padded LEB128 operand in place. Values below 2^28 encode
+/// identically as signed and unsigned in 5 bytes, which covers every index and
+/// address a self-linked module produces.
+void patchLEB(ubyte[] buf, uint off, ulong v, uint n) nothrow @safe
 {
-    if (off + 10 > buf.length)
+    if (off + n > buf.length)
         return;
-    foreach (b; 0 .. 10)
+    foreach (b; 0 .. n)
     {
-        buf[off + b] = cast(ubyte)((v & 0x7f) | (b < 9 ? 0x80 : 0));
+        buf[off + b] = cast(ubyte)((v & 0x7F) | (b + 1 < n ? 0x80 : 0));
         v >>= 7;
     }
 }
@@ -123,29 +115,4 @@ long readsLEB128(const(ubyte)[] code, ref size_t pos) nothrow @safe
     if (shift < 64 && (b & 0x40))
         v |= -(1L << shift);
     return v;
-}
-
-/// Overwrite a little-endian 32-bit value in place.
-void patchLE32(ubyte[] buf, uint off, uint v) nothrow @safe
-{
-    if (off + 4 > buf.length)
-        return;
-    buf[off + 0] = cast(ubyte)(v);
-    buf[off + 1] = cast(ubyte)(v >> 8);
-    buf[off + 2] = cast(ubyte)(v >> 16);
-    buf[off + 3] = cast(ubyte)(v >> 24);
-}
-
-/// Overwrite a 5-byte padded LEB128 operand in place. Values below 2^28 encode
-/// identically as signed and unsigned here, which covers every index and
-/// address a self-linked module produces.
-void patchLEB5(ubyte[] buf, uint off, long v) nothrow @safe
-{
-    if (off + 5 > buf.length)
-        return;
-    foreach (b; 0 .. 5)
-    {
-        buf[off + b] = cast(ubyte)((v & 0x7f) | (b < 4 ? 0x80 : 0));
-        v >>= 7;
-    }
 }

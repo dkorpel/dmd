@@ -56,7 +56,7 @@ import dmd.backend.rtlsym : getRtlsym, RTLSYM;
 import dmd.backend.wasm.enums;
 import dmd.backend.wasm.simd;
 import dmd.backend.wasm.softreal;
-import dmd.backend.wasm.util : writeuLEB128_5, writeuLEB128_10;
+import dmd.backend.wasm.util : writeuLEB128Padded;
 import dmd.backend.wasm.obj;
 import dmd.backend.wasm.blocks;
 
@@ -89,9 +89,21 @@ OP OP_PTR_ADD() nothrow @nogc { return I64() ? OP.I64_ADD : OP.I32_ADD; }
 OP OP_PTR_SUB() nothrow @nogc { return I64() ? OP.I64_SUB : OP.I32_SUB; }
 OP OP_PTR_AND() nothrow @nogc { return I64() ? OP.I64_AND : OP.I32_AND; }
 OP OP_PTR_MUL() nothrow @nogc { return I64() ? OP.I64_MUL : OP.I32_MUL; }
-OP OP_PTR_LOAD() nothrow @nogc { return I64() ? OP.I64_LOAD : OP.I32_LOAD; }
-OP OP_PTR_STORE() nothrow @nogc { return I64() ? OP.I64_STORE : OP.I32_STORE; }
+OP OP_PTR_LOAD() nothrow @nogc @safe { return I64() ? OP.I64_LOAD : OP.I32_LOAD; }
+OP OP_PTR_STORE() nothrow @nogc @safe { return I64() ? OP.I64_STORE : OP.I32_STORE; }
 uint PTR_ALIGN() nothrow @nogc { return I64() ? 3 : 2; }
+
+WASM_LIMITS memLimits(bool hasMax) nothrow @nogc
+{
+    if (I64())
+        return hasMax ? WASM_LIMITS.MEM64_HAS_MAX : WASM_LIMITS.MEM64_NO_MAX;
+    return hasMax ? WASM_LIMITS.HAS_MAX : WASM_LIMITS.NO_MAX;
+}
+
+bool isV128Cent(tym_t ty) nothrow @nogc
+{
+    return I64() && (tybasic(ty) == TYcent || tybasic(ty) == TYucent);
+}
 
 /// Extend an i32 count/index on the stack to pointer width
 void extendToPtr(ref WasmCG cg) nothrow
@@ -242,7 +254,7 @@ struct UlebPad
 
     void emit(ref WasmCG cg, ref OutBuffer buf) nothrow
     {
-        buf.writeuLEB128_5(v);
+        buf.writeuLEB128Padded(v, 5);
     }
 }
 
@@ -262,10 +274,7 @@ struct RelocOp
         cg.relocs ~= WasmReloc(cast(uint) buf.length, type, symIdx, addend, sym);
         const bool wide = I64() &&
             (type == R_WASM.MEMORY_ADDR_LEB || type == R_WASM.TABLE_INDEX_SLEB);
-        if (wide)
-            buf.writeuLEB128_10(symIdx);
-        else
-            buf.writeuLEB128_5(symIdx);
+        buf.writeuLEB128Padded(symIdx, wide ? 10 : 5);
     }
 }
 
@@ -425,11 +434,6 @@ nothrow:
         emit(OP_PTR_CONST, dataAddrReloc(cast(uint)(sym.Soffset + addend), addend, sym));
     }
 
-    void emitDataBase(Symbol* sym)
-    {
-        emit(OP_PTR_CONST, dataAddrReloc(cast(uint) sym.Soffset, 0, sym));
-    }
-
     /// Returns: the exnref local of the try/finally identified by its flag symbol
     uint exnLocalFor(Symbol* s)
     {
@@ -487,8 +491,7 @@ private MemOps memOpsFor(tym_t ty) @safe
     case TYnptr, TYptr, TYnullptr, TYref, TYnref, TYsptr,
         TYcptr, TYf16ptr, TYfptr, TYhptr, TYvptr, TYfgPtr,
         TYsharePtr, TYimmutPtr:
-        return I64() ? MemOps(OP.I64_LOAD, OP.I64_STORE)
-                     : MemOps(OP.I32_LOAD, OP.I32_STORE);
+        return MemOps(OP_PTR_LOAD, OP_PTR_STORE);
     case TYschar:
         return MemOps(OP.I32_LOAD8_S, OP.I32_STORE8);
     case TYchar, TYuchar, TYbool:
@@ -521,8 +524,7 @@ private int canonicalI32Const(int v, tym_t ty)
 
 private void emitLoad(ref WasmCG cg, tym_t ty, uint offset = 0)
 {
-    if (tyvector(tybasic(ty)) || isSoftRealTy(ty) ||
-        (I64() && (tybasic(ty) == TYcent || tybasic(ty) == TYucent)))
+    if (tyvector(tybasic(ty)) || isSoftRealTy(ty) || isV128Cent(ty))
         return cg.emit(OP.FD_PREFIX, Uleb(WASM_SIMD.V128_LOAD), Uleb(4), Uleb(offset));
 
     const m = memOpsFor(ty);
@@ -542,8 +544,7 @@ private void emitStore(ref WasmCG cg, tym_t ty, uint offset = 0)
             OP.FD_PREFIX, Uleb(WASM_SIMD.V128_STORE32_LANE), Uleb(2), Uleb(offset + 8), cast(ubyte) 2);
         return;
     }
-    if (tyvector(tybasic(ty)) || isSoftRealTy(ty) ||
-        (I64() && (tybasic(ty) == TYcent || tybasic(ty) == TYucent)))
+    if (tyvector(tybasic(ty)) || isSoftRealTy(ty) || isV128Cent(ty))
         return cg.emit(OP.FD_PREFIX, Uleb(WASM_SIMD.V128_STORE), Uleb(4), Uleb(offset));
 
     const m = memOpsFor(ty);
@@ -645,7 +646,7 @@ bool emitSymAddr(ref WasmCG cg, Symbol* s, uint off)
 {
     if (isDataSym(s.Sfl))
     {
-        cg.emit(OP_PTR_CONST, dataAddrReloc(cast(uint)(s.Soffset + off), off, s));
+        cg.emitDataAddr(s, off);
         return true;
     }
     uint memOff;
@@ -670,7 +671,7 @@ bool emitSymBase(ref WasmCG cg, Symbol* s, uint off, out uint memOff)
     }
     if (isDataSym(s.Sfl))
     {
-        cg.emitDataBase(s);
+        cg.emitDataAddr(s, 0);
         memOff = off;
         return true;
     }
@@ -2149,7 +2150,7 @@ bool genElem(ref WasmCG cg, elem* e)
         elem* src = unwrapComma(cg, e.E1);
         if (cg.emitSliceHalf(src, /*ptrHalf*/ true))
             return true;
-        if (I64() && (tybasic(src.Ety) == TYcent || tybasic(src.Ety) == TYucent))
+        if (isV128Cent(src.Ety))
         {
             cg.emit(src, OP.FD_PREFIX, Uleb(WASM_SIMD.I64X2_EXTRACT_LANE), Uleb(1));
             return true;

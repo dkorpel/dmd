@@ -40,6 +40,7 @@ private void initCwd() @nogc nothrow
 }
 
 private extern(C) int chdir(const(char)* path) @nogc nothrow;
+private extern(C) int fflush(void* stream) @nogc nothrow;
 
 import core.attribute : wasmImportModule;
 

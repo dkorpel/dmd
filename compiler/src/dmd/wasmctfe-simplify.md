@@ -59,9 +59,6 @@ These came up during the reviews. None of them was verified or fixed.
   code.** The engine order is patched in glue by rewriting the AST during code
   generation. Fixing the order in the lowering (`lowerToArrayCat`) would make
   both agree but changes native behaviour.
-- **`compiler/src/dmd/link.d` line 322 holds a leftover merge-conflict marker**
-  (`>>>>>>> a3372b503c ...`) inside a doc comment. It comes from the wasm
-  backend commits, not from the CTFE commits, so it was left alone.
 - **Verify mode skips the comparison whenever the AST interpreter errored.**
   `wasmctfe.md` calls this a stop-gap until the legality scan runs in the
   in-process path, which it does since 7b2efa852e. "The interpreter errored
@@ -131,6 +128,42 @@ These came up during the reviews. None of them was verified or fixed.
 - **The `hdrgen.d` null guard fixes a bug that also exists on master.**
   `-ftime-trace` prints an enum while its members are still being analysed. It
   could go upstream as its own fix.
+- **Self-linking never gathers the ModuleInfo array.** `gatherMinfo` looks for
+  segments named `minfo` and `linkerSymbolAddr` resolves `__start_minfo` and
+  `__stop_minfo`. The object writer names the segment `__minfo` and
+  `rt/sections_wasm.d` references `__start___minfo` and `__stop___minfo`
+  (renamed in f1063afe46, before the self-link port). A `-mwasm-selflink`
+  build with druntime would report the two symbols as undefined; the only test
+  is `-betterC`. `gatherMinfo` also aligns the array for 4-byte pointers under
+  wasm64 and allocates a buffer for every module before it knows there is
+  anything to gather. One shared name constant would fix the mismatch, but
+  that changes self-link output.
+- **Data relocations are applied before the layout exists.** `selfLink` runs
+  `applyDataRelocs` before `computeLayout`, so a static initializer such as
+  `__gshared void* p = &__heap_base;` gets address 0 without a diagnostic.
+  Code relocations see the final layout.
+- **wasm64 code relocations keep the 32-bit relocation types.**
+  `MEMORY_ADDR_LEB` and `TABLE_INDEX_SLEB` are written to `reloc.CODE` for
+  10-byte fields, and `wat.d` advances 5 bytes per relocation. The width is
+  derived from `I64()` in `RelocOp.emit` and `patchSelfLinkCodeRelocs`.
+  Picking `MEMORY_ADDR_LEB64` / `TABLE_INDEX_SLEB64` when the relocation is
+  created, as the data relocations do, would carry the width in the type.
+- **`-mwasm64` is only half a switch.** It has no entry in `cli.d` and is
+  missing from `parse_arch_arg` in `mars.d`. `-os=wasi` after `-mwasm64` sets
+  the architecture back to wasm32 without a message. `runnable/hello.d` hits
+  `assert(0)` in the conversion table of `codgen.d` with `-mwasm64`, and the
+  CTFE engine cannot evaluate calls for that target
+  (`runnable/testaa.d`: "wasm-ctfe cannot evaluate `test6178a()`").
+- **The flush at exit sits in the shared `_start`.** `rt/wasm/start.d` calls
+  `fflush(null)` after `__wasm_call_dtors` for every link mode. Only the empty
+  self-link stub of `__wasm_call_dtors` in `rt/wasm/selflink.d` needs it; with
+  wasi-libc the real function already flushes. The stubs
+  `_d_eh_swapContext` and `_d_eh_swapContextDwarf` in the same file cover a
+  gap of the whole wasm target (`rt.dwarfeh` is not in the archive) for one
+  link mode only.
+- **Unresolved self-link symbols are reported by the link step.** With `-c`
+  the module is written with address 0 for them and no error. Reporting in
+  `obj_end` would cover both, but makes `-c` fail where it succeeds today.
 
 ## b59c4b7545, 6cfaa2bd1f (fixes in 9807fbec93)
 
@@ -449,7 +482,7 @@ The virtual call path in `e2ir.d` has its upstream assert back
   what one invariant ("the primary instance sits in a non-root module") could
   express. The rewrite touches upstream logic.
 
-## cce6e02dfd, d392e7b071, 7436614c60, e72e48a342, e87ea5c69f, 1705c07d23 (fixes in the commit that adds this section)
+## cce6e02dfd, d392e7b071, 7436614c60, e72e48a342, e87ea5c69f, 1705c07d23 (fixes in 4b9560ea0b)
 
 Two fixes change behaviour. Host imports are linked with the function type
 the module declares, so a call to a function with more than 16 parameters no
@@ -487,3 +520,58 @@ after the call and no longer pile up in the cached module.
   `R_WASM.MEMORY_ADDR_LEB64`. They keep the numbering complete.
 - **"Memory or trap" prologue of the host hooks.** See the batch above; the
   hooks that only format a message now share `ipCallerMem` and `ipTrapf`.
+
+## ef17b5f61f, a68516fa69, 4cb4ea763d, 12d7c683ba, 7d8d2e855d (fixes in the commit that adds this section)
+
+Three fixes repair leftovers of the self-link port (4cb4ea763d). The
+merge-conflict marker in a doc comment of `link.d` is gone, together with the
+`wasm-opt` sentence and the unused `verbose` parameter of
+`finishWasmSelfLink`. `rt/wasm/start.d` declares `fflush` again; the port
+dropped the declaration, so the wasm druntime did not compile. The wasm
+druntime archive was not rebuilt. `addWasmSelfLinkRuntimeRoots` searches
+`global.importPaths` through the array overload of `FileName.searchPath`, so
+an import directory with a `:` in its name is no longer split.
+
+Output was compared with the compiler from the commit before: wasm32 and
+wasm64 objects, self-linked modules and the modules of the CTFE engine
+(`DMD_CTFE_KEEP`) are byte-identical (`tmp/simplify/wobjcmp.sh`,
+`wobjcmp64.sh`, `modcmp.sh`).
+
+- **Self-link switches that nothing in this tree sets.**
+  `wasmSelfLinkDataBase`, `wasmSelfLinkImportMemory`,
+  `wasmSelfLinkDataSymbols` and `wasmSelfLinkStackSize` are only read here.
+  Folding their branches removes eight conditions in `obj.d` and
+  `selflink.d`. The browser explorer on the `wasm-web-app` branch sets them,
+  and removing them makes every merge between the branches conflict.
+- **`emitLoad` / `emitStore` for pointer loads and stores.** Ten sites in
+  `codgen.d` write `OP_PTR_LOAD, Uleb(PTR_ALIGN), Uleb(off)` inside a longer
+  `cg.emit(...)` call. `cg.emitLoad(TYnptr, off)` emits the same bytes but
+  splits each call in two, so the code gets longer.
+- **Renaming `inproc`.** The mode name, `tryWasmCtfeInproc` and the
+  `wasm-ctfe inproc:` prefix distinguish the engine from a subprocess engine
+  that no longer exists. `DMD_CTFE=inproc` is a user-visible value.
+- **`enum Legality` for the 0/1/2 result of `scanLegalityImpl`.** The function
+  now has two nested helpers (`settle`, `pending`) that name the three
+  outcomes; the `int` result is compared with `1` in two places.
+- **Renaming the object file in `finishWasmSelfLink`.** The module is read,
+  compared, written and the object deleted. A `rename` is cheaper, but
+  `File.update` keeps the timestamp of an unchanged output and a rename does
+  not.
+- **One lookup function in `emitCodeSection`.** It resolves calls by symbol
+  for objects and by symbol or name for self-linked modules. Always using the
+  second lookup removes `funcIdxBySym` as a separate entry point but changes
+  the placeholder bytes of relocatable objects.
+- **Building the data address index once per module.** `applyDataRelocs` and
+  `emitCodeSection` each build it. An earlier section rejects sharing it
+  because "offsets are not final"; the offsets are set in `pushDataSeg` and
+  the only segment added in between has no symbol, so the reason looks wrong,
+  but the index would have to live in `WasmModule`.
+- **A `uint[] minfoSegs` list in `WasmModule`.** It would replace the name
+  scan in `gatherMinfo`. The scan cannot match today (see the open
+  questions), so this is part of that fix.
+- **`PTRSIZE` as `tysize(TYnptr)`.** `I64()` is defined as
+  `_tysize[TYnptr] == 8`, so `I64() ? 8 : 4` is a round trip. The helpers next
+  to it all use `I64()`.
+- **A `bool[string]` next to `wasmSelfLinkUnresolved`.** The list is scanned
+  for duplicates on every unresolved reference. It only has entries in a
+  failing build.

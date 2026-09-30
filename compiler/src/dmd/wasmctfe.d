@@ -135,7 +135,8 @@ WasmCtfeMode wasmCtfeMode()
         if (mode != WasmCtfeMode.off)
         {
             import core.stdc.stdlib : atexit;
-            atexit(&wasmCtfeAtExit);
+            if (getenv("DMD_CTFE_STATS"))
+                atexit(&wasmCtfePrintStats);
             ipResultCache._init(64);
         }
         keepFiles = getenv("DMD_CTFE_KEEP") !is null;
@@ -145,15 +146,8 @@ WasmCtfeMode wasmCtfeMode()
     return mode;
 }
 
-extern (C) void wasmCtfeAtExit()
+private extern (C) void wasmCtfePrintStats()
 {
-    wasmCtfePrintStats();
-}
-
-void wasmCtfePrintStats()
-{
-    if (mode == WasmCtfeMode.off || !getenv("DMD_CTFE_STATS"))
-        return;
     with (wasmCtfeStats)
         fprintf(stderr, "wasm-ctfe: calls=%u attempts=%u ok=%u compilefail=%u cachehit=%u mismatch=%u\n",
             calls, attempts, successes, compileFailures, cacheHits, mismatches);
@@ -1768,18 +1762,7 @@ private TemplateInstance ipEnclosingInstance(Dsymbol s)
     return null;
 }
 
-private bool ipInstanceReady(Dsymbol s)
-{
-    auto ti = ipEnclosingInstance(s);
-    return ti && ti.semanticRun >= PASS.semanticdone && !ti.errors;
-}
-
-bool insideTemplateInstance(Dsymbol s)
-{
-    return ipEnclosingInstance(s) !is null;
-}
-
-__gshared byte[void*] legalityVerdicts;
+__gshared bool[void*] legalityVerdicts;
 __gshared bool[void*] forcedSem3Errors;
 
 public bool ipForceSemantic3Gagged(FuncDeclaration fd)
@@ -1826,103 +1809,94 @@ public bool wasmCtfeTakeForcedSem3Error(FuncDeclaration fd)
 
 int scanLegalityImpl(FuncDeclaration fd, ref bool[void*] inProgress)
 {
-    if (auto p = cast(void*) fd in legalityVerdicts)
-        return *p == 1 ? 1 : 0;
-    if (cast(void*) fd in inProgress)
+    auto key = cast(void*) fd;
+    if (auto p = key in legalityVerdicts)
+        return *p;
+    if (key in inProgress)
         return 1;
-    inProgress[cast(void*) fd] = true;
+    inProgress[key] = true;
 
-    if (trustedModule(fd) || wasmCtfeHostBuiltin(fd))
+    int settle(bool ok)
     {
-        legalityVerdicts[cast(void*) fd] = 1;
-        return 1;
+        legalityVerdicts[key] = ok;
+        return ok;
     }
-    if (fd.semanticRun >= PASS.semantic3done && fd.hasSemantic3Errors)
+
+    int pending()
     {
-        legalityVerdicts[cast(void*) fd] = 1;
-        return 1;
-    }
-    if (!fd.fbody || fd.errors)
-    {
-        const ok = !fd.errors;
-        legalityVerdicts[cast(void*) fd] = ok ? 1 : 0;
-        return ok ? 1 : 0;
-    }
-    if (fd.semanticRun < PASS.semantic3done && (!insideTemplateInstance(fd) || ipInstanceReady(fd)))
-        ipForceSemantic3(fd);
-    if (fd.semanticRun < PASS.semantic3done)
-    {
-        inProgress.remove(cast(void*) fd);
+        inProgress.remove(key);
         return 2;
     }
-    if (fd.hasSemantic3Errors)
+
+    if (trustedModule(fd) || wasmCtfeHostBuiltin(fd)
+        || fd.semanticRun >= PASS.semantic3done && fd.hasSemantic3Errors)
+        return settle(true);
+    if (!fd.fbody || fd.errors)
+        return settle(!fd.errors);
+    if (fd.semanticRun < PASS.semantic3done)
     {
-        legalityVerdicts[cast(void*) fd] = 1;
-        return 1;
+        auto ti = ipEnclosingInstance(fd);
+        if (!ti || ti.semanticRun >= PASS.semanticdone && !ti.errors)
+            ipForceSemantic3(fd);
     }
+    if (fd.semanticRun < PASS.semantic3done)
+        return pending();
+    if (fd.hasSemantic3Errors)
+        return settle(true);
     Module mod = fd.getModule();
     if (!mod || !mod.srcfile.toChars())
-    {
-        legalityVerdicts[cast(void*) fd] = 0;
-        return 0;
-    }
+        return settle(false);
 
     scope scanner = new LegalityScanner();
     fd.fbody.accept(scanner);
-    int verdict = scanner.bad ? 0 : 1;
-    if (verdict == 1)
+    if (scanner.bad)
     {
-        foreach (callee; scanner.callees)
-        {
-            const cv = scanLegalityImpl(callee, inProgress);
-            if (cv != 1)
-            {
-                verdict = cv;
-                if (verbose)
-                    fprintf(stderr, "wasm-ctfe: reject %s: callee %s%s\n", fd.toPrettyChars(), callee.toPrettyChars(), cv == 2 ? " (pending)".ptr : "".ptr);
-                break;
-            }
-        }
+        if (verbose && scanner.why)
+            fprintf(stderr, "wasm-ctfe: reject %s: %s\n", fd.toPrettyChars(), scanner.why);
+        return settle(false);
     }
-    else if (verbose && scanner.why)
-        fprintf(stderr, "wasm-ctfe: reject %s: %s\n", fd.toPrettyChars(), scanner.why);
-    if (verdict != 2)
-        legalityVerdicts[cast(void*) fd] = verdict == 1 ? 1 : 0;
-    else
-        inProgress.remove(cast(void*) fd);
-    return verdict;
+    foreach (callee; scanner.callees)
+    {
+        const cv = scanLegalityImpl(callee, inProgress);
+        if (cv == 1)
+            continue;
+        if (verbose)
+            fprintf(stderr, "wasm-ctfe: reject %s: callee %s%s\n", fd.toPrettyChars(), callee.toPrettyChars(), cv == 2 ? " (pending)".ptr : "".ptr);
+        return cv == 2 ? pending() : settle(false);
+    }
+    return settle(true);
 }
 
-__gshared byte[void*] overlapVerdicts;
+__gshared bool[void*] overlapVerdicts;
 
 bool hasOverlaps(StructDeclaration sd)
 {
     if (!sd)
         return false;
-    if (auto p = cast(void*) sd in overlapVerdicts)
-        return *p == 1;
-    overlapVerdicts[cast(void*) sd] = 0;
-    bool result = sd.isUnionDeclaration() !is null;
-    if (!result)
+    auto key = cast(void*) sd;
+    if (auto p = key in overlapVerdicts)
+        return *p;
+    overlapVerdicts[key] = false;
+
+    bool compute()
     {
+        if (sd.isUnionDeclaration())
+            return true;
         foreach (v; sd.fields)
         {
             if (v.overlapped)
-            {
-                result = true;
-                break;
-            }
+                return true;
             auto tb = v.type ? v.type.toBasetype() : null;
             while (tb && (tb.ty == Tarray || tb.ty == Tsarray))
                 tb = tb.nextOf().toBasetype();
             if (tb && tb.ty == Tstruct && hasOverlaps(tb.isTypeStruct().sym))
-            {
-                result = true;
-                break;
-            }
+                return true;
         }
+        return false;
     }
-    overlapVerdicts[cast(void*) sd] = result ? 1 : 0;
+
+    const result = compute();
+    overlapVerdicts[key] = result;
     return result;
 }
 
@@ -1945,13 +1919,8 @@ private bool ipTrustedName(const(char)[] name)
         "core.checkedint", "core.int128", "object", "rt.",
     ];
     foreach (t; trusted)
-    {
-        if (name.length >= t.length && name[0 .. t.length] == t)
-        {
-            if (t[$ - 1] == '.' || name.length == t.length || name[t.length] == '.')
-                return true;
-        }
-    }
+        if (name.startsWith(t) && (t[$ - 1] == '.' || name.length == t.length || name[t.length] == '.'))
+            return true;
     return false;
 }
 
@@ -1972,10 +1941,6 @@ extern (C++) final class LegalityScanner : SemanticTimeTransitiveVisitor
     bool bad;
     const(char)* why;
     FuncDeclarations callees;
-
-    extern (D) this() scope
-    {
-    }
 
     void reject(const(char)* reason)
     {
@@ -1998,12 +1963,7 @@ extern (C++) final class LegalityScanner : SemanticTimeTransitiveVisitor
         }
         if (f)
             callees.push(f);
-        if (e.e1)
-            e.e1.accept(this);
-        if (e.arguments)
-            foreach (arg; *e.arguments)
-                if (arg)
-                    arg.accept(this);
+        super.visit(e);
     }
 
     override void visit(VarExp e)
