@@ -121,7 +121,7 @@ public Expression ctfeInterpret(Expression e)
             wasmResult = tryWasmCtfe(e);
         if (wmode != WasmCtfeMode.verify && wasmResult !is null)
             return scrubReturnValue(e.loc, wasmResult);
-        if (wstrict)
+        if (wstrict && !wasmCtfeDeferred)
             return ctfeLiteral(e);
     }
 

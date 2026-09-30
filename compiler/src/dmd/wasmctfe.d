@@ -18,6 +18,7 @@ version (NoBackend)
     bool wasmCtfeLoweringActive() pure nothrow @nogc @trusted { return false; }
     void wasmCtfeCompare(Expression e, Expression astResult, Expression wasmResult) { }
     Expression tryWasmCtfe(Expression e) { return null; }
+    enum wasmCtfeDeferred = false;
     bool wasmCtfeTakeForcedSem3Error(FuncDeclaration fd) { return false; }
     void wasmCtfeSuspendMinstNull() { }
     void wasmCtfeResumeMinstNull() { }
@@ -27,7 +28,7 @@ else
 
 import core.stdc.stdio;
 import core.stdc.string;
-import core.stdc.stdlib : getenv;
+import core.stdc.stdlib : getenv, malloc, realloc, free;
 
 import dmd.arraytypes;
 import dmd.astenums;
@@ -55,7 +56,7 @@ import dmd.statement;
 import dmd.typesem : toBasetype, size, nextOf, defaultInitLiteral, arrayOf, equivalent, immutableOf;
 import dmd.expressionsem : toInteger, toUInteger;
 import dmd.funcsem : functionSemantic3;
-import dmd.dsymbolsem : isPOD, determineSize;
+import dmd.dsymbolsem : isPOD, determineSize, isOverlappedWith;
 import dmd.visitor;
 
 struct WasmCtfeStats
@@ -423,6 +424,13 @@ Expression tryWasmCtfe(Expression e)
     if (mode == WasmCtfeMode.off)
         return null;
     ipLastReason[0] = 0;
+    const savedDeferred = ipNestedDeferred;
+    ipNestedDeferred = false;
+    scope (exit)
+    {
+        wasmCtfeDeferred = ipNestedDeferred;
+        ipNestedDeferred = savedDeferred;
+    }
     wasmCtfeStats.calls++;
     __gshared int depth;
     const t0 = ipNow();
@@ -475,7 +483,7 @@ Expression tryWasmCtfe(Expression e)
     ipRootCall = outerRoot;
     if (!r && mode != WasmCtfeMode.verify)
         r = ipReportCircularCall(e, true);
-    if (!r && mode == WasmCtfeMode.strict && !wasmCtfeIsLiteral(e))
+    if (!r && mode == WasmCtfeMode.strict && !ipNestedDeferred && !wasmCtfeIsLiteral(e))
     {
         global.errorSink.error(e.loc, "wasm-ctfe cannot evaluate `%s` [%s]", e.toChars(),
             ipLastReason[0] ? ipLastReason.ptr : "run");
@@ -1145,6 +1153,8 @@ private Expression ipFallback(Expression e, const(char)* reason)
 }
 
 private __gshared char[128] ipLastReason;
+private __gshared bool ipNestedDeferred;
+public __gshared bool wasmCtfeDeferred;
 
 private bool wasmCtfeIsLiteral(Expression e)
 {
@@ -1160,6 +1170,14 @@ private bool wasmCtfeIsLiteral(Expression e)
         return true;
     }
     return false;
+}
+
+private bool ipAllLiteral(Expression[] args)
+{
+    foreach (a; args)
+        if (!ipIsLiteral(a))
+            return false;
+    return true;
 }
 
 private bool ipIsLiteralElems(Expressions* es, int depth)
@@ -2138,7 +2156,7 @@ int scanLegalityImpl(FuncDeclaration fd, ref bool[void*] inProgress)
 
 __gshared bool[void*] overlapVerdicts;
 
-bool hasOverlaps(StructDeclaration sd)
+public bool hasOverlaps(StructDeclaration sd)
 {
     if (!sd)
         return false;
@@ -2448,7 +2466,8 @@ extern (C++) final class LegalityScanner : CalleeScanner
                 }
                 if ((!v.type || !v._init || !v._init.semanticDone) && !ipZeroSizeArray(v.type))
                 {
-                    reject("mutable global");
+                    if (!v.type || !ipNotePoisonGlobal(v))
+                        reject("mutable global");
                     return;
                 }
                 if (v.type && v.type.isImmutable())
@@ -2685,6 +2704,7 @@ private extern (C) wasm_trap_t* ipHostAppend(void* env, wasmtime_caller_t* calle
         return trap;
     mem = ipMemSlice(caller, m);
     memmove(mem.ptr + r + oldBytes, mem.ptr + sptr, cast(size_t) addBytes);
+    ipTagCopy(r + oldBytes, sptr, addBytes);
     const nlen = len + n;
     ipStP(mem.ptr + dst, nlen);
     ipStP(mem.ptr + dst + ipPS, r);
@@ -3397,6 +3417,7 @@ private extern (C) wasm_trap_t* ipHostCAlloc(void* env, wasmtime_caller_t* calle
     {
         auto mem = ipMemSlice(caller, m);
         memcpy(mem.ptr + r, mem.ptr + old, cast(size_t) (oldSz < sz ? oldSz : sz));
+        ipTagCopy(r, old, oldSz < sz ? oldSz : sz);
     }
     ipSetP(results[0], r);
     return null;
@@ -3599,15 +3620,17 @@ private extern (C) wasm_trap_t* ipHostSiteError(void* env, wasmtime_caller_t* ca
 private struct IpUnionInfo
 {
     VarDeclaration v;
+    AggregateDeclaration ad;
     uint site;
     ulong size;
+    ulong off;
+    ulong aggSize;
     ulong[] ptrOffs;
     bool known;
 }
 
 private __gshared IpUnionInfo[] ipUnionInfos;
 private __gshared bool[VarDeclaration] ipMixedCache;
-private __gshared bool[void*] ipMixedTypeCache;
 
 private struct IpUnionTag
 {
@@ -3615,8 +3638,114 @@ private struct IpUnionTag
     uint info;
 }
 
-private __gshared IpUnionTag[1024] ipUnionTags;
+private __gshared IpUnionTag* ipUnionTags;
 private __gshared size_t ipUnionTagCount;
+private __gshared size_t ipUnionTagCap;
+
+private size_t ipTagLower(ulong addr) nothrow @nogc
+{
+    size_t lo = 0, hi = ipUnionTagCount;
+    while (lo < hi)
+    {
+        const mid = (lo + hi) / 2;
+        if (ipUnionTags[mid].addr < addr)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    return lo;
+}
+
+private bool ipTagReserve(size_t n) nothrow @nogc
+{
+    if (ipUnionTagCount + n <= ipUnionTagCap)
+        return true;
+    size_t cap = ipUnionTagCap ? ipUnionTagCap : 64;
+    while (cap < ipUnionTagCount + n)
+        cap *= 2;
+    auto p = cast(IpUnionTag*) realloc(ipUnionTags, cap * IpUnionTag.sizeof);
+    if (!p)
+        return false;
+    ipUnionTags = p;
+    ipUnionTagCap = cap;
+    return true;
+}
+
+private void ipTagCut(size_t a, size_t b) nothrow @nogc
+{
+    memmove(ipUnionTags + a, ipUnionTags + b, (ipUnionTagCount - b) * IpUnionTag.sizeof);
+    ipUnionTagCount -= b - a;
+}
+
+private void ipTagClear(ulong lo, ulong hi) nothrow @nogc
+{
+    if (ipUnionTagCount && lo < hi)
+        ipTagCut(ipTagLower(lo), ipTagLower(hi));
+}
+
+private void ipTagInsert(ulong addr, uint info) nothrow @nogc
+{
+    if (!ipTagReserve(1))
+        return;
+    const i = ipTagLower(addr + 1);
+    memmove(ipUnionTags + i + 1, ipUnionTags + i, (ipUnionTagCount - i) * IpUnionTag.sizeof);
+    ipUnionTags[i] = IpUnionTag(addr, info);
+    ipUnionTagCount++;
+}
+
+private void ipTagCopy(ulong dst, ulong src, ulong n) nothrow @nogc
+{
+    if (!ipUnionTagCount || dst == src || !n)
+        return;
+    const a = ipTagLower(src);
+    const k = ipTagLower(src + n) - a;
+    if (!k)
+    {
+        ipTagClear(dst, dst + n);
+        return;
+    }
+    auto saved = cast(IpUnionTag*) malloc(k * IpUnionTag.sizeof);
+    if (!saved)
+        return;
+    memcpy(saved, ipUnionTags + a, k * IpUnionTag.sizeof);
+    ipTagClear(dst, dst + n);
+    if (ipTagReserve(k))
+    {
+        const i = ipTagLower(dst);
+        memmove(ipUnionTags + i + k, ipUnionTags + i, (ipUnionTagCount - i) * IpUnionTag.sizeof);
+        foreach (j; 0 .. k)
+            ipUnionTags[i + j] = IpUnionTag(saved[j].addr - src + dst, saved[j].info);
+        ipUnionTagCount += k;
+    }
+    free(saved);
+}
+
+private void ipTagFill(ulong dst, ulong src, ulong sz, ulong n) nothrow @nogc
+{
+    if (!ipUnionTagCount)
+        return;
+    if (ipTagLower(src) == ipTagLower(src + sz))
+    {
+        ipTagClear(dst, dst + n * sz);
+        return;
+    }
+    foreach (i; 0 .. n)
+        ipTagCopy(dst + i * sz, src, sz);
+}
+
+private bool ipTagSibling(const(IpUnionInfo)* w, ulong wa, const(IpUnionInfo)* v, ulong va) nothrow @nogc
+{
+    return w.ad is v.ad && w.v !is v.v && wa - w.off == va - v.off
+        && w.off < v.off + v.size && v.off < w.off + w.size;
+}
+
+private bool ipTagged(ulong addr, VarDeclaration v) nothrow @nogc
+{
+    for (size_t i = ipTagLower(addr); i < ipUnionTagCount && ipUnionTags[i].addr == addr; i++)
+        if (ipUnionInfos[ipUnionTags[i].info].v is v)
+            return true;
+    return false;
+}
 
 private bool ipPtrOffsets(Type t, ulong base, ref ulong[] offs)
 {
@@ -3720,27 +3849,13 @@ public bool wasmCtfeMixedOverlap(VarDeclaration v)
     return mixed;
 }
 
-public bool wasmCtfeHasMixedUnion(Type t)
+public bool wasmCtfeHasUnion(Type t)
 {
     auto tb = t.toBasetype();
     while (auto tsa = tb.isTypeSArray())
         tb = tsa.next.toBasetype();
     auto ts = tb.isTypeStruct();
-    if (!ts)
-        return false;
-    auto sd = ts.sym;
-    if (auto p = cast(void*) sd in ipMixedTypeCache)
-        return *p;
-    ipMixedTypeCache[cast(void*) sd] = false;
-    bool r;
-    foreach (f; sd.fields)
-        if (wasmCtfeMixedOverlap(f) || wasmCtfeHasMixedUnion(f.type))
-        {
-            r = true;
-            break;
-        }
-    ipMixedTypeCache[cast(void*) sd] = r;
-    return r;
+    return ts && hasOverlaps(ts.sym);
 }
 
 public uint wasmCtfeUnionInfo(VarDeclaration v, uint site, ulong size)
@@ -3750,7 +3865,12 @@ public uint wasmCtfeUnionInfo(VarDeclaration v, uint site, ulong size)
     info.site = site;
     info.size = size;
     if (v)
+    {
         info.known = ipPtrOffsets(v.type, 0, info.ptrOffs);
+        info.ad = v.isMember2();
+        info.off = v.offset;
+        info.aggSize = info.ad ? info.ad.structsize : size;
+    }
     ipUnionInfos ~= info;
     return cast(uint) (ipUnionInfos.length - 1);
 }
@@ -3787,25 +3907,40 @@ private extern (C) wasm_trap_t* ipHostUnion(void* env, wasmtime_caller_t* caller
         return null;
     auto info = &ipUnionInfos[idx];
     const end = addr + info.size;
+    if (op == 2)
+    {
+        ipTagClear(addr, end);
+        return null;
+    }
+    const base = addr - info.off;
+    const i0 = ipTagLower(base), i1 = ipTagLower(base + info.aggSize);
     if (op == 0)
     {
-        foreach (ref t; ipUnionTags[0 .. ipUnionTagCount])
+        foreach (ref t; ipUnionTags[i0 .. i1])
         {
             auto w = &ipUnionInfos[t.info];
-            if (w.v is info.v || t.addr >= end || addr >= t.addr + w.size)
-                continue;
-            if (!ipSamePtrLayout(t.addr, w, addr, info))
+            if (ipTagSibling(w, t.addr, info, addr) && !ipSamePtrLayout(t.addr, w, addr, info))
                 return ipSiteTrap(CtfeSiteErr.unionReinterpret, info.site);
         }
         return null;
     }
-    size_t n;
-    foreach (t; ipUnionTags[0 .. ipUnionTagCount])
-        if (t.addr >= end || addr >= t.addr + ipUnionInfos[t.info].size)
-            ipUnionTags[n++] = t;
-    ipUnionTagCount = n;
-    if (op == 1 && n < ipUnionTags.length)
-        ipUnionTags[ipUnionTagCount++] = IpUnionTag(addr, idx);
+    size_t n = i0;
+    foreach (i; i0 .. i1)
+    {
+        auto t = ipUnionTags[i];
+        if ((t.addr >= addr && t.addr < end) || ipTagSibling(&ipUnionInfos[t.info], t.addr, info, addr))
+            continue;
+        ipUnionTags[n++] = t;
+    }
+    ipTagCut(n, i1);
+    ipTagInsert(addr, idx);
+    return null;
+}
+
+private extern (C) wasm_trap_t* ipHostUnionCopy(void* env, wasmtime_caller_t* caller,
+    const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
+{
+    ipTagCopy(ipValP(args[0]), ipValP(args[1]), ipValP(args[2]));
     return null;
 }
 
@@ -4141,6 +4276,7 @@ private extern (C) wasm_trap_t* ipHostMemset(void* env, wasmtime_caller_t* calle
     if (ipNullRange(d, n))
         return ipTrap("$null$null pointer dereference");
     memset(mem.ptr + d, c, cast(size_t) n);
+    ipTagClear(d, d + n);
     results[0] = args[0];
     return null;
 }
@@ -4160,6 +4296,7 @@ private extern (C) wasm_trap_t* ipHostMemcpy(void* env, wasmtime_caller_t* calle
     if (ipNullRange(d, n) || ipNullRange(s, n))
         return ipTrap("$null$null pointer dereference");
     memmove(mem.ptr + d, mem.ptr + s, cast(size_t) n);
+    ipTagCopy(d, s, n);
     results[0] = args[0];
     return null;
 }
@@ -4183,6 +4320,7 @@ private extern (C) wasm_trap_t* ipHostMemsetn(void* env, wasmtime_caller_t* call
         return ipTrap("$null$null pointer dereference");
     foreach (i; 0 .. n)
         memmove(mem.ptr + cast(size_t)(p + i * sz), mem.ptr + cast(size_t) v, cast(size_t) sz);
+    ipTagFill(p, v, sz, n);
     results[0] = args[0];
     return null;
 }
@@ -4213,6 +4351,7 @@ private extern (C) wasm_trap_t* ipHostMemsetT(void* env, wasmtime_caller_t* call
         return ipTrap("$null$null pointer dereference");
     foreach (i; 0 .. n)
         memcpy(mem.ptr + cast(size_t)(p + i * sz), valbuf.ptr, sz);
+    ipTagClear(p, p + n * sz);
     results[0] = args[0];
     return null;
 }
@@ -4269,6 +4408,7 @@ private wasm_trap_t* ipGrowArray(wasmtime_caller_t* caller, ref wasmtime_memory_
     ipAllocs[$ - 1].used = need;
     auto mem = ipMemSlice(caller, m);
     memmove(mem.ptr + r, mem.ptr + ptr, cast(size_t) oldBytes);
+    ipTagCopy(r, ptr, oldBytes);
     return null;
 }
 
@@ -4694,6 +4834,8 @@ private wasmtime_func_callback_t ipFixedHost(const(char)[] nm, ref HostImport hi
         return &ipHostPtrSlice;
     if (nm == "__wasmctfe_union")
         return &ipHostUnion;
+    if (nm == "__wasmctfe_unioncopy")
+        return &ipHostUnionCopy;
     if (nm == "__wasmctfe_throw")
         return &ipHostThrow;
     if (nm == "__wasmctfe_cov")
@@ -5165,6 +5307,7 @@ private IpRoot* ipGetRoot(FuncDeclaration fd)
         if (verbose)
             fprintf(stderr, "wasm-ctfe inproc: nested run of %s refused\n", fd.toPrettyChars());
         wasmCtfeStats.nestedRuns++;
+        ipNestedDeferred = true;
         return null;
     }
     if (ipProg.flushPending)
@@ -5175,6 +5318,7 @@ private IpRoot* ipGetRoot(FuncDeclaration fd)
     {
         if (verbose)
             fprintf(stderr, "wasm-ctfe inproc: nested build for %s deferred\n", fd.toPrettyChars());
+        ipNestedDeferred = true;
         return null;
     }
     if (!ipProgramInit())
@@ -5701,7 +5845,7 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
 
     if (!fd || !resultType)
         return bail(fd, "no fd/result type");
-    if (!thisExp && wasmCtfeHostBuiltin(fd))
+    if (!thisExp && wasmCtfeHostBuiltin(fd) && ipAllLiteral(args))
     {
         import dmd.builtin : eval_builtin;
         if (isBuiltin(fd) == BUILTIN.ctfeWrite)
@@ -6095,8 +6239,8 @@ private bool ipResultTypeAt(Type t, int depth)
             auto sd = tb.isTypeStruct().sym;
             if (!sd.determineSize(sd.loc))
                 return false;
-            foreach (i, v; sd.fields)
-                if (!ipOverlapDominated(sd, i) && !ipResultTypeAt(v.type, depth + 1))
+            foreach (v; sd.fields)
+                if (!ipResultTypeAt(v.type, depth + 1))
                     return false;
             return true;
         default:
@@ -6232,7 +6376,7 @@ private Expression ipDecodeClassRef(const(ubyte)[] mem, ulong objAddr, Type type
         {
             if (soFar + cast(ptrdiff_t) i < 0)
                 break;
-            if (ipOverlapDominated(c, i))
+            if (ipOverlapSkipped(objAddr, c, i))
                 continue;
             auto el = ipDecodeMem(mem, objAddr + v.offset, v.type, loc, depth + 1);
             if (!el)
@@ -6412,25 +6556,38 @@ private bool ipOverlapDominated(AggregateDeclaration sd, size_t i)
     auto v = sd.fields[i];
     if (!v.overlapped)
         return false;
-    const vs = cast(ulong) v.type.size();
+    static bool explicitInit(VarDeclaration x)
+    {
+        return x._init && !x._init.isVoidInitializer();
+    }
     foreach (j, w; sd.fields)
     {
-        if (j == i)
+        if (j == i || !v.isOverlappedWith(w))
             continue;
-        const ws = cast(ulong) w.type.size();
-        if (w.offset >= v.offset + vs || v.offset >= w.offset + ws)
-            continue;
-        if (ws > vs || (ws == vs && j < i))
+        if (explicitInit(w) != explicitInit(v) ? explicitInit(w) : j < i)
             return true;
     }
     return false;
+}
+
+private bool ipOverlapSkipped(ulong addr, AggregateDeclaration sd, size_t i)
+{
+    auto v = sd.fields[i];
+    if (!v.overlapped)
+        return false;
+    if (ipTagged(addr + v.offset, v))
+        return false;
+    foreach (w; sd.fields)
+        if (w !is v && w.overlapped && v.isOverlappedWith(w) && ipTagged(addr + w.offset, w))
+            return true;
+    return ipOverlapDominated(sd, i);
 }
 
 private bool ipFillStruct(const(ubyte)[] mem, ulong addr, StructDeclaration sd, Expressions* elems, Loc loc, int depth)
 {
     foreach (i, v; sd.fields)
     {
-        if (ipOverlapDominated(sd, i))
+        if (ipOverlapSkipped(addr, sd, i))
             continue;
         if (v.isThisDeclaration())
         {
@@ -6439,7 +6596,10 @@ private bool ipFillStruct(const(ubyte)[] mem, ulong addr, StructDeclaration sd, 
         }
         auto el = ipDecodeMem(mem, addr + v.offset, v.type, loc, depth + 1);
         if (!el)
+        {
+            if (wasmCtfeTraceGen) fprintf(stderr, "wasm-ctfe decode: field %s.%s failed\n", sd.toChars(), v.toChars());
             return false;
+        }
         (*elems)[i] = el;
     }
     return true;

@@ -2338,8 +2338,19 @@ bool genElem(ref WasmCG cg, elem* e)
         genElemAddr(cg, e.E1);
         cg.emit(OP.LOCAL_TEE, Uleb(dstTmp));
         genElemAddr(cg, e.E2);
-        cg.emit(OP_PTR_CONST, Sleb(sz));
-        cg.emit(OP.FC_PREFIX, Uleb(WASM_FC.MEMORY_COPY), Uleb(0), Uleb(0));
+        if (hasUnionTags(e.ET))
+        {
+            uint srcTmp = cg.allocTemp(WASM_PTR);
+            uint nTmp = cg.allocTemp(WASM_PTR);
+            cg.emit(OP.LOCAL_TEE, Uleb(srcTmp), OP_PTR_CONST, Sleb(sz), OP.LOCAL_TEE, Uleb(nTmp));
+            cg.emit(OP.FC_PREFIX, Uleb(WASM_FC.MEMORY_COPY), Uleb(0), Uleb(0));
+            emitUnionCopy(cg, dstTmp, srcTmp, nTmp);
+        }
+        else
+        {
+            cg.emit(OP_PTR_CONST, Sleb(sz));
+            cg.emit(OP.FC_PREFIX, Uleb(WASM_FC.MEMORY_COPY), Uleb(0), Uleb(0));
+        }
         cg.emit(OP.LOCAL_GET, Uleb(dstTmp));
         return true;
     }
@@ -2350,8 +2361,21 @@ bool genElem(ref WasmCG cg, elem* e)
         uint dstTmp = cg.allocTemp(WASM_PTR);
         cg.emit(e.E1, OP.LOCAL_TEE, Uleb(dstTmp));
         cg.genElem(e.E2.E1, WASM_PTR);
-        cg.genElem(e.E2.E2, WASM_PTR);
-        cg.emit(OP.FC_PREFIX, Uleb(WASM_FC.MEMORY_COPY), Uleb(0), Uleb(0));
+        if (wasmCGCtfeBuild)
+        {
+            uint srcTmp = cg.allocTemp(WASM_PTR);
+            uint nTmp = cg.allocTemp(WASM_PTR);
+            cg.emit(OP.LOCAL_TEE, Uleb(srcTmp));
+            cg.genElem(e.E2.E2, WASM_PTR);
+            cg.emit(OP.LOCAL_TEE, Uleb(nTmp));
+            cg.emit(OP.FC_PREFIX, Uleb(WASM_FC.MEMORY_COPY), Uleb(0), Uleb(0));
+            emitUnionCopy(cg, dstTmp, srcTmp, nTmp);
+        }
+        else
+        {
+            cg.genElem(e.E2.E2, WASM_PTR);
+            cg.emit(OP.FC_PREFIX, Uleb(WASM_FC.MEMORY_COPY), Uleb(0), Uleb(0));
+        }
         cg.emit(OP.LOCAL_GET, Uleb(dstTmp));
         return true;
     }
@@ -3089,6 +3113,25 @@ private bool isNonPodStruct(type* t)
     return tag && tag.Sstruct && (tag.Sstruct.Sflags & STRnotpod) != 0;
 }
 
+bool hasUnionTags(type* t)
+{
+    if (!wasmCGCtfeBuild)
+        return false;
+    while (t && tybasic(t.Tty) == TYarray)
+        t = t.Tnext;
+    if (!t || tybasic(t.Tty) != TYstruct)
+        return false;
+    Symbol* tag = t.Ttag;
+    return tag && tag.Sstruct && (tag.Sstruct.Sflags & STRoverlap) != 0;
+}
+
+private void emitUnionCopy(ref WasmCG cg, uint dst, uint src, uint n)
+{
+    Symbol* fn = getRtlsym(RTLSYM.WASMCTFEUNIONCOPY);
+    cg.emit(OP.LOCAL_GET, Uleb(dst), OP.LOCAL_GET, Uleb(src), OP.LOCAL_GET, Uleb(n));
+    cg.emit(OP.CALL, callReloc(cg.funcIndex(fn), fn));
+}
+
 private struct ParamSpill
 {
     uint wasmLocalIdx;
@@ -3182,8 +3225,20 @@ void wasm_codgen2(Symbol* sfunc, ref WasmFuncBody fb)
             cg.emit(OP.LOCAL_GET, Uleb(cg.shadowBaseLocal));
             if (off)
                 cg.emit(OP_PTR_CONST, Sleb(cast(int) off), OP_PTR_ADD);
+            const tagged = hasUnionTags(sp.sym.Stype);
+            uint dstTmp, nTmp;
+            if (tagged)
+            {
+                dstTmp = cg.allocTemp(WASM_PTR);
+                nTmp = cg.allocTemp(WASM_PTR);
+                cg.emit(OP.LOCAL_TEE, Uleb(dstTmp));
+            }
             cg.emit(OP.LOCAL_GET, Uleb(sp.wasmLocalIdx), OP_PTR_CONST, Sleb(sp.copyBytes));
+            if (tagged)
+                cg.emit(OP.LOCAL_TEE, Uleb(nTmp));
             cg.emit(OP.FC_PREFIX, Uleb(WASM_FC.MEMORY_COPY), Uleb(0), Uleb(0));
+            if (tagged)
+                emitUnionCopy(cg, dstTmp, sp.wasmLocalIdx, nTmp);
             continue;
         }
         cg.emit(OP.LOCAL_GET, Uleb(cg.shadowBaseLocal), OP.LOCAL_GET, Uleb(sp.wasmLocalIdx));

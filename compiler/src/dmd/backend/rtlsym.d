@@ -144,6 +144,7 @@ enum RTLSYM
     WASMCTFEPTRSLICE,
     WASMCTFEERROR2,
     WASMCTFEUNION,
+    WASMCTFEUNIONCOPY,
     WASMCTFECPPCAST,
 }
 
@@ -316,6 +317,7 @@ Symbol* getRtlsym(RTLSYM i) @trusted
         case RTLSYM.WASMCTFEPTRSLICE:       symbolz(ps,FL.func,FREGSAVED,"__wasmctfe_ptrslice", 0, t); break;
         case RTLSYM.WASMCTFEERROR2:         symbolz(ps,FL.func,FREGSAVED,"__wasmctfe_error2", 0, t); break;
         case RTLSYM.WASMCTFEUNION:          symbolz(ps,FL.func,FREGSAVED,"__wasmctfe_union", 0, t); break;
+        case RTLSYM.WASMCTFEUNIONCOPY:      symbolz(ps,FL.func,FREGSAVED,"__wasmctfe_unioncopy", 0, t); break;
         case RTLSYM.WASMCTFECPPCAST:        symbolz(ps,FL.func,FREGSAVED,"__wasmctfe_cppcast", 0, t); break;
         default:
             assert(0);
@@ -436,6 +438,7 @@ private type* wasmRtlsymType(RTLSYM i)
         case RTLSYM.WASMCTFEPTRSLICE:       return fn([tuint, tuint, tsize, tsize, voidPtr()], tvoid);
         case RTLSYM.WASMCTFEERROR2:         return fn([tuint, tuint, tsize, tsize], tvoid);
         case RTLSYM.WASMCTFEUNION:          return fn([tuint, tuint, voidPtr()], tvoid);
+        case RTLSYM.WASMCTFEUNIONCOPY:      return fn([voidPtr(), voidPtr(), tsize], tvoid);
         case RTLSYM.WASMCTFECPPCAST:        return fn([voidPtr(), voidPtr()], voidPtr());
 
         case RTLSYM.MONITOR_HANDLER:        return null;

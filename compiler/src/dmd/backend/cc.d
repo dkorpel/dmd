@@ -465,6 +465,7 @@ enum
     STRclass         = 0x4000,     // it's a class, not a struct
     STR0size         = 0x20000,    // zero sized struct
     STRnotpod        = 0x200000,   // struct is not POD
+    STRoverlap       = 0x400000,
 }
 
 struct struct_t

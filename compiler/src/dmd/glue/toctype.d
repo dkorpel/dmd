@@ -14,7 +14,7 @@ module dmd.glue.toctype;
 import core.stdc.stdio;
 import core.stdc.stdlib;
 
-import dmd.backend.cc : Classsym;
+import dmd.backend.cc : Classsym, STRoverlap;
 import dmd.backend.symbol;
 import dmd.backend.ty;
 import dmd.backend.type;
@@ -216,6 +216,11 @@ type* Type_toCtype(Type t)
 
             // Create a new backend type
             t.ctype = type_struct_class(sym.toPrettyChars(true), sym.alignsize, sym.structsize, arg1type ? Type_toCtype(arg1type) : null, arg2type ? Type_toCtype(arg2type) : null, sym.isUnionDeclaration() !is null, false, sym.isPOD() != 0, sym.hasNoFields);
+            {
+                import dmd.wasmctfe : hasOverlaps;
+                if (hasOverlaps(sym))
+                    (cast(type*)t.ctype).Ttag.Sstruct.Sflags |= STRoverlap;
+            }
             /* Add in fields of the struct
              * (after setting ctype to avoid infinite recursion)
              */

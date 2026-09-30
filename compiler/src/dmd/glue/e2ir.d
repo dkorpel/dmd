@@ -2667,7 +2667,7 @@ elem* toElem(Expression e, ref IRState irs)
     elem* visitAssign(AssignExp ae)
     {
         auto savedUnionWrite = wasmCtfeUnionWrite;
-        wasmCtfeUnionWrite = wasmCtfeBuildActive ? ae.e1 : null;
+        wasmCtfeUnionWrite = !wasmCtfeBuildActive ? null : ae.e1.isSliceExp() ? ae.e1.isSliceExp().e1 : ae.e1;
         scope (exit)
             wasmCtfeUnionWrite = savedUnionWrite;
         version (none)
@@ -3733,10 +3733,11 @@ elem* toElem(Expression e, ref IRState irs)
         if (wasmCtfeBuildActive && v.overlapped && !(v.storage_class & (STC.out_ | STC.ref_)))
         {
             import dmd.wasmctfe : wasmCtfeMixedOverlap;
-            if (wasmCtfeUntrusted(irs) && wasmCtfeMixedOverlap(v))
+            const write = dve is wasmCtfeUnionWrite;
+            if (write || wasmCtfeUntrusted(irs) && wasmCtfeMixedOverlap(v))
             {
                 elem* ecopy = el_same(e);
-                e = el_combine(wasmCtfeUnionCall(v, dve, v.type.size(), dve is wasmCtfeUnionWrite ? 1 : 0, e), ecopy);
+                e = el_combine(wasmCtfeUnionCall(v, dve, v.type.size(), write ? 1 : 0, e), ecopy);
             }
         }
         if (v.storage_class & (STC.out_ | STC.ref_))
@@ -5010,8 +5011,8 @@ elem* Dsymbol_toElem(Dsymbol s, ref IRState irs)
 
             if (wasmCtfeBuildActive && !(vd.storage_class & (STC.ref_ | STC.out_)))
             {
-                import dmd.wasmctfe : wasmCtfeHasMixedUnion;
-                if (wasmCtfeHasMixedUnion(vd.type))
+                import dmd.wasmctfe : wasmCtfeHasUnion;
+                if (wasmCtfeHasUnion(vd.type))
                     e = el_combine(wasmCtfeUnionCall(null, null, vd.type.size(), 2, el_ptr(sp)), e);
             }
 
@@ -6335,13 +6336,18 @@ elem* callfunc(Loc loc,
                 wasmCtfeArgCallStack.pop();
         foreach (const i, arg; *arguments)
         {
-            elem* ea = toElem(arg, irs);
             Parameter param = null;
 
             if (i - j < tf.parameterList.length && i >= j)
             {
                 param = tf.parameterList[i - j];
             }
+
+            auto savedUnionWrite = wasmCtfeUnionWrite;
+            if (wasmCtfeBuildActive && param && param.isReference() && param.type.isMutable())
+                wasmCtfeUnionWrite = arg;
+            elem* ea = toElem(arg, irs);
+            wasmCtfeUnionWrite = savedUnionWrite;
 
             //printf("\targ[%d]: %s\n", cast(int)i, arg.toChars());
 
@@ -7771,6 +7777,12 @@ elem* toElemStructLit(StructLiteralExp sle, ref IRState irs, EXP op, Symbol* sym
 
         VarDeclaration v = sle.sd.fields[i];
         assert(!v.isThisDeclaration() || element.op == EXP.null_);
+        if (wasmCtfeBuildActive && v.overlapped && !element.isVoidInitExp())
+        {
+            elem* ea = tybasic(stmp.Stype.Tty) == TYnptr ? el_var(stmp) : el_ptr(stmp);
+            ea = el_bin(OPadd, TYnptr, ea, el_long(TYsize_t, v.offset));
+            e = el_combine(e, wasmCtfeUnionCall(v, null, v.type.size(), 1, ea));
+        }
 
         elem* e1;
         if (tybasic(stmp.Stype.Tty) == TYnptr)

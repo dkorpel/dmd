@@ -3621,6 +3621,12 @@ elem* elstruct(elem* e, Goal goal)
     }
     //if (targ1) { printf("targ1\n"); type_print(targ1); }
     //if (targ2) { printf("targ2\n"); type_print(targ2); }
+    if (config.objfmt == OBJ_WASM)
+    {
+        import dmd.backend.wasm.codgen : hasUnionTags;
+        if (hasUnionTags(t))
+            goto Ldefault;
+    }
     switch (cast(int)sz)
     {
         case 1:  tym = TYchar;   goto L1;

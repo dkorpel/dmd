@@ -384,7 +384,8 @@ array hooks). `wasmCtfeGenerate` is not reentrant and refused the nested
 call — but `ipGetModule` then cached that function as permanently failed
 and reported it as "errors" (no message, since nothing was actually
 raised). Nested requests now return null before touching the failure
-cache; the same evaluation succeeds later at top level.
+cache; the same evaluation succeeds later at top level, or runs in the
+AST interpreter (see "Nested builds fall back to the AST interpreter").
 
 ### Array literals allocate through the host bump allocator
 The `_d_arrayliteralTX` lowering never runs for ctfe-scope expressions,
@@ -814,14 +815,15 @@ walks that table's entries for the impl. The result is an
 `AssocArrayLiteralExp` in insertion order, which is exactly the AST
 interpreter's order. A null impl decodes as `null`.
 
-### Unions decode to the widest member
+### Unions decode to the active member
 
-Memory doesn't say which union member was written last. The decoder
-keeps the widest overlapping field (the earliest on ties) and leaves the
-others `null`. The AST interpreter keeps the member it last wrote. Verify
+Memory doesn't say which union member was written last, so engine builds
+record it (see "Active union members"). The decoder keeps the recorded
+member and leaves the others `null`. When no member of a group was
+recorded, it keeps the explicitly initialized member, else the first
+declared one, as the AST interpreter's default initialization does. Verify
 compares union structs, and classes containing unions, by their encoded
-bytes instead of by shape. Any later read of a narrower member through
-the AST would be a reinterpretation, but no fallback reads it.
+bytes instead of by shape.
 
 ### Enclosing `const` locals are hoisted into the wrapper
 
@@ -1377,10 +1379,9 @@ calls `__wasmctfe_union(info, op, address)` on each access. A write (an
 assignment to the member, or taking its address) records the member as
 active at that address; a read checks the active members recorded over
 its bytes. Declaring a local of a type that contains such a union clears
-the records for its storage. Copies of the whole aggregate do not carry
-the records, so a read after a copy is allowed. Members with the same
-pointer layout, such as `size_t*` and `struct { size_t* p; }`, are not
-tracked.
+the records for its storage. Members with the same pointer layout, such
+as `size_t*` and `struct { size_t* p; }`, are not checked. The records are
+the same ones that "Active union members" describes.
 
 ### Discarded roots
 
@@ -1736,9 +1737,61 @@ instance's functions, that reuse can happen inside the instance itself, and
 recursive expansion (Pegged). The move now skips a `tinst` chain that
 already contains the instance.
 
-### Open: active union member
+### Active union members
 
 The AST interpreter knows which member of a union was written last. The
-engine decodes a union from its bytes and picks the widest member, so a
-tagged union holding a smaller member fails to decode (mir `Algebraic`,
-`std.json.JSONValue`, `std.sumtype.SumType` in argparse and serialized).
+engine used to decode a union from its bytes and pick the widest member,
+so a tagged union holding a smaller member failed to decode (mir
+`Algebraic`, `std.json.JSONValue`, `std.sumtype.SumType` in argparse and
+serialized). Engine builds now keep a record per written member, keyed by
+its address, in a sorted array on the host. It is reset for every call.
+
+- An assignment to a member, a slice assignment to it, taking its address
+  and passing it to a mutable `ref` parameter call
+  `__wasmctfe_union(info, 1, address)`. The call replaces the records
+  inside the member's bytes and those of the overlapping siblings.
+- Struct literals record each explicitly initialized overlapped field.
+- Declaring a local whose type contains a union clears its storage
+  (`op 2`).
+- Copies of a type that contains a union (`OPstreq`, `memcpy`, by-value
+  parameters) call `__wasmctfe_unioncopy(dst, src, n)`, which moves the
+  records with the bytes. The host-side copies (appends, `realloc`,
+  `memset`, array growth) do the same. `toctype` marks these types with
+  `STRoverlap`, and `elstruct` leaves them in memory, since a copy through
+  a register cannot carry the records.
+
+Test: `compilable/ctfe_union_active.d`.
+
+### Nested builds fall back to the AST interpreter
+
+Generating the `TypeInfo` of a struct during an engine build runs
+`semanticTypeInfoMembers`, which can run semantic3 of `toString` and a
+string mixin in it (dub-registry). That CTFE is requested while a build
+is in progress, and the engine can't start another. In strict mode the
+request used to fail. It is now marked as deferred (`wasmCtfeDeferred`),
+and `ctfeInterpret` evaluates it with the AST interpreter. Test:
+`compilable/ctfe_typeinfo_nested_build.d`.
+
+### `static immutable` without an initializer
+
+A `static immutable` field set in a `shared static this` has no
+initializer at compile time (ae's and sdc's `pageSize`). The legality scan
+rejected functions that mention it as reading a mutable global. It is now
+poisoned like a mutable global, so only an actual read traps. Test:
+`compilable/ctfe_uninit_immutable_global.d`.
+
+### Host builtins need literal arguments
+
+The host evaluates calls to builtins such as `sqrt` directly when the
+wrapper's arguments are literals. `sqrt(sqrt(16.0))` passed a call
+expression, which `eval_sqrt` asserted on (mir-random). The host path now
+requires every argument to be a literal. Test:
+`compilable/ctfe_nested_builtin.d`.
+
+### `float` and `double` round in the engine
+
+The AST interpreter computes `float` and `double` expressions in `real`
+without rounding intermediate results, so `f(1) == 1.0 / 3` can hold for
+a `float` function `f`. The engine computes in IEEE `float` and `double`,
+like the program would at run time. This makes ggplotd's test fail in
+engine mode. The difference is intentional and won't be fixed.
