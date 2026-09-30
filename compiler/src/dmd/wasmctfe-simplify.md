@@ -34,6 +34,36 @@ These came up during the reviews. None of them was verified or fixed.
   retry leaks one `wasmtime` module.
 - **The interpreter does not flag `y >>= 70`, the engine does.** No test covers
   shift-range errors.
+- **druntime and Phobos do not build with the strict engine.** A
+  semantic-only build of the library sources gives
+  `core/internal/gc/proxy.d(26): wasm-ctfe cannot evaluate 'cast(GC)new ProtoGC'`
+  (the build has an unresolved `stderr`),
+  `std/datetime/timezone.d(1122): wasm-ctfe cannot evaluate 'new immutable(LocalTime)'`
+  and an `Error: unknown` for
+  `_d_aaIn!(const(JSONValue)[string], ...)` in `std/json.d`. The same three
+  errors appear with the compiler from before the simplification commits
+  (643dff209b). Both libraries build with `DMD_CTFE=verify` (no mismatches)
+  and `DMD_CTFE=off`. `tmp/simplify/libcheck.sh` runs this check.
+- **An array literal of structs returned from a lambda cannot be evaluated.**
+  `enum S[] a = () { return [S(1, "a"), S(2, "b")]; }();` with
+  `struct S { int a; string s; }` fails in strict mode; the build skips
+  `TypeInfo_Const`, `TypeInfo_Array` and `TypeInfo_Invariant` as "not ready".
+- **`is` on two float arrays poisons the build**, so a function that compares
+  `double[]` slices with `is` cannot be evaluated by the engine.
+- **`typeid(C).name` is computed three ways.** The interpreter uses
+  `toPrettyChars()`, the class info uses `toPrettyChars(true, true)` and skips
+  `TypeInfo_` classes, and `wasmCtfeFindClass` uses `toPrettyChars(true, true)`
+  without that exception. For a template class the interpreter and the engine
+  can return different names.
+- **`a ~ f(a)` is evaluated in a different order by the engine and by native
+  code.** The engine order is patched in glue by rewriting the AST during code
+  generation. Fixing the order in the lowering (`lowerToArrayCat`) would make
+  both agree but changes native behaviour.
+- **`im.hostImports` grows on every call of a cached module.** One
+  `HostImport` per import is appended per call.
+- **`compiler/src/dmd/link.d` line 322 holds a leftover merge-conflict marker**
+  (`>>>>>>> a3372b503c ...`) inside a doc comment. It comes from the wasm
+  backend commits, not from the CTFE commits, so it was left alone.
 - **`sqrt(double) + fabs(sin(double))` in a loop fails** with "wasm-ctfe cannot
   evaluate". It fails the same way before the simplification commits.
 - **A ctfe-only lambda that loops over an outer const array fails.**
@@ -276,7 +306,7 @@ These came up during the reviews. None of them was verified or fixed.
   attempt finds only the next layer, so a call chain of depth k needs k+1
   builds (limit 64). Redesign.
 
-## 04d80e220c, 9055d76cdd (fixes in the commit that adds this section)
+## 04d80e220c, 9055d76cdd (fixes in 208cacba49)
 
 One fix changed behaviour on purpose: the address of the AA order table now
 comes from the data extents. The probe it replaces was switched off by a nested
@@ -303,3 +333,51 @@ mode).
 - **The defensive null checks at the top of `ipDecodePtr` and `ipDecodeAA`.**
   They cannot fail with the single caller they have now; kept for future
   callers.
+
+## d3f170a527, 0da34a1ed1, 54527b69ff, f530c3c97a, b8b37777c2, 80e704019e, 3ccbb61acb, b0fd813fbf, 64eecd12f9, b43ad693e1, b45f7f59b6, 50d81ec66f, 296cc8cca7, 5c152935ae (fixes in the commit that adds this section)
+
+One fix repairs a regression from e404b6f5c3. That commit marked every
+function of a retry round as "semantic3 tried" before forcing any of them. A
+nested build started by the first forced function then skipped the others and
+failed with an unimplemented runtime call (seen when building druntime:
+`core.lifetime.emplace!(OutOfMemoryError, ...)` hit a static assert). Functions
+are marked one at a time again.
+
+- **Array `is` through `visitEqual`.** The hand-built length and `memcmp`
+  compare in `visitIdentity` could call the equality code, but that changes the
+  element type and adds a short-circuit on equal pointers.
+- **`elAssign` in `visitCat`.** The temporary copy builds `OPstreq` by hand.
+  `elAssign` types a static array copy as `TYstruct` and takes the C type from
+  the D type, so the generated element differs.
+- **`wasmCtfeAggReady` through `getConstInitializer`.** The helper reports
+  errors of non-speculative members for real, lowers static AAs and clears the
+  scope on error; the hand-written block does none of these. Field
+  initializers still get semantic by three routes (`wasmCtfeAggReady`,
+  `membersToDt`, `ipInitConstInitializer`).
+- **`arrayop.d` predicates in the legality scan.** The operator list in
+  `Scan.visit(BinExp)` is no shorter when written with them.
+- **Typeid identity fold through `ctfeIdentity`.** It asserts that both
+  operands are types, so the `isType` guards stay and nothing gets shorter.
+- **Linear search in the AA order table, and a "last entry" shortcut.**
+  `ctfeOrderSlot` scans all tables on every AA operation. A shortcut needs a
+  second global in `newaa.d`.
+- **A pointer-compare pass in `unparkWasmCtfe` before the associative-array
+  fixpoint.** The cost of the current loop was not measured, and the pass adds
+  a second walk of the same list.
+- **A name cache for `wasmCtfeFindClass`.** It is only used when a class
+  result is decoded.
+- **A scope-based "guest instance" test in place of `buildActiveSuspended`.**
+  Six sites keep the suspension counter balanced and two of them use different
+  tests for "host rooted". Deriving it from the scope is a redesign of how
+  template instances are assigned to modules.
+- **Lowering `new` and array literals in ctfe scopes in the frontend.** The
+  glue allocates by hand when no lowering exists, and the legality scan lists
+  the supported shapes. Using the frontend lowering there would remove both,
+  but it changes which hooks engine builds call.
+- **No parameter registers for wasm.** `visitSymbol` tests `SC.fastpar` for
+  every target to cover a wasm-only state. The test for `SC.regpar`, which is
+  never assigned, was dropped; the rest needs a backend change.
+- **A `genElemAs` helper in `codgen.d`.** Would touch code from before these
+  commits.
+- **Typeid fold in glue.** Moving the fold out of `tryWasmCtfeExpr` changes
+  which expressions reach the engine.

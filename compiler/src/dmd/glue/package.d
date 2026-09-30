@@ -80,6 +80,7 @@ import dmd.target;
 import dmd.typesem;
 import dmd.funcsem : genCfunc;
 import dmd.utils;
+import dmd.wasmctfe : wasmCtfeTraceGen;
 
 /**
  * Generate code for `modules` and write objects/libraries
@@ -1451,7 +1452,7 @@ private void wasmCtfeStubFunc(FuncDeclaration fd, const(char)* why)
     buf.printf("cannot build `%s`: %s", fd.toPrettyChars(), why);
     const msg = buf.extractChars();
     wasmCtfeStubFuncs[key] = msg;
-    if (getenv("DMD_CTFE_TRACEGEN"))
+    if (wasmCtfeTraceGen)
         fprintf(stderr, "wasm-ctfe stub: %s\n", msg);
 }
 
@@ -1484,9 +1485,11 @@ public bool wasmCtfeGenerate(FuncDeclaration root, ref OutBuffer objbuf, out con
         }
         auto stubs = wasmCtfeStubFuncs;
         foreach (fd; need)
+        {
             wasmCtfeSem3Tried[cast(void*) fd] = true;
-        if (ipForceSemantic3Gagged(need))
-            preSemErrors = true;
+            if (ipForceSemantic3Gagged(fd))
+                preSemErrors = true;
+        }
         wasmCtfeStubFuncs = stubs;
     }
     wasmCtfePoisoned = "semantic3 retry limit";
@@ -1505,7 +1508,7 @@ private bool wasmCtfeGenerateOnce(FuncDeclaration root, ref OutBuffer objbuf, ou
 
     if (hostFuncDepth)
     {
-        if (getenv("DMD_CTFE_TRACEGEN"))
+        if (wasmCtfeTraceGen)
             fprintf(stderr, "wasm-ctfe: refuse build inside host function codegen: %s\n", root.toPrettyChars());
         return false;
     }
@@ -1567,7 +1570,7 @@ private bool wasmCtfeGenerateOnce(FuncDeclaration root, ref OutBuffer objbuf, ou
     wasmCtfeBuiltFuncs = null;
 
     const showGag = getenv("DMD_CTFE_SHOWGAG") !is null;
-    const trace = getenv("DMD_CTFE_TRACEGEN") !is null;
+    const trace = wasmCtfeTraceGen;
     const oldGag = showGag ? global.gag : global.startGagging();
     obj_start(objbuf, "__wasmctfe.d");
     const id = mangleExact(root);

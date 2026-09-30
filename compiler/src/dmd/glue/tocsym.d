@@ -145,13 +145,10 @@ void wasmCtfeRecordClass(ClassDeclaration cd)
 
 public ClassDeclaration wasmCtfeFindClass(const(char)[] name)
 {
-    import core.stdc.string : strlen;
+    import dmd.root.string : toDString;
     foreach (cd; wasmCtfeVtblClasses.byValue)
-    {
-        const p = cd.toPrettyChars(true, true);
-        if (name == p[0 .. strlen(p)])
+        if (name == cd.toPrettyChars(true, true).toDString)
             return cd;
-    }
     return null;
 }
 
@@ -322,15 +319,16 @@ void wasmCtfeQueueDefinition(Dsymbol d)
         if (m in wasmCtfeStubFuncs)
             return;
         if (!fd.fbody)
-            wasmCtfeNoBodyFuncs[m] = fd;
-        if (!fd.fbody && fd.semanticRun >= PASS.semantic3done)
         {
-            import core.stdc.stdlib : getenv;
-            import core.stdc.stdio : fprintf, stderr;
-            if (getenv("DMD_CTFE_TRACEGEN"))
-                fprintf(stderr, "wasm-ctfe queue reject bodyless: %s (run=%d)\n",
-                    fd.toPrettyChars(), cast(int) fd.semanticRun);
-            return;
+            wasmCtfeNoBodyFuncs[m] = fd;
+            if (fd.semanticRun >= PASS.semantic3done)
+            {
+                import dmd.wasmctfe : wasmCtfeTraceGen;
+                if (wasmCtfeTraceGen)
+                    fprintf(stderr, "wasm-ctfe queue reject bodyless: %s (run=%d)\n",
+                        fd.toPrettyChars(), cast(int) fd.semanticRun);
+                return;
+            }
         }
     }
     else if (auto vd = d.isVarDeclaration())

@@ -1433,28 +1433,19 @@ private extern (C++) class TypeInfoDtVisitor : Visitor
         auto tc = d.tinfo.isTypeAArray();
         TypeInfo_toObjFile(null, d.loc, tc.next);
         TypeInfo_toObjFile(null, d.loc, tc.index);
-        if (wasmCtfeBuildActive && (!d.entry || !d.xopEqual || !d.xtoHash))
+        Expression sym(Declaration s)
         {
-            Expression sym(Declaration s)
-            {
-                return s ? cast(Expression) new SymOffExp(d.loc, s, 0)
-                    : new NullExp(d.loc, Type.tvoidptr);
-            }
-            classFieldsToDt(Type.typeinfoassociativearray, new Expressions(
-                new SymOffExp(d.loc, tc.next.vtinfo, 0),
-                new SymOffExp(d.loc, tc.index.vtinfo, 0),
-                d.entry ? sym(d.entry.vtinfo) : new NullExp(d.loc, Type.tvoidptr),
-                sym(d.xopEqual),
-                sym(d.xtoHash)), *dtb);
-            return;
+            return s ? cast(Expression) new SymOffExp(d.loc, s, 0)
+                : new NullExp(d.loc, Type.tvoidptr);
         }
-        TypeInfo_toObjFile(null, d.loc, d.entry);
+        if (!wasmCtfeBuildActive || (d.entry && d.xopEqual && d.xtoHash))
+            TypeInfo_toObjFile(null, d.loc, d.entry);
         classFieldsToDt(Type.typeinfoassociativearray, new Expressions(
             new SymOffExp(d.loc, tc.next.vtinfo, 0),
             new SymOffExp(d.loc, tc.index.vtinfo, 0),
-            new SymOffExp(d.loc, d.entry.vtinfo, 0),
-            new SymOffExp(d.loc, d.xopEqual, 0),
-            new SymOffExp(d.loc, d.xtoHash, 0)), *dtb);
+            sym(d.entry ? d.entry.vtinfo : null),
+            sym(d.xopEqual),
+            sym(d.xtoHash)), *dtb);
     }
 
     override void visit(TypeInfoFunctionDeclaration d)

@@ -1859,18 +1859,17 @@ private Dsymbols* appendToModuleMember(TemplateInstance ti)
         mi = (enc ? enc : ti.tempdecl).getModule();
         if (!mi.isRoot())
         {
-            bool keepNonRoot = false;
+            if (mi.importedFrom)
             {
                 import dmd.wasmctfe : wasmCtfeBuildActiveNow;
-                keepNonRoot = !ti.minst && wasmCtfeBuildActiveNow();
+                if (!ti.minst && wasmCtfeBuildActiveNow())
+                    wasmCtfeParked ~= ti;
+                else
+                {
+                    mi = mi.importedFrom;
+                    assert(mi.isRoot());
+                }
             }
-            if (mi.importedFrom && !keepNonRoot)
-            {
-                mi = mi.importedFrom;
-                assert(mi.isRoot());
-            }
-            else if (keepNonRoot && mi.importedFrom)
-                wasmCtfeParked ~= ti;
             else
             {
                 // This can happen when using the frontend as a library.

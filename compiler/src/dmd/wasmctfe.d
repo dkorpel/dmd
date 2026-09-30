@@ -1,17 +1,17 @@
 module dmd.wasmctfe;
 
+enum WasmCtfeMode
+{
+    off,
+    verify,
+    inproc,
+    strict,
+}
+
 version (NoBackend)
 {
     import dmd.expression;
     import dmd.func;
-
-    enum WasmCtfeMode
-    {
-        off,
-        verify,
-        inproc,
-        strict,
-    }
 
     WasmCtfeMode wasmCtfeMode() { return WasmCtfeMode.off; }
     bool wasmCtfeBuildActiveNow() { return false; }
@@ -58,14 +58,6 @@ import dmd.funcsem : functionSemantic3;
 import dmd.dsymbolsem : isPOD, determineSize;
 import dmd.visitor;
 
-enum WasmCtfeMode
-{
-    off,
-    verify,
-    inproc,
-    strict,
-}
-
 struct WasmCtfeStats
 {
     uint calls;
@@ -77,6 +69,7 @@ struct WasmCtfeStats
 }
 
 __gshared WasmCtfeStats wasmCtfeStats;
+__gshared bool wasmCtfeTraceGen;
 
 private __gshared uint buildActiveSuspended;
 
@@ -117,6 +110,7 @@ private __gshared
     bool modeChecked = false;
     bool verbose = false;
     bool keepFiles = false;
+    bool traceFallback = false;
     uint seq = 0;
     StringTable!(Expression) ipResultCache;
     bool ipCacheInit = false;
@@ -146,6 +140,8 @@ WasmCtfeMode wasmCtfeMode()
             atexit(&wasmCtfeAtExit);
         }
         keepFiles = getenv("DMD_CTFE_KEEP") !is null;
+        traceFallback = getenv("DMD_CTFE_TRACEFB") !is null;
+        wasmCtfeTraceGen = getenv("DMD_CTFE_TRACEGEN") !is null;
     }
     return mode;
 }
@@ -811,7 +807,6 @@ private bool ipReadsOuterLocals(FuncDeclaration f)
 
 Expression wasmCtfeOuterConstInit(VarDeclaration v, FuncDeclaration reader = null)
 {
-    import dmd.tokens : EXP;
     if (!v || !(v.isConst() || v.isImmutable()) || v.isReference() || v.isDataseg() || v.inuse)
         return null;
     if (reader && v.nestedrefs.contains(reader))
@@ -843,6 +838,7 @@ private bool ipExprSupported(Expression e, out const(char)* why, VarDeclarations
         VarDeclarations funcLocals;
         const(char)* why;
         Expression failAt;
+        Type lastClear;
         extern (D) void fail(const(char)* r, Expression at = null)
         {
             if (!why)
@@ -881,14 +877,15 @@ private bool ipExprSupported(Expression e, out const(char)* why, VarDeclarations
         }
         override void visit(Expression e)
         {
-            if (!e.type)
+            if (!e.type || e.type is lastClear)
                 return;
             if (ipTypeBlocksEngine(e.type))
                 fail("blocked type");
+            else
+                lastClear = e.type;
         }
         override void visit(BinExp e)
         {
-            import dmd.tokens : EXP;
             visit(cast(Expression) e);
             if (stop)
                 return;
@@ -1094,9 +1091,6 @@ private void ipAppendSymKey(Expression e, ref OutBuffer kb)
     walkPostorder(e, v);
 }
 
-private __gshared bool traceFallback = false;
-private __gshared bool traceFallbackChecked = false;
-
 private Expression ipReportUnreadable(Expression root, VarDeclaration bad)
 {
     import dmd.visitor.postorder : walkPostorder;
@@ -1173,11 +1167,6 @@ private Expression ipReportStringArrayOp(BinExp be)
 
 private Expression ipFallback(Expression e, const(char)* reason)
 {
-    if (!traceFallbackChecked)
-    {
-        traceFallbackChecked = true;
-        traceFallback = getenv("DMD_CTFE_TRACEFB") !is null;
-    }
     if (traceFallback)
         fprintf(stderr, "wasm-ctfe fallback %s: %s: %s\n", reason, e.loc.toChars(), e.toChars());
     snprintf(ipLastReason.ptr, ipLastReason.length, "%s", reason);
@@ -1410,7 +1399,6 @@ private Expression ipSubstConstVars(Expression e, int depth)
 
 private Expression ipFoldLiteralCompare(Expression e)
 {
-    import dmd.tokens : EXP;
     auto be = e.isBinExp();
     if (!be || !(e.isIdentityExp() || e.isEqualExp()))
         return null;
@@ -1637,20 +1625,16 @@ Expression tryWasmCtfeExpr(Expression e)
     {
         if (te.e0 && !ipIsLiteral(te.e0))
             return ipFallback(e, "tuple");
-        auto exps = new Expressions(te.exps.length);
-        foreach (i, el; *te.exps)
+        auto exps = te.exps.copy();
+        foreach (ref el; *exps)
         {
             if (ipIsLiteral(el))
-            {
-                (*exps)[i] = el;
                 continue;
-            }
             if (!el.type || el.type.toBasetype().ty == Terror)
                 return ipFallback(e, "tuple");
-            auto r = tryWasmCtfeExpr(el);
-            if (!r)
+            el = tryWasmCtfeExpr(el);
+            if (!el)
                 return null;
-            (*exps)[i] = r;
         }
         auto nte = new TupleExp(te.loc, exps);
         nte.type = te.type;
@@ -1686,14 +1670,10 @@ Expression tryWasmCtfeExpr(Expression e)
         if (te1 && te2)
         {
             import dmd.dtemplate : isType;
-            import dmd.tokens : EXP;
             Type t1 = isType(te1.obj);
             Type t2 = isType(te2.obj);
             if (t1 && t2)
-            {
-                const same = t1 is t2;
-                return new IntegerExp(e.loc, (ie.op == EXP.identity) == same ? 1 : 0, e.type);
-            }
+                return new IntegerExp(e.loc, (ie.op == EXP.identity) == (t1 is t2), e.type);
         }
     }
     if (!ipHasCall(e))
@@ -1858,14 +1838,13 @@ bool insideTemplateInstance(Dsymbol s)
 __gshared byte[void*] legalityVerdicts;
 __gshared bool[void*] forcedSem3Errors;
 
-public bool ipForceSemantic3Gagged(scope FuncDeclaration[] fds)
+public bool ipForceSemantic3Gagged(FuncDeclaration fd)
 {
     const oldGag = global.startGagging();
     const savedSuspend = buildActiveSuspended;
     buildActiveSuspended = 0;
     ++preSemDepth;
-    foreach (fd; fds)
-        ipForceSemantic3(fd);
+    ipForceSemantic3(fd);
     --preSemDepth;
     buildActiveSuspended = savedSuspend;
     return global.endGagging(oldGag);
@@ -1876,15 +1855,8 @@ public void ipForceSemantic3(FuncDeclaration fd)
     if (fd.semanticRun >= PASS.semantic3done)
         return;
     auto fdMod = fd.getModule();
-    bool hostRooted = fdMod && fdMod.isRoot();
-    for (Dsymbol p = fd; p; p = p.parent)
-    {
-        if (auto ti = p.isTemplateInstance())
-        {
-            hostRooted = ti.minst !is null;
-            break;
-        }
-    }
+    auto ti = ipEnclosingInstance(fd);
+    const hostRooted = ti ? ti.minst !is null : fdMod && fdMod.isRoot();
     if (hostRooted)
         ++buildActiveSuspended;
     if (fd.deferred3 && fd._scope && fd.semanticRun < PASS.semantic3)
@@ -2180,7 +2152,7 @@ extern (C++) final class LegalityScanner : SemanticTimeTransitiveVisitor
             return;
         if (v.semanticRun < PASS.semanticdone)
         {
-            if (getenv("DMD_CTFE_TRACEGEN"))
+            if (wasmCtfeTraceGen)
                 fprintf(stderr, "wasm-ctfe unresolved declaration %s at %s run=%d\n", v.toChars(), v.loc.toChars(), cast(int) v.semanticRun);
             reject("unresolved declaration");
             return;
@@ -2481,7 +2453,6 @@ private int ipRealRelop(int op, real a, real b) nothrow @nogc
 private extern (C) wasm_trap_t* ipHostSoftReal(void* env, wasmtime_caller_t* caller,
     const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
 {
-    import dmd.wasmtimec;
     static import core.math;
     auto hi = cast(HostImport*) env;
     static real ar(ref const wasmtime_val_t v) { return ipLdReal(v.of.v128.ptr); }
@@ -2878,7 +2849,6 @@ private bool ipFindAlloc(ulong p, out ulong base, out ulong sz) nothrow @nogc
 
 private wasm_trap_t* ipTrap(const(char)* msg) nothrow @nogc
 {
-    import dmd.wasmtimec;
     return wasmtime_trap_new(msg, strlen(msg));
 }
 
@@ -2937,7 +2907,6 @@ private void ipStP(ubyte* p, ulong v) nothrow @nogc
 
 private bool ipCallerMemory(wasmtime_caller_t* caller, out wasmtime_memory_t m) nothrow @nogc
 {
-    import dmd.wasmtimec;
     wasmtime_extern_t ext;
     if (!wasmtime_caller_export_get(caller, "memory".ptr, "memory".length, &ext)
         || ext.kind != WASMTIME_EXTERN_MEMORY)
@@ -2948,7 +2917,6 @@ private bool ipCallerMemory(wasmtime_caller_t* caller, out wasmtime_memory_t m) 
 
 private bool ipGrowHeap(wasmtime_context_t* ctx, ref wasmtime_memory_t m, ulong pages) nothrow @nogc
 {
-    import dmd.wasmtimec;
     ulong prevPages;
     if (auto err = wasmtime_memory_grow(ctx, &m, pages, &prevPages))
     {
@@ -2962,7 +2930,6 @@ private bool ipGrowHeap(wasmtime_context_t* ctx, ref wasmtime_memory_t m, ulong 
 
 private wasm_trap_t* ipBumpAlloc(wasmtime_caller_t* caller, ref wasmtime_memory_t m, ulong sz, out ulong r) nothrow @nogc
 {
-    import dmd.wasmtimec;
     auto ctx = wasmtime_caller_context(caller);
     const reqSz = sz;
     sz = (sz + 15) & ~15UL;
@@ -2982,7 +2949,6 @@ private wasm_trap_t* ipBumpAlloc(wasmtime_caller_t* caller, ref wasmtime_memory_
 private extern (C) wasm_trap_t* ipHostGcMalloc(void* env, wasmtime_caller_t* caller,
     const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
 {
-    import dmd.wasmtimec;
     wasmtime_memory_t m;
     if (!ipCallerMemory(caller, m))
         return ipTrap("wasm-ctfe: no memory export");
@@ -2996,7 +2962,6 @@ private extern (C) wasm_trap_t* ipHostGcMalloc(void* env, wasmtime_caller_t* cal
 private extern (C) wasm_trap_t* ipHostCAlloc(void* env, wasmtime_caller_t* caller,
     const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
 {
-    import dmd.wasmtimec;
     auto hi = cast(HostImport*) env;
     wasmtime_memory_t m;
     if (!ipCallerMemory(caller, m))
@@ -3046,7 +3011,6 @@ private extern (C) wasm_trap_t* ipHostErrno(void* env, wasmtime_caller_t* caller
 private wasm_trap_t* ipCallTable(wasmtime_caller_t* caller, ulong idx, const(wasmtime_val_t)[] args,
     wasmtime_val_t[] results, const(char)* failMsg) nothrow @nogc
 {
-    import dmd.wasmtimec;
     auto ctx = wasmtime_caller_context(caller);
     wasmtime_extern_t ext;
     wasmtime_val_t fv;
@@ -3066,7 +3030,6 @@ private wasm_trap_t* ipCallTable(wasmtime_caller_t* caller, ulong idx, const(was
 private extern (C) wasm_trap_t* ipHostAApply(void* env, wasmtime_caller_t* caller,
     const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
 {
-    import dmd.wasmtimec;
     import dmd.root.utf;
     auto hi = cast(HostImport*) env;
     const nm = hi.name[0 .. hi.nameLen];
@@ -3497,7 +3460,6 @@ private void ipCovInc(uint mod, uint line) nothrow
 private extern (C) wasm_trap_t* ipHostChain(void* env, wasmtime_caller_t* caller,
     const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
 {
-    import dmd.wasmtimec;
     const e1 = ipValP(args[0]);
     const e2 = ipValP(args[1]);
     ipSetP(results[0], e1 ? e1 : e2);
@@ -3559,7 +3521,6 @@ private extern (C) wasm_trap_t* ipHostChain(void* env, wasmtime_caller_t* caller
 private extern (C) wasm_trap_t* ipHostInvariant(void* env, wasmtime_caller_t* caller,
     const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
 {
-    import dmd.wasmtimec;
     const o = ipValP(args[0]);
     if (!o)
         return ipTrap("$null$null this in invariant check");
@@ -3623,7 +3584,6 @@ private wasm_trap_t* ipHostCppCastImpl(wasmtime_caller_t* caller, const(wasmtime
 private extern (C) wasm_trap_t* ipHostEhMatch(void* env, wasmtime_caller_t* caller,
     const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
 {
-    import dmd.wasmtimec;
     wasmtime_memory_t m;
     if (!ipCallerMemory(caller, m))
         return ipTrap("wasm-ctfe: no memory export");
@@ -3655,7 +3615,6 @@ private extern (C) wasm_trap_t* ipHostEhMatch(void* env, wasmtime_caller_t* call
 private extern (C) wasm_trap_t* ipHostArrayAppendC(void* env, wasmtime_caller_t* caller,
     const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
 {
-    import dmd.wasmtimec;
     auto hi = cast(HostImport*) env;
     const wide = hi.name[0 .. hi.nameLen] == "_d_arrayappendwd";
     wasmtime_memory_t m;
@@ -3732,7 +3691,6 @@ private extern (C) wasm_trap_t* ipHostArrayAppendC(void* env, wasmtime_caller_t*
 
 private ubyte[] ipMemSlice(wasmtime_caller_t* caller, ref wasmtime_memory_t m) nothrow @nogc
 {
-    import dmd.wasmtimec;
     auto ctx = wasmtime_caller_context(caller);
     auto data = wasmtime_memory_data(ctx, &m);
     const len = wasmtime_memory_data_size(ctx, &m);
@@ -3808,7 +3766,6 @@ private extern (C) wasm_trap_t* ipHostMemsetn(void* env, wasmtime_caller_t* call
 private extern (C) wasm_trap_t* ipHostMemsetT(void* env, wasmtime_caller_t* caller,
     const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
 {
-    import dmd.wasmtimec;
     wasmtime_memory_t m;
     if (!ipCallerMemory(caller, m))
         return ipTrap("wasm-ctfe: no memory export");
@@ -4021,6 +3978,13 @@ private extern (C) wasm_trap_t* ipHostAssert(void* env, wasmtime_caller_t* calle
     return wasmtime_trap_new(ipTrapBuf.ptr, n);
 }
 
+private const(char)[] ipMemChars(const(ubyte)[] mem, ulong len, ulong ptr) nothrow @nogc
+{
+    if (ptr > mem.length || len > mem.length - ptr || len > 512)
+        return "?";
+    return cast(const(char)[]) mem[cast(size_t) ptr .. cast(size_t)(ptr + len)];
+}
+
 private extern (C) wasm_trap_t* ipHostBounds(void* env, wasmtime_caller_t* caller,
     const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
 {
@@ -4028,11 +3992,7 @@ private extern (C) wasm_trap_t* ipHostBounds(void* env, wasmtime_caller_t* calle
     ubyte[] mem;
     if (ipCallerMemory(caller, m))
         mem = ipMemSlice(caller, m);
-    const(char)[] file = "?";
-    const flen = ipValP(args[0]);
-    const fptr = ipValP(args[1]);
-    if (fptr < mem.length && flen <= mem.length - fptr && flen <= 512)
-        file = cast(const(char)[])(mem.ptr[cast(size_t) fptr .. cast(size_t)(fptr + flen)]);
+    const file = ipMemChars(mem, ipValP(args[0]), ipValP(args[1]));
     const n = snprintf(ipTrapBuf.ptr, ipTrapBuf.length,
         "$bounds$%.*s(%d): array index out of bounds",
         cast(int) file.length, file.ptr, args[2].of.i32);
@@ -4046,14 +4006,8 @@ private extern (C) wasm_trap_t* ipHostAssertMsg(void* env, wasmtime_caller_t* ca
     ubyte[] mem;
     if (ipCallerMemory(caller, m))
         mem = ipMemSlice(caller, m);
-    const(char)[] str(ulong len, ulong ptr) nothrow @nogc
-    {
-        if (ptr > mem.length || len > mem.length - ptr || len > 512)
-            return "?";
-        return cast(const(char)[])(mem.ptr[cast(size_t) ptr .. cast(size_t)(ptr + len)]);
-    }
-    const msg = str(ipValP(args[0]), ipValP(args[1]));
-    const file = str(ipValP(args[2]), ipValP(args[3]));
+    const msg = ipMemChars(mem, ipValP(args[0]), ipValP(args[1]));
+    const file = ipMemChars(mem, ipValP(args[2]), ipValP(args[3]));
     ipErrKind = IpErrKind.assertMsg;
     ipErrMsgLen = msg.length < ipErrMsg.length ? msg.length : ipErrMsg.length;
     ipErrMsg[0 .. ipErrMsgLen] = msg[0 .. ipErrMsgLen];
@@ -4066,7 +4020,6 @@ private extern (C) wasm_trap_t* ipHostAssertMsg(void* env, wasmtime_caller_t* ca
 
 private wasm_engine_t* ipGetEngine()
 {
-    import dmd.wasmtimec;
     if (ipEngine)
         return ipEngine;
     auto cfg = wasm_config_new();
@@ -4080,7 +4033,6 @@ private wasm_engine_t* ipGetEngine()
 
 private IpModule* ipGetModule(FuncDeclaration fd)
 {
-    import dmd.wasmtimec;
     import dmd.glue : wasmCtfeGenerate;
 
     if (auto p = cast(void*) fd in ipModuleCache)
@@ -4196,7 +4148,6 @@ private __gshared CallExp ipRootCall;
 
 private const(ubyte)[] ipInstanceMemory(wasmtime_context_t* ctx, ref wasmtime_instance_t inst)
 {
-    import dmd.wasmtimec;
     wasmtime_extern_t memExt;
     if (!wasmtime_instance_export_get(ctx, &inst, "memory".ptr, "memory".length, &memExt)
         || memExt.kind != WASMTIME_EXTERN_MEMORY)
@@ -4522,7 +4473,6 @@ private Expression ipReportUncaught(const(uint)[] chain, const(ubyte)[] data)
 private Expression ipReportTrap(const(wasm_trap_t)* trap, const(wasmtime_error_t)* err, IpModule* im,
     const(ubyte)[] data)
 {
-    import dmd.wasmtimec;
     import dmd.glue.tocsym : wasmCtfeSites;
     import dmd.hdrgen : toErrMsg;
     import dmd.dtemplate : isExpression;
@@ -4669,7 +4619,7 @@ Expression tryWasmCtfeInproc(FuncDeclaration fd, Expression thisExp, Expression[
         ipLazyHit = null;
         if (!lf || lf.semanticRun >= PASS.semantic3done)
             return r;
-        if (ipForceSemantic3Gagged((&lf)[0 .. 1]) || lf.semanticRun < PASS.semantic3done || lf.errors)
+        if (ipForceSemantic3Gagged(lf) || lf.semanticRun < PASS.semantic3done || lf.errors)
             return r;
         ipModuleCache.remove(cast(void*) fd);
         ipModuleFailed.remove(cast(void*) fd);
@@ -4679,7 +4629,6 @@ Expression tryWasmCtfeInproc(FuncDeclaration fd, Expression thisExp, Expression[
 
 private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp, Expression[] args, Type resultType, Loc loc)
 {
-    import dmd.wasmtimec;
     import dmd.target : target;
     ipPS = target.ptrsize;
 
@@ -5365,7 +5314,7 @@ private Expression ipDecodeClassRef(const(ubyte)[] mem, ulong objAddr, Type type
     auto tc = type.toBasetype().isTypeClass();
     if (!tc)
     {
-        if (verbose) fprintf(stderr, "wasm-ctfe classref: not class type\n");
+        if (wasmCtfeTraceGen) fprintf(stderr, "wasm-ctfe classref: not class type\n");
         return null;
     }
     {
@@ -5383,7 +5332,7 @@ private Expression ipDecodeClassRef(const(ubyte)[] mem, ulong objAddr, Type type
     const cpp = tc.sym.classKind == ClassKind.cpp;
     if (!cpp && !ipTINameOffset && (tc.sym.isInterfaceDeclaration() || wasmCtfeHasSubclass(tc.sym)))
     {
-        if (verbose) fprintf(stderr, "wasm-ctfe classref: no name offset\n");
+        if (wasmCtfeTraceGen) fprintf(stderr, "wasm-ctfe classref: no name offset\n");
         return null;
     }
     if (tc.sym.isInterfaceDeclaration())
@@ -5405,12 +5354,12 @@ private Expression ipDecodeClassRef(const(ubyte)[] mem, ulong objAddr, Type type
     {
         if (!ipRdP(mem, vtbl, ci) || !ipRdP(mem, ci + ipTINameOffset, nlen) || !ipRdP(mem, ci + ipTINameOffset + ipPS, nptr))
         {
-            if (verbose) fprintf(stderr, "wasm-ctfe classref: read fail obj=%llx vtbl=%llx ci=%llx\n", objAddr, vtbl, ci);
+            if (wasmCtfeTraceGen) fprintf(stderr, "wasm-ctfe classref: read fail obj=%llx vtbl=%llx ci=%llx\n", objAddr, vtbl, ci);
             return null;
         }
         if (nlen > 1024 || nptr > mem.length || nlen > mem.length - nptr)
         {
-            if (verbose) fprintf(stderr, "wasm-ctfe classref: bad name slice len=%llx ptr=%llx\n", nlen, nptr);
+            if (wasmCtfeTraceGen) fprintf(stderr, "wasm-ctfe classref: bad name slice len=%llx ptr=%llx\n", nlen, nptr);
             return null;
         }
         cd = wasmCtfeFindClass(cast(const(char)[]) mem[cast(size_t) nptr .. cast(size_t)(nptr + nlen)]);
@@ -5419,14 +5368,14 @@ private Expression ipDecodeClassRef(const(ubyte)[] mem, ulong objAddr, Type type
         cd = tc.sym;
     if (!cd)
     {
-        if (verbose) fprintf(stderr, "wasm-ctfe classref: no class for '%.*s'\n", cast(int) nlen, mem.ptr + nptr);
+        if (wasmCtfeTraceGen) fprintf(stderr, "wasm-ctfe classref: no class for '%.*s'\n", cast(int) nlen, mem.ptr + nptr);
         return null;
     }
     for (auto c = cd; c; c = c.baseClass)
     {
         if (c.ident == Id.TypeInfo)
         {
-            if (verbose) fprintf(stderr, "wasm-ctfe classref: TypeInfo result\n");
+            if (wasmCtfeTraceGen) fprintf(stderr, "wasm-ctfe classref: TypeInfo result\n");
             return null;
         }
     }
@@ -5455,7 +5404,7 @@ private Expression ipDecodeClassRef(const(ubyte)[] mem, ulong objAddr, Type type
             auto el = ipDecodeMem(mem, objAddr + v.offset, v.type, loc, depth + 1);
             if (!el)
             {
-                if (verbose) fprintf(stderr, "wasm-ctfe classref: field %s decode fail\n", v.toChars());
+                if (wasmCtfeTraceGen) fprintf(stderr, "wasm-ctfe classref: field %s decode fail\n", v.toChars());
                 return null;
             }
             (*elems)[soFar + i] = el;
@@ -6033,7 +5982,6 @@ private bool ipEncodeVal(ubyte[] mem, ulong addr, Type t, Expression e, int dept
 
 private bool ipMarshalScalar(Expression arg, ref wasmtime_val_t val)
 {
-    import dmd.wasmtimec;
     auto tb = arg.type ? arg.type.toBasetype() : null;
     if (!tb)
         return false;
@@ -6074,7 +6022,6 @@ private bool ipMarshalScalar(Expression arg, ref wasmtime_val_t val)
 
 private Expression ipDecodeScalar(ref wasmtime_val_t val, Type type, Loc loc)
 {
-    import dmd.wasmtimec;
     auto tb = type.toBasetype();
     switch (tb.ty)
     {

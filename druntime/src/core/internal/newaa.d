@@ -483,6 +483,11 @@ private enum ctfeOrderLen = cast(size_t function(const(void)*) pure nothrow @nog
 private enum ctfeOrderAt = cast(const(void)* function(const(void)*, size_t) pure nothrow @nogc @safe) &ctfeOrderAtImpl;
 private enum ctfeOrderClear = cast(void function(const(void)*) pure nothrow @nogc @safe) &ctfeOrderClearImpl;
 
+private auto ctfeOrderEntry(I)(I impl, size_t n) @trusted
+{
+    return cast(typeof(impl.buckets[0].entry)) ctfeOrderAt(impl, n);
+}
+
 //==============================================================================
 // Helper functions
 //------------------------------------------------------------------------------
@@ -638,7 +643,7 @@ V* _aaGetX(K, V, K2, V2)(auto ref scope V[K] a, auto ref K2 key, out bool found,
     p.hash = hash;
     aa.firstUsed = min(aa.firstUsed, cast(uint)pi);
     if (__ctfe) if (__ctfeGuest())
-        ctfeOrderAppend(cast(const(void)*) aa.impl, cast(const(void)*) p.entry);
+        ctfeOrderAppend(aa.impl, p.entry);
     return &p.entry.value;
 }
 
@@ -707,14 +712,14 @@ auto _aaDup(T : V[K], K, V)(T a)
     impl.used = cast(uint) len;
     if (__ctfe) if (__ctfeGuest())
     {
-        foreach (n; 0 .. ctfeOrderLen(cast(const(void)*) aa.impl))
+        foreach (n; 0 .. ctfeOrderLen(aa.impl))
         {
-            auto se = () @trusted { return cast(typeof(aa.buckets[0].entry)) ctfeOrderAt(cast(const(void)*) aa.impl, n); }();
+            auto se = ctfeOrderEntry(aa.impl, n);
             if (se is null)
                 continue;
             hash_t hash = impl.calcHash(se.key);
             if (auto pb = impl.findSlotLookup!K(hash, se.key))
-                ctfeOrderAppend(cast(const(void)*) impl, cast(const(void)*) pb.entry);
+                ctfeOrderAppend(impl, pb.entry);
         }
     }
     return () @trusted { return *cast(Unconstify!V[K]*)&impl; }();
@@ -765,7 +770,7 @@ auto _d_aaDel(T : V[K], K, V, K2)(T a, auto ref K2 key)
     if (auto p = aa.findSlotLookup(hash, key2))
     {
         if (__ctfe) if (__ctfeGuest())
-            ctfeOrderRemove(cast(const(void)*) aa.impl, cast(const(void)*) p.entry);
+            ctfeOrderRemove(aa.impl, p.entry);
         // clear entry
         p.hash = HASH_DELETED;
         p.entry = null;
@@ -788,7 +793,7 @@ void _aaClear(K, V)(V[K] a)
     if (!aa.empty)
     {
         if (__ctfe) if (__ctfeGuest())
-            ctfeOrderClear(cast(const(void)*) aa.impl);
+            ctfeOrderClear(aa.impl);
         aa.clear();
     }
 }
@@ -821,10 +826,10 @@ auto _aaValues(K, V)(inout V[K] a)
     size_t i = 0;
     if (__ctfe) if (__ctfeGuest())
     {
-        foreach (n; 0 .. ctfeOrderLen(cast(const(void)*) aa.impl))
+        foreach (n; 0 .. ctfeOrderLen(aa.impl))
         {
             () @trusted {
-                auto entry = cast(typeof(aa.buckets[0].entry)) ctfeOrderAt(cast(const(void)*) aa.impl, n);
+                auto entry = ctfeOrderEntry(aa.impl, n);
                 if (entry is null)
                     return;
                 import core.lifetime;
@@ -862,10 +867,10 @@ auto _aaKeys(K, V)(inout V[K] a)
     size_t i = 0;
     if (__ctfe) if (__ctfeGuest())
     {
-        foreach (n; 0 .. ctfeOrderLen(cast(const(void)*) aa.impl))
+        foreach (n; 0 .. ctfeOrderLen(aa.impl))
         {
             () @trusted {
-                auto entry = cast(typeof(aa.buckets[0].entry)) ctfeOrderAt(cast(const(void)*) aa.impl, n);
+                auto entry = ctfeOrderEntry(aa.impl, n);
                 if (entry is null)
                     return;
                 import core.lifetime;
@@ -896,9 +901,9 @@ int _d_aaApply(K, V, DG)(inout V[K] a, DG dg)
 
     if (__ctfe) if (__ctfeGuest())
     {
-        foreach (n; 0 .. ctfeOrderLen(cast(const(void)*) aa.impl))
+        foreach (n; 0 .. ctfeOrderLen(aa.impl))
         {
-            auto entry = () @trusted { return cast(typeof(aa.buckets[0].entry)) ctfeOrderAt(cast(const(void)*) aa.impl, n); }();
+            auto entry = ctfeOrderEntry(aa.impl, n);
             if (entry is null)
                 continue;
             if (auto res = dg(entry.value))
@@ -942,9 +947,9 @@ int _d_aaApply2(K, V, DG)(inout V[K] a, DG dg)
 
     if (__ctfe) if (__ctfeGuest())
     {
-        foreach (n; 0 .. ctfeOrderLen(cast(const(void)*) aa.impl))
+        foreach (n; 0 .. ctfeOrderLen(aa.impl))
         {
-            auto entry = () @trusted { return cast(typeof(aa.buckets[0].entry)) ctfeOrderAt(cast(const(void)*) aa.impl, n); }();
+            auto entry = ctfeOrderEntry(aa.impl, n);
             if (entry is null)
                 continue;
             if (auto res = dg(entry.key, entry.value))
@@ -1010,7 +1015,7 @@ Impl!(K, V)* _d_assocarrayliteralTX(K, V)(K[] keys, V[] vals)
                 auto oldEntry = p.entry;
                 p.entry = _newEntry!(K, V)(keys[i], vals[i]);
                 if (__ctfe) if (__ctfeGuest())
-                    ctfeOrderReplace(cast(const(void)*) aa, cast(const(void)*) oldEntry, cast(const(void)*) p.entry);
+                    ctfeOrderReplace(aa, oldEntry, p.entry);
             }
             duplicates++;
             continue;
@@ -1021,7 +1026,7 @@ Impl!(K, V)* _d_assocarrayliteralTX(K, V)(K[] keys, V[] vals)
         p.entry = _newEntry!(K, V)(keys[i], vals[i]); // todo: move key and value?
         aa.firstUsed = min(aa.firstUsed, cast(uint)pi);
         if (__ctfe) if (__ctfeGuest())
-            ctfeOrderAppend(cast(const(void)*) aa, cast(const(void)*) p.entry);
+            ctfeOrderAppend(aa, p.entry);
     }
     aa.used = cast(uint) (length - duplicates);
     return aa;
@@ -1125,7 +1130,7 @@ AARange!(K, V) _aaRange(K, V)(V[K] a)
 bool _aaRangeEmpty(K, V)(AARange!(K, V) r)
 {
     if (__ctfe) if (__ctfeGuest())
-        return r.impl is null || r.idx >= ctfeOrderLen(cast(const(void)*) r.impl);
+        return r.impl is null || r.idx >= ctfeOrderLen(r.impl);
     return r.impl is null || r.idx >= r.dim;
 }
 
@@ -1134,7 +1139,7 @@ K* _aaRangeFrontKey(K, V)(AARange!(K, V) r)
     assert(!_aaRangeEmpty(r));
     if (__ctfe) if (__ctfeGuest())
     {
-        auto entry = () @trusted { return cast(typeof(r.buckets[0].entry)) ctfeOrderAt(cast(const(void)*) r.impl, r.idx); }();
+        auto entry = ctfeOrderEntry(r.impl, r.idx);
         return entry is null ? null : &entry.key;
     }
     if (r.idx >= r.dim)
@@ -1148,7 +1153,7 @@ V* _aaRangeFrontValue(K, V)(AARange!(K, V) r)
     assert(!_aaRangeEmpty(r));
     if (__ctfe) if (__ctfeGuest())
     {
-        auto entry = () @trusted { return cast(typeof(r.buckets[0].entry)) ctfeOrderAt(cast(const(void)*) r.impl, r.idx); }();
+        auto entry = ctfeOrderEntry(r.impl, r.idx);
         return entry is null ? null : &entry.value;
     }
     if (r.idx >= r.dim)
@@ -1162,7 +1167,7 @@ void _aaRangePopFront(K, V)(ref AARange!(K, V) r)
 {
     if (__ctfe) if (__ctfeGuest())
     {
-        if (r.idx < ctfeOrderLen(cast(const(void)*) r.impl))
+        if (r.idx < ctfeOrderLen(r.impl))
             ++r.idx;
         return;
     }

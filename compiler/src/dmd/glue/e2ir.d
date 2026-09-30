@@ -819,7 +819,7 @@ elem* toElem(Expression e, ref IRState irs)
         const bool nrvo = fd && s == fd.shidden;
 
         if (s.Sclass == SC.auto_ || s.Sclass == SC.parameter || s.Sclass == SC.shadowreg ||
-            s.Sclass == SC.fastpar || s.Sclass == SC.regpar)
+            s.Sclass == SC.fastpar)
         {
             if (fd && fd != irs.getFunc() &&
                 !(wasmCtfeBuildActive && s.Ssymnum < (*cstate.CSpsymtab).length && (*cstate.CSpsymtab)[s.Ssymnum] is s))
@@ -1388,13 +1388,16 @@ elem* toElem(Expression e, ref IRState irs)
             elem* ezprefix = null;
             elem* ez = null;
 
-            if (ne.onstack || ne.placement)
+            if (ne.onstack || ne.placement || (!ne.lowering && wasmCtfeBuildActive))
             {
                 if (ne.placement)
                 {
                     ex = toElem(ne.placement, irs);
                     ex = addressElem(ex, ne.newtype.toBasetype(), false);
                 }
+                else if (!ne.onstack)
+                    ex = el_bin(OPcall, TYnptr, el_var(getRtlsym(RTLSYM.ALLOCMEMORY)),
+                        el_long(TYsize_t, tclass.sym.structsize));
                 else
                 {
                     /* Create an instance of the class on the stack,
@@ -1410,28 +1413,6 @@ elem* toElem(Expression e, ref IRState irs)
                     ex = el_ptr(stmp);
                 }
 
-                Symbol* si = toInitializer(tclass.sym);
-                elem* ei = el_var(si);
-
-                if (cd.isNested())
-                {
-                    ey = el_same(ex);
-                    ez = el_copytree(ey);
-                    if (cd.vthis2)
-                        ew = el_copytree(ey);
-                }
-                else if (ne.member)
-                    ez = el_same(ex);
-
-                ex = el_una(OPind, TYstruct, ex);
-                ex = elAssign(ex, ei, null, Type_toCtype(tclass).Tnext);
-                ex = el_una(OPaddr, TYnptr, ex);
-                ectype = tclass;
-            }
-            else if (!ne.lowering && wasmCtfeBuildActive)
-            {
-                ex = el_bin(OPcall, TYnptr, el_var(getRtlsym(RTLSYM.ALLOCMEMORY)),
-                    el_long(TYsize_t, tclass.sym.structsize));
                 Symbol* si = toInitializer(tclass.sym);
                 elem* ei = el_var(si);
 
@@ -2627,13 +2608,11 @@ elem* toElem(Expression e, ref IRState irs)
             elem* ea2 = toElem(ie.e2, irs);
             ea2 = array_toDarray(t2, ea2);
 
-            if (wasmCtfeBuildActive && !ie.e1.isNullExp() && !ie.e2.isNullExp()
-                && t1.nextOf().toBasetype().isFloating())
-            {
+            const structural = wasmCtfeBuildActive && !ie.e1.isNullExp() && !ie.e2.isNullExp();
+            const floatElems = structural && t1.nextOf().toBasetype().isFloating();
+            if (floatElems)
                 wasmCtfePoison("float array identity compare");
-                e = el_bin(eop, totym(ie.type), ea1, ea2);
-            }
-            else if (wasmCtfeBuildActive && !ie.e1.isNullExp() && !ie.e2.isNullExp())
+            if (structural && !floatElems)
             {
                 const esz = t1.nextOf().size();
                 elem* c1 = el_same(ea1);
@@ -4500,24 +4479,17 @@ elem* toElem(Expression e, ref IRState irs)
                 * Avoids the whole variadic arg mess.
                 */
 
-                if (!ale.lowering && wasmCtfeBuildActive)
-                {
-                    elem* ev = el_bin(OPcall, TYnptr, el_var(getRtlsym(RTLSYM.ALLOCMEMORY)),
-                        el_long(TYsize_t, dim * tb.nextOf().size()));
-                    Symbol* stmp = symbol_genauto(Type_toCtype(Type.tvoid.pointerTo()));
-                    e = el_bin(OPeq, TYnptr, el_var(stmp), ev);
-                    e = el_combine(e, ExpressionsToStaticArray(irs, ale.loc, ale.elements, &stmp, 0, ale.basis));
-                    e = el_combine(e, el_var(stmp));
-                }
-                else
-                {
-                if (!ale.lowering)
+                if (!ale.lowering && !wasmCtfeBuildActive)
                 {
                     fprintf(stderr, "Internal Error: array literal %s at %s should have been lowered to a _d_arrayliteralTX template\n",
                         ale.toChars(), ale.loc.toChars());
                     assert(0);
                 }
-                e = toElem(ale.lowering, irs);
+                if (ale.lowering)
+                    e = toElem(ale.lowering, irs);
+                else
+                    e = el_bin(OPcall, TYnptr, el_var(getRtlsym(RTLSYM.ALLOCMEMORY)),
+                        el_long(TYsize_t, dim * tb.nextOf().size()));
 
                 Symbol* stmp = symbol_genauto(Type_toCtype(Type.tvoid.pointerTo()));
                 e = el_bin(OPeq, TYnptr, el_var(stmp), e);
@@ -4525,7 +4497,6 @@ elem* toElem(Expression e, ref IRState irs)
                 e = el_combine(e, ExpressionsToStaticArray(irs, ale.loc, ale.elements, &stmp, 0, ale.basis));
 
                 e = el_combine(e, el_var(stmp));
-                }
             }
         }
         else

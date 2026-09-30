@@ -2234,25 +2234,15 @@ bool genElem(ref WasmCG cg, elem* e)
                     cg.emit(OP.DROP);
                 return;
             }
-            if (!pushed)
+            if (pushed && tybasic(arm.Ety) != TYvoid
+                && (wasmType(arm.Ety) == WASM_TYPE.V128) == (e.wasmType == WASM_TYPE.V128))
             {
-                padZero();
+                cg.emitCoerce(wasmType(arm.Ety), e.wasmType);
                 return;
             }
-            if (tybasic(arm.Ety) == TYvoid)
-            {
+            if (pushed)
                 cg.emit(OP.DROP);
-                padZero();
-                return;
-            }
-            const ft = wasmType(arm.Ety);
-            if ((ft == WASM_TYPE.V128) != (e.wasmType == WASM_TYPE.V128))
-            {
-                cg.emit(OP.DROP);
-                padZero();
-                return;
-            }
-            cg.emitCoerce(ft, e.wasmType);
+            padZero();
         }
 
         fitArm(cg.genElem(e.E2.E1), e.E2.E1);

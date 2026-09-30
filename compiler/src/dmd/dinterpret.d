@@ -6248,9 +6248,8 @@ public:
                     auto sym = t.toDsymbol(null);
                     if (sym && sym.ident)
                     {
-                        import core.stdc.string : strlen;
-                        auto pretty = sym.toPrettyChars();
-                        result = new StringExp(e.loc, pretty[0 .. strlen(pretty)]);
+                        import dmd.root.string : toDString;
+                        result = new StringExp(e.loc, sym.toPrettyChars().toDString);
                         result.expressionSemantic(null);
                         return ;
                     }
