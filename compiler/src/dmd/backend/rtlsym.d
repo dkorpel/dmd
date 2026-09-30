@@ -432,8 +432,8 @@ private type* wasmRtlsymType(RTLSYM i)
         case RTLSYM.WASMCTFECOV:            return fn([tuint, tuint], tvoid);
         case RTLSYM.WASMCTFETHROW:          return fn([voidPtr(), tuint], voidPtr());
         case RTLSYM.WASMCTFEERROR:          return fn([tuint, tuint], tvoid);
-        case RTLSYM.WASMCTFESWITCHERR:      return fn([tuint, tstypes[TYllong]], tvoid);
-        case RTLSYM.WASMCTFESLICECOPY:      return fn([tuint, tsize, tsize, voidPtr(), voidPtr()], tvoid);
+        case RTLSYM.WASMCTFESWITCHERR:      return fn([tuint, tuint, tstypes[TYllong]], tvoid);
+        case RTLSYM.WASMCTFESLICECOPY:      return fn([tuint, tuint, tsize, tsize, voidPtr(), voidPtr()], tvoid);
         case RTLSYM.WASMCTFEPTRSLICE:       return fn([tuint, tuint, tsize, tsize, voidPtr()], tvoid);
         case RTLSYM.WASMCTFEERROR2:         return fn([tuint, tuint, tsize, tsize], tvoid);
         case RTLSYM.WASMCTFEUNION:          return fn([tuint, tuint, voidPtr()], tvoid);

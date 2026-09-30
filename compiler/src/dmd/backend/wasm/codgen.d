@@ -1445,12 +1445,11 @@ private bool genCall(ref WasmCG cg, elem* e)
     if (ctx.isCVariadic)
         cg.genVarArgs(varArgs, spLocal, vaFrameSize);
 
-    if (wasmCGCtfeBuild && e.Esite)
-        cg.sites ~= WasmSite(0, e.Esite);
+    const uint site = wasmCGCtfeBuild ? e.Esite : 0;
     if (calleeSym)
     {
-        if (cg.sites.length && cg.sites[$ - 1].offset == 0)
-            cg.sites[$ - 1].offset = cast(uint) cg.code.length + 1;
+        if (site)
+            cg.sites ~= WasmSite(cast(uint) cg.code.length, site);
         cg.emit(OP.CALL, callReloc(cg.funcIndex(calleeSym), calleeSym));
     }
     else
@@ -1466,8 +1465,8 @@ private bool genCall(ref WasmCG cg, elem* e)
         elem* fn = (e.E1.Eoper == OPind && e.E1.E1) ? e.E1.E1 : e.E1;
         cg.genElem(fn);
         cg.wrapPtrToI32();
-        if (cg.sites.length && cg.sites[$ - 1].offset == 0)
-            cg.sites[$ - 1].offset = cast(uint) cg.code.length + 1;
+        if (site)
+            cg.sites ~= WasmSite(cast(uint) cg.code.length, site);
         cg.emit(OP.CALL_INDIRECT,
             RelocOp(R_WASM.TYPE_INDEX_LEB, typeIdx, null), RelocOp(R_WASM.TABLE_NUMBER_LEB));
     }

@@ -332,7 +332,7 @@ enum CTFEGoal : int
 //debug = SHOWPERFORMANCE;
 
 // Maximum allowable recursive function calls in CTFE
-enum CTFE_RECURSION_LIMIT = 1000;
+package enum CTFE_RECURSION_LIMIT = 1000;
 
 /**
  The values of all CTFE variables

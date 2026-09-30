@@ -747,12 +747,11 @@ private bool emitCodeSection(ref OutBuffer out_, ref WasmModule wmod)
     if (wasmCGCtfeBuild)
     {
         const uint payloadBase = cast(uint)(out_.length - wmod.moduleStart + 1 + ulebSize(cast(uint) s.length));
-        wasmModuleSites.length = 0;
+        wasmModuleSites = null;
         foreach (size_t fi; 0 .. defined)
             if (fi < wasmFuncBodies.length && wasmFuncBodies[fi].code.length())
                 foreach (ref const WasmSite ws; wasmFuncBodies[fi].sites)
-                    if (ws.offset)
-                        wasmModuleSites ~= WasmSite(payloadBase + wasmFuncBodies[fi].codePayloadStart + ws.offset - 1, ws.site);
+                    wasmModuleSites ~= WasmSite(payloadBase + wasmFuncBodies[fi].codePayloadStart + ws.offset, ws.site);
     }
     writeSection(out_, WASM_SECTION.code, s);
     return true;

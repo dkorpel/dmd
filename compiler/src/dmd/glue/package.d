@@ -988,7 +988,8 @@ private void FuncDeclaration_toObjFileImpl(FuncDeclaration fd, bool multiobj)
         if (tfn && tfn.next && tfn.next.ty != Tvoid)
         {
             import dmd.glue.e2ir : wasmCtfeErrorCall;
-            block_appendexp(bx.curblock, wasmCtfeErrorCall(19, new VarExp(fd.loc, fd)));
+            import dmd.wasmctfe : CtfeSiteErr;
+            block_appendexp(bx.curblock, wasmCtfeErrorCall(CtfeSiteErr.noReturnValue, new VarExp(fd.loc, fd)));
         }
     }
     bx.curblock.bc = BC.ret;

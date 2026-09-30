@@ -123,7 +123,7 @@ public __gshared Module[] wasmCtfeCovModules;
 public __gshared Expression[] wasmCtfeSites;
 public __gshared FuncDeclaration[const(char)[]] wasmCtfeNoBodyFuncs;
 public __gshared Expression[][] wasmCtfeSiteArgCalls;
-public __gshared Expression[] wasmCtfeArgCallStack;
+public __gshared Array!Expression wasmCtfeArgCallStack;
 
 private __gshared Array!ClassDeclaration wasmCtfeClasses;
 
@@ -325,33 +325,22 @@ void wasmCtfeQueueDefinition(Dsymbol d)
         import dmd.wasmctfe : wasmCtfeHostBuiltin;
         if (wasmCtfeHostBuiltin(fd))
             return;
+        import dmd.root.string : toDString;
+        const m = mangleExact(fd).toDString;
         if (fd.semanticRun >= PASS.semantic3done && fd.hasSemantic3Errors)
         {
-            import core.stdc.string : strlen;
-            const m = mangleExact(fd);
-            wasmCtfeErrorFuncs[m[0 .. strlen(m)].idup] = fd;
+            wasmCtfeErrorFuncs[m] = fd;
             return;
         }
         if (wasmCtfeVtblCtx && fd.fbody && fd.semanticRun < PASS.semantic3done)
         {
-            import core.stdc.string : strlen;
-            const m = mangleExact(fd);
-            wasmCtfeLazyFuncs[m[0 .. strlen(m)].idup] = fd;
+            wasmCtfeLazyFuncs[m] = fd;
             return;
         }
-        if (wasmCtfeStubFuncs.length)
-        {
-            import core.stdc.string : strlen;
-            const m = mangleExact(fd);
-            if (m[0 .. strlen(m)] in wasmCtfeStubFuncs)
-                return;
-        }
+        if (m in wasmCtfeStubFuncs)
+            return;
         if (!fd.fbody)
-        {
-            import core.stdc.string : strlen;
-            const m = mangleExact(fd);
-            wasmCtfeNoBodyFuncs[m[0 .. strlen(m)].idup] = fd;
-        }
+            wasmCtfeNoBodyFuncs[m] = fd;
         if (!fd.fbody && fd.semanticRun >= PASS.semantic3done)
         {
             import core.stdc.stdlib : getenv;

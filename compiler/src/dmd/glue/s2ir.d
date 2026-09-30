@@ -427,7 +427,7 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
 
         incUsage(irs, s.loc);
         elem* econd = toElemDtor(s.condition, irs);
-        const ctfeCond = wasmCtfeBuildActive && s.condition.type.isIntegral()
+        const ctfeCond = wasmCtfeBuildActive && s.isFinal && s.condition.type.isIntegral()
             && !(s.condition.isCallExp() && s.condition.isCallExp().f && s.condition.isCallExp().f.ident == Id.__switch);
         if (ctfeCond && econd.Eoper != OPvar)
         {
@@ -436,10 +436,10 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
             econd = el_copytree(e.E2);
         }
         if (ctfeCond)
-            wasmCtfeSwitchConds ~= WasmCtfeSwitchCond(el_copytree(econd), s);
+            wasmCtfeSwitchConds.push(WasmCtfeSwitchCond(el_copytree(econd), s));
         scope (exit)
             if (ctfeCond)
-                wasmCtfeSwitchConds.length--;
+                wasmCtfeSwitchConds.pop();
         if (s.hasVars)
         {   /* Generate a sequence of if-then-else blocks for the cases.
              */
@@ -584,13 +584,13 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
         incUsage(irs, s.loc);
         if (wasmCtfeSwitchConds.length)
         {
-            auto sc = wasmCtfeSwitchConds[$ - 1];
+            auto sc = wasmCtfeSwitchConds[wasmCtfeSwitchConds.length - 1];
             auto ce = new CastExp(sc.sw.condition.loc, sc.sw.condition, Type.tint64);
             ce.type = Type.tint64;
             elem* ev = toElemCast(ce, el_copytree(sc.cond), false, irs);
-            const idx = wasmCtfeAddSite(sc.sw.condition);
-            block_appendexp(blx.curblock, el_bin(OPcall, TYvoid, el_var(getRtlsym(RTLSYM.WASMCTFESWITCHERR)),
-                el_params(ev, el_long(TYuint, idx), null)));
+            import dmd.wasmctfe : CtfeSiteErr;
+            block_appendexp(blx.curblock, wasmCtfeErrorCall(CtfeSiteErr.switchNoCase, sc.sw.condition,
+                RTLSYM.WASMCTFESWITCHERR, ev));
             return;
         }
         block_appendexp(blx.curblock, toElemDtor(s.exp, irs));
@@ -1871,7 +1871,7 @@ struct WasmCtfeSwitchCond
     SwitchStatement sw;
 }
 
-__gshared WasmCtfeSwitchCond[] wasmCtfeSwitchConds;
+__gshared Array!WasmCtfeSwitchCond wasmCtfeSwitchConds;
 
 private void block_setLoc(block* b, Loc loc) nothrow
 {
