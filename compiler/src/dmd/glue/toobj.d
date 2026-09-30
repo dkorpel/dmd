@@ -166,15 +166,7 @@ void TypeInfo_toObjFile(Expression e, Loc loc, Type t)
         return;
 
     if (wasmCtfeBuildActive)
-    {
-        if (t.vtinfo.tinfo.isTypeAArray())
-        {
-            auto tiaa = cast(TypeInfoAssociativeArrayDeclaration) cast(void*) t.vtinfo;
-            if (!tiaa.entry)
-                return;
-        }
         wasmCtfeRecordTypeInfo(t.vtinfo);
-    }
 
     t.vtinfo.hadCodegen = true;
 
@@ -754,8 +746,7 @@ void toObjFile(Dsymbol ds, bool multiobj)
                 sinit.Sdt = dtb.finish();
                 outdata(sinit);
             }
-            wasmCtfeRecordObjPass(ed, ed.semanticRun);
-            ed.semanticRun = PASS.obj;
+            wasmCtfeMarkObj(ed);
         }
 
         override void visit(TypeInfoDeclaration tid)

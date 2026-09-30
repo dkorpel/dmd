@@ -59,8 +59,6 @@ These came up during the reviews. None of them was verified or fixed.
   code.** The engine order is patched in glue by rewriting the AST during code
   generation. Fixing the order in the lowering (`lowerToArrayCat`) would make
   both agree but changes native behaviour.
-- **`im.hostImports` grows on every call of a cached module.** One
-  `HostImport` per import is appended per call.
 - **`compiler/src/dmd/link.d` line 322 holds a leftover merge-conflict marker**
   (`>>>>>>> a3372b503c ...`) inside a doc comment. It comes from the wasm
   backend commits, not from the CTFE commits, so it was left alone.
@@ -83,6 +81,20 @@ These came up during the reviews. None of them was verified or fixed.
   The `_TMP` counter is shared, so a change in how many temporaries an engine
   build creates renumbers the host's symbols. The object files are otherwise
   identical.
+- **Verify mode hands an error expression to the engine.** When the AST
+  interpreter fails an enum initializer and the enum is used later
+  (`enum v = f(); pragma(msg, v);`), the engine build hits the `assert` in the
+  default `visit(Expression)` of `e2ir.d`. Seen with `core.math.rint` on a
+  `real`, which the engine evaluates and the AST interpreter rejects.
+- **The engine is compiled in, linked and enabled by three different
+  conditions.** `build.d` links libwasmtime on `linux`, the engine code is
+  compiled unless `NoBackend` is set, and the mode defaults to strict on
+  `Posix`. macOS and the BSDs get the engine enabled without the library, and
+  the dub build has no link flag. One version identifier set by the build
+  script would cover all three.
+- **A TypeInfo may be emitted twice in an engine build**, once by
+  `TypeInfo_toObjFile` and once when the work list pops the declaration that
+  `toSymbol` queued. The two are deduplicated by different flags.
 - **`sqrt(double) + fabs(sin(double))` in a loop fails** with "wasm-ctfe cannot
   evaluate". It fails the same way before the simplification commits.
 - **A ctfe-only lambda that loops over an outer const array fails.**
@@ -401,7 +413,7 @@ are marked one at a time again.
 - **Typeid fold in glue.** Moving the fold out of `tryWasmCtfeExpr` changes
   which expressions reach the engine.
 
-## c185ce6596, 7b2efa852e, abacf08325, 53c6f80de0, dbc78f622f, 3d4fa81d8d, e40df7f3ca, ddae26a150 (fixes in the commit that adds this section)
+## c185ce6596, 7b2efa852e, abacf08325, 53c6f80de0, dbc78f622f, 3d4fa81d8d, e40df7f3ca, ddae26a150 (fixes in 4f8985713b)
 
 The virtual call path in `e2ir.d` has its upstream assert back
 (`tysize(TYnptr) == 4` on 32-bit x86). It holds during engine builds because a
@@ -436,3 +448,42 @@ The virtual call path in `e2ir.d` has its upstream assert back
 - **The re-append condition in `templateInstanceSemantic`.** Two tests cover
   what one invariant ("the primary instance sits in a non-root module") could
   express. The rewrite touches upstream logic.
+
+## cce6e02dfd, d392e7b071, 7436614c60, e72e48a342, e87ea5c69f, 1705c07d23 (fixes in the commit that adds this section)
+
+Two fixes change behaviour. Host imports are linked with the function type
+the module declares, so a call to a function with more than 16 parameters no
+longer fails with "cannot evaluate". The per-call import records are freed
+after the call and no longer pile up in the cached module.
+
+- **Resolving host imports once per module.** Which host function an import
+  binds to is worked out again on every call. Doing it when the module is
+  created moves the lookup in the glue tables (stubs, error functions, lazy
+  functions) from call time to build time.
+- **A width-neutral `DataReloc`.** The record could store "function or data"
+  and leave the 32 or 64-bit wire type to the one writer. The emitter and the
+  two predicates that were added cover the duplication; changing the record
+  touches the object writer from before these commits.
+- **`needsCodegen` outside the `pure` block of `Scope`.**
+  `wasmCtfeLoweringActive` casts `wasmCtfeMode` to `pure` so that
+  `Scope.needsCodegen` can stay under the attribute label. Moving the function
+  above the label removes the cast but moves upstream code.
+- **Recording rejected symbols in `wasmCtfeQueueDefinition`.** A symbol that
+  is not queued is classified again on every reference. Remembering the
+  rejection is only valid for the reasons that cannot change during a build,
+  and the lazy-virtual branch must stay out.
+- **A return-style predicate that does not allocate.** `toArgTypes_wasm`
+  allocates a `TypeTuple` per query. A predicate would have to repeat its
+  type tests. The rule is now in one place (`isReturnOnStack_wasm`), which
+  still allocates.
+- **The `sret` test in `tryWasmCtfeInprocOnce`.** It lists the type kinds by
+  hand where it could ask `isReturnOnStack_wasm`. The list also decides how
+  the result is decoded.
+- **`relOp` for the 128-bit compare in `emitRelop`.** The four-line opcode
+  table could be two calls to the nested `relOp` after moving it up. That is
+  not shorter.
+- **Unused members of partly used enums in `wasmtimec.d`**
+  (`WASMTIME_EXTERNREF`, `WASMTIME_EXTERN_TAG`, ...) and
+  `R_WASM.MEMORY_ADDR_LEB64`. They keep the numbering complete.
+- **"Memory or trap" prologue of the host hooks.** See the batch above; the
+  hooks that only format a message now share `ipCallerMem` and `ipTrapf`.

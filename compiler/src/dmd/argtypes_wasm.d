@@ -47,3 +47,9 @@ TypeTuple toArgTypes_wasm(Type t)
     // return through a hidden sret pointer instead of packing it into a value
     return TypeTuple.empty;
 }
+
+bool isReturnOnStack_wasm(Type tn)
+{
+    TypeTuple tt = toArgTypes_wasm(tn);
+    return tt && !tt.arguments.length;
+}

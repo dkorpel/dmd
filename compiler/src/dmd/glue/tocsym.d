@@ -165,8 +165,7 @@ bool wasmGlue()
 {
     return target.isWasm || wasmCtfeBuildActive;
 }
-private __gshared Array!Dsymbol wasmCtfeTouched;
-private __gshared bool[void*] wasmCtfeSeenTouched;
+private __gshared bool[void*] wasmCtfeTouched;
 private __gshared Array!Dsymbol wasmCtfeWork;
 private __gshared bool[void*] wasmCtfeQueued;
 
@@ -279,11 +278,7 @@ void wasmCtfeRecord(Dsymbol d)
     }
     if (d is null)
         return;
-    if (cast(void*) d !in wasmCtfeSeenTouched)
-    {
-        wasmCtfeSeenTouched[cast(void*) d] = true;
-        wasmCtfeTouched.push(d);
-    }
+    wasmCtfeTouched[cast(void*) d] = true;
     wasmCtfeQueueDefinition(d);
 }
 
@@ -345,7 +340,6 @@ void wasmCtfeQueueDefinition(Dsymbol d)
         }
         if (auto tid = vd.isTypeInfoDeclaration())
         {
-            import dmd.mtype : TypeClass;
             if (auto tc = tid.tinfo.isTypeClass())
             {
                 wasmCtfeQueueDefinition(tc.sym);
@@ -368,16 +362,20 @@ Dsymbol wasmCtfePopWork()
 }
 
 package(dmd.glue)
-void wasmCtfeRecordObjPass(Dsymbol d, PASS oldPass)
+void wasmCtfeMarkObj(Dsymbol d)
 {
-    if (!wasmCtfeBuildActive)
-        return;
-    wasmCtfeObjMarked.push(d);
-    wasmCtfeObjMarkedPass.push(oldPass);
+    if (wasmCtfeBuildActive)
+        wasmCtfeObjMarked.push(ObjMark(d, d.semanticRun));
+    d.semanticRun = PASS.obj;
 }
 
-private __gshared Array!Dsymbol wasmCtfeObjMarked;
-private __gshared Array!PASS wasmCtfeObjMarkedPass;
+private struct ObjMark
+{
+    Dsymbol d;
+    PASS pass;
+}
+
+private __gshared Array!ObjMark wasmCtfeObjMarked;
 private __gshared Array!TypeInfoDeclaration wasmCtfeTypeInfos;
 
 /// TypeInfo declarations emitted by the last engine build, by symbol name.
@@ -407,12 +405,12 @@ void wasmCtfeWipeCaches()
     foreach (tid; wasmCtfeTypeInfos[])
         if (tid.csym && (cast(Symbol*) tid.csym).Sident.ptr)
             wasmCtfeTypeInfoByName[(cast(Symbol*) tid.csym).identifier.idup] = tid;
-    foreach (i, d; wasmCtfeObjMarked[])
-        d.semanticRun = wasmCtfeObjMarkedPass[i];
+    foreach (ref om; wasmCtfeObjMarked[])
+        om.d.semanticRun = om.pass;
     wasmCtfeObjMarked.setDim(0);
-    wasmCtfeObjMarkedPass.setDim(0);
-    foreach (d; wasmCtfeTouched[])
+    foreach (p; wasmCtfeTouched.byKey)
     {
+        auto d = cast(Dsymbol) p;
         d.csym = null;
         if (auto ad = d.isAggregateDeclaration())
             ad.sinit = null;
@@ -421,8 +419,7 @@ void wasmCtfeWipeCaches()
         if (auto fld = d.isFuncLiteralDeclaration())
             fld.deferToObj = false;
     }
-    wasmCtfeTouched.setDim(0);
-    wasmCtfeSeenTouched.clear();
+    wasmCtfeTouched.clear();
     wasmCtfeWork.setDim(0);
     wasmCtfeQueued.clear();
     foreach (tid; wasmCtfeTypeInfos[])

@@ -19,10 +19,8 @@ struct wasmtime_error_t;
 struct wasm_trap_t;
 struct wasmtime_caller_t;
 struct wasm_functype_t;
-struct wasm_valtype_t;
 struct wasm_externtype_t;
 struct wasm_importtype_t;
-struct wasm_exporttype_t;
 struct wasm_frame_t;
 
 struct wasm_frame_vec_t
@@ -50,14 +48,6 @@ enum : ubyte
     WASMTIME_FUNCREF = 5,
     WASMTIME_EXTERNREF = 6,
     WASMTIME_ANYREF = 7,
-}
-
-enum : ubyte
-{
-    WASM_KIND_I32 = 0,
-    WASM_KIND_I64 = 1,
-    WASM_KIND_F32 = 2,
-    WASM_KIND_F64 = 3,
 }
 
 enum : ubyte
@@ -139,12 +129,6 @@ struct wasmtime_extern_t
     wasmtime_extern_union_t of;
 }
 
-struct wasm_valtype_vec_t
-{
-    size_t size;
-    wasm_valtype_t** data;
-}
-
 struct wasm_importtype_vec_t
 {
     size_t size;
@@ -154,30 +138,22 @@ struct wasm_importtype_vec_t
 wasm_config_t* wasm_config_new();
 void wasmtime_config_wasm_memory64_set(wasm_config_t*, bool);
 void wasmtime_config_wasm_exceptions_set(wasm_config_t*, bool);
-void wasmtime_config_wasm_multi_memory_set(wasm_config_t*, bool);
 void wasmtime_config_consume_fuel_set(wasm_config_t*, bool);
 void wasmtime_config_memory_init_cow_set(wasm_config_t*, bool);
-wasm_engine_t* wasm_engine_new();
 wasm_engine_t* wasm_engine_new_with_config(wasm_config_t*);
-void wasm_engine_delete(wasm_engine_t*);
 
 wasmtime_store_t* wasmtime_store_new(wasm_engine_t*, void* data, void function(void*) finalizer);
 wasmtime_context_t* wasmtime_store_context(wasmtime_store_t*);
 void wasmtime_store_delete(wasmtime_store_t*);
 wasmtime_error_t* wasmtime_context_set_fuel(wasmtime_context_t*, ulong fuel);
-wasmtime_error_t* wasmtime_context_get_fuel(const(wasmtime_context_t)*, ulong* fuel);
 
 wasmtime_error_t* wasmtime_module_new(wasm_engine_t*, const(ubyte)* wasm, size_t len, wasmtime_module_t**);
-void wasmtime_module_delete(wasmtime_module_t*);
 void wasmtime_module_imports(const(wasmtime_module_t)*, wasm_importtype_vec_t*);
 void wasm_importtype_vec_delete(wasm_importtype_vec_t*);
 const(wasm_name_t)* wasm_importtype_module(const(wasm_importtype_t)*);
 const(wasm_name_t)* wasm_importtype_name(const(wasm_importtype_t)*);
 const(wasm_externtype_t)* wasm_importtype_type(const(wasm_importtype_t)*);
 const(wasm_functype_t)* wasm_externtype_as_functype_const(const(wasm_externtype_t)*);
-const(wasm_valtype_vec_t)* wasm_functype_params(const(wasm_functype_t)*);
-const(wasm_valtype_vec_t)* wasm_functype_results(const(wasm_functype_t)*);
-ubyte wasm_valtype_kind(const(wasm_valtype_t)*);
 
 wasmtime_linker_t* wasmtime_linker_new(wasm_engine_t*);
 void wasmtime_linker_delete(wasmtime_linker_t*);
@@ -189,16 +165,11 @@ wasmtime_error_t* wasmtime_linker_instantiate(
     const(wasmtime_linker_t)*, wasmtime_context_t*,
     const(wasmtime_module_t)*, wasmtime_instance_t*, wasm_trap_t**);
 
-wasmtime_error_t* wasmtime_instance_new(wasmtime_context_t*, const(wasmtime_module_t)*,
-    const(wasmtime_extern_t)* imports, size_t nimports, wasmtime_instance_t*, wasm_trap_t**);
 bool wasmtime_instance_export_get(wasmtime_context_t*, const(wasmtime_instance_t)*,
     const(char)* name, size_t name_len, wasmtime_extern_t*);
 
 alias wasmtime_func_callback_t = wasm_trap_t* function(void* env, wasmtime_caller_t*,
     const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults);
-
-void wasmtime_func_new(wasmtime_context_t*, const(wasm_functype_t)*,
-    wasmtime_func_callback_t, void* env, void function(void*) finalizer, wasmtime_func_t*);
 
 wasmtime_error_t* wasmtime_func_call(wasmtime_context_t*, const(wasmtime_func_t)*,
     const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults, wasm_trap_t**);
@@ -225,9 +196,3 @@ void wasm_trap_trace(const(wasm_trap_t)*, wasm_frame_vec_t*);
 void wasm_frame_vec_delete(wasm_frame_vec_t*);
 size_t wasm_frame_module_offset(const(wasm_frame_t)*);
 void wasm_byte_vec_delete(wasm_byte_vec_t*);
-
-wasm_valtype_t* wasm_valtype_new(uint kind);
-void wasm_valtype_vec_new(wasm_valtype_vec_t*, size_t, wasm_valtype_t**);
-void wasm_valtype_vec_new_empty(wasm_valtype_vec_t*);
-wasm_functype_t* wasm_functype_new(wasm_valtype_vec_t* params, wasm_valtype_vec_t* results);
-void wasm_functype_delete(wasm_functype_t*);

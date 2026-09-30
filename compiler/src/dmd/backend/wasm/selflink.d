@@ -151,27 +151,23 @@ private void applyDataRelocs(ref WasmModule wmod)
         if (rel.segIdx >= wmod.dataSegs.length)
             continue;
         ubyte[] seg = wmod.dataSegs[rel.segIdx].data.peekSlice();
-        const bool wide = rel.type == R_WASM.TABLE_INDEX_I64 || rel.type == R_WASM.MEMORY_ADDR_I64;
-        if (rel.type == R_WASM.TABLE_INDEX_I32 || rel.type == R_WASM.TABLE_INDEX_I64)
+        uint v;
+        if (isTableIndexReloc(rel.type))
         {
             const uint fi = funcIdxBySymOrName(wmod, rel.sym);
-            const uint v = fi == uint.max ? 0 : fi + 1;
-            if (wide)
-                patchLE64(seg, rel.dataByteOffset, v);
-            else
-                patchLE32(seg, rel.dataByteOffset, v);
+            v = fi == uint.max ? 0 : fi + 1;
         }
         else
         {
             const uint addr = dataSymAddr(wmod, rel.sym, byName);
             if (addr == uint.max)
                 noteUnresolved(rel.sym);
-            const uint v = addr == uint.max ? 0 : addr + rel.addend;
-            if (wide)
-                patchLE64(seg, rel.dataByteOffset, v);
-            else
-                patchLE32(seg, rel.dataByteOffset, v);
+            v = addr == uint.max ? 0 : addr + rel.addend;
         }
+        if (rel.type == R_WASM.TABLE_INDEX_I64 || rel.type == R_WASM.MEMORY_ADDR_I64)
+            patchLE64(seg, rel.dataByteOffset, v);
+        else
+            patchLE32(seg, rel.dataByteOffset, v);
     }
 }
 

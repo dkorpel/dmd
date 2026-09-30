@@ -571,8 +571,7 @@ void FuncDeclaration_toObjFile(FuncDeclaration fd, bool multiobj)
         return;
 
     // start code generation
-    wasmCtfeRecordObjPass(fd, fd.semanticRun);
-    fd.semanticRun = PASS.obj;
+    wasmCtfeMarkObj(fd);
 
     if (global.params.v.verbose)
     {
@@ -1498,7 +1497,6 @@ private bool wasmCtfeGenerateOnce(FuncDeclaration root, ref OutBuffer objbuf, ou
     import dmd.dmsc : backend_init_wasm_ctfe, backend_reinit_host;
     import dmd.backend.wasm.selflink : wasmSelfLink, wasmSelfLinkUnresolved;
     import dmd.backend.wasm.obj : WasmObj_registerExportName;
-    import dmd.funcsem : functionSemantic3;
     import dmd.mangle : mangleExact;
 
     if (hostFuncDepth)
@@ -1546,7 +1544,8 @@ private bool wasmCtfeGenerateOnce(FuncDeclaration root, ref OutBuffer objbuf, ou
     }
     const startErrors = global.errors;
     wasmCtfeBaseErrors = startErrors;
-    ObjcGlue_initialize();
+    if (!objc())
+        ObjcGlue_initialize();
     backend_init_wasm_ctfe();
     const selfLinkSave = wasmSelfLink;
     wasmSelfLink = true;
@@ -1570,8 +1569,8 @@ private bool wasmCtfeGenerateOnce(FuncDeclaration root, ref OutBuffer objbuf, ou
     const trace = wasmCtfeTraceGen;
     const oldGag = showGag ? global.gag : global.startGagging();
     obj_start(objbuf, "__wasmctfe.d");
-    const id = mangleExact(root);
-    WasmObj_registerExportName(id[0 .. strlen(id)], id[0 .. strlen(id)]);
+    const id = mangleExact(root).toDString;
+    WasmObj_registerExportName(id, id);
     wasmCtfeQueueDefinition(root);
     while (auto d = wasmCtfePopWork())
     {
@@ -1619,16 +1618,9 @@ private bool wasmCtfeGenerateOnce(FuncDeclaration root, ref OutBuffer objbuf, ou
         else if (auto vd = d.isVarDeclaration())
         {
             if (!vd.isTypeInfoDeclaration())
-            {
-                auto tbv = vd.type.toBasetype();
-                AggregateDeclaration tad = null;
-                if (auto ts = tbv.isTypeStruct())
-                    tad = ts.sym;
-                else if (auto tc = tbv.isTypeClass())
-                    tad = tc.sym;
-                if (tad && !wasmCtfeAggReady(tad))
-                    continue;
-            }
+                if (auto tad = isAggregate(vd.type))
+                    if (!wasmCtfeAggReady(tad))
+                        continue;
             if (vd._init)
             {
                 auto ai = vd._init.isArrayInitializer();

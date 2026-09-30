@@ -2170,8 +2170,6 @@ private __gshared
     struct IpModule
     {
         wasmtime_module_t* mod;
-        const(char)[] exportName;
-        HostImport*[] hostImports;
         ulong ctfeOrdersAddr;
         FuncDeclaration[] tableFuncs;
         ClassDeclaration[ulong] vtbls;
@@ -2180,9 +2178,6 @@ private __gshared
     }
 
     IpModule*[void*] ipModuleCache;
-    bool[void*] ipModuleFailed;
-
-    char[512] ipTrapBuf;
 
     enum IpErrKind : ubyte { none, index, nullp, slice, assert_, assertMsg, errorFunc, uncaught, siteError }
     IpErrKind ipErrKind;
@@ -2462,10 +2457,7 @@ private extern (C) wasm_trap_t* ipHostStub(void* env, wasmtime_caller_t* caller,
     const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
 {
     auto hi = cast(HostImport*) env;
-    const n = snprintf(ipTrapBuf.ptr, ipTrapBuf.length,
-        "wasm-ctfe: unimplemented runtime call %.*s",
-        cast(int) hi.nameLen, hi.name.ptr);
-    return wasmtime_trap_new(ipTrapBuf.ptr, n);
+    return ipTrapf("wasm-ctfe: unimplemented runtime call %.*s", cast(int) hi.nameLen, hi.name.ptr);
 }
 
 private __gshared
@@ -3636,12 +3628,32 @@ private extern (C) wasm_trap_t* ipHostArrayAppendC(void* env, wasmtime_caller_t*
     return null;
 }
 
+private ubyte[] ipMemSlice(wasmtime_context_t* ctx, ref wasmtime_memory_t m) nothrow @nogc
+{
+    return wasmtime_memory_data(ctx, &m)[0 .. wasmtime_memory_data_size(ctx, &m)];
+}
+
 private ubyte[] ipMemSlice(wasmtime_caller_t* caller, ref wasmtime_memory_t m) nothrow @nogc
 {
-    auto ctx = wasmtime_caller_context(caller);
-    auto data = wasmtime_memory_data(ctx, &m);
-    const len = wasmtime_memory_data_size(ctx, &m);
-    return data[0 .. len];
+    return ipMemSlice(wasmtime_caller_context(caller), m);
+}
+
+private ubyte[] ipCallerMem(wasmtime_caller_t* caller) nothrow @nogc
+{
+    wasmtime_memory_t m;
+    return ipCallerMemory(caller, m) ? ipMemSlice(caller, m) : null;
+}
+
+pragma(printf)
+private extern (C) wasm_trap_t* ipTrapf(const(char)* fmt, ...) nothrow @nogc
+{
+    import core.stdc.stdarg : va_list, va_start, va_end;
+    char[512] buf = void;
+    va_list ap;
+    va_start(ap, fmt);
+    const n = vsnprintf(buf.ptr, buf.length, fmt, ap);
+    va_end(ap);
+    return wasmtime_trap_new(buf.ptr, cast(size_t) n < buf.length ? n : buf.length - 1);
 }
 
 private bool ipNullRange(ulong p, ulong n) nothrow @nogc
@@ -3849,59 +3861,45 @@ private const(char)* ipMemString(ubyte[] mem, ulong addr) nothrow @nogc
 {
     if (addr == 0 || addr >= mem.length)
         return "?".ptr;
-    foreach (i; addr .. mem.length)
-        if (mem[cast(size_t) i] == 0)
-            return cast(const(char)*) mem.ptr + addr;
-    return "?".ptr;
+    auto s = cast(const(char)*) mem.ptr + addr;
+    return memchr(s, 0, cast(size_t)(mem.length - addr)) ? s : "?".ptr;
 }
 
 private extern (C) wasm_trap_t* ipHostBoundsIndex(void* env, wasmtime_caller_t* caller,
     const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
 {
-    wasmtime_memory_t m;
-    ubyte[] mem;
-    if (ipCallerMemory(caller, m))
-        mem = ipMemSlice(caller, m);
+    auto mem = ipCallerMem(caller);
     ipErrKind = IpErrKind.index;
     ipErrVals[0] = ipValP(args[2]);
     ipErrVals[1] = ipValP(args[3]);
-    const n = snprintf(ipTrapBuf.ptr, ipTrapBuf.length,
+    return ipTrapf(
         "$bounds$%s(%d): array index %llu exceeds array length %llu",
         ipMemString(mem, ipValP(args[0])), args[1].of.i32,
         ipValP(args[2]), ipValP(args[3]));
-    return wasmtime_trap_new(ipTrapBuf.ptr, n);
 }
 
 private extern (C) wasm_trap_t* ipHostNullPointer(void* env, wasmtime_caller_t* caller,
     const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
 {
-    wasmtime_memory_t m;
-    ubyte[] mem;
-    if (ipCallerMemory(caller, m))
-        mem = ipMemSlice(caller, m);
+    auto mem = ipCallerMem(caller);
     ipErrKind = IpErrKind.nullp;
-    const n = snprintf(ipTrapBuf.ptr, ipTrapBuf.length,
+    return ipTrapf(
         "$null$%s(%d): null pointer dereference",
         ipMemString(mem, ipValP(args[0])), args[1].of.i32);
-    return wasmtime_trap_new(ipTrapBuf.ptr, n);
 }
 
 private extern (C) wasm_trap_t* ipHostBoundsSlice(void* env, wasmtime_caller_t* caller,
     const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
 {
-    wasmtime_memory_t m;
-    ubyte[] mem;
-    if (ipCallerMemory(caller, m))
-        mem = ipMemSlice(caller, m);
+    auto mem = ipCallerMem(caller);
     ipErrKind = IpErrKind.slice;
     ipErrVals[0] = ipValP(args[2]);
     ipErrVals[1] = ipValP(args[3]);
     ipErrVals[2] = ipValP(args[4]);
-    const n = snprintf(ipTrapBuf.ptr, ipTrapBuf.length,
+    return ipTrapf(
         "$bounds$%s(%d): slice [%llu..%llu] exceeds array bounds [0..%llu]",
         ipMemString(mem, ipValP(args[0])), args[1].of.i32,
         ipValP(args[2]), ipValP(args[3]), ipValP(args[4]));
-    return wasmtime_trap_new(ipTrapBuf.ptr, n);
 }
 
 private extern (C) wasm_trap_t* ipHostAssertStr(void* env, wasmtime_caller_t* caller,
@@ -3914,15 +3912,11 @@ private extern (C) wasm_trap_t* ipHostAssertStr(void* env, wasmtime_caller_t* ca
 private extern (C) wasm_trap_t* ipHostAssert(void* env, wasmtime_caller_t* caller,
     const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
 {
-    wasmtime_memory_t m;
-    ubyte[] mem;
-    if (ipCallerMemory(caller, m))
-        mem = ipMemSlice(caller, m);
+    auto mem = ipCallerMem(caller);
     ipErrKind = IpErrKind.assert_;
-    const n = snprintf(ipTrapBuf.ptr, ipTrapBuf.length,
+    return ipTrapf(
         "$assert$%s(%d): assertion failure",
         ipMemString(mem, ipValP(args[0])), args[1].of.i32);
-    return wasmtime_trap_new(ipTrapBuf.ptr, n);
 }
 
 private const(char)[] ipMemChars(const(ubyte)[] mem, ulong len, ulong ptr) nothrow @nogc
@@ -3935,34 +3929,26 @@ private const(char)[] ipMemChars(const(ubyte)[] mem, ulong len, ulong ptr) nothr
 private extern (C) wasm_trap_t* ipHostBounds(void* env, wasmtime_caller_t* caller,
     const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
 {
-    wasmtime_memory_t m;
-    ubyte[] mem;
-    if (ipCallerMemory(caller, m))
-        mem = ipMemSlice(caller, m);
+    auto mem = ipCallerMem(caller);
     const file = ipMemChars(mem, ipValP(args[0]), ipValP(args[1]));
-    const n = snprintf(ipTrapBuf.ptr, ipTrapBuf.length,
+    return ipTrapf(
         "$bounds$%.*s(%d): array index out of bounds",
         cast(int) file.length, file.ptr, args[2].of.i32);
-    return wasmtime_trap_new(ipTrapBuf.ptr, n);
 }
 
 private extern (C) wasm_trap_t* ipHostAssertMsg(void* env, wasmtime_caller_t* caller,
     const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
 {
-    wasmtime_memory_t m;
-    ubyte[] mem;
-    if (ipCallerMemory(caller, m))
-        mem = ipMemSlice(caller, m);
+    auto mem = ipCallerMem(caller);
     const msg = ipMemChars(mem, ipValP(args[0]), ipValP(args[1]));
     const file = ipMemChars(mem, ipValP(args[2]), ipValP(args[3]));
     ipErrKind = IpErrKind.assertMsg;
     ipErrMsgLen = msg.length < ipErrMsg.length ? msg.length : ipErrMsg.length;
     ipErrMsg[0 .. ipErrMsgLen] = msg[0 .. ipErrMsgLen];
-    const n = snprintf(ipTrapBuf.ptr, ipTrapBuf.length,
+    return ipTrapf(
         "$assert$%.*s(%d): %.*s",
         cast(int) file.length, file.ptr, args[4].of.i32,
         cast(int) msg.length, msg.ptr);
-    return wasmtime_trap_new(ipTrapBuf.ptr, n);
 }
 
 private wasm_engine_t* ipGetEngine()
@@ -3978,14 +3964,22 @@ private wasm_engine_t* ipGetEngine()
     return ipEngine;
 }
 
+private void ipLogError(const(char)* what, FuncDeclaration fd, const(wasmtime_error_t)* err)
+{
+    if (!verbose)
+        return;
+    wasm_name_t msg;
+    wasmtime_error_message(err, &msg);
+    fprintf(stderr, "wasm-ctfe inproc: %s %s: %.*s\n", what, fd.toPrettyChars(), cast(int) msg.size, msg.data);
+    wasm_byte_vec_delete(&msg);
+}
+
 private IpModule* ipGetModule(FuncDeclaration fd)
 {
     import dmd.glue : wasmCtfeGenerate;
 
     if (auto p = cast(void*) fd in ipModuleCache)
         return *p;
-    if (cast(void*) fd in ipModuleFailed)
-        return null;
     if (wasmCGCtfeBuild)
     {
         if (verbose)
@@ -4009,7 +4003,7 @@ private IpModule* ipGetModule(FuncDeclaration fd)
                 fd.toPrettyChars(), fd.loc.toChars(), why ? why : "errors".ptr);
         }
         wasmCtfeStats.compileFailures++;
-        ipModuleFailed[cast(void*) fd] = true;
+        ipModuleCache[cast(void*) fd] = null;
         return null;
     }
     if (keepFiles)
@@ -4031,30 +4025,21 @@ private IpModule* ipGetModule(FuncDeclaration fd)
                 fprintf(stderr, "  undefined: %.*s\n", cast(int) u.length, u.ptr);
         }
         wasmCtfeStats.compileFailures++;
-        ipModuleFailed[cast(void*) fd] = true;
+        ipModuleCache[cast(void*) fd] = null;
         return null;
     }
 
     wasmtime_module_t* mod;
     if (auto err = wasmtime_module_new(ipGetEngine(), cast(const(ubyte)*) buf[].ptr, buf.length, &mod))
     {
-        if (verbose)
-        {
-            wasm_name_t msg;
-            wasmtime_error_message(err, &msg);
-            fprintf(stderr, "wasm-ctfe inproc: module error for %s: %.*s\n",
-                fd.toPrettyChars(), cast(int) msg.size, msg.data);
-            wasm_byte_vec_delete(&msg);
-        }
+        ipLogError("module error for", fd, err);
         wasmtime_error_delete(err);
-        ipModuleFailed[cast(void*) fd] = true;
+        ipModuleCache[cast(void*) fd] = null;
         return null;
     }
 
     auto im = new IpModule;
     im.mod = mod;
-    const mangled = mangleExact(fd);
-    im.exportName = mangled[0 .. strlen(mangled)];
     {
         import dmd.backend.wasm.obj : wasmModuleSites;
         im.sites = wasmModuleSites;
@@ -4096,8 +4081,7 @@ private const(ubyte)[] ipInstanceMemory(wasmtime_context_t* ctx, ref wasmtime_in
     if (!wasmtime_instance_export_get(ctx, &inst, "memory".ptr, "memory".length, &memExt)
         || memExt.kind != WASMTIME_EXTERN_MEMORY)
         return null;
-    const data = wasmtime_memory_data(ctx, &memExt.of.memory);
-    return data[0 .. wasmtime_memory_data_size(ctx, &memExt.of.memory)];
+    return ipMemSlice(ctx, memExt.of.memory);
 }
 
 private void ipCalledFrom(Expression e)
@@ -4566,7 +4550,6 @@ Expression tryWasmCtfeInproc(FuncDeclaration fd, Expression thisExp, Expression[
         if (ipForceSemantic3Gagged(lf) || lf.semanticRun < PASS.semantic3done || lf.errors)
             return r;
         ipModuleCache.remove(cast(void*) fd);
-        ipModuleFailed.remove(cast(void*) fd);
     }
     return null;
 }
@@ -4681,7 +4664,8 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
     }
 
     OutBuffer keyBuf;
-    keyBuf.writestring(mangleExact(fd));
+    const exportName = mangleExact(fd).toDString;
+    keyBuf.writestring(exportName);
     keyBuf.writeByte(0);
     if (thisExp)
     {
@@ -4702,6 +4686,9 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
     if (!im)
         return null;
 
+    HostImport* his;
+    scope (exit) dmd.root.rmem.mem.xfree(his);
+
     auto store = wasmtime_store_new(ipGetEngine(), null, null);
     scope (exit) wasmtime_store_delete(store);
     auto ctx = wasmtime_store_context(store);
@@ -4713,6 +4700,7 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
         wasm_importtype_vec_t imports;
         wasmtime_module_imports(im.mod, &imports);
         scope (exit) wasm_importtype_vec_delete(&imports);
+        his = cast(HostImport*) dmd.root.rmem.mem.xcalloc(imports.size, HostImport.sizeof);
         foreach (i; 0 .. imports.size)
         {
             auto it = imports.data[i];
@@ -4722,29 +4710,10 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
             if (!ftc)
                 return null;
 
-            auto hi = new HostImport;
+            auto hi = &his[i];
             const nl = name.size < hi.name.length ? name.size : hi.name.length;
             hi.name[0 .. nl] = name.data[0 .. nl];
             hi.nameLen = nl;
-            im.hostImports ~= hi;
-
-            const pv = wasm_functype_params(ftc);
-            const rv = wasm_functype_results(ftc);
-            wasm_valtype_t*[16] pk;
-            if (pv.size > pk.length || rv.size > 1)
-                return null;
-            foreach (j; 0 .. pv.size)
-                pk[j] = wasm_valtype_new(wasm_valtype_kind(pv.data[j]));
-            wasm_valtype_vec_t pvec, rvec;
-            wasm_valtype_vec_new(&pvec, pv.size, pk.ptr);
-            if (rv.size == 1)
-            {
-                wasm_valtype_t*[1] rk = [wasm_valtype_new(wasm_valtype_kind(rv.data[0]))];
-                wasm_valtype_vec_new(&rvec, 1, rk.ptr);
-            }
-            else
-                wasm_valtype_vec_new_empty(&rvec);
-            auto ft = wasm_functype_new(&pvec, &rvec);
             import dmd.glue.tocsym : wasmCtfeLazyFuncs, wasmCtfeStubFuncs, wasmCtfeErrorFuncs, wasmCtfeNoBodyFuncs;
             wasmtime_func_callback_t cb = &ipHostStub;
             const nm = name.data[0 .. name.size];
@@ -4868,8 +4837,7 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
             }
             auto err = wasmtime_linker_define_func(linker,
                 modName.data, modName.size, name.data, name.size,
-                ft, cb, cast(void*) hi, null);
-            wasm_functype_delete(ft);
+                ftc, cb, cast(void*) hi, null);
             if (err)
             {
                 wasmtime_error_delete(err);
@@ -4882,14 +4850,7 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
     wasm_trap_t* trap;
     if (auto err = wasmtime_linker_instantiate(linker, ctx, im.mod, &inst, &trap))
     {
-        if (verbose)
-        {
-            wasm_name_t msg;
-            wasmtime_error_message(err, &msg);
-            fprintf(stderr, "wasm-ctfe inproc: instantiate %s: %.*s\n",
-                fd.toPrettyChars(), cast(int) msg.size, msg.data);
-            wasm_byte_vec_delete(&msg);
-        }
+        ipLogError("instantiate", fd, err);
         wasmtime_error_delete(err);
         return null;
     }
@@ -4900,12 +4861,12 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
     }
 
     wasmtime_extern_t fnExt;
-    if (!wasmtime_instance_export_get(ctx, &inst, im.exportName.ptr, im.exportName.length, &fnExt)
+    if (!wasmtime_instance_export_get(ctx, &inst, exportName.ptr, exportName.length, &fnExt)
         || fnExt.kind != WASMTIME_EXTERN_FUNC)
     {
         if (verbose)
             fprintf(stderr, "wasm-ctfe inproc: export %.*s not found for %s at %s\n",
-                cast(int) im.exportName.length, im.exportName.ptr, fd.toPrettyChars(), fd.loc.toChars());
+                cast(int) exportName.length, exportName.ptr, fd.toPrettyChars(), fd.loc.toChars());
         return null;
     }
 
@@ -4949,14 +4910,13 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
                 return bail(fd, "stack pointer set");
             }
         }
-        auto data = wasmtime_memory_data(ctx, &mem);
-        const dataLen = wasmtime_memory_data_size(ctx, &mem);
-        if (base + need > dataLen)
+        auto data = ipMemSlice(ctx, mem);
+        if (base + need > data.length)
             return bail(fd, "stack overflow");
         ulong cur = base;
         if (thisExp)
         {
-            if (!ipEncodeVal(data[0 .. dataLen], base, thisExp.type, thisExp))
+            if (!ipEncodeVal(data, base, thisExp.type, thisExp))
                 return bail(fd, "this encode");
             cur = base + ipAlign16(thisSize);
             ipSetP(vals[0], base);
@@ -4971,14 +4931,14 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
                     break;
                 case ArgKind.block:
                     auto pt = tf.parameterList[i].type;
-                    if (!ipEncodeVal(data[0 .. dataLen], cur, pt, arg))
+                    if (!ipEncodeVal(data, cur, pt, arg))
                         return bail(fd, "arg encode");
                     ipSetP(vals[slot++], cur);
                     cur += ipAlign16(pt.size());
                     break;
                 case ArgKind.slice:
                     ulong alen, aptr;
-                    if (!ipEncodeArg(data[0 .. dataLen], cur, arg, alen, aptr))
+                    if (!ipEncodeArg(data, cur, arg, alen, aptr))
                         return bail(fd, "arg encode");
                     cur = ipAlign16(cur);
                     ipSetP(vals[slot++], alen);
@@ -5017,14 +4977,7 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
     ipDiscardRun = false;
     if (auto err = callErr)
     {
-        if (verbose)
-        {
-            wasm_name_t msg;
-            wasmtime_error_message(err, &msg);
-            fprintf(stderr, "wasm-ctfe inproc: call %s: %.*s\n",
-                fd.toPrettyChars(), cast(int) msg.size, msg.data);
-            wasm_byte_vec_delete(&msg);
-        }
+        ipLogError("call", fd, err);
         if (mode != WasmCtfeMode.verify && !ipLazyHit && ipErrKind == IpErrKind.none
             && ipThrowCount && !ipReplayAt)
         {
@@ -5061,7 +5014,7 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
 
     const(ubyte)[] memory()
     {
-        return wasmtime_memory_data(ctx, &mem)[0 .. wasmtime_memory_data_size(ctx, &mem)];
+        return ipMemSlice(ctx, mem);
     }
     Expression resultExp;
     if (isCtor)
@@ -5102,15 +5055,10 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
 
 private bool ipScalarType(Type t)
 {
-    auto tb = t.toBasetype();
-    if (tb.isTypeEnum())
-        return false;
-    switch (tb.ty)
+    switch (t.toBasetype().ty)
     {
         case Tint8, Tuns8, Tint16, Tuns16, Tint32, Tuns32, Tint64, Tuns64,
-             Tbool, Tchar, Twchar, Tdchar:
-            return true;
-        case Tfloat32, Tfloat64:
+             Tbool, Tchar, Twchar, Tdchar, Tfloat32, Tfloat64:
             return true;
         case Tfloat80:
             return wasmCtfeSoftRealTarget();
@@ -5687,7 +5635,7 @@ private Expression ipDecodeMem(const(ubyte)[] mem, ulong addr, Type type, Loc lo
         const total = len * esz;
         if (ptr > mem.length || total > mem.length - ptr)
             return null;
-        if (etb.ty == Tchar || etb.ty == Twchar || etb.ty == Tdchar)
+        if (etb.ty.isSomeChar())
         {
             auto bytes = cast(ubyte*) dmd.root.rmem.mem.xmalloc(cast(size_t) total + esz);
             bytes[0 .. cast(size_t) total] = mem[cast(size_t) ptr .. cast(size_t)(ptr + total)];
@@ -5748,15 +5696,7 @@ private Expression ipDecodeMem(const(ubyte)[] mem, ulong addr, Type type, Loc lo
     }
     if (!ipScalarType(tb))
         return null;
-    ulong v = ipRead(mem, addr, sz);
-    switch (tb.ty)
-    {
-        case Tint8: v = cast(ulong) cast(byte) v; break;
-        case Tint16: v = cast(ulong) cast(short) v; break;
-        case Tint32: v = cast(ulong) cast(int) v; break;
-        default: break;
-    }
-    return new IntegerExp(loc, v, type);
+    return new IntegerExp(loc, ipRead(mem, addr, sz), type);
 }
 
 private ulong ipAlign16(ulong n) nothrow @nogc
@@ -5945,41 +5885,11 @@ private bool ipMarshalScalar(Expression arg, ref wasmtime_val_t val)
 private Expression ipDecodeScalar(ref wasmtime_val_t val, Type type, Loc loc)
 {
     auto tb = type.toBasetype();
-    switch (tb.ty)
-    {
-        case Tint8, Tuns8, Tint16, Tuns16, Tint32, Tuns32, Tbool, Tchar, Twchar, Tdchar:
-            if (val.kind != WASMTIME_I32)
-                return null;
-            ulong v = cast(uint) val.of.i32;
-            switch (tb.ty)
-            {
-                case Tint8: v = cast(ulong) cast(byte) v; break;
-                case Tint16: v = cast(ulong) cast(short) v; break;
-                case Tint32: v = cast(ulong) cast(int) v; break;
-                case Tuns8, Tbool, Tchar: v &= 0xFF; break;
-                case Tuns16, Twchar: v &= 0xFFFF; break;
-                default: v &= 0xFFFF_FFFF; break;
-            }
-            return new IntegerExp(loc, v, type);
-        case Tint64, Tuns64:
-            if (val.kind != WASMTIME_I64)
-                return null;
-            return new IntegerExp(loc, cast(ulong) val.of.i64, type);
-        case Tfloat32:
-            if (val.kind != WASMTIME_F32)
-                return null;
-            return new RealExp(loc, real_t(val.of.f32), type);
-        case Tfloat64:
-            if (val.kind != WASMTIME_F64)
-                return null;
-            return new RealExp(loc, real_t(val.of.f64), type);
-        case Tfloat80:
-            if (val.kind != WASMTIME_V128)
-                return null;
-            return new RealExp(loc, ipLdReal(val.of.v128.ptr), type);
-        default:
-            return null;
-    }
+    if (!ipScalarType(tb))
+        return null;
+    const kind = tb.ty == Tfloat32 ? WASMTIME_F32 : tb.ty == Tfloat64 ? WASMTIME_F64
+        : tb.ty == Tfloat80 ? WASMTIME_V128 : tb.size() <= 4 ? WASMTIME_I32 : WASMTIME_I64;
+    return val.kind == kind ? ipDecodeMem(val.of.v128[], 0, type, loc) : null;
 }
 
 private Expressions* ipNewExps(size_t n)

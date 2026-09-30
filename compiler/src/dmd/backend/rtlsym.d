@@ -341,7 +341,7 @@ private type* wasmRtlsymType(RTLSYM i)
     type* tvoid = tstypes[TYvoid];
     type* tint  = tstypes[TYint];
     type* tuint = tstypes[TYuint];
-    type* tsize = tstypes[I64() ? TYullong : TYuint];
+    type* tsize = tssize;
     type* tdchar = tstypes[TYdchar];
     type* tshort = tstypes[TYshort];
     type* tfloat = tstypes[TYfloat];

@@ -140,9 +140,6 @@ void backend_term() @safe
 
 void backend_init_wasm_ctfe()
 {
-    import dmd.backend.cc : config;
-    import dmd.backend.cdef : Config;
-
     config = Config.init;
     go.mfoptim = 0;
     out_config_init(
@@ -193,10 +190,6 @@ package bool wasmCtfeSoftRealTarget()
 
 void backend_reinit_host()
 {
-    import dmd.backend.cc : config;
-    import dmd.backend.cdef : Config;
-    import dmd.target : target;
-    import dmd.dmdparams : driverParams;
     import dmd.backend.wasm.softreal : wasmSoftReal;
 
     wasmSoftReal = false;

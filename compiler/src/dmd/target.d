@@ -1251,13 +1251,8 @@ extern (C++) struct Target
         }
         else if (isWasm)
         {
-            import dmd.argtypes_wasm : toArgTypes_wasm;
-
-            TypeTuple tt = toArgTypes_wasm(tn);
-            if (!tt)
-                return false; // void
-
-            return !tt.arguments.length;
+            import dmd.argtypes_wasm : isReturnOnStack_wasm;
+            return isReturnOnStack_wasm(tn);
         }
 
     Lagain:

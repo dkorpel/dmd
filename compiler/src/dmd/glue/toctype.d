@@ -19,7 +19,6 @@ import dmd.backend.symbol;
 import dmd.backend.ty;
 import dmd.backend.type;
 
-import dmd.root.array;
 import dmd.root.rmem;
 
 import dmd.glue;
@@ -91,15 +90,10 @@ package(dmd.glue)
 type* Type_toCtype(Type t)
 {
     import dmd.glue.tocsym : wasmCtfeBuildActive;
-    if (wasmCtfeBuildActive && cast(void*) t !in wasmCtfeCtypeSeen)
+    if (wasmCtfeBuildActive && cast(void*) t !in wasmCtfeCtypeSave)
     {
-        wasmCtfeCtypeSeen[cast(void*) t] = true;
-        wasmCtfeCtypeTouched.push(t);
-        if (t.ctype)
-        {
-            wasmCtfeCtypeSave[cast(void*) t] = cast(type*) t.ctype;
-            t.ctype = null;
-        }
+        wasmCtfeCtypeSave[cast(void*) t] = cast(type*) t.ctype;
+        t.ctype = null;
     }
     if (t.ctype)
         return cast(type*)t.ctype;
@@ -390,21 +384,12 @@ type* Type_toCtype(Type t)
     return tr;
 }
 
-private __gshared Array!Type wasmCtfeCtypeTouched;
-private __gshared bool[void*] wasmCtfeCtypeSeen;
 private __gshared type*[void*] wasmCtfeCtypeSave;
 
 package(dmd.glue)
 void wasmCtfeWipeCtypes()
 {
-    foreach (t; wasmCtfeCtypeTouched[])
-    {
-        if (auto p = cast(void*) t in wasmCtfeCtypeSave)
-            t.ctype = *p;
-        else
-            t.ctype = null;
-    }
-    wasmCtfeCtypeTouched.setDim(0);
-    wasmCtfeCtypeSeen.clear();
+    foreach (t, ct; wasmCtfeCtypeSave)
+        (cast(Type) t).ctype = ct;
     wasmCtfeCtypeSave.clear();
 }

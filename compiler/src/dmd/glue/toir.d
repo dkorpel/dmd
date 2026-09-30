@@ -1206,14 +1206,9 @@ RET retStyle(TypeFunction tf, bool needsThis)
     //printf("TypeFunction.retStyle() %s\n", toChars());
     if (wasmGlue() && !target.isWasm)
     {
-        import dmd.argtypes_wasm : toArgTypes_wasm;
+        import dmd.argtypes_wasm : isReturnOnStack_wasm;
         import dmd.typesem : toBasetype;
-        if (tf.isRef)
-            return RET.regs;
-        TypeTuple tt = toArgTypes_wasm(tf.next.toBasetype());
-        if (!tt)
-            return RET.regs;
-        return tt.arguments.length ? RET.regs : RET.stack;
+        return !tf.isRef && isReturnOnStack_wasm(tf.next.toBasetype()) ? RET.stack : RET.regs;
     }
     return target.isReturnOnStack(tf, needsThis) ? RET.stack : RET.regs;
 }
