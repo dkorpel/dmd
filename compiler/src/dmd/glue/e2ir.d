@@ -1304,6 +1304,10 @@ elem* toElem(Expression e, ref IRState irs)
 
         elem* e;
         Type tb = se.type.toBasetype();
+        {
+            import dmd.wasmctfe : wasmCtfeNoteString;
+            wasmCtfeNoteString(se);
+        }
         if (tb.ty == Tarray)
         {
             Symbol* si = toStringSymbol(se);

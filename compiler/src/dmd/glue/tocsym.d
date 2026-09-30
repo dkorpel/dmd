@@ -168,6 +168,24 @@ bool wasmGlue()
 private __gshared bool[void*] wasmCtfeTouched;
 private __gshared Array!Dsymbol wasmCtfeWork;
 private __gshared bool[void*] wasmCtfeQueued;
+package(dmd.glue) __gshared Array!Dsymbol wasmCtfeEmitted;
+private __gshared bool[void*] wasmCtfeLibrary;
+
+public void wasmCtfeCommitEmitted()
+{
+    foreach (d; wasmCtfeEmitted[])
+        wasmCtfeLibrary[cast(void*) d] = true;
+}
+
+public bool wasmCtfeInLibrary(Dsymbol d)
+{
+    return (cast(void*) d in wasmCtfeLibrary) !is null;
+}
+
+public void wasmCtfeResetLibrary()
+{
+    wasmCtfeLibrary = null;
+}
 
 package(dmd.glue) __gshared bool hostGlueActive;
 package(dmd.glue) __gshared int hostFuncDepth;
@@ -178,6 +196,7 @@ private struct HostSymSave
 {
     void* csym;
     void* sinit;
+    void* shidden;
     bool deferToObj;
     bool hadCodegen;
     PASS run;
@@ -220,6 +239,8 @@ private void hostSymExchange(Dsymbol d, ref HostSymSave h)
         xchg(ad.sinit, h.sinit);
     else if (auto ed = d.isEnumDeclaration())
         xchg(ed.sinit, h.sinit);
+    if (auto fd = d.isFuncDeclaration())
+        xchg(fd.shidden, h.shidden);
     if (auto fld = d.isFuncLiteralDeclaration())
         xchg(fld.deferToObj, h.deferToObj);
     if (auto tid = d.isTypeInfoDeclaration())
@@ -282,7 +303,7 @@ void wasmCtfeRecord(Dsymbol d)
     wasmCtfeQueueDefinition(d);
 }
 
-package(dmd.glue) __gshared bool wasmCtfeVtblCtx;
+package(dmd.glue) __gshared bool wasmCtfeDataCtx;
 public __gshared FuncDeclaration[const(char)[]] wasmCtfeLazyFuncs;
 public __gshared const(char)*[const(char)[]] wasmCtfeStubFuncs;
 public __gshared FuncDeclaration[const(char)[]] wasmCtfeErrorFuncs;
@@ -292,7 +313,7 @@ void wasmCtfeQueueDefinition(Dsymbol d)
 {
     if (!wasmCtfeBuildActive || d is null)
         return;
-    if (cast(void*) d in wasmCtfeQueued)
+    if (cast(void*) d in wasmCtfeQueued || cast(void*) d in wasmCtfeLibrary)
         return;
     if (auto fd = d.isFuncDeclaration())
     {
@@ -306,7 +327,7 @@ void wasmCtfeQueueDefinition(Dsymbol d)
             wasmCtfeErrorFuncs[m] = fd;
             return;
         }
-        if (wasmCtfeVtblCtx && fd.fbody && fd.semanticRun < PASS.semantic3done)
+        if (wasmCtfeDataCtx && fd.fbody && fd.semanticRun < PASS.semantic3done)
         {
             wasmCtfeLazyFuncs[m] = fd;
             return;
@@ -401,10 +422,13 @@ void wasmCtfePoison(const(char)* why)
 package(dmd.glue)
 void wasmCtfeWipeCaches()
 {
-    wasmCtfeTypeInfoByName = null;
     foreach (tid; wasmCtfeTypeInfos[])
         if (tid.csym && (cast(Symbol*) tid.csym).Sident.ptr)
-            wasmCtfeTypeInfoByName[(cast(Symbol*) tid.csym).identifier.idup] = tid;
+        {
+            const id = cast(string) (cast(Symbol*) tid.csym).identifier;
+            if (id !in wasmCtfeTypeInfoByName)
+                wasmCtfeTypeInfoByName[id.idup] = tid;
+        }
     foreach (ref om; wasmCtfeObjMarked[])
         om.d.semanticRun = om.pass;
     wasmCtfeObjMarked.setDim(0);
@@ -416,6 +440,8 @@ void wasmCtfeWipeCaches()
             ad.sinit = null;
         if (auto ed = d.isEnumDeclaration())
             ed.sinit = null;
+        if (auto fd = d.isFuncDeclaration())
+            fd.shidden = null;
         if (auto fld = d.isFuncLiteralDeclaration())
             fld.deferToObj = false;
     }

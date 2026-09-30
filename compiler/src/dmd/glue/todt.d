@@ -437,6 +437,10 @@ void Expression_toDt(Expression e, ref DtBuilder dtb)
     {
         //printf("StringExp.toDt() '%s', type = %s\n", e.toChars(), e.type.toChars());
         Type t = e.type.toBasetype();
+        {
+            import dmd.wasmctfe : wasmCtfeNoteString;
+            wasmCtfeNoteString(e);
+        }
 
         // BUG: should implement some form of static string pooling
         string s2;

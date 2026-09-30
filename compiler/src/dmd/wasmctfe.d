@@ -66,6 +66,18 @@ struct WasmCtfeStats
     uint compileFailures;
     uint cacheHits;
     uint mismatches;
+    uint modules;
+    uint tempModules;
+    uint flushes;
+    uint nestedRuns;
+    long[Phase.max + 1] ticks;
+    enum Phase { total, gen, compile, link, call, decode, teardown }
+}
+
+private long ipNow()
+{
+    import core.time : MonoTime;
+    return MonoTime.currTime().ticks();
 }
 
 __gshared WasmCtfeStats wasmCtfeStats;
@@ -151,6 +163,12 @@ private extern (C) void wasmCtfePrintStats()
     with (wasmCtfeStats)
         fprintf(stderr, "wasm-ctfe: calls=%u attempts=%u ok=%u compilefail=%u cachehit=%u mismatch=%u\n",
             calls, attempts, successes, compileFailures, cacheHits, mismatches);
+    import core.time : MonoTime;
+    const double tps = MonoTime.ticksPerSecond() / 1000.0;
+    with (wasmCtfeStats)
+        fprintf(stderr, "wasm-ctfe: modules=%u temp=%u flushes=%u nested=%u total=%.1fms gen=%.1fms compile=%.1fms link=%.1fms call=%.1fms decode=%.1fms teardown=%.1fms\n",
+            modules, tempModules, flushes, nestedRuns, ticks[Phase.total] / tps, ticks[Phase.gen] / tps, ticks[Phase.compile] / tps,
+            ticks[Phase.link] / tps, ticks[Phase.call] / tps, ticks[Phase.decode] / tps, ticks[Phase.teardown] / tps);
 }
 
 private struct IpCmpPair
@@ -406,6 +424,12 @@ Expression tryWasmCtfe(Expression e)
         return null;
     ipLastReason[0] = 0;
     wasmCtfeStats.calls++;
+    __gshared int depth;
+    const t0 = ipNow();
+    depth++;
+    scope (exit)
+        if (--depth == 0)
+            wasmCtfeStats.ticks[WasmCtfeStats.Phase.total] += ipNow() - t0;
     if (auto v = ipCircularVar(e))
     {
         if (mode == WasmCtfeMode.verify)
@@ -1202,32 +1226,247 @@ private Expression ipOptimizeGagged(Expression e)
     return global.endGagging(oldGagged) ? null : r;
 }
 
-private Expression ipFoldNoCall(Expression e)
+private Expression ipFoldedLiteral(Expression r)
 {
-    auto r = ipOptimizeGagged(e);
-    if (r && r !is e && r.type && ipIsLiteral(r))
-        return r;
-    return null;
-}
-
-private Expression ipFoldConstVars(Expression e)
-{
-    import dmd.ctfeexpr : copyLiteral;
     import dmd.typesem : equivalent;
-    auto x = ipSubstConstVars(e, 0);
-    if (!x || x is e)
-        return null;
-    auto r = ipOptimizeGagged(x);
     if (auto se = r ? r.isSliceExp() : null)
-        if (!se.lwr && !se.upr && se.type && se.e1.type && se.e1.isArrayLiteralExp()
+        if (!se.lwr && !se.upr && se.type && se.e1.type && (se.e1.isArrayLiteralExp() || se.e1.isStringExp())
             && se.e1.type.toBasetype().ty == Tarray && equivalent(se.e1.type, se.type))
         {
             r = se.e1.copy();
             r.type = se.type;
         }
-    if (!r || !r.type || !ipIsLiteral(r))
+    return r && r.type && ipIsLiteral(r) ? r : null;
+}
+
+private Expression ipFoldOptimize(Expression e)
+{
+    auto r = ipFoldedLiteral(ipOptimizeGagged(e));
+    return r is e ? null : r;
+}
+
+private Expression ipFoldConstVars(Expression e)
+{
+    import dmd.ctfeexpr : copyLiteral;
+    auto x = ipSubstConstVars(e, 0);
+    if (!x || x is e)
         return null;
-    return copyLiteral(r).copy();
+    auto r = ipFoldedLiteral(ipOptimizeGagged(x));
+    return r ? copyLiteral(r).copy() : null;
+}
+
+private bool ipValueLiteral(Expression e, int depth = 0)
+{
+    if (!e || depth > 64)
+        return false;
+    if (e.isIntegerExp() || e.isRealExp() || e.isComplexExp() || e.isStringExp() || e.isNullExp())
+        return true;
+    Expressions* elems;
+    if (auto ale = e.isArrayLiteralExp())
+    {
+        if (ale.basis)
+            return false;
+        elems = ale.elements;
+    }
+    else if (auto sle = e.isStructLiteralExp())
+    {
+        if (sle.sd.vthis)
+            return false;
+        elems = sle.elements;
+    }
+    else
+        return false;
+    if (elems)
+        foreach (el; *elems)
+            if (!ipValueLiteral(el, depth + 1))
+                return false;
+    return true;
+}
+
+private int ipConstBody(Statement s, ref Expression result, int depth = 0)
+{
+    if (!s)
+        return 0;
+    if (depth > 32)
+        return -1;
+    if (auto rs = s.isReturnStatement())
+    {
+        result = rs.exp;
+        return rs.exp ? 1 : -1;
+    }
+    if (auto cs = s.isCompoundStatement())
+    {
+        foreach (x; cs.statements)
+            if (const r = ipConstBody(x, result, depth + 1))
+                return r;
+        return 0;
+    }
+    if (auto ss = s.isScopeStatement())
+        return ipConstBody(ss.statement, result, depth + 1);
+    if (auto fs = s.isForwardingStatement())
+        return ipConstBody(fs.statement, result, depth + 1);
+    if (auto ifs = s.isIfStatement())
+    {
+        int c = ifs.param ? 0 : ipCtfeCond(ifs.condition);
+        if (!c && !ifs.param)
+            if (auto oe = ipOptimizeGagged(ifs.condition.copy()))
+                if (auto ie = oe.isIntegerExp())
+                    c = ie.toInteger() ? 1 : -1;
+        return c ? ipConstBody(c > 0 ? ifs.ifbody : ifs.elsebody, result, depth + 1) : -1;
+    }
+    if (auto es = s.isExpStatement())
+    {
+        if (!es.exp)
+            return 0;
+        auto de = es.exp.isDeclarationExp();
+        if (!de)
+            return -1;
+        if (auto v = de.declaration.isVarDeclaration())
+            return v.storage_class & STC.manifest ? 0 : -1;
+        auto d = de.declaration;
+        return d.isAliasDeclaration() || d.isFuncDeclaration() || d.isAggregateDeclaration()
+            || d.isEnumDeclaration() || d.isTemplateDeclaration() ? 0 : -1;
+    }
+    return s.isImportStatement() ? 0 : -1;
+}
+
+private Expression ipFoldConstBody(FuncDeclaration fd, Type resultType)
+{
+    import dmd.ctfeexpr : copyLiteral;
+    import dmd.typesem : equivalent;
+    Expression e;
+    if (fd.hasSemantic3Errors || global.params.ctfe_cov || ipConstBody(fd.fbody, e) != 1)
+        return null;
+    auto r = ipFoldedLiteral(ipOptimizeGagged(e.copy()));
+    if (!ipValueLiteral(r) || !equivalent(r.type, resultType))
+        return null;
+    r = copyLiteral(r).copy();
+    r.type = resultType;
+    return r;
+}
+
+private bool ipFoldableOp(EXP op)
+{
+    switch (op)
+    {
+        case EXP.add, EXP.min, EXP.mul, EXP.div, EXP.mod, EXP.pow,
+            EXP.and, EXP.or, EXP.xor, EXP.leftShift, EXP.rightShift, EXP.unsignedRightShift,
+            EXP.concatenate, EXP.equal, EXP.notEqual, EXP.identity, EXP.notIdentity,
+            EXP.lessThan, EXP.greaterThan, EXP.lessOrEqual, EXP.greaterOrEqual,
+            EXP.negate, EXP.uadd, EXP.tilde, EXP.not, EXP.cast_:
+            return true;
+        default:
+            return false;
+    }
+}
+
+private bool ipTreeFoldable(Expression e, int depth = 0)
+{
+    if (depth > 32)
+        return false;
+    if (ipIsLiteral(e))
+        return true;
+    if (auto ce = e.isCallExp())
+    {
+        auto tf = ce.f && ce.f.type ? ce.f.type.isTypeFunction() : null;
+        if (!tf || !ce.e1.isVarExp() || ce.f.isNested() || ce.f.needThis() || tf.isRef
+            || tf.parameterList.varargs != VarArg.none)
+            return false;
+        foreach (i, p; tf.parameterList)
+            if (p.storageClass & (STC.ref_ | STC.out_ | STC.lazy_))
+                return false;
+        if (ce.arguments)
+            foreach (a; *ce.arguments)
+                if (!ipTreeFoldable(a, depth + 1))
+                    return false;
+        return true;
+    }
+    if (auto ce = e.isCondExp())
+        return ipTreeFoldable(ce.econd, depth + 1) && ipTreeFoldable(ce.e1, depth + 1)
+            && ipTreeFoldable(ce.e2, depth + 1);
+    if (auto le = e.isLogicalExp())
+        return e.type.toBasetype().ty == Tbool && ipTreeFoldable(le.e1, depth + 1)
+            && ipTreeFoldable(le.e2, depth + 1);
+    if (!ipFoldableOp(e.op))
+        return false;
+    if (auto be = e.isBinExp())
+        return ipTreeFoldable(be.e1, depth + 1) && ipTreeFoldable(be.e2, depth + 1);
+    auto ue = e.isUnaExp();
+    return ue && ipTreeFoldable(ue.e1, depth + 1);
+}
+
+private Expression ipFoldTree(Expression e)
+{
+    import dmd.expressionsem : toBool;
+    if (ipIsLiteral(e))
+        return e;
+    if (auto ce = e.isCallExp())
+    {
+        Expression[] args;
+        if (ce.arguments)
+            foreach (a; *ce.arguments)
+            {
+                auto x = ipFoldTree(a);
+                if (!x || x.isErrorExp())
+                    return x;
+                args ~= x;
+            }
+        auto savedRoot = ipRootCall;
+        ipRootCall = ce;
+        auto r = tryWasmCtfeInproc(ce.f, null, args, e.type, e.loc);
+        ipRootCall = savedRoot;
+        return r && (r.isErrorExp() || ipIsLiteral(r)) ? r : null;
+    }
+    if (auto ce = e.isCondExp())
+    {
+        auto c = ipFoldTree(ce.econd);
+        if (!c || c.isErrorExp())
+            return c;
+        const b = c.toBool();
+        return b.isPresent() ? ipFoldTree(b.get() ? ce.e1 : ce.e2) : null;
+    }
+    if (auto le = e.isLogicalExp())
+    {
+        const oror = e.op == EXP.orOr;
+        foreach (x; [le.e1, le.e2])
+        {
+            auto c = ipFoldTree(x);
+            if (!c || c.isErrorExp())
+                return c;
+            const b = c.toBool();
+            if (b.isEmpty())
+                return null;
+            if (b.get() == oror || x is le.e2)
+                return IntegerExp.createBool(b.get());
+        }
+        assert(0);
+    }
+    Expression n;
+    if (auto be = e.isBinExp())
+    {
+        auto a = ipFoldTree(be.e1);
+        if (!a || a.isErrorExp())
+            return a;
+        auto b = ipFoldTree(be.e2);
+        if (!b || b.isErrorExp())
+            return b;
+        auto nb = cast(BinExp) be.copy();
+        nb.e1 = a;
+        nb.e2 = b;
+        n = nb;
+    }
+    else
+    {
+        auto ue = e.isUnaExp();
+        auto a = ipFoldTree(ue.e1);
+        if (!a || a.isErrorExp())
+            return a;
+        auto nu = cast(UnaExp) ue.copy();
+        nu.e1 = a;
+        n = nu;
+    }
+    auto r = ipFoldedLiteral(ipOptimizeGagged(n));
+    return r is n ? null : r;
 }
 
 private Expression ipSubstConstVars(Expression e, int depth)
@@ -1564,6 +1803,13 @@ private Expression ipLowerArrayOp(Expression e)
     return ale;
 }
 
+private Expression ipSubExpr(Expression e)
+{
+    import dmd.ctfeexpr : copyLiteral;
+    auto r = tryWasmCtfeExpr(e);
+    return r || !wasmCtfeIsLiteral(e) ? r : copyLiteral(e).copy();
+}
+
 Expression tryWasmCtfeExpr(Expression e)
 {
     if (wasmCtfeIsLiteral(e))
@@ -1579,7 +1825,7 @@ Expression tryWasmCtfeExpr(Expression e)
                 continue;
             if (!el.type || el.type.toBasetype().ty == Terror)
                 return ipFallback(e, "tuple");
-            el = tryWasmCtfeExpr(el);
+            el = ipSubExpr(el);
             if (!el)
                 return null;
         }
@@ -1608,7 +1854,7 @@ Expression tryWasmCtfeExpr(Expression e)
                         return r;
             return ipFallback(e, "expr unsupported [array binop]");
         }
-        return tryWasmCtfeExpr(lowered);
+        return ipSubExpr(lowered);
     }
     if (auto ie = e.isIdentityExp())
     {
@@ -1623,12 +1869,28 @@ Expression tryWasmCtfeExpr(Expression e)
                 return new IntegerExp(e.loc, (ie.op == EXP.identity) == (t1 is t2), e.type);
         }
     }
+    if (auto r = ipFoldOptimize(e))
+        return r;
+    if (wasmCtfeIsLiteral(e))
+        return null;
     if (!ipHasCall(e))
     {
-        if (auto r = ipFoldNoCall(e))
-            return r;
         if (auto r = ipFoldLiteralCompare(e))
             return r;
+    }
+    else if (ipTreeFoldable(e))
+    {
+        import dmd.ctfeexpr : copyLiteral;
+        import dmd.typesem : equivalent;
+        auto r = ipFoldTree(e);
+        if (r && r.isErrorExp())
+            return r;
+        if (r && equivalent(r.type, e.type))
+        {
+            r = copyLiteral(r).copy();
+            r.type = e.type;
+            return r;
+        }
     }
     const isNoreturn = e.type.toBasetype().isTypeNoreturn() !is null;
     const discard = !ipResultType(e.type) && e.type.toBasetype().ty != Tvoid && !isNoreturn;
@@ -1934,20 +2196,12 @@ private bool ipMutableStatic(VarDeclaration v)
     return v.type && !v.type.isImmutable() && !v.type.isConst() && !ipZeroSizeArray(v.type);
 }
 
-extern (C++) final class LegalityScanner : SemanticTimeTransitiveVisitor
+extern (C++) class CalleeScanner : SemanticTimeTransitiveVisitor
 {
     alias visit = SemanticTimeTransitiveVisitor.visit;
 
     bool bad;
-    const(char)* why;
     FuncDeclarations callees;
-
-    void reject(const(char)* reason)
-    {
-        bad = true;
-        if (!why)
-            why = reason;
-    }
 
     override void visit(CallExp e)
     {
@@ -1964,44 +2218,6 @@ extern (C++) final class LegalityScanner : SemanticTimeTransitiveVisitor
         if (f)
             callees.push(f);
         super.visit(e);
-    }
-
-    override void visit(VarExp e)
-    {
-        if (bad)
-            return;
-        if (e.var && e.var.ident == Id.ctfe)
-            return;
-        if (auto v = e.var ? e.var.isVarDeclaration() : null)
-        {
-            if (auto ie = wasmCtfeDollarInit(v))
-            {
-                ie.accept(this);
-                return;
-            }
-            if (ipStaticVar(v))
-            {
-                ipInitConstInitializer(v);
-                if (ipMutableStatic(v))
-                {
-                    if (!ipNotePoisonGlobal(v))
-                        reject("mutable global");
-                    return;
-                }
-                if (v.inuse && v._init && !trustedModule(v))
-                {
-                    ipCircularVars[v] = true;
-                    return;
-                }
-                if ((!v.type || !v._init || !v._init.semanticDone) && !ipZeroSizeArray(v.type))
-                {
-                    reject("mutable global");
-                    return;
-                }
-                if (v.type && v.type.isImmutable())
-                    ipNoteAddrGlobal(v);
-            }
-        }
     }
 
     override void visit(LogicalExp e)
@@ -2042,6 +2258,195 @@ extern (C++) final class LegalityScanner : SemanticTimeTransitiveVisitor
     override void visit(TemplateDeclaration) {}
     override void visit(AliasDeclaration) {}
     override void visit(AliasAssign) {}
+
+    override void visit(NewExp e)
+    {
+        if (bad)
+            return;
+        if (e.member)
+            callees.push(e.member);
+        if (e.arguments)
+            foreach (arg; *e.arguments)
+                if (arg)
+                    arg.accept(this);
+        if (e.lowering)
+            e.lowering.accept(this);
+    }
+}
+
+private __gshared bool[void*] preSemSeen;
+
+extern (C++) final class PreSemScanner : CalleeScanner
+{
+    alias visit = CalleeScanner.visit;
+
+    private void dataRef(FuncDeclaration f)
+    {
+        if (f && f.semanticRun >= PASS.semantic3done)
+            callees.push(f);
+    }
+
+    private bool seen(Dsymbol s)
+    {
+        if (cast(void*) s in preSemSeen)
+            return true;
+        preSemSeen[cast(void*) s] = true;
+        return false;
+    }
+
+    private void visitType(Type t)
+    {
+        if (!t)
+            return;
+        auto tb = t.toBasetype();
+        while (tb.ty == Tarray || tb.ty == Tsarray)
+            tb = tb.nextOf().toBasetype();
+        if (auto ts = tb.isTypeStruct())
+        {
+            auto sd = ts.sym;
+            if (seen(sd))
+                return;
+            foreach (f; [sd.xhash, sd.xeq, sd.xcmp, sd.tidtor, sd.postblit])
+                if (f)
+                    callees.push(f);
+        }
+        else if (auto tc = tb.isTypeClass())
+        {
+            for (auto cd = tc.sym; cd && !seen(cd); cd = cd.baseClass)
+            {
+                foreach (m; cd.vtbl[])
+                    dataRef(m.isFuncDeclaration());
+                dataRef(cd.tidtor);
+                dataRef(cd.defaultCtor);
+                dataRef(cd.inv);
+            }
+        }
+    }
+
+    private void visitSymbol(Declaration d)
+    {
+        if (!d)
+            return;
+        if (auto f = d.isFuncDeclaration())
+        {
+            callees.push(f);
+            return;
+        }
+        auto v = d.isVarDeclaration();
+        if (v && v._init && ipStaticVar(v) && !seen(v))
+            v._init.accept(this);
+    }
+
+    override void visit(VarExp e) { visitSymbol(e.var); }
+    override void visit(SymOffExp e) { visitSymbol(e.var); }
+    override void visit(FuncExp e) { visitSymbol(e.fd); }
+
+    override void visit(DelegateExp e)
+    {
+        visitSymbol(e.func);
+        super.visit(e);
+    }
+
+    override void visit(TypeidExp e)
+    {
+        import dmd.dtemplate : isType;
+        visitType(isType(e.obj));
+        super.visit(e);
+    }
+
+    override void visit(NewExp e)
+    {
+        visitType(e.newtype);
+        super.visit(e);
+    }
+
+    override void visit(Catch c)
+    {
+        visitType(c.type);
+        super.visit(c);
+    }
+
+    private void visitLowered(E)(E e)
+    {
+        if (e.lowering)
+            e.lowering.accept(this);
+        super.visit(e);
+    }
+
+    override void visit(CatExp e) { visitLowered(e); }
+    override void visit(CatAssignExp e) { visitLowered(e); }
+    override void visit(CatElemAssignExp e) { visitLowered(e); }
+    override void visit(CatDcharAssignExp e) { visitLowered(e); }
+    override void visit(LoweredAssignExp e) { visitLowered(e); }
+    override void visit(ConstructExp e) { visitLowered(e); }
+    override void visit(EqualExp e) { visitLowered(e); }
+    override void visit(ArrayLiteralExp e) { visitLowered(e); }
+    override void visit(AssocArrayLiteralExp e) { visitLowered(e); }
+
+    override void visit(CastExp e)
+    {
+        visitType(e.to);
+        visitLowered(e);
+    }
+}
+
+public void wasmCtfeDirectCallees(FuncDeclaration fd, ref FuncDeclarations callees)
+{
+    scope scanner = new PreSemScanner();
+    fd.fbody.accept(scanner);
+    callees.append(&scanner.callees);
+}
+
+extern (C++) final class LegalityScanner : CalleeScanner
+{
+    alias visit = CalleeScanner.visit;
+
+    const(char)* why;
+
+    void reject(const(char)* reason)
+    {
+        bad = true;
+        if (!why)
+            why = reason;
+    }
+
+    override void visit(VarExp e)
+    {
+        if (bad)
+            return;
+        if (e.var && e.var.ident == Id.ctfe)
+            return;
+        if (auto v = e.var ? e.var.isVarDeclaration() : null)
+        {
+            if (auto ie = wasmCtfeDollarInit(v))
+            {
+                ie.accept(this);
+                return;
+            }
+            if (ipStaticVar(v))
+            {
+                ipInitConstInitializer(v);
+                if (ipMutableStatic(v))
+                {
+                    if (!ipNotePoisonGlobal(v))
+                        reject("mutable global");
+                    return;
+                }
+                if (v.inuse && v._init && !trustedModule(v))
+                {
+                    ipCircularVars[v] = true;
+                    return;
+                }
+                if ((!v.type || !v._init || !v._init.semanticDone) && !ipZeroSizeArray(v.type))
+                {
+                    reject("mutable global");
+                    return;
+                }
+                if (v.type && v.type.isImmutable())
+                    ipNoteAddrGlobal(v);
+            }
+        }
+    }
 
     override void visit(VarDeclaration v)
     {
@@ -2084,20 +2489,6 @@ extern (C++) final class LegalityScanner : SemanticTimeTransitiveVisitor
             }
     }
 
-    override void visit(NewExp e)
-    {
-        if (bad)
-            return;
-        if (e.member)
-            callees.push(e.member);
-        if (e.arguments)
-            foreach (arg; *e.arguments)
-                if (arg)
-                    arg.accept(this);
-        if (e.lowering)
-            e.lowering.accept(this);
-    }
-
     override void visit(AsmStatement s)
     {
         reject("inline asm");
@@ -2122,22 +2513,62 @@ extern (C++) final class LegalityScanner : SemanticTimeTransitiveVisitor
 private __gshared
 {
     import dmd.wasmtimec;
-    import dmd.backend.wasm.selflink : WasmDataExtent;
+    import dmd.backend.wasm.selflink : WasmDataExtent, WasmImportInfo;
     import dmd.backend.wasm.obj : WasmSite;
 
     wasm_engine_t* ipEngine;
 
-    struct IpModule
+    enum HostKind : ubyte { fixed, stub, errorFunc, lazy_, noBody, unknown }
+
+    struct IpHost
     {
-        wasmtime_module_t* mod;
-        ulong ctfeOrdersAddr;
-        FuncDeclaration[] tableFuncs;
-        ClassDeclaration[ulong] vtbls;
-        WasmSite[] sites;
-        WasmDataExtent[] dataExtents;
+        HostImport* hi;
+        wasmtime_func_callback_t cb;
+        HostKind kind;
+        bool committed;
+        bool direct;
+        uint slot;
     }
 
-    IpModule*[void*] ipModuleCache;
+    struct IpRoot
+    {
+        wasmtime_func_t func;
+        bool temp;
+        uint id;
+        size_t imageLen;
+        size_t extents;
+        size_t poisonExtents;
+        ulong prevOrders;
+        ulong[] vtbls;
+    }
+
+    struct IpProgram
+    {
+        wasmtime_store_t* store;
+        wasmtime_context_t* ctx;
+        wasmtime_linker_t* linker;
+        wasmtime_memory_t mem;
+        wasmtime_table_t table;
+        wasmtime_global_t sp;
+        ulong memEnd;
+        ulong tableSize;
+        uint tableNext;
+        uint dataEnd;
+        uint liveEnd;
+        uint poisonNext;
+        ubyte[] image;
+        uint[string] dataSyms;
+        uint[string] slots;
+        IpHost*[const(char)[]] hosts;
+        FuncDeclaration[const(char)[]] funcs;
+        WasmSite[][] sites;
+        IpRoot*[void*] roots;
+        bool flushPending;
+        bool running;
+    }
+
+    IpProgram ipProg;
+    enum uint ipStackLow = 0x1_0000;
 
     enum IpErrKind : ubyte { none, index, nullp, slice, assert_, assertMsg, errorFunc, uncaught, siteError }
     IpErrKind ipErrKind;
@@ -2413,6 +2844,41 @@ private extern (C) wasm_trap_t* ipHostSoftReal(void* env, wasmtime_caller_t* cal
     return null;
 }
 
+private extern (C) wasm_trap_t* ipHostLibm(void* env, wasmtime_caller_t* caller,
+    const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
+{
+    static import core.math;
+    import core.stdc.math : log1pl, log2l;
+    auto hi = cast(HostImport*) env;
+    const f32 = args[0].kind == WASMTIME_F32;
+    real x = f32 ? args[0].of.f32 : args[0].of.f64;
+    real r;
+    switch (hi.softOp)
+    {
+        case SR.sin: r = CTFloat.sin(x); break;
+        case SR.cos: r = CTFloat.cos(x); break;
+        case SR.mod: r = x % (f32 ? args[1].of.f32 : args[1].of.f64); break;
+        case SR.scale: r = CTFloat.ldexp(x, args[1].of.i32); break;
+        case SR.rint: r = core.math.rint(x); break;
+        case SR.yl2x: r = log2l(x); break;
+        case SR.yl2xp1: r = log1pl(x); break;
+        case SR.rndtol:
+            results[0].kind = WASMTIME_I64;
+            results[0].of.i64 = core.math.rndtol(x);
+            return null;
+        default: assert(0);
+    }
+    results[0].kind = args[0].kind;
+    if (f32)
+        results[0].of.f32 = cast(float) r;
+    else
+        results[0].of.f64 = cast(double) r;
+    return null;
+}
+
+private immutable string[8] ipLibmNames = ["sin", "cos", "fmod", "ldexp", "rint", "llrint", "log2", "log1p"];
+private immutable SR[8] ipLibmOps = [SR.sin, SR.cos, SR.mod, SR.scale, SR.rint, SR.rndtol, SR.yl2x, SR.yl2xp1];
+
 private extern (C) wasm_trap_t* ipHostStub(void* env, wasmtime_caller_t* caller,
     const(wasmtime_val_t)* args, size_t nargs, wasmtime_val_t* results, size_t nresults) nothrow @nogc
 {
@@ -2520,13 +2986,24 @@ public enum CtfeSiteErr : uint
 
 private __gshared bool[VarDeclaration] ipPoisonNoted;
 private __gshared bool[VarDeclaration] ipCircularVars;
+private __gshared bool ipCircularUsed;
+
+public void wasmCtfeNoteExternGlobal(VarDeclaration v)
+{
+    import dmd.backend.wasm.selflink : wasmSelfLinkPoisonNames;
+    ipPoisonNoted[v] = true;
+    wasmSelfLinkPoisonNames[ipNoteAddrGlobal(v)] = true;
+}
 
 public CtfeSiteErr wasmCtfeUnreadableVar(VarDeclaration v)
 {
-    if (v in ipPoisonNoted)
+    if (v in ipPoisonNoted || v.storage_class & STC.extern_)
         return CtfeSiteErr.staticRead;
     if (v.inuse && v in ipCircularVars)
+    {
+        ipCircularUsed = true;
         return CtfeSiteErr.circularInit;
+    }
     return CtfeSiteErr.none;
 }
 
@@ -2685,6 +3162,7 @@ public VarDeclaration wasmCtfeNewCircular(NewExp e)
             if (v.inuse)
             {
                 ipCircularVars[v] = true;
+                ipCircularUsed = true;
                 return v;
             }
     return null;
@@ -2692,30 +3170,36 @@ public VarDeclaration wasmCtfeNewCircular(NewExp e)
 
 private bool ipNotePoisonGlobal(VarDeclaration v)
 {
-    import dmd.backend.wasm.selflink : wasmSelfLinkPoisonNames;
+    import dmd.backend.wasm.selflink : wasmSelfLinkPoisonNames, wasmSelfLinkPoisonBase;
     if (v in ipPoisonNoted)
         return true;
     if (trustedModule(v))
         return false;
     ipPoisonNoted[v] = true;
-    wasmSelfLinkPoisonNames[ipNoteAddrGlobal(v)] = true;
+    const name = ipNoteAddrGlobal(v);
+    wasmSelfLinkPoisonNames[name] = true;
+    if (auto p = name in ipProg.dataSyms)
+        if (*p < wasmSelfLinkPoisonBase)
+            ipProg.flushPending = true;
     return true;
 }
 
 private bool ipFindData(ulong p, out ulong base, out ulong sz, out const(char)[] name) nothrow @nogc
 {
-    size_t lo = 0, hi = ipDataExtents.length;
+    import dmd.backend.wasm.selflink : wasmSelfLinkPoisonBase;
+    const exts = p >= wasmSelfLinkPoisonBase ? ipPoisonExtents : ipDataExtents;
+    size_t lo = 0, hi = exts.length;
     while (lo < hi)
     {
         const mid = (lo + hi) / 2;
-        if (ipDataExtents[mid].start <= p)
+        if (exts[mid].start <= p)
             lo = mid + 1;
         else
             hi = mid;
     }
     if (lo == 0)
         return false;
-    const ext = ipDataExtents[lo - 1];
+    const ext = exts[lo - 1];
     base = ext.start;
     sz = ext.size;
     name = ext.name;
@@ -2806,39 +3290,54 @@ private void ipStP(ubyte* p, ulong v) nothrow @nogc
 
 private bool ipCallerMemory(wasmtime_caller_t* caller, out wasmtime_memory_t m) nothrow @nogc
 {
-    wasmtime_extern_t ext;
-    if (!wasmtime_caller_export_get(caller, "memory".ptr, "memory".length, &ext)
-        || ext.kind != WASMTIME_EXTERN_MEMORY)
-        return false;
-    m = ext.of.memory;
+    m = ipProg.mem;
     return true;
 }
 
-private bool ipGrowHeap(wasmtime_context_t* ctx, ref wasmtime_memory_t m, ulong pages) nothrow @nogc
+private bool ipGrowMemory(ulong end) nothrow @nogc
 {
-    ulong prevPages;
-    if (auto err = wasmtime_memory_grow(ctx, &m, pages, &prevPages))
+    if (end <= ipProg.memEnd)
+        return true;
+    const need = ((end - ipProg.memEnd + 0xFFFF) >> 16) + 16;
+    const eighth = ipProg.memEnd >> 19;
+    ulong pages = need > eighth ? need : eighth;
+    ulong prev;
+    auto err = wasmtime_memory_grow(ipProg.ctx, &ipProg.mem, pages, &prev);
+    if (err && pages != need)
+    {
+        wasmtime_error_delete(err);
+        pages = need;
+        err = wasmtime_memory_grow(ipProg.ctx, &ipProg.mem, pages, &prev);
+    }
+    if (err)
     {
         wasmtime_error_delete(err);
         return false;
     }
-    ipHeapPtr = prevPages << 16;
-    ipHeapEnd = (prevPages + pages) << 16;
+    ipProg.memEnd = (prev + pages) << 16;
+    return true;
+}
+
+private bool ipHeapEnsure(ulong sz) nothrow @nogc
+{
+    if (ipHeapPtr + sz <= ipHeapEnd)
+        return true;
+    if (!ipGrowMemory(ipHeapPtr + sz))
+        return false;
+    ipHeapEnd = ipProg.memEnd;
     return true;
 }
 
 private wasm_trap_t* ipBumpAlloc(wasmtime_caller_t* caller, ref wasmtime_memory_t m, ulong sz, out ulong r) nothrow @nogc
 {
-    auto ctx = wasmtime_caller_context(caller);
     const reqSz = sz;
     sz = ipAlign16(sz);
     if (!sz)
         sz = 16;
     if (sz > (1UL << 32))
         return ipTrap("wasm-ctfe: allocation too large");
-    if (!ipHeapPtr || ipHeapPtr + sz > ipHeapEnd)
-        if (!ipGrowHeap(ctx, m, (sz >> 16) + 16))
-            return ipTrap("wasm-ctfe: out of memory");
+    if (!ipHeapEnsure(sz))
+        return ipTrap("wasm-ctfe: out of memory");
     r = ipHeapPtr;
     ipHeapPtr += sz;
     ipRecordAlloc(r, reqSz);
@@ -2911,11 +3410,8 @@ private wasm_trap_t* ipCallTable(wasmtime_caller_t* caller, ulong idx, const(was
     wasmtime_val_t[] results, const(char)* failMsg) nothrow @nogc
 {
     auto ctx = wasmtime_caller_context(caller);
-    wasmtime_extern_t ext;
     wasmtime_val_t fv;
-    if (!wasmtime_caller_export_get(caller, "__indirect_function_table".ptr, "__indirect_function_table".length, &ext)
-        || ext.kind != WASMTIME_EXTERN_TABLE
-        || !wasmtime_table_get(ctx, &ext.of.table, idx, &fv) || fv.kind != WASMTIME_FUNCREF)
+    if (!wasmtime_table_get(ctx, &ipProg.table, idx, &fv) || fv.kind != WASMTIME_FUNCREF)
         return ipTrap(failMsg);
     wasm_trap_t* trap;
     if (auto err = wasmtime_func_call(ctx, &fv.of.funcref, args.ptr, args.length, results.ptr, results.length, &trap))
@@ -3918,7 +4414,6 @@ private wasm_engine_t* ipGetEngine()
     auto cfg = wasm_config_new();
     wasmtime_config_wasm_memory64_set(cfg, true);
     wasmtime_config_wasm_exceptions_set(cfg, true);
-    wasmtime_config_consume_fuel_set(cfg, true);
     wasmtime_config_memory_init_cow_set(cfg, false);
     ipEngine = wasm_engine_new_with_config(cfg);
     return ipEngine;
@@ -3930,15 +4425,742 @@ private void ipLogError(const(char)* what, FuncDeclaration fd, const(wasmtime_er
         return;
     wasm_name_t msg;
     wasmtime_error_message(err, &msg);
-    fprintf(stderr, "wasm-ctfe inproc: %s %s: %.*s\n", what, fd.toPrettyChars(), cast(int) msg.size, msg.data);
+    fprintf(stderr, "wasm-ctfe inproc: %s %s: %.*s\n", what, fd ? fd.toPrettyChars() : "".ptr,
+        cast(int) msg.size, msg.data);
     wasm_byte_vec_delete(&msg);
 }
 
-private IpModule* ipGetModule(FuncDeclaration fd)
+version (linux) private extern (C) int madvise(void*, size_t, int) nothrow @nogc;
+
+private uint ipStackHigh() nothrow @nogc
+{
+    import dmd.backend.wasm.selflink : wasmSelfLinkStackSize;
+    return ipStackLow + wasmSelfLinkStackSize;
+}
+
+private ulong ipPageAlign(ulong x) nothrow @nogc
+{
+    return (x + 0xFFFF) & ~0xFFFFUL;
+}
+
+private void ipZeroRange(ubyte* mem, ulong lo, ulong hi) nothrow @nogc
+{
+    if (lo >= hi)
+        return;
+    version (linux)
+    {
+        import core.sys.linux.sys.mman : MADV_DONTNEED;
+        const a = ipPageAlign(lo);
+        const b = hi & ~0xFFFFUL;
+        if (a < b && madvise(mem + a, cast(size_t)(b - a), MADV_DONTNEED) == 0)
+        {
+            memset(mem + lo, 0, cast(size_t)(a - lo));
+            memset(mem + b, 0, cast(size_t)(hi - b));
+            return;
+        }
+    }
+    memset(mem + lo, 0, cast(size_t)(hi - lo));
+}
+
+private bool ipProgramInit()
+{
+    if (ipProg.store)
+        return true;
+    import dmd.backend.wasm.selflink : wasmSelfLinkPoisonBase;
+    import dmd.target : target;
+    ipPS = target.ptrsize;
+    const bool m64 = ipPS == 8;
+    const ubyte pt = m64 ? 0x7E : 0x7F;
+    const stackHigh = ipStackHigh();
+
+    static void section(ref OutBuffer o, ubyte id, ref OutBuffer s)
+    {
+        o.writeByte(id);
+        o.writeuLEB128(cast(uint) s.length);
+        o.write(s[]);
+        s.reset();
+    }
+
+    static void exportEntry(ref OutBuffer s, string name, ubyte kind)
+    {
+        s.writeuLEB128(cast(uint) name.length);
+        s.writestring(name);
+        s.writeByte(kind);
+        s.writeByte(0);
+    }
+
+    OutBuffer o, s;
+    o.write("\0asm\x01\0\0\0");
+    s.writeByte(1);
+    s.writeByte(0x60);
+    s.writeByte(1);
+    s.writeByte(pt);
+    s.writeByte(0);
+    section(o, 1, s);
+    s.writeByte(1);
+    s.writeByte(0x70);
+    s.writeByte(0);
+    s.writeByte(1);
+    section(o, 4, s);
+    s.writeByte(1);
+    s.writeByte(m64 ? 0x05 : 0x01);
+    s.writeuLEB128((stackHigh >> 16) + 1);
+    s.writeuLEB128(wasmSelfLinkPoisonBase >> 16);
+    section(o, 5, s);
+    s.writeByte(1);
+    s.writeByte(0);
+    s.writeByte(0);
+    section(o, 13, s);
+    s.writeByte(1);
+    s.writeByte(pt);
+    s.writeByte(1);
+    s.writeByte(m64 ? 0x42 : 0x41);
+    s.writesLEB128(cast(int) stackHigh);
+    s.writeByte(0x0B);
+    section(o, 6, s);
+    s.writeByte(4);
+    exportEntry(s, "memory", 2);
+    exportEntry(s, "__indirect_function_table", 1);
+    exportEntry(s, "__stack_pointer", 3);
+    exportEntry(s, "__d_exception", 4);
+    section(o, 7, s);
+
+    auto engine = ipGetEngine();
+    wasmtime_module_t* mod;
+    if (auto err = wasmtime_module_new(engine, cast(const(ubyte)*) o[].ptr, o.length, &mod))
+    {
+        ipLogError("base module", null, err);
+        wasmtime_error_delete(err);
+        return false;
+    }
+    scope (exit) wasmtime_module_delete(mod);
+    auto store = wasmtime_store_new(engine, null, null);
+    wasmtime_store_limiter(store, -1, -1, int.max, int.max, int.max);
+    auto ctx = wasmtime_store_context(store);
+    auto linker = wasmtime_linker_new(engine);
+    wasmtime_linker_allow_shadowing(linker, true);
+    wasmtime_instance_t inst;
+    wasm_trap_t* trap;
+    auto err = wasmtime_linker_instantiate(linker, ctx, mod, &inst, &trap);
+    if (!err && !trap)
+        err = wasmtime_linker_define_instance(linker, ctx, "env".ptr, 3, &inst);
+    wasmtime_extern_t memExt, tableExt, spExt;
+    if (err || trap
+        || !wasmtime_instance_export_get(ctx, &inst, "memory".ptr, 6, &memExt)
+        || !wasmtime_instance_export_get(ctx, &inst, "__indirect_function_table".ptr, 25, &tableExt)
+        || !wasmtime_instance_export_get(ctx, &inst, "__stack_pointer".ptr, 15, &spExt))
+    {
+        if (err)
+        {
+            ipLogError("base instance", null, err);
+            wasmtime_error_delete(err);
+        }
+        if (trap)
+            wasm_trap_delete(trap);
+        wasmtime_linker_delete(linker);
+        wasmtime_store_delete(store);
+        return false;
+    }
+    ipProg.store = store;
+    ipProg.ctx = ctx;
+    ipProg.linker = linker;
+    ipProg.mem = memExt.of.memory;
+    ipProg.table = tableExt.of.table;
+    ipProg.sp = spExt.of.global;
+    ipProg.memEnd = wasmtime_memory_data_size(ctx, &ipProg.mem);
+    ipProg.tableSize = 1;
+    ipProg.tableNext = 1;
+    ipProg.dataEnd = stackHigh;
+    ipProg.liveEnd = stackHigh;
+    ipProg.poisonNext = wasmSelfLinkPoisonBase;
+    return true;
+}
+
+private void ipFlush()
+{
+    import dmd.glue.tocsym : wasmCtfeResetLibrary;
+    assert(!ipProg.running);
+    if (!ipProg.store)
+    {
+        ipProg.flushPending = false;
+        return;
+    }
+    if (verbose)
+        fprintf(stderr, "wasm-ctfe inproc: flush after %zu modules\n", ipProg.sites.length);
+    wasmtime_linker_delete(ipProg.linker);
+    wasmtime_store_delete(ipProg.store);
+    ipProg = IpProgram.init;
+    ipTableFuncs = null;
+    ipVtbls = null;
+    ipDataExtents = null;
+    ipPoisonExtents = null;
+    ipCtfeOrdersAddr = 0;
+    wasmCtfeResetLibrary();
+    wasmCtfeStats.flushes++;
+}
+
+public void wasmCtfeLinkSetup()
+{
+    import dmd.backend.wasm.selflink : wasmSelfLinkShared, wasmSelfLinkDataBase, wasmSelfLinkDataSymbols,
+        wasmSelfLinkSlots, wasmSelfLinkTableBase, wasmSelfLinkPoisonNext, wasmSelfLinkModuleId;
+    if (ipProg.flushPending)
+        ipFlush();
+    ipProgramInit();
+    ipCircularUsed = false;
+    wasmSelfLinkShared = true;
+    wasmSelfLinkDataBase = ipProg.dataEnd;
+    wasmSelfLinkDataSymbols = ipProg.dataSyms;
+    wasmSelfLinkSlots = ipProg.slots;
+    wasmSelfLinkTableBase = ipProg.tableNext;
+    wasmSelfLinkPoisonNext = ipProg.poisonNext;
+    wasmSelfLinkModuleId = cast(uint) ipProg.sites.length;
+}
+
+private wasmtime_func_callback_t ipFixedHost(const(char)[] nm, ref HostImport hi)
+{
+    if (nm == "gc_malloc" || nm == "_d_allocmemory" || nm == "gc_mallocTrace" || nm == "gc_calloc" || nm == "gc_callocTrace")
+        return &ipHostGcMalloc;
+    if (nm == "malloc" || nm == "calloc" || nm == "realloc")
+    {
+        hi.cAlloc = nm == "malloc" ? CAlloc.malloc : nm == "calloc" ? CAlloc.calloc : CAlloc.realloc;
+        return &ipHostCAlloc;
+    }
+    if (nm == "__errno_location")
+        return &ipHostErrno;
+    if (nm == "free" || nm == "gc_addRange" || nm == "gc_removeRange"
+        || nm == "_d_criticalenter2" || nm == "_d_criticalexit"
+        || nm == "_d_monitorenter" || nm == "_d_monitorexit" || nm == "gc_allocatedInCurrentThread")
+        return &ipHostZero64;
+    if (nm.length >= 10 && nm[0 .. 7] == "_aApply" && (nm[$ - 1] == '1' || nm[$ - 1] == '2')
+        && (nm.length == 10 || (nm.length == 11 && nm[7] == 'R')))
+        return &ipHostAApply;
+    foreach (k, ln; ipLibmNames)
+        if (nm == ln || nm.length == ln.length + 1 && nm[$ - 1] == 'f' && nm[0 .. $ - 1] == ln)
+        {
+            hi.softOp = ipLibmOps[k];
+            return &ipHostLibm;
+        }
+    if (nm == "memset")
+        return &ipHostMemset;
+    if (nm == "memcpy")
+        return &ipHostMemcpy;
+    if (nm == "memcmp")
+        return &ipHostMemcmp;
+    if (nm == "_memsetn")
+        return &ipHostMemsetn;
+    if (nm == "_memsetFloat" || nm == "_memsetDouble" || nm == "_memset80"
+        || nm == "_memset128" || nm == "_memset128ii" || nm == "_memset16"
+        || nm == "_memset32" || nm == "_memset64")
+        return &ipHostMemsetT;
+    if (nm == "gc_expandArrayUsed")
+        return &ipHostExpandArray;
+    if (nm == "gc_shrinkArrayUsed")
+        return &ipHostShrinkArray;
+    if (nm == "gc_reserveArrayCapacity")
+        return &ipHostReserveArray;
+    if (nm == "gc_query")
+        return &ipHostGcQuery;
+    if (nm == "_d_arraybounds_indexp")
+        return &ipHostBoundsIndex;
+    if (nm == "_d_arraybounds_slicep")
+        return &ipHostBoundsSlice;
+    if (nm == "_d_assertp" || nm == "_d_arrayboundsp")
+        return &ipHostAssert;
+    if (nm == "_d_arraybounds")
+        return &ipHostBounds;
+    if (nm == "_d_assert")
+        return &ipHostAssertStr;
+    if (nm == "_d_assert_msg")
+        return &ipHostAssertMsg;
+    if (nm == "_d_arrayappendcd" || nm == "_d_arrayappendwd")
+        return &ipHostArrayAppendC;
+    if (nm == "__wasmctfe_append")
+        return &ipHostAppend;
+    if (nm == "_d_nullpointerp")
+        return &ipHostNullPointer;
+    if (nm == "__wasmctfe_error" || nm == "__wasmctfe_error2" || nm == "__wasmctfe_error64"
+        || nm == "__wasmctfe_slicecopy")
+        return &ipHostSiteError;
+    if (nm == "__wasmctfe_ptrslice")
+        return &ipHostPtrSlice;
+    if (nm == "__wasmctfe_union")
+        return &ipHostUnion;
+    if (nm == "__wasmctfe_throw")
+        return &ipHostThrow;
+    if (nm == "__wasmctfe_cov")
+        return &ipHostCov;
+    if (nm == "__wasmctfe_cppcast")
+        return &ipHostCppCast;
+    if (nm == "__wasmctfe_chain")
+    {
+        ipComputeThrowOffsets();
+        return &ipHostChain;
+    }
+    if (nm == "_D2rt10invariant_12_d_invariantFC6ObjectZv")
+    {
+        ipComputeTIOffsets();
+        return &ipHostInvariant;
+    }
+    if (nm == "_d_eh_wasm_match")
+    {
+        ipComputeTIOffsets();
+        return &ipHostEhMatch;
+    }
+    if (auto bp = nm in wasmCtfeBuiltinFds)
+    {
+        hi.fd = *bp;
+        return isBuiltin(*bp) == BUILTIN.ctfeWrite ? &ipHostCtfeWrite : &ipHostBuiltin;
+    }
+    if (nm.startsWith(softRealPrefix))
+        foreach (k, sn; softRealNames)
+            if (sn == nm)
+            {
+                hi.softOp = cast(SR) k;
+                return &ipHostSoftReal;
+            }
+    return null;
+}
+
+private wasmtime_func_callback_t ipClassify(const(char)[] nm, ref HostImport hi, out HostKind kind)
+{
+    import dmd.glue.tocsym : wasmCtfeLazyFuncs, wasmCtfeStubFuncs, wasmCtfeErrorFuncs, wasmCtfeNoBodyFuncs;
+    if (auto cb = ipFixedHost(nm, hi))
+    {
+        kind = HostKind.fixed;
+        return cb;
+    }
+    if (auto sp = nm in wasmCtfeStubFuncs)
+    {
+        kind = HostKind.stub;
+        hi.stubWhy = *sp;
+        return &ipHostStubbed;
+    }
+    if (auto ep = nm in wasmCtfeErrorFuncs)
+    {
+        kind = HostKind.errorFunc;
+        hi.fd = *ep;
+        return &ipHostErrorFunc;
+    }
+    if (auto lp = nm in wasmCtfeLazyFuncs)
+    {
+        kind = HostKind.lazy_;
+        hi.fd = *lp;
+        return &ipHostLazy;
+    }
+    if (auto np = nm in wasmCtfeNoBodyFuncs)
+    {
+        kind = HostKind.noBody;
+        hi.fd = *np;
+        hi.noBody = true;
+        return &ipHostErrorFunc;
+    }
+    kind = HostKind.unknown;
+    return &ipHostStub;
+}
+
+private extern (C) void ipFreeHost(void* p) nothrow @nogc
+{
+    import core.stdc.stdlib : free;
+    free(p);
+}
+
+private bool ipDefineHost(ref const WasmImportInfo imp, IpHost* h, ref HostImport tmp)
+{
+    import core.stdc.stdlib : malloc;
+    import dmd.backend.wasm.enums : WASM_TYPE;
+
+    static bool valtypes(const(WASM_TYPE)[] types, out wasm_valtype_vec_t vec)
+    {
+        foreach (t; types)
+            if (t < WASM_TYPE.V128)
+                return false;
+        wasm_valtype_vec_new_uninitialized(&vec, types.length);
+        foreach (i, t; types)
+            vec.data[i] = wasm_valtype_new(cast(ubyte)(WASM_TYPE.I32 - t));
+        return true;
+    }
+
+    wasm_valtype_vec_t params, results;
+    if (!valtypes(imp.type.params, params) || !valtypes(imp.type.results, results))
+        return false;
+    auto ft = wasm_functype_new(&params, &results);
+    scope (exit) wasm_functype_delete(ft);
+    auto hi = cast(HostImport*) malloc(HostImport.sizeof);
+    *hi = tmp;
+    if (auto err = wasmtime_linker_define_func(ipProg.linker, imp.module_.ptr, imp.module_.length,
+        imp.name.ptr, imp.name.length, ft, h.cb, hi, &ipFreeHost))
+    {
+        wasmtime_error_delete(err);
+        return false;
+    }
+    h.hi = hi;
+    return true;
+}
+
+private void ipRelease(IpRoot* r)
+{
+    const td = ipNow();
+    auto mem = wasmtime_memory_data(ipProg.ctx, &ipProg.mem);
+    const top = ipHeapPtr > ipProg.liveEnd ? ipHeapPtr : ipProg.liveEnd;
+    if (r && r.temp)
+    {
+        ipProg.image = ipProg.image[0 .. r.imageLen].assumeSafeAppend;
+        ipDataExtents = ipDataExtents[0 .. r.extents].assumeSafeAppend;
+        ipPoisonExtents = ipPoisonExtents[0 .. r.poisonExtents].assumeSafeAppend;
+        foreach (k; r.vtbls)
+            ipVtbls.remove(k);
+        ipCtfeOrdersAddr = r.prevOrders;
+        ipTableFuncs = ipTableFuncs[0 .. ipProg.tableNext - 1].assumeSafeAppend;
+        ipProg.sites[r.id] = null;
+        ipProg.liveEnd = ipProg.dataEnd;
+    }
+    const stackHigh = ipStackHigh();
+    memcpy(mem + stackHigh, ipProg.image.ptr, ipProg.image.length);
+    ipZeroRange(mem, ipProg.dataEnd, top);
+    ipZeroRange(mem, 0, stackHigh);
+    ipHeapPtr = 0;
+    version (linux) {}
+    else
+    {
+        if (top - ipProg.dataEnd > 64 << 20)
+            ipProg.flushPending = true;
+    }
+    wasmCtfeStats.ticks[WasmCtfeStats.Phase.teardown] += ipNow() - td;
+}
+
+private void ipEndRun(IpRoot* r)
+{
+    ipRelease(r);
+    ipProg.running = false;
+}
+
+private IpRoot* ipLink(FuncDeclaration fd, ref OutBuffer buf, out bool retry)
+{
+    import dmd.glue : wasmCtfeBuiltFuncs;
+    import dmd.glue.tocsym : wasmCtfeStubFuncs, wasmCtfeVtblClasses, wasmCtfeCommitEmitted;
+    import dmd.backend.wasm.obj : wasmModuleSites;
+    import dmd.backend.wasm.selflink : wasmSelfLinkDataExtents, wasmSelfLinkTableNames, wasmSelfLinkDataEnd,
+        wasmSelfLinkPoisonEnd, wasmSelfLinkDefined, wasmSelfLinkImports, wasmSelfLinkTableBase,
+        wasmSelfLinkPoisonBase, wasmSelfLinkNewData;
+
+    if (!ipProg.store)
+        return null;
+    auto ctx = ipProg.ctx;
+    const hasLibrary = ipProg.sites.length != 0;
+
+    foreach (name; wasmSelfLinkDefined)
+        if (auto ph = name in ipProg.hosts)
+            if ((*ph).committed && ((*ph).kind != HostKind.lazy_ || (*ph).direct))
+            {
+                if (verbose)
+                    fprintf(stderr, "wasm-ctfe inproc: stale import %.*s\n", cast(int) name.length, name.ptr);
+                retry = true;
+                return null;
+            }
+    FuncDeclaration[const(char)[]] byName;
+    foreach (bf; wasmCtfeBuiltFuncs)
+    {
+        const name = mangleExact(bf).toDString;
+        byName[name] = bf;
+        auto pf = name in ipProg.funcs;
+        if (pf && *pf && *pf !is bf && (*pf).loc != bf.loc)
+        {
+            if (verbose)
+                fprintf(stderr, "wasm-ctfe inproc: name clash %s\n", bf.toPrettyChars());
+            retry = true;
+            return null;
+        }
+    }
+
+    wasmtime_module_t* mod;
+    const tc = ipNow();
+    auto merr = wasmtime_module_new(ipGetEngine(), cast(const(ubyte)*) buf[].ptr, buf.length, &mod);
+    wasmCtfeStats.ticks[WasmCtfeStats.Phase.compile] += ipNow() - tc;
+    wasmCtfeStats.modules++;
+    if (merr)
+    {
+        ipLogError("module error for", fd, merr);
+        wasmtime_error_delete(merr);
+        return null;
+    }
+    scope (exit) wasmtime_module_delete(mod);
+    const tl = ipNow();
+    scope (exit) wasmCtfeStats.ticks[WasmCtfeStats.Phase.link] += ipNow() - tl;
+
+    auto imports = wasmSelfLinkImports;
+    auto used = new IpHost*[](imports.length);
+    foreach (i, ref imp; imports)
+    {
+        const nm = imp.name;
+        if (nm in ipProg.funcs)
+            continue;
+        auto ph = nm in ipProg.hosts;
+        auto h = ph ? *ph : null;
+        used[i] = h;
+        if (h && h.kind == HostKind.fixed)
+            continue;
+        HostImport tmp;
+        HostKind kind;
+        auto cb = ipClassify(nm, tmp, kind);
+        if (h && h.cb is cb && h.hi.fd is tmp.fd && h.hi.stubWhy is tmp.stubWhy)
+            continue;
+        if (h && h.committed)
+        {
+            if (verbose)
+                fprintf(stderr, "wasm-ctfe inproc: import %.*s changed kind\n", cast(int) nm.length, nm.ptr);
+            retry = true;
+            return null;
+        }
+        const nl = nm.length < tmp.name.length ? nm.length : tmp.name.length;
+        tmp.name[0 .. nl] = nm[0 .. nl];
+        tmp.nameLen = nl;
+        if (!h)
+        {
+            h = new IpHost;
+            ipProg.hosts[nm] = h;
+            used[i] = h;
+        }
+        h.cb = cb;
+        h.kind = kind;
+        if (!ipDefineHost(imp, h, tmp))
+            return null;
+    }
+
+    if (!ipGrowMemory(ipPageAlign(wasmSelfLinkDataEnd) + 0x1_0000))
+        return null;
+    const tableEnd = wasmSelfLinkTableBase + wasmSelfLinkTableNames.length;
+    if (tableEnd > ipProg.tableSize)
+    {
+        ulong delta = tableEnd - ipProg.tableSize;
+        if (delta < ipProg.tableSize)
+            delta = ipProg.tableSize;
+        wasmtime_val_t nul;
+        nul.kind = WASMTIME_FUNCREF;
+        ulong prev;
+        if (auto err = wasmtime_table_grow(ctx, &ipProg.table, delta, &nul, &prev))
+        {
+            ipLogError("table grow for", fd, err);
+            wasmtime_error_delete(err);
+            return null;
+        }
+        ipProg.tableSize = prev + delta;
+    }
+
+    wasmtime_instance_t inst;
+    wasm_trap_t* trap;
+    auto err = wasmtime_linker_instantiate(ipProg.linker, ctx, mod, &inst, &trap);
+    if (err && !trap)
+    {
+        ipLogError("instantiate (retrying with own import types)", fd, err);
+        wasmtime_error_delete(err);
+        foreach (i, ref imp; imports)
+            if (auto h = used[i])
+            {
+                HostImport tmp = *h.hi;
+                if (!ipDefineHost(imp, h, tmp))
+                    return null;
+            }
+        err = wasmtime_linker_instantiate(ipProg.linker, ctx, mod, &inst, &trap);
+    }
+    if (err || trap)
+    {
+        if (err)
+        {
+            ipLogError("instantiate", fd, err);
+            wasmtime_error_delete(err);
+        }
+        if (trap)
+            wasm_trap_delete(trap);
+        ipZeroRange(wasmtime_memory_data(ctx, &ipProg.mem), ipProg.dataEnd, wasmSelfLinkDataEnd);
+        retry = hasLibrary;
+        return null;
+    }
+
+    auto r = new IpRoot;
+    r.id = cast(uint) ipProg.sites.length;
+    r.imageLen = ipProg.image.length;
+    r.extents = ipDataExtents.length;
+    r.poisonExtents = ipPoisonExtents.length;
+    r.prevOrders = ipCtfeOrdersAddr;
+    r.temp = true;
+    ipProg.sites ~= wasmModuleSites;
+    ipProg.image ~= wasmtime_memory_data(ctx, &ipProg.mem)[ipProg.dataEnd .. wasmSelfLinkDataEnd];
+    ipProg.liveEnd = wasmSelfLinkDataEnd;
+    foreach (ref x; wasmSelfLinkDataExtents)
+    {
+        if (x.start >= wasmSelfLinkPoisonBase)
+            ipPoisonExtents ~= x;
+        else
+            ipDataExtents ~= x;
+        if (auto cd = x.name in wasmCtfeVtblClasses)
+        {
+            ipVtbls[x.start] = *cd;
+            r.vtbls ~= x.start;
+        }
+        else if (x.name.startsWith("_D4core8internal5newaa10ctfeOrders"))
+            ipCtfeOrdersAddr = x.start;
+    }
+    ipTableFuncs.length = wasmSelfLinkTableBase - 1 + wasmSelfLinkTableNames.length;
+    foreach (i, n; wasmSelfLinkTableNames)
+    {
+        auto pf = n in byName;
+        if (!pf)
+            pf = n in ipProg.funcs;
+        ipTableFuncs[wasmSelfLinkTableBase - 1 + i] = pf ? *pf : null;
+    }
+
+    const rootName = mangleExact(fd).toDString;
+    wasmtime_extern_t rootExt;
+    if (!wasmtime_instance_export_get(ctx, &inst, rootName.ptr, rootName.length, &rootExt)
+        || rootExt.kind != WASMTIME_EXTERN_FUNC)
+    {
+        if (verbose)
+            fprintf(stderr, "wasm-ctfe inproc: export %.*s not found for %s at %s\n",
+                cast(int) rootName.length, rootName.ptr, fd.toPrettyChars(), fd.loc.toChars());
+        ipRelease(r);
+        return null;
+    }
+    r.func = rootExt.of.func;
+    if (wasmCtfeStubFuncs.length || ipCircularUsed)
+    {
+        wasmCtfeStats.tempModules++;
+        return r;
+    }
+
+    r.temp = false;
+    r.vtbls = null;
+    foreach (name; wasmSelfLinkDefined)
+    {
+        HostImport tmp;
+        if (ipFixedHost(name, tmp))
+            continue;
+        wasmtime_extern_t fe;
+        if (!wasmtime_instance_export_get(ctx, &inst, name.ptr, name.length, &fe))
+            continue;
+        if (auto derr = wasmtime_linker_define(ipProg.linker, ctx, "env".ptr, 3, name.ptr, name.length, &fe))
+        {
+            wasmtime_error_delete(derr);
+            continue;
+        }
+        auto pf = name in byName;
+        ipProg.funcs[name] = pf ? *pf : null;
+        if (auto ph = name in ipProg.hosts)
+        {
+            if (const slot = (*ph).slot)
+            {
+                wasmtime_val_t v;
+                v.kind = WASMTIME_FUNCREF;
+                v.of.funcref = fe.of.func;
+                if (auto serr = wasmtime_table_set(ctx, &ipProg.table, slot, &v))
+                    wasmtime_error_delete(serr);
+                ipTableFuncs[slot - 1] = pf ? *pf : null;
+            }
+            ipProg.hosts.remove(name);
+        }
+    }
+    foreach (i, ref imp; imports)
+        if (auto h = used[i])
+        {
+            h.committed = true;
+            if (imp.called)
+                h.direct = true;
+        }
+    foreach (i, n; wasmSelfLinkTableNames)
+    {
+        const slot = wasmSelfLinkTableBase + cast(uint) i;
+        ipProg.slots[n] = slot;
+        if (auto ph = n in ipProg.hosts)
+            (*ph).slot = slot;
+    }
+    foreach (name, addr; wasmSelfLinkNewData)
+        ipProg.dataSyms[name] = addr;
+    ipProg.dataEnd = wasmSelfLinkDataEnd;
+    ipProg.poisonNext = wasmSelfLinkPoisonEnd;
+    ipProg.tableNext = cast(uint) tableEnd;
+    wasmCtfeCommitEmitted();
+    return r;
+}
+
+private IpRoot* ipBuild(FuncDeclaration fd)
 {
     import dmd.glue : wasmCtfeGenerate;
 
-    if (auto p = cast(void*) fd in ipModuleCache)
+    foreach (round; 0 .. 3)
+    {
+        OutBuffer buf;
+        const(char)[][] unresolved;
+        const savedSuspend = buildActiveSuspended;
+        buildActiveSuspended = 0;
+        const tg = ipNow();
+        const genOk = wasmCtfeGenerate(fd, buf, unresolved);
+        wasmCtfeStats.ticks[WasmCtfeStats.Phase.gen] += ipNow() - tg;
+        buildActiveSuspended = savedSuspend;
+        if (!genOk)
+        {
+            if (verbose)
+            {
+                import dmd.glue : wasmCtfeLastPoison;
+                auto why = wasmCtfeLastPoison();
+                fprintf(stderr, "wasm-ctfe inproc: codegen failed for %s at %s: %s\n",
+                    fd.toPrettyChars(), fd.loc.toChars(), why ? why : "errors".ptr);
+            }
+            wasmCtfeStats.compileFailures++;
+            return null;
+        }
+        if (keepFiles)
+        {
+            import dmd.utils : writeFile;
+            char[256] name = void;
+            snprintf(name.ptr, name.length, "wasmctfe_ip_%u.wasm", seq);
+            seq++;
+            writeFile(Loc.initial, name[0 .. strlen(name.ptr)], buf[]);
+            fprintf(stderr, "wasm-ctfe inproc: kept %s = %s\n", name.ptr, fd.toPrettyChars());
+        }
+        if (ipProg.flushPending)
+        {
+            ipFlush();
+            continue;
+        }
+        if (unresolved.length)
+        {
+            if (verbose)
+            {
+                fprintf(stderr, "wasm-ctfe inproc: %zu unresolved symbols for %s\n",
+                    unresolved.length, fd.toPrettyChars());
+                foreach (u; unresolved)
+                    fprintf(stderr, "  undefined: %.*s\n", cast(int) u.length, u.ptr);
+            }
+            if (ipProg.sites.length)
+            {
+                ipFlush();
+                continue;
+            }
+            wasmCtfeStats.compileFailures++;
+            return null;
+        }
+        bool retry;
+        auto r = ipLink(fd, buf, retry);
+        if (!retry)
+            return r;
+        ipFlush();
+    }
+    return null;
+}
+
+private IpRoot* ipGetRoot(FuncDeclaration fd)
+{
+    import dmd.glue.tocsym : wasmCtfeInLibrary;
+
+    if (ipProg.running)
+    {
+        if (verbose)
+            fprintf(stderr, "wasm-ctfe inproc: nested run of %s refused\n", fd.toPrettyChars());
+        wasmCtfeStats.nestedRuns++;
+        return null;
+    }
+    if (ipProg.flushPending)
+        ipFlush();
+    if (auto p = cast(void*) fd in ipProg.roots)
         return *p;
     if (wasmCGCtfeBuild)
     {
@@ -3946,103 +5168,28 @@ private IpModule* ipGetModule(FuncDeclaration fd)
             fprintf(stderr, "wasm-ctfe inproc: nested build for %s deferred\n", fd.toPrettyChars());
         return null;
     }
-
-    OutBuffer buf;
-    const(char)[][] unresolved;
-    const savedSuspend = buildActiveSuspended;
-    buildActiveSuspended = 0;
-    const genOk = wasmCtfeGenerate(fd, buf, unresolved);
-    buildActiveSuspended = savedSuspend;
-    if (!genOk)
-    {
-        if (verbose)
-        {
-            import dmd.glue : wasmCtfeLastPoison;
-            auto why = wasmCtfeLastPoison();
-            fprintf(stderr, "wasm-ctfe inproc: codegen failed for %s at %s: %s\n",
-                fd.toPrettyChars(), fd.loc.toChars(), why ? why : "errors".ptr);
-        }
-        wasmCtfeStats.compileFailures++;
-        ipModuleCache[cast(void*) fd] = null;
+    if (!ipProgramInit())
         return null;
-    }
-    if (keepFiles)
+    IpRoot* r;
+    if (wasmCtfeInLibrary(fd))
     {
-        import dmd.utils : writeFile;
-        char[256] name = void;
-        snprintf(name.ptr, name.length, "wasmctfe_ip_%u.wasm", seq);
-        seq++;
-        writeFile(Loc.initial, name[0 .. strlen(name.ptr)], buf[]);
-        fprintf(stderr, "wasm-ctfe inproc: kept %s = %s\n", name.ptr, fd.toPrettyChars());
-    }
-    if (unresolved.length)
-    {
-        if (verbose)
+        const nm = mangleExact(fd).toDString;
+        wasmtime_extern_t ext;
+        if (wasmtime_linker_get(ipProg.linker, ipProg.ctx, "env".ptr, 3, nm.ptr, nm.length, &ext)
+            && ext.kind == WASMTIME_EXTERN_FUNC)
         {
-            fprintf(stderr, "wasm-ctfe inproc: %zu unresolved symbols for %s\n",
-                unresolved.length, fd.toPrettyChars());
-            foreach (u; unresolved)
-                fprintf(stderr, "  undefined: %.*s\n", cast(int) u.length, u.ptr);
-        }
-        wasmCtfeStats.compileFailures++;
-        ipModuleCache[cast(void*) fd] = null;
-        return null;
-    }
-
-    wasmtime_module_t* mod;
-    if (auto err = wasmtime_module_new(ipGetEngine(), cast(const(ubyte)*) buf[].ptr, buf.length, &mod))
-    {
-        ipLogError("module error for", fd, err);
-        wasmtime_error_delete(err);
-        ipModuleCache[cast(void*) fd] = null;
-        return null;
-    }
-
-    auto im = new IpModule;
-    im.mod = mod;
-    {
-        import dmd.backend.wasm.obj : wasmModuleSites;
-        im.sites = wasmModuleSites;
-    }
-    {
-        import dmd.glue.tocsym : wasmCtfeVtblClasses;
-        import dmd.backend.wasm.selflink : wasmSelfLinkDataExtents;
-        im.dataExtents = wasmSelfLinkDataExtents;
-        foreach (ref x; im.dataExtents)
-        {
-            if (auto cd = x.name in wasmCtfeVtblClasses)
-                im.vtbls[x.start] = *cd;
-            else if (x.name.startsWith("_D4core8internal5newaa10ctfeOrders"))
-                im.ctfeOrdersAddr = x.start;
+            r = new IpRoot;
+            r.func = ext.of.func;
         }
     }
-    {
-        import dmd.glue : wasmCtfeBuiltFuncs;
-        import dmd.backend.wasm.selflink : wasmSelfLinkTableNames;
-        FuncDeclaration[const(char)[]] byName;
-        foreach (bf; wasmCtfeBuiltFuncs)
-            byName[mangleExact(bf).toDString] = bf;
-        im.tableFuncs = new FuncDeclaration[](wasmSelfLinkTableNames.length);
-        foreach (i, n; wasmSelfLinkTableNames)
-            if (auto p = n in byName)
-                im.tableFuncs[i] = *p;
-    }
-    import dmd.glue.tocsym : wasmCtfeStubFuncs;
-    if (!wasmCtfeStubFuncs.length && !ipCircularVars.length)
-        ipModuleCache[cast(void*) fd] = im;
-    return im;
+    else
+        r = ipBuild(fd);
+    if (!r || !r.temp)
+        ipProg.roots[cast(void*) fd] = r;
+    return r;
 }
 
 private __gshared CallExp ipRootCall;
-
-private const(ubyte)[] ipInstanceMemory(wasmtime_context_t* ctx, ref wasmtime_instance_t inst)
-{
-    wasmtime_extern_t memExt;
-    if (!wasmtime_instance_export_get(ctx, &inst, "memory".ptr, "memory".length, &memExt)
-        || memExt.kind != WASMTIME_EXTERN_MEMORY)
-        return null;
-    return ipMemSlice(ctx, memExt.of.memory);
-}
 
 private void ipCalledFrom(Expression e)
 {
@@ -4358,8 +5505,7 @@ private Expression ipReportUncaught(const(uint)[] chain, const(ubyte)[] data)
     return ErrorExp.get();
 }
 
-private Expression ipReportTrap(const(wasm_trap_t)* trap, const(wasmtime_error_t)* err, IpModule* im,
-    const(ubyte)[] data)
+private Expression ipReportTrap(const(wasm_trap_t)* trap, const(wasmtime_error_t)* err, const(ubyte)[] data)
 {
     import dmd.glue.tocsym : wasmCtfeSites;
     import dmd.hdrgen : toErrMsg;
@@ -4391,19 +5537,26 @@ private Expression ipReportTrap(const(wasm_trap_t)* trap, const(wasmtime_error_t
     foreach (i; 0 .. frames.size)
     {
         const off = wasm_frame_module_offset(frames.data[i]);
-        size_t lo = 0, hi = im.sites.length;
+        size_t id;
+        if (auto mn = wasmtime_frame_module_name(frames.data[i]))
+            foreach (c; mn.data[0 .. mn.size])
+                id = id * 10 + (c - '0');
+        else
+            id = size_t.max;
+        const(WasmSite)[] sites = id < ipProg.sites.length ? ipProg.sites[id] : null;
+        size_t lo = 0, hi = sites.length;
         while (lo < hi)
         {
             const mid = (lo + hi) / 2;
-            if (im.sites[mid].offset < off)
+            if (sites[mid].offset < off)
                 lo = mid + 1;
             else
                 hi = mid;
         }
-        if (lo < im.sites.length && im.sites[lo].offset == off)
+        if (lo < sites.length && sites[lo].offset == off)
         {
-            if (im.sites[lo].site < wasmCtfeSites.length)
-                chain ~= im.sites[lo].site;
+            if (sites[lo].site < wasmCtfeSites.length)
+                chain ~= sites[lo].site;
         }
         else if (i == 0 && ipErrKind == IpErrKind.errorFunc)
         {
@@ -4505,11 +5658,22 @@ Expression tryWasmCtfeInproc(FuncDeclaration fd, Expression thisExp, Expression[
         }
         auto lf = ipLazyHit;
         ipLazyHit = null;
-        if (!lf || lf.semanticRun >= PASS.semantic3done)
+        if (!lf)
             return r;
-        if (ipForceSemantic3Gagged(lf) || lf.semanticRun < PASS.semantic3done || lf.errors)
+        if (lf.semanticRun < PASS.semantic3done
+            && (ipForceSemantic3Gagged(lf) || lf.semanticRun < PASS.semantic3done || lf.errors))
             return r;
-        ipModuleCache.remove(cast(void*) fd);
+        if (cast(void*) lf in ipProg.roots)
+        {
+            ipProg.flushPending = true;
+            continue;
+        }
+        auto patch = ipGetRoot(lf);
+        if (patch && !patch.temp)
+            continue;
+        if (patch)
+            ipRelease(patch);
+        ipProg.flushPending = true;
     }
     return null;
 }
@@ -4613,6 +5777,8 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
             if (!arg.isStructLiteralExp() && !arg.isArrayLiteralExp() && !arg.isStringExp())
                 return bail(fd, "arg not literal");
             memArgBytes += ipAlign16(p.type.size());
+            if (!ipBlockTailSize(p.type, arg, memArgBytes))
+                return bail(fd, "arg not literal");
             argKind[i] = ArgKind.block;
             memArgCount++;
             nvals += 1;
@@ -4623,10 +5789,14 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
             return bail(fd, "arg not literal scalar");
     }
 
+    if (!isCtor)
+        if (auto r = ipFoldConstBody(fd, resultType))
+            return r;
+
     OutBuffer keyBuf;
     const exportName = mangleExact(fd).toDString;
     keyBuf.writestring(exportName);
-    keyBuf.writeByte(0);
+    keyBuf.write((cast(const(void)*) &fd)[0 .. fd.sizeof]);
     if (thisExp)
     {
         ipAppendExpKey(thisExp, keyBuf);
@@ -4642,233 +5812,38 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
     const writesBefore = ipCtfeWrites;
 
     wasmCtfeStats.attempts++;
-    auto im = ipGetModule(fd);
-    if (!im)
+    auto root = ipGetRoot(fd);
+    if (!root)
         return null;
-
-    HostImport* his;
-    scope (exit) dmd.root.rmem.mem.xfree(his);
-
-    auto store = wasmtime_store_new(ipGetEngine(), null, null);
-    scope (exit) wasmtime_store_delete(store);
-    auto ctx = wasmtime_store_context(store);
-
-    auto linker = wasmtime_linker_new(ipGetEngine());
-    scope (exit) wasmtime_linker_delete(linker);
-
-    {
-        wasm_importtype_vec_t imports;
-        wasmtime_module_imports(im.mod, &imports);
-        scope (exit) wasm_importtype_vec_delete(&imports);
-        his = cast(HostImport*) dmd.root.rmem.mem.xcalloc(imports.size, HostImport.sizeof);
-        foreach (i; 0 .. imports.size)
-        {
-            auto it = imports.data[i];
-            const modName = wasm_importtype_module(it);
-            const name = wasm_importtype_name(it);
-            const ftc = wasm_externtype_as_functype_const(wasm_importtype_type(it));
-            if (!ftc)
-                return null;
-
-            auto hi = &his[i];
-            const nl = name.size < hi.name.length ? name.size : hi.name.length;
-            hi.name[0 .. nl] = name.data[0 .. nl];
-            hi.nameLen = nl;
-            import dmd.glue.tocsym : wasmCtfeLazyFuncs, wasmCtfeStubFuncs, wasmCtfeErrorFuncs, wasmCtfeNoBodyFuncs;
-            wasmtime_func_callback_t cb = &ipHostStub;
-            const nm = name.data[0 .. name.size];
-            if (nm == "gc_malloc" || nm == "_d_allocmemory" || nm == "gc_mallocTrace" || nm == "gc_calloc" || nm == "gc_callocTrace")
-                cb = &ipHostGcMalloc;
-            else if (nm == "malloc" || nm == "calloc" || nm == "realloc")
-            {
-                hi.cAlloc = nm == "malloc" ? CAlloc.malloc : nm == "calloc" ? CAlloc.calloc : CAlloc.realloc;
-                cb = &ipHostCAlloc;
-            }
-            else if (nm == "__errno_location")
-                cb = &ipHostErrno;
-            else if (nm == "free" || nm == "gc_addRange" || nm == "gc_removeRange"
-                || nm == "_d_criticalenter2" || nm == "_d_criticalexit"
-                || nm == "_d_monitorenter" || nm == "_d_monitorexit" || nm == "gc_allocatedInCurrentThread")
-                cb = &ipHostZero64;
-            else if (nm.length >= 10 && nm[0 .. 7] == "_aApply" && (nm[$ - 1] == '1' || nm[$ - 1] == '2')
-                && (nm.length == 10 || (nm.length == 11 && nm[7] == 'R')))
-                cb = &ipHostAApply;
-            else if (nm == "memset")
-                cb = &ipHostMemset;
-            else if (nm == "memcpy")
-                cb = &ipHostMemcpy;
-            else if (nm == "memcmp")
-                cb = &ipHostMemcmp;
-            else if (nm == "_memsetn")
-                cb = &ipHostMemsetn;
-            else if (nm == "_memsetFloat" || nm == "_memsetDouble" || nm == "_memset80"
-                || nm == "_memset128" || nm == "_memset128ii" || nm == "_memset16"
-                || nm == "_memset32" || nm == "_memset64")
-                cb = &ipHostMemsetT;
-            else if (nm == "gc_expandArrayUsed")
-                cb = &ipHostExpandArray;
-            else if (nm == "gc_shrinkArrayUsed")
-                cb = &ipHostShrinkArray;
-            else if (nm == "gc_reserveArrayCapacity")
-                cb = &ipHostReserveArray;
-            else if (nm == "gc_query")
-                cb = &ipHostGcQuery;
-            else if (nm == "_d_arraybounds_indexp")
-                cb = &ipHostBoundsIndex;
-            else if (nm == "_d_arraybounds_slicep")
-                cb = &ipHostBoundsSlice;
-            else if (nm == "_d_assertp" || nm == "_d_arrayboundsp")
-                cb = &ipHostAssert;
-            else if (nm == "_d_arraybounds")
-                cb = &ipHostBounds;
-            else if (nm == "_d_assert")
-                cb = &ipHostAssertStr;
-            else if (nm == "_d_assert_msg")
-                cb = &ipHostAssertMsg;
-            else if (nm == "_d_arrayappendcd" || nm == "_d_arrayappendwd")
-                cb = &ipHostArrayAppendC;
-            else if (nm == "__wasmctfe_append")
-                cb = &ipHostAppend;
-            else if (nm == "_d_nullpointerp")
-                cb = &ipHostNullPointer;
-            else if (nm == "__wasmctfe_error" || nm == "__wasmctfe_error2" || nm == "__wasmctfe_error64"
-                || nm == "__wasmctfe_slicecopy")
-                cb = &ipHostSiteError;
-            else if (nm == "__wasmctfe_ptrslice")
-                cb = &ipHostPtrSlice;
-            else if (nm == "__wasmctfe_union")
-                cb = &ipHostUnion;
-            else if (nm == "__wasmctfe_throw")
-                cb = &ipHostThrow;
-            else if (nm == "__wasmctfe_cov")
-                cb = &ipHostCov;
-            else if (nm == "__wasmctfe_chain")
-            {
-                cb = &ipHostChain;
-                ipComputeThrowOffsets();
-            }
-            else if (nm == "_D2rt10invariant_12_d_invariantFC6ObjectZv")
-            {
-                cb = &ipHostInvariant;
-                ipComputeTIOffsets();
-            }
-            else if (auto bp = nm in wasmCtfeBuiltinFds)
-            {
-                hi.fd = *bp;
-                cb = isBuiltin(*bp) == BUILTIN.ctfeWrite ? &ipHostCtfeWrite : &ipHostBuiltin;
-            }
-            else if (nm.startsWith(softRealPrefix))
-            {
-                foreach (k, sn; softRealNames)
-                    if (sn == nm)
-                    {
-                        hi.softOp = cast(SR) k;
-                        cb = &ipHostSoftReal;
-                        break;
-                    }
-            }
-            else if (auto sp = nm in wasmCtfeStubFuncs)
-            {
-                hi.stubWhy = *sp;
-                cb = &ipHostStubbed;
-            }
-            else if (auto ep = nm in wasmCtfeErrorFuncs)
-            {
-                hi.fd = *ep;
-                cb = &ipHostErrorFunc;
-            }
-            else if (auto lp = nm in wasmCtfeLazyFuncs)
-            {
-                hi.fd = *lp;
-                cb = &ipHostLazy;
-            }
-            else if (nm == "__wasmctfe_cppcast")
-                cb = &ipHostCppCast;
-            else if (nm == "_d_eh_wasm_match")
-            {
-                cb = &ipHostEhMatch;
-                ipComputeTIOffsets();
-            }
-            else if (auto np = nm in wasmCtfeNoBodyFuncs)
-            {
-                hi.fd = *np;
-                hi.noBody = true;
-                cb = &ipHostErrorFunc;
-            }
-            auto err = wasmtime_linker_define_func(linker,
-                modName.data, modName.size, name.data, name.size,
-                ftc, cb, cast(void*) hi, null);
-            if (err)
-            {
-                wasmtime_error_delete(err);
-                return null;
-            }
-        }
-    }
-
-    wasmtime_instance_t inst;
+    auto ctx = ipProg.ctx;
+    ipProg.running = true;
+    scope (exit) ipEndRun(root);
+    const tl = ipNow();
     wasm_trap_t* trap;
-    if (auto err = wasmtime_linker_instantiate(linker, ctx, im.mod, &inst, &trap))
-    {
-        ipLogError("instantiate", fd, err);
-        wasmtime_error_delete(err);
-        return null;
-    }
-    if (trap)
-    {
-        wasm_trap_delete(trap);
-        return null;
-    }
 
-    wasmtime_extern_t fnExt;
-    if (!wasmtime_instance_export_get(ctx, &inst, exportName.ptr, exportName.length, &fnExt)
-        || fnExt.kind != WASMTIME_EXTERN_FUNC)
-    {
-        if (verbose)
-            fprintf(stderr, "wasm-ctfe inproc: export %.*s not found for %s at %s\n",
-                cast(int) exportName.length, exportName.ptr, fd.toPrettyChars(), fd.loc.toChars());
-        return null;
-    }
-
-    wasmtime_memory_t mem;
+    wasmtime_memory_t mem = ipProg.mem;
     ulong sretAddr;
-    ipHeapPtr = 0;
-    ipHeapEnd = 0;
+    ipHeapPtr = ipPageAlign(ipProg.liveEnd);
+    ipHeapEnd = ipProg.memEnd;
+    ulong sp = ipStackHigh();
     const ulong thisSize = thisExp ? cast(ulong) thisSd.type.size() : 0;
     if (sret || memArgCount || thisExp || refResult)
     {
-        wasmtime_extern_t memExt, spExt;
-        if (!wasmtime_instance_export_get(ctx, &inst, "memory".ptr, "memory".length, &memExt)
-            || memExt.kind != WASMTIME_EXTERN_MEMORY)
-            return bail(fd, "no memory export");
-        if (!wasmtime_instance_export_get(ctx, &inst, "__stack_pointer".ptr, "__stack_pointer".length, &spExt)
-            || spExt.kind != WASMTIME_EXTERN_GLOBAL)
-            return bail(fd, "no stack pointer export");
-        mem = memExt.of.memory;
-        wasmtime_val_t spVal;
-        wasmtime_global_get(ctx, &spExt.of.global, &spVal);
-        if (!ipIsP(spVal))
-            return bail(fd, "stack pointer kind");
         const size_t rsz = sret ? cast(size_t) resultType.size() : 0;
         const need = ipAlign16(rsz) + memArgBytes + ipAlign16(thisSize);
         import dmd.backend.wasm.selflink : wasmSelfLinkStackSize;
         ulong base;
         if (need + 65536 > wasmSelfLinkStackSize)
         {
-            if (!ipGrowHeap(ctx, mem, (need >> 16) + 1))
+            if (!ipHeapEnsure(need))
                 return bail(fd, "arg memory");
             base = ipHeapPtr;
             ipHeapPtr = ipAlign16(base + need);
         }
         else
         {
-            base = (ipValP(spVal) - need) & ~15UL;
-            ipSetP(spVal, base);
-            if (auto err = wasmtime_global_set(ctx, &spExt.of.global, &spVal))
-            {
-                wasmtime_error_delete(err);
-                return bail(fd, "stack pointer set");
-            }
+            base = (sp - need) & ~15UL;
+            sp = base;
         }
         auto data = ipMemSlice(ctx, mem);
         if (base + need > data.length)
@@ -4891,10 +5866,11 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
                     break;
                 case ArgKind.block:
                     auto pt = tf.parameterList[i].type;
-                    if (!ipEncodeVal(data, cur, pt, arg))
+                    ulong tail = cur + ipAlign16(pt.size());
+                    if (!ipEncodeVal(data, cur, pt, arg, 0, &tail))
                         return bail(fd, "arg encode");
                     ipSetP(vals[slot++], cur);
-                    cur += ipAlign16(pt.size());
+                    cur = tail;
                     break;
                 case ArgKind.slice:
                     ulong alen, aptr;
@@ -4924,16 +5900,24 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
         ipDecodeMemo.setDim(0);
         ipMemoHead = null;
     }
-    ipCtfeOrdersAddr = im.ctfeOrdersAddr;
-    ipTableFuncs = im.tableFuncs;
-    ipDataExtents = im.dataExtents;
-    ipVtbls = im.vtbls;
-    if (auto err = wasmtime_context_set_fuel(ctx, 2_000_000_000))
-        wasmtime_error_delete(err);
+    {
+        wasmtime_val_t spVal;
+        ipSetP(spVal, sp);
+        if (auto err = wasmtime_global_set(ctx, &ipProg.sp, &spVal))
+        {
+            wasmtime_error_delete(err);
+            return bail(fd, "stack pointer set");
+        }
+    }
     wasmtime_val_t[1] results;
     const nresults = (sret || zeroResult || rty == Tvoid) ? 0 : 1;
     ipDiscardRun = ipDiscardFd is fd;
-    auto callErr = wasmtime_func_call(ctx, &fnExt.of.func, vals.ptr, nvals, results.ptr, nresults, &trap);
+    const tcall = ipNow();
+    wasmCtfeStats.ticks[WasmCtfeStats.Phase.link] += tcall - tl;
+    auto callErr = wasmtime_func_call(ctx, &root.func, vals.ptr, nvals, results.ptr, nresults, &trap);
+    const tdec = ipNow();
+    wasmCtfeStats.ticks[WasmCtfeStats.Phase.call] += tdec - tcall;
+    scope (exit) wasmCtfeStats.ticks[WasmCtfeStats.Phase.decode] += ipNow() - tdec;
     ipDiscardRun = false;
     if (auto err = callErr)
     {
@@ -4948,7 +5932,7 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
         Expression ee;
         if (mode != WasmCtfeMode.verify && !ipLazyHit)
         {
-            ee = ipReportTrap(null, err, im, ipInstanceMemory(ctx, inst));
+            ee = ipReportTrap(null, err, ipMemSlice(ctx, mem));
         }
         wasmtime_error_delete(err);
         return ee;
@@ -4966,7 +5950,7 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
         Expression ee;
         if (mode != WasmCtfeMode.verify && !ipLazyHit)
         {
-            ee = ipReportTrap(trap, null, im, ipInstanceMemory(ctx, inst));
+            ee = ipReportTrap(trap, null, ipMemSlice(ctx, mem));
         }
         wasm_trap_delete(trap);
         return ee;
@@ -5257,6 +6241,30 @@ private struct IpMemo
 
 private __gshared Array!IpMemo ipDecodeMemo;
 private __gshared uint[ulong] ipMemoHead;
+private __gshared StringExp[][size_t] ipDataStrings;
+
+public void wasmCtfeNoteString(StringExp se)
+{
+    if (wasmCGCtfeBuild)
+        ipNoteDataString(se);
+}
+
+private void ipNoteDataString(StringExp se)
+{
+    if (se.type.nextOf().toBasetype().ty.isSomeChar())
+        return;
+    if (!ipDataString(se.peekData(), se.sz))
+        ipDataStrings[se.peekData().length] ~= se;
+}
+
+private StringExp ipDataString(const(ubyte)[] bytes, size_t esz)
+{
+    if (auto l = bytes.length in ipDataStrings)
+        foreach (se; *l)
+            if (se.sz == esz && se.peekData() == bytes)
+                return se;
+    return null;
+}
 
 private enum ipDecodeMaxDepth = 400;
 
@@ -5264,6 +6272,7 @@ private __gshared ulong ipCtfeOrdersAddr;
 private __gshared ClassDeclaration[ulong] ipVtbls;
 private __gshared FuncDeclaration[] ipTableFuncs;
 private __gshared WasmDataExtent[] ipDataExtents;
+private __gshared WasmDataExtent[] ipPoisonExtents;
 
 private Expression ipDecodeFuncPtr(ulong slot, ulong ctx, Type type, Loc loc)
 {
@@ -5606,6 +6615,9 @@ private Expression ipDecodeMem(const(ubyte)[] mem, ulong addr, Type type, Loc lo
             se.ownedByCtfe = OwnedBy.ctfe;
             return se;
         }
+        if (auto ds = ipDataString(mem[cast(size_t) ptr .. cast(size_t)(ptr + total)], esz))
+            if (ds.type.nextOf().toBasetype().ty == etb.ty)
+                return ds.copy();
         auto elems = ipNewExps(cast(size_t) len);
         if (!ipFillElems(mem, ptr, et, esz, elems, loc, depth))
             return null;
@@ -5690,6 +6702,32 @@ private bool ipArgMemSize(Expression arg, ref ulong total)
     return false;
 }
 
+private bool ipBlockTailSize(Type t, Expression e, ref ulong total, int depth = 0)
+{
+    if (depth > 64)
+        return false;
+    auto tb = t.toBasetype();
+    if (tb.ty == Tarray)
+        return ipArgMemSize(e, total);
+    if (auto sle = e.isStructLiteralExp())
+    {
+        auto ts = tb.isTypeStruct();
+        if (!ts)
+            return false;
+        const n = sle.elements ? sle.elements.length : 0;
+        foreach (i, v; ts.sym.fields)
+            if (i < n && (*sle.elements)[i] && !ipBlockTailSize(v.type, (*sle.elements)[i], total, depth + 1))
+                return false;
+    }
+    else if (auto ale = e.isArrayLiteralExp())
+    {
+        foreach (i; 0 .. ale.elements ? ale.elements.length : 0)
+            if (!ale[i] || !ipBlockTailSize(tb.nextOf(), ale[i], total, depth + 1))
+                return false;
+    }
+    return true;
+}
+
 private void ipWrite(ubyte[] mem, ulong addr, ulong v, size_t sz)
 {
     foreach (i; 0 .. sz)
@@ -5709,6 +6747,7 @@ private bool ipEncodeArg(ubyte[] mem, ref ulong cur, Expression arg, out ulong l
             return false;
         mem[cast(size_t) cur .. cast(size_t)(cur + len * sz)] = se.peekData();
         cur += len * sz;
+        ipNoteDataString(se);
         return true;
     }
     if (auto ale = arg.isArrayLiteralExp())
@@ -5729,7 +6768,7 @@ private bool ipEncodeArg(ubyte[] mem, ref ulong cur, Expression arg, out ulong l
     return false;
 }
 
-private bool ipEncodeVal(ubyte[] mem, ulong addr, Type t, Expression e, int depth = 0)
+private bool ipEncodeVal(ubyte[] mem, ulong addr, Type t, Expression e, int depth = 0, ulong* tail = null)
 {
     if (depth > 64)
         return false;
@@ -5737,6 +6776,16 @@ private bool ipEncodeVal(ubyte[] mem, ulong addr, Type t, Expression e, int dept
     const sz = cast(size_t) tb.size();
     if (addr > mem.length || sz > mem.length - addr)
         return false;
+    if (tail && tb.ty == Tarray)
+    {
+        ulong len, ptr;
+        if (!ipEncodeArg(mem, *tail, e, len, ptr))
+            return false;
+        *tail = ipAlign16(*tail);
+        ipWrite(mem, addr, len, ipPS);
+        ipWrite(mem, addr + ipPS, ptr, ipPS);
+        return true;
+    }
     if (e.isNullExp())
     {
         mem[cast(size_t) addr .. cast(size_t) addr + sz] = 0;
@@ -5767,7 +6816,7 @@ private bool ipEncodeVal(ubyte[] mem, ulong addr, Type t, Expression e, int dept
             auto el = i < n ? (*sle.elements)[i] : null;
             if (!el)
                 continue;
-            if (!ipEncodeVal(mem, addr + v.offset, v.type, el, depth + 1))
+            if (!ipEncodeVal(mem, addr + v.offset, v.type, el, depth + 1, tail))
                 return false;
         }
         return true;
@@ -5794,7 +6843,7 @@ private bool ipEncodeVal(ubyte[] mem, ulong addr, Type t, Expression e, int dept
         foreach (i; 0 .. n)
         {
             auto el = ale[i];
-            if (!el || !ipEncodeVal(mem, addr + i * esz, et, el, depth + 1))
+            if (!el || !ipEncodeVal(mem, addr + i * esz, et, el, depth + 1, tail))
                 return false;
         }
         return true;

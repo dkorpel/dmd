@@ -206,6 +206,7 @@ struct WasmDataSeg
     const(char)[] name;
     uint alignLog2 = 2;
     uint reserved;
+    bool dup;
 }
 
 private void checkSegFull(ref const WasmDataSeg ds)
@@ -240,8 +241,14 @@ private uint pushDataSeg(uint size, uint align_, Symbol* sym, const(char)[] name
     const bool poison = sym && wasmCGCtfeBuild && wasmSelfLinkPoisonNames.length
         && (cast(string) sym.identifier) in wasmSelfLinkPoisonNames;
     uint* heap = poison ? &wmod.poisonHeap : &wmod.dataHeap;
-    const uint base = (*heap + (align_ - 1)) & ~(align_ - 1);
+    uint base = (*heap + (align_ - 1)) & ~(align_ - 1);
     WasmDataSeg ds;
+    if (wasmSelfLinkShared && sym && sym.Sident.ptr && (sym.Sclass == SC.global || sym.Sclass == SC.comdat))
+        if (auto p = cast(string) sym.identifier in wasmSelfLinkDataSymbols)
+        {
+            ds.dup = true;
+            base = *p;
+        }
     ds.data = new OutBuffer();
     ds.offset = base;
     ds.sym = sym;
@@ -259,7 +266,8 @@ private uint pushDataSeg(uint size, uint align_, Symbol* sym, const(char)[] name
         checkSegFull(wmod.dataSegs[$ - 1]);
     wmod.dataSegs ~= ds;
     wmod.segOpen = true;
-    *heap = base + size;
+    if (!ds.dup)
+        *heap = base + size;
     return base;
 }
 
@@ -356,6 +364,9 @@ struct WasmModule
     uint minfoStop;
 
     OutBuffer scratch;
+
+    uint[] slotFuncs;
+    uint[] slotOfFunc;
 
     WasmSymIndex symIndex;
 
@@ -583,12 +594,39 @@ private bool emitImportSection(ref OutBuffer out_, ref WasmModule wmod)
 {
     OutBuffer* s = &wmod.scratch;
     s.reset();
-    const count = wmod.numImports + (wasmSelfLink ? (wasmSelfLinkImportMemory ? 1 : 0) : 3);
+    const count = wmod.numImports + (wasmSelfLinkShared ? 3 + (wmod.tagTypeIdx != uint.max)
+        : wasmSelfLink ? (wasmSelfLinkImportMemory ? 1 : 0) : 3);
     s.writeuLEB128(count);
     foreach (ref const WasmFunc f; wmod.funcs[0 .. wmod.numImports])
     {
         appendImportHead(*s, f.importModule, f.importName ? f.importName : funcName(f), WASM_EXPORT.FUNC);
         s.writeuLEB128(f.typeIdx);
+    }
+    if (wasmSelfLinkShared)
+    {
+        wasmSelfLinkImports = new WasmImportInfo[](wmod.numImports);
+        foreach (i, ref const WasmFunc f; wmod.funcs[0 .. wmod.numImports])
+            wasmSelfLinkImports[i] = WasmImportInfo(f.importModule,
+                utf8SanitizeName(f.importName ? f.importName : funcName(f)).idup,
+                cast() wmod.funcTypes[f.typeIdx]);
+        appendImportHead(*s, "env", "memory", WASM_EXPORT.MEM);
+        s.writeByte(memLimits(false));
+        s.writeuLEB128(0);
+        appendImportHead(*s, "env", "__indirect_function_table", WASM_EXPORT.TABLE);
+        s.writeByte(WASM_REFTYPE.FUNCREF);
+        s.writeByte(WASM_LIMITS.NO_MAX);
+        s.writeuLEB128(0);
+        appendImportHead(*s, "env", "__stack_pointer", WASM_EXPORT.GLOBAL);
+        s.writeByte(WASM_PTR);
+        s.writeByte(WASM_MUT.VAR);
+        if (wmod.tagTypeIdx != uint.max)
+        {
+            appendImportHead(*s, "env", "__d_exception", WASM_EXPORT.TAG);
+            s.writeByte(0x00);
+            s.writeuLEB128(wmod.tagTypeIdx);
+        }
+        writeSection(out_, WASM_SECTION.import_, s);
+        return true;
     }
     if (wasmSelfLink)
     {
@@ -638,6 +676,29 @@ private bool emitExportSection(ref OutBuffer out_, ref WasmModule wmod)
 {
     OutBuffer* s = &wmod.scratch;
     s.reset();
+    if (wasmSelfLinkShared)
+    {
+        OutBuffer names;
+        bool[string] seen;
+        wasmSelfLinkDefined = null;
+        foreach (i; wmod.numImports .. wmod.funcs.length)
+        {
+            const name = cast(string) utf8SanitizeName(funcName(wmod.funcs[i]));
+            if (!name.length || name in seen)
+                continue;
+            seen[name] = true;
+            wasmSelfLinkDefined ~= name.idup;
+            appendName(names, name);
+            names.writeByte(WASM_EXPORT.FUNC);
+            names.writeuLEB128(cast(uint) i);
+        }
+        if (!wasmSelfLinkDefined.length)
+            return false;
+        s.writeuLEB128(cast(uint) wasmSelfLinkDefined.length);
+        s.write(names.peekSlice());
+        writeSection(out_, WASM_SECTION.export_, s);
+        return true;
+    }
     uint count = 0;
     foreach (ref const WasmFunc f; wmod.funcs)
         if (f.exported)
@@ -709,6 +770,8 @@ private bool emitCodeSection(ref OutBuffer out_, ref WasmModule wmod)
                     continue;
                 }
                 patchLEB(codeBytes, r.offset, idx, 5);
+                if (wasmSelfLinkShared && idx < wmod.numImports)
+                    wasmSelfLinkImports[idx].called = true;
             }
             if (wasmSelfLink)
                 patchSelfLinkCodeRelocs(wmod, *fb, codeBytes, selfLinkAddrs);
@@ -784,9 +847,14 @@ private bool emitDataSection(ref OutBuffer out_, ref WasmModule wmod)
         return false;
     OutBuffer* s = &wmod.scratch;
     s.reset();
-    s.writeuLEB128(cast(uint) wmod.dataSegs.length);
+    uint count;
+    foreach (ref WasmDataSeg ds; wmod.dataSegs)
+        count += !ds.dup;
+    s.writeuLEB128(count);
     foreach (ref WasmDataSeg ds; wmod.dataSegs)
     {
+        if (ds.dup)
+            continue;
         const bool poison = ds.offset >= wasmSelfLinkPoisonBase;
         const data = poison ? null : ds.data.peekSlice();
         s.writeByte(0x00);
@@ -1239,6 +1307,8 @@ Obj WasmObj_init(OutBuffer* objbuf, const(char)* filename, const(char)* csegname
     wmod.objbuf = objbuf;
     if (wasmSelfLink && wasmSelfLinkDataBase)
         wmod.dataHeap = wasmSelfLinkDataBase;
+    if (wasmSelfLinkShared)
+        wmod.poisonHeap = wasmSelfLinkPoisonNext;
     wasmFuncBodies = null;
 
     SegData.reset();
@@ -1340,6 +1410,27 @@ void WasmObj_term2(const(char)[] objfilename, ref WasmModule wmod, ref OutBuffer
     foreach (ref const WasmDataSeg ds; wmod.dataSegs)
         checkSegFull(ds);
 
+    if (wasmSelfLinkShared)
+    {
+        selfLink(wmod);
+        emitTypeSection(out_, wmod);
+        emitImportSection(out_, wmod);
+        emitFunctionSection(out_, wmod);
+        emitExportSection(out_, wmod);
+        emitElemSection(out_, wmod);
+        emitCodeSection(out_, wmod);
+        emitDataSection(out_, wmod);
+        import core.stdc.stdio : snprintf;
+        char[16] id = void;
+        const n = snprintf(id.ptr, id.length, "%u", wasmSelfLinkModuleId);
+        OutBuffer name;
+        name.writeByte(0);
+        name.writeuLEB128(1 + n);
+        name.writeuLEB128(n);
+        name.write(id[0 .. n]);
+        writeCustomSection(out_, "name", &name);
+        return;
+    }
     if (wasmSelfLink)
     {
         selfLink(wmod);
@@ -2054,7 +2145,7 @@ void syncImportIndex()
     }
 }
 
-const(char)[] utf8SanitizeName(const(char)[] name)
+public const(char)[] utf8SanitizeName(const(char)[] name)
 {
     static bool validUtf8(const(char)[] s)
     {
@@ -2094,7 +2185,7 @@ void appendName(ref OutBuffer buf, const(char)[] name)
     buf.write(name.ptr[0 .. name.length]);
 }
 
-const(char)[] funcName(ref const WasmFunc f)
+public const(char)[] funcName(ref const WasmFunc f)
 {
     return f.sym ? f.sym.identifier : null;
 }

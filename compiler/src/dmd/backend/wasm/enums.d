@@ -399,6 +399,7 @@ enum WASM_EXPORT : ubyte
     TABLE = 0x01,
     MEM = 0x02,
     GLOBAL = 0x03,
+    TAG = 0x04,
 }
 
 /// WASM relocation types (WebAssembly tool conventions / linking metadata)

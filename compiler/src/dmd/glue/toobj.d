@@ -185,7 +185,7 @@ void TypeInfo_toObjFile(Expression e, Loc loc, Type t)
         if (hostFuncDepth)
             hostDeferredTypeInfos.push(t.vtinfo);
         else
-            toObjFile(t.vtinfo, global.params.multiobj);
+            toObjFile(t.vtinfo, global.params.multiobj && !wasmCtfeBuildActive);
     }
 }
 
@@ -228,7 +228,10 @@ void toObjFile(Dsymbol ds, bool multiobj)
         override void visit(FuncDeclaration fd)
         {
             // in glue/package.d
+            const oldDataCtx = wasmCtfeDataCtx;
+            wasmCtfeDataCtx = false;
             FuncDeclaration_toObjFile(fd, multiobj);
+            wasmCtfeDataCtx = oldDataCtx;
         }
 
         override void visit(ClassDeclaration cd)
@@ -322,8 +325,6 @@ void toObjFile(Dsymbol ds, bool multiobj)
             auto dtbv = DtBuilder(0);
             if (cd.vtblOffset())
                 dtbv.xoff(cast(Symbol*)cd.csym, 0, TYnptr);           // first entry is ClassInfo reference
-            const oldVtblCtx = wasmCtfeVtblCtx;
-            wasmCtfeVtblCtx = true;
             foreach (i; cd.vtblOffset() .. cd.vtbl.length)
             {
                 FuncDeclaration fd = cd.vtbl[i].isFuncDeclaration();
@@ -336,7 +337,6 @@ void toObjFile(Dsymbol ds, bool multiobj)
                 else
                     dtbv.size(0);
             }
-            wasmCtfeVtblCtx = oldVtblCtx;
             if (dtbv.isZeroLength())
             {
                 /* Someone made an 'extern (C++) class C { }' with no virtual functions.
@@ -512,8 +512,15 @@ void toObjFile(Dsymbol ds, bool multiobj)
             if (config.objfmt == OBJ_MACH && vd.mangleOverride.length > 8 && vd.mangleOverride[0 .. 8] == "section$")
                 vd.noUnderscore = true;
 
-            if (!vd.isDataseg() || vd.storage_class & STC.extern_)
+            if (!vd.isDataseg())
                 return;
+            if (vd.storage_class & STC.extern_)
+            {
+                import dmd.wasmctfe : wasmCtfeNoteExternGlobal;
+                if (!wasmCtfeBuildActive)
+                    return;
+                wasmCtfeNoteExternGlobal(vd);
+            }
 
             if (wasmCtfeBuildActive)
                 if (auto ad = isAggregate(vd.type.baseElemOf()))

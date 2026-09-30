@@ -30,64 +30,91 @@ environment variables (kept out of the CLI while experimental):
 
 `ctfeInterpret` calls `tryWasmCtfe` before the AST interpreter.
 
-1. **Wrap**: a call is evaluated directly. Any other expression is wrapped in
-   a generated function; enclosing `const` locals are hoisted into it and
-   top-level array operations are unrolled.
-2. **Check**: `ipExprSupported` and the legality scan reject what the engine
+1. **Fold**: expressions that need no code are answered on the host.
+   Constant folding (`optimize`) runs first, also when the expression
+   contains calls, since a dead `?:` arm or a `const` initializer often
+   removes them. A tree of pure operators whose leaves are literals or
+   calls with literal arguments (`x | f(1)`, `"a" ~ g(2) ~ "b"`,
+   `[f(1), f(2) + 1]`) is evaluated node by node: each call goes through
+   the cached direct-call path and the operators are folded on the host.
+2. **Wrap**: a call with literal arguments is evaluated directly: the
+   arguments are written into guest memory and the function is called by its
+   export. Any other expression is wrapped in a generated function;
+   enclosing `const` locals are hoisted into it and top-level array
+   operations are unrolled.
+3. **Check**: `ipExprSupported` and the legality scan reject what the engine
    can't do yet or what CTFE must refuse. In `verify` and `inproc` mode that
    falls back to the AST interpreter; in `strict` mode it is an error.
-3. **Build** (`wasmCtfeGenerate` in `glue/package.d`): the root function goes
+4. **Analyse**: `wasmCtfePreSemantic3` walks the bodies of the root and its
+   callees and runs `semantic3` on every function the build will need, before
+   the build starts, so that CTFE nested in that analysis gets its own engine
+   run.
+5. **Build** (`wasmCtfeGenerate` in `glue/package.d`): the root function goes
    through `toObjFile` for the wasm64 target, and every function, vtable,
-   `TypeInfo` and global it references is queued and built the same way,
-   forcing `semantic3` where needed. `wasmCtfeBuildActive` switches glue
-   lowerings to CTFE semantics (`__ctfe` is true, GC lowerings are on,
-   `const` initializers fold). The build is retried to add lazily built
-   virtual functions, to replace functions that fail to build with traps, and
-   to run `semantic3` on functions found late.
-4. **Run**: the module is compiled and instantiated with the wasmtime C API
-   (`dmd.wasmtimec`) and cached per root function. Imports bind to host
-   callbacks: the bump allocator behind `gc_malloc` and `malloc`, math
-   builtins, 80-bit `real`, C++ casts, `_aApply*` and stub traps. A trap
-   becomes a CTFE error.
-5. **Decode**: guest memory is read back into literal `Expression`s:
+   `TypeInfo` and global it references is queued and built the same way.
+   `wasmCtfeBuildActive` switches glue lowerings to CTFE semantics (`__ctfe`
+   is true, GC lowerings are on, `const` initializers fold). Symbols already
+   in the program are not built again: the module imports them. The build
+   is retried to replace functions that fail to build with traps, and to run
+   `semantic3` on functions the walk missed.
+6. **Link**: all evaluations share one wasmtime store. A base module exports
+   the memory, the function table, the stack pointer and the exception tag;
+   every build is a small module instantiated into that store, with its data
+   placed after the data of the modules before it and its functions appended
+   to the table. A module that built cleanly is committed: its exports are
+   defined in the linker and later modules call them. A module that contains
+   trap stubs is used once and rolled back. Imports that are neither in the
+   program nor host callbacks bind to host functions: the bump allocator
+   behind `gc_malloc` and `malloc`, math builtins, 80-bit `real`, C++ casts,
+   `_aApply*`, stub traps and lazily built virtual functions.
+7. **Run**: guest memory is reset to the image of the committed data, the
+   function is called and a trap becomes a CTFE error.
+8. **Decode**: guest memory is read back into literal `Expression`s:
    scalars, arrays, structs, unions, pointers, class references (by vtable
    address), AAs, function pointers and delegates, keeping shared references
    and cycles.
 
 ## Results
 
-Measured on 2026-09-30 (commit `6cfaa2bd1f`) against the AST interpreter at
-baseline `12d7c683ba`. Both compilers are release builds (`ENABLE_RELEASE=1`),
-all runs use `-o-`, and each time is the best of three runs. The harness is
+Measured on 2026-09-30 against the AST interpreter at baseline
+`12d7c683ba`. Both compilers are release builds (`ENABLE_RELEASE=1`), all
+runs use `-o-`, and each time is the best of three runs. The harness is
 `tmp/ctfebench/bench.sh`. The `real/` workloads import Phobos
 (`EXTRA=-I<phobos>`).
 
 | Workload | AST (base) | AST (`DMD_CTFE=off`) | wasm engine |
 |---|---|---|---|
-| `aa` (AA insert/lookup, n=20000) | 7.35 s / 43 MB | 7.12 s / 45 MB | 0.11 s / 84 MB |
-| `fib` (recursion) | 0.39 s / 47 MB | 0.39 s / 49 MB | 0.01 s / 32 MB |
-| `manysmall` (3000 small CTFE calls) | 2.77 s / 345 MB | 2.83 s / 346 MB | 0.20 s / 77 MB |
-| `sieve` | 7.45 s / 1256 MB | 7.89 s / 1258 MB | 0.07 s / 53 MB |
-| `sort` | 2.52 s / 372 MB | 2.80 s / 374 MB | 0.06 s / 52 MB |
-| `strings` (append/concat) | 2.40 s / 4023 MB | 2.40 s / 4025 MB | 0.18 s / 69 MB |
-| `structs` | 0.99 s / 337 MB | 1.05 s / 337 MB | 0.04 s / 44 MB |
-| `ctRegex` (two patterns) | 1.25 s / 302 MB | 1.26 s / 303 MB | 1.86 s / 689 MB |
-| `format`/`to`/`sort` enums | 0.23 s / 98 MB | 0.24 s / 100 MB | 0.46 s / 205 MB |
-| import 12 Phobos modules | 0.18 s / 85 MB | 0.19 s / 87 MB | 0.29 s / 142 MB |
+| `aa` (AA insert/lookup, n=20000) | 7.09 s / 42 MB | 7.07 s / 45 MB | 0.07 s / 56 MB |
+| `fib` (recursion) | 0.40 s / 47 MB | 0.37 s / 49 MB | 0.01 s / 31 MB |
+| `manysmall` (3000 small CTFE calls) | 2.83 s / 344 MB | 2.82 s / 346 MB | 0.13 s / 65 MB |
+| `sieve` | 7.84 s / 1256 MB | 8.10 s / 1258 MB | 0.05 s / 46 MB |
+| `sort` | 2.65 s / 371 MB | 2.66 s / 374 MB | 0.05 s / 44 MB |
+| `strings` (append/concat) | 2.51 s / 4025 MB | 2.56 s / 4025 MB | 0.15 s / 57 MB |
+| `structs` | 1.04 s / 337 MB | 1.08 s / 337 MB | 0.04 s / 42 MB |
+| `ctRegex` (two patterns) | 1.30 s / 301 MB | 1.18 s / 304 MB | 0.95 s / 355 MB |
+| `format`/`to`/`sort` enums | 0.23 s / 98 MB | 0.24 s / 98 MB | 0.32 s / 150 MB |
+| import 12 Phobos modules | 0.19 s / 85 MB | 0.19 s / 87 MB | 0.24 s / 122 MB |
+| 2000 different tiny lambdas | 0.11 s / 40 MB | 0.11 s / 43 MB | 0.86 s / 149 MB |
 
-Compute-heavy CTFE is 13–100 times faster and uses 5–60 times less memory.
-The AST interpreter is unchanged: `DMD_CTFE=off` matches the baseline.
+Compute-heavy CTFE is 17–150 times faster and uses up to 70 times less
+memory. The AST interpreter is unchanged: `DMD_CTFE=off` matches the
+baseline.
 
-Code with many small CTFE calls is slower. Every call that is not folded on
-the host builds, compiles and instantiates a module. For a tiny module this
-costs about 0.2 ms in `wasmtime_module_new` alone: Cranelift compiles the
-function, its entry trampoline and the required builtin trampolines. Opt
-level, Winch, Pulley, parallel compilation and unwind info make no
-measurable difference. Glue and backend code generation adds 0.1–7 ms per
-module, depending on how many callees the module contains. Modules are
-cached per function, but callees are compiled again in every module that
-reaches them. ctRegex builds 198 modules. Importing Phobos builds 58 (it was
-700 before constant globals were folded on the host).
+Code with many small, different CTFE calls is slower. A call is answered
+without a module when the host can fold it (constant expressions, functions
+whose body is a constant, cached results). Every other call builds,
+compiles and instantiates a module, and the last row of the table is the
+worst case: 2000 lambdas that each run a two-iteration loop once. A module
+costs about 0.38 ms there: 0.07 ms in glue and backend code generation,
+0.29 ms in `wasmtime_module_new`, 0.01 ms to link and 0.003 ms to call.
+Wasmtime's share has a floor that the engine cannot lower: a module that
+contains only `(func (result i32) i32.const 1)` takes 0.14 ms, spread thinly
+over Cranelift's pipeline, the object writer and type registration. Opt
+level, the single-pass register allocator, serial compilation and unwind
+info change it by less than 10 %. Fuel metering doubled it, which is why it
+is off (see "No fuel"). ctRegex builds 39 modules, the `format` workload 20
+and importing Phobos 23 (it was 700 before constant globals were folded on
+the host).
 
 Profiling tips: `-ftime-trace -ftime-trace-granularity=0` shows each CTFE
 call. `perf` sees only on-CPU time, and Cranelift runs on worker threads, so
@@ -1466,3 +1493,182 @@ with the callee and arguments. The AST interpreter emits one of those for
 every function it interprets; the engine only emits one for the outermost
 call. Code generation for CTFE builds does not emit `Codegen: function`
 events.
+
+### One program for the whole compilation
+
+Every root used to get its own self-contained module, so a callee such as
+`std.format`'s internals was generated and compiled again in each module
+that reached it, and each module had its own memory, table and store.
+Builds now share one store. `wasmSelfLinkShared` makes the object writer
+emit a module that imports memory, table, stack pointer and exception tag
+from `env`, exports every function it defines, and places data at
+`wasmSelfLinkDataBase` and table entries at `wasmSelfLinkTableBase`, both
+taken from the end of the program so far. `wasmCtfeQueueDefinition` skips
+symbols in the library (`wasmCtfeCommitEmitted`), which turns references to
+them into imports resolved by the linker.
+
+The program is thrown away and rebuilt from nothing ("flush") when
+something already committed turns out to be wrong: a module defines a name
+the program bound to a host stub or to a different function, a global that
+was committed as data has to be poisoned, or a lazy virtual function was
+already called directly.
+`DMD_CTFE_STATS` prints the module, temporary-module and flush counts.
+
+### Functions are analysed before the build
+
+The build used to discover functions without `semantic3` one attempt at a
+time: emit everything, find the functions that were missing, analyse them,
+emit everything again. `format` needed 77 attempts' worth of emission for
+65 modules and emitted 1518 function bodies to keep 579. The walk in
+`wasmCtfePreSemantic3` follows what code generation will reference: calls
+(virtual ones included, since `callfunc` takes the symbol of the statically
+bound function), lowerings, `new`, `typeid`, `catch` types, casts, function
+and delegate literals, and the initializers of static variables. For a
+struct type it adds the functions its `TypeInfo` points at. Functions
+referenced only from data (vtables, class and interface `TypeInfo`) are not
+analysed: those are built when they already have `semantic3` and become
+lazy imports otherwise (`wasmCtfeDataCtx`). The retry loop is still there
+for what the walk misses.
+
+### Glue expressions are folded on the host
+
+Most expression roots are not computations. Importing Phobos evaluated
+hundreds of roots like `[cast(ubyte) 1, 2]`, `"abc"[]`, `cond ? a : b` with
+a constant condition, or `flags | toFlag(x)`, and each one cost a module:
+about 0.4 ms even when the module only contains the wrapper. Two of these
+cases hid behind `optimize` itself. It folds the elements of an array
+literal in place and returns the same node, and it leaves `lit[]` as a
+`SliceExp`; both are now recognised as folded. 2000 roots of the form
+`[f(N), f(N + 1) + 1]` went from 0.85 s to 0.08 s, with one module instead
+of 2001.
+
+A sub-expression that was folded in place has no separate result; the
+unrolled array operation and tuple elements copy the literal themselves
+(`ipSubExpr`).
+
+### Struct arguments with slice fields
+
+The direct-call path writes literal arguments into guest memory. A struct
+argument whose fields are slices (`asTrie(TrieEntry(x"...", x"...",
+x"..."))` in `std.uni`) was refused and went through a wrapper module. The
+slice payloads are now written behind the struct and the fields point at
+them.
+
+### Overloads can share a mangled name
+
+`string f(T)(T x)` and `string f(T)(T y)` have the same mangled name and
+are selected by named arguments. The direct-call result cache was keyed by
+mangled name and arguments, which the host fold tier exposed: `f(y: 0)`
+returned the cached result of `f(x: 0)`. The key now includes the function's
+identity. The shared program links by name too: a later module that called
+the first `f` was bound to the second. A module that defines a name the
+program already has, for a function declared somewhere else, now flushes
+the program. Both overloads in one module still collapse into one function,
+as they do in a native object file.
+
+### `-lib` builds
+
+`TypeInfo_toObjFile` passes `global.params.multiobj`, which with `-lib`
+appends the `TypeInfo` to the host's list of objects to write later. During
+an engine build that left the `TypeInfo` undefined in the module, and the
+build failed with an unresolved symbol. This broke building druntime's
+static library. Engine builds never use multiobj.
+
+### Extern globals
+
+An `extern` variable has no definition to emit. A function that mentions
+one and is reached only through a vtable is not covered by the legality
+scan, so the module had an unresolved data symbol and the whole evaluation
+failed (`std.datetime.timezone`'s `LocalTime` reads `tzname`). Engine
+builds now define extern variables in the poisoned address range and turn
+reads into the "static variable cannot be read at compile time" error site,
+so only an evaluation that actually reads one fails.
+
+### Functions with a constant body
+
+`std.meta.staticIndexOf` and `core.lifetime` call hundreds of lambdas and
+template functions whose body is `return 3;` after `static if` has picked a
+branch. Each one cost a module. When the statements of a body are
+declarations without run-time effect (`enum`, `alias`, imports, nested
+functions and types), `if` with a constant condition, and a `return` whose
+expression folds to a literal, the direct-call path returns that literal
+(`ipFoldConstBody`). The arguments are validated first, so a call with an
+argument that is not known at compile time still reports it. Struct
+literals of nested structs are left to the engine, because their hidden
+context field is part of the result, and nothing is folded under
+`-cov=ctfe`. Compiling sumtype's unittests went from 960 modules to 575.
+
+### No fuel
+
+The store used to run with `consume_fuel` and a budget of two billion
+instructions per call, as a guard against CTFE that does not terminate.
+Fuel is compiled into every function as a counter update per block, and
+for a module of a few hundred bytes that doubled the time spent in
+Cranelift (519 to 281 microseconds for a 190 byte lambda). It is off now.
+A non-terminating loop in CTFE hangs the compiler, as it does with the AST
+interpreter. Infinite recursion still traps on the stack limit.
+
+### Hidden return pointer symbols
+
+`FuncDeclaration.shidden` caches the backend symbol of the hidden pointer a
+function returns a struct through. An engine build of a function set it
+for the wasm calling convention, and the host build of the same function
+found it already set and reused it. When the inliner turned the result
+into a named return value (`vthis.nrvo`), the host wrote the result through
+a symbol that did not belong to its function. `core.time.Duration.zero` and
+`dur!"hours"` in a druntime built by the engine-mode compiler returned
+garbage, and every program using vibe-core or dub crashed at startup.
+`shidden` is now part of the per-declaration state that is exchanged
+between host and engine (`hostSymExchange`) and wiped after a build
+(`wasmCtfeWipeCaches`). Test: `runnable/ctfe_nrvo_host.d`.
+
+### Integer arrays that came from a string literal
+
+Phobos stores its Unicode tables as hex strings cast to
+`immutable(size_t)[]`. The AST interpreter passes such a `StringExp`
+through CTFE by reference, so `static immutable res = asTrie(entries)`
+ends up with the same `StringExp`, and the glue layer writes a
+`StringExp` to read-only data. The engine decoded the slice from memory as
+an `ArrayLiteralExp`, which the glue layer writes to `.data`: 250 KB of
+tables in `libphobos2.a` moved from `.rodata` to `.data`.
+Every `StringExp` with a non-character element type that goes into engine
+memory, as an argument (`ipEncodeArg`) or through the glue layer
+(`wasmCtfeNoteString`), is now remembered by content. A decoded slice with
+the same bytes and element type becomes a copy of that `StringExp`.
+Test: `compilable/ctfe_hexstring_result.d`.
+
+### Host code compared between modes
+
+The engine shares the glue layer and the per-declaration backend state
+with host code generation, so a leak shows up as different host code. To
+look for leaks, druntime and Phobos are built as `-lib` archives with the
+engine and with `DMD_CTFE=off`, and every defined symbol is compared by
+content and relocations. druntime is identical apart from one numbered
+`ModuleInfo`. Phobos differs in 74 of 17795 symbols, all understood:
+
+- 67 `std.conv.enumRep` strings are in `.rodata` with the engine and in
+  `.data` with the AST interpreter, which returns a character array built
+  by appending as an `ArrayLiteralExp`, where the engine returns a
+  `StringExp`.
+- 5 `core.internal.newaa` instances for `std.json` are emitted in a
+  different order. The backend inlines a `pragma(inline, true)` callee
+  only when its code was generated before the caller's, so the order
+  decides whether `_d_aaLen` contains two calls or none.
+- 2 `ModuleInfo` symbols (`fiber`, `uuid`) carry a counter in their name
+  that differs between the two builds.
+
+35 template instances that only CTFE uses are emitted by the AST
+interpreter build and not by the engine build.
+
+### C math functions
+
+The backend lowers `%` on `float` and `double`, and the `core.math`
+intrinsics `sin`, `cos`, `ldexp`, `rint` and `rndtol` on those types, to
+calls of `fmod`, `sin`, `cos`, `ldexp`, `rint`, `llrint`, `log2` and
+`log1p` (with an `f` suffix for `float`). The engine did not provide them,
+so any CTFE with a floating point remainder failed (the `color` package
+used by ggplotd computes hue angles with `h % 1`). They are now host
+imports (`ipHostLibm`) that compute in `real`, as the AST interpreter's
+builtins do, and round to the argument type. `rint` and `rndtol` have no
+source for the AST interpreter, so the engine now evaluates calls that
+`DMD_CTFE=off` rejects. Test: `compilable/ctfe_libm.d`.

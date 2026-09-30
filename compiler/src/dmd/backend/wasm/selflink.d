@@ -18,6 +18,7 @@
 module dmd.backend.wasm.selflink;
 
 import dmd.backend.cc;
+import dmd.backend.cdef : SC;
 import dmd.backend.symbol;
 import dmd.backend.wasm.enums;
 import dmd.backend.wasm.obj;
@@ -69,6 +70,25 @@ __gshared WasmDataExtent[] wasmSelfLinkDataExtents;
 
 /// Symbol name of each function, by table slot - 1, recorded by `selfLink`.
 __gshared const(char)[][] wasmSelfLinkTableNames;
+
+__gshared bool wasmSelfLinkShared;
+__gshared uint wasmSelfLinkTableBase = 1;
+__gshared uint[string] wasmSelfLinkSlots;
+__gshared uint wasmSelfLinkPoisonNext = wasmSelfLinkPoisonBase;
+__gshared uint wasmSelfLinkModuleId;
+__gshared uint wasmSelfLinkDataEnd;
+__gshared uint wasmSelfLinkPoisonEnd;
+__gshared const(char)[][] wasmSelfLinkDefined;
+__gshared WasmImportInfo[] wasmSelfLinkImports;
+
+struct WasmImportInfo
+{
+    const(char)[] module_;
+    const(char)[] name;
+    WasmFuncType type;
+    bool called;
+}
+__gshared uint[string] wasmSelfLinkNewData;
 
 /// Data symbols no definition and no `wasmSelfLinkDataSymbols` entry was found
 /// for; relocated to address 0. Reported by the driver once the module is done.
@@ -156,7 +176,33 @@ void noteUnresolved(const(Symbol)* sym)
 private uint tableSlot(ref WasmModule wmod, const(Symbol)* sym)
 {
     const uint fi = funcIdxBySymOrName(wmod, sym);
-    return fi == uint.max ? 0 : fi + 1;
+    if (fi == uint.max)
+        return 0;
+    if (!wasmSelfLinkShared)
+        return fi + 1;
+    if (wmod.slotOfFunc.length < wmod.funcs.length)
+        wmod.slotOfFunc.length = wmod.funcs.length;
+    if (const slot = wmod.slotOfFunc[fi])
+        return slot;
+    const name = cast(string) utf8SanitizeName(funcName(wmod.funcs[fi]));
+    uint slot;
+    if (auto p = name in wasmSelfLinkSlots)
+        slot = *p;
+    else
+    {
+        slot = wasmSelfLinkTableBase + cast(uint) wmod.slotFuncs.length;
+        wmod.slotFuncs ~= fi;
+    }
+    wmod.slotOfFunc[fi] = slot;
+    return slot;
+}
+
+private void assignCodeSlots(ref WasmModule wmod)
+{
+    foreach (ref fb; wasmFuncBodies)
+        foreach (ref const WasmReloc r; fb.relocs)
+            if (r.type == R_WASM.TABLE_INDEX_SLEB)
+                tableSlot(wmod, r.sym);
 }
 
 /// Write the resolved values of the data-section relocations into the segment
@@ -244,6 +290,8 @@ private void fillCallCtors(ref WasmModule wmod)
 private void computeLayout(ref WasmModule wmod)
 {
     wmod.dataEnd = (wmod.dataHeap + 15) & ~15;
+    wasmSelfLinkDataEnd = wmod.dataEnd;
+    wasmSelfLinkPoisonEnd = wmod.poisonHeap;
     wmod.stackHigh = wmod.dataEnd + wasmSelfLinkStackSize;
     // A page of headroom above the heap base so a module that never grows
     // memory still has somewhere to put its first allocation.
@@ -259,13 +307,28 @@ void selfLink(ref WasmModule wmod)
     fillCallCtors(wmod);
     gatherMinfo(wmod);
     computeLayout(wmod);
-    wasmSelfLinkTableNames = new const(char)[][](wmod.funcs.length);
-    foreach (i, ref f; wmod.funcs)
-        if (f.sym && f.sym.Sident.ptr)
-            wasmSelfLinkTableNames[i] = f.sym.identifier.idup;
+    if (wasmSelfLinkShared)
+    {
+        assignCodeSlots(wmod);
+        wasmSelfLinkTableNames = new const(char)[][](wmod.slotFuncs.length);
+        foreach (i, fi; wmod.slotFuncs)
+            wasmSelfLinkTableNames[i] = utf8SanitizeName(funcName(wmod.funcs[fi])).idup;
+        wasmSelfLinkNewData = null;
+        foreach (ref const WasmDataSeg ds; wmod.dataSegs)
+            if (!ds.dup && ds.sym && ds.sym.Sident.ptr && (ds.sym.Sclass == SC.global || ds.sym.Sclass == SC.comdat))
+                if (cast(string) ds.sym.identifier !in wasmSelfLinkNewData)
+                    wasmSelfLinkNewData[ds.sym.identifier.idup] = ds.offset;
+    }
+    else
+    {
+        wasmSelfLinkTableNames = new const(char)[][](wmod.funcs.length);
+        foreach (i, ref f; wmod.funcs)
+            if (f.sym && f.sym.Sident.ptr)
+                wasmSelfLinkTableNames[i] = f.sym.identifier.idup;
+    }
     wasmSelfLinkDataExtents = null;
     foreach (ref const WasmDataSeg ds; wmod.dataSegs)
-        if (ds.data && ds.data.length)
+        if (ds.data && ds.data.length && !ds.dup)
             wasmSelfLinkDataExtents ~= WasmDataExtent(ds.offset, cast(uint) ds.data.length,
                 ds.sym && ds.sym.Sident.ptr ? ds.sym.identifier.idup : null);
     {
@@ -352,15 +415,23 @@ void emitGlobalSection(ref OutBuffer out_, ref WasmModule wmod)
 /// `i`, matching the `funcIdx + 1` written into the TABLE_INDEX relocations.
 void emitElemSection(ref OutBuffer out_, ref WasmModule wmod)
 {
-    if (!wmod.funcs.length)
+    if (wasmSelfLinkShared ? !wmod.slotFuncs.length : !wmod.funcs.length)
         return;
     OutBuffer* s = &wmod.scratch;
     s.reset();
     s.writeuLEB128(1);
     s.writeuLEB128(0);
     s.writeByte(OP.I32_CONST);
-    s.writesLEB128(1);
+    s.writesLEB128(wasmSelfLinkShared ? cast(int) wasmSelfLinkTableBase : 1);
     s.writeByte(OP.END);
+    if (wasmSelfLinkShared)
+    {
+        s.writeuLEB128(cast(uint) wmod.slotFuncs.length);
+        foreach (fi; wmod.slotFuncs)
+            s.writeuLEB128(fi);
+        writeSection(out_, WASM_SECTION.element, s);
+        return;
+    }
     s.writeuLEB128(cast(uint) wmod.funcs.length);
     foreach (uint i; 0 .. cast(uint) wmod.funcs.length)
         s.writeuLEB128(i);

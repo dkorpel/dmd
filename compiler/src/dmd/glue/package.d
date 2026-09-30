@@ -1450,6 +1450,45 @@ private void wasmCtfeStubFunc(FuncDeclaration fd, const(char)* why)
         fprintf(stderr, "wasm-ctfe stub: %s\n", msg);
 }
 
+private __gshared bool[void*] wasmCtfePreSemWalked;
+
+private bool wasmCtfeNeedsSemantic3(FuncDeclaration fd)
+{
+    if (fd.semanticRun >= PASS.semantic3done)
+        return false;
+    if (auto ad = fd.isMember())
+        if (ad.semanticRun < PASS.semanticdone && (fd.needThis() || fd.isVirtual()))
+            return false;
+    return true;
+}
+
+private bool wasmCtfePreSemantic3(FuncDeclaration root)
+{
+    import dmd.wasmctfe : ipForceSemantic3Gagged, wasmCtfeDirectCallees, wasmCtfeHostBuiltin;
+
+    bool errors;
+    FuncDeclarations work;
+    work.push(root);
+    while (work.length)
+    {
+        auto fd = work.pop();
+        if (cast(void*) fd in wasmCtfePreSemWalked || !fd.fbody || wasmCtfeHostBuiltin(fd))
+            continue;
+        if (wasmCtfeNeedsSemantic3(fd) && !(cast(void*) fd in wasmCtfeSem3Tried))
+        {
+            wasmCtfeSem3Tried[cast(void*) fd] = true;
+            if (ipForceSemantic3Gagged(fd))
+                errors = true;
+        }
+        if (fd.semanticRun < PASS.semantic3done)
+            continue;
+        wasmCtfePreSemWalked[cast(void*) fd] = true;
+        if (!fd.errors && !fd.hasSemantic3Errors)
+            wasmCtfeDirectCallees(fd, work);
+    }
+    return errors;
+}
+
 public bool wasmCtfeGenerate(FuncDeclaration root, ref OutBuffer objbuf, out const(char)[][] unresolved)
 {
     import dmd.wasmctfe : ipForceSemantic3Gagged;
@@ -1457,7 +1496,7 @@ public bool wasmCtfeGenerate(FuncDeclaration root, ref OutBuffer objbuf, out con
     if (wasmCtfeBuildActive)
         return false;
     import dmd.glue.tocsym : wasmCtfeStubFuncs;
-    bool preSemErrors;
+    bool preSemErrors = wasmCtfePreSemantic3(root);
     wasmCtfeStubFuncs = null;
     foreach (attempt; 0 .. 64)
     {
@@ -1481,7 +1520,7 @@ public bool wasmCtfeGenerate(FuncDeclaration root, ref OutBuffer objbuf, out con
         foreach (fd; need)
         {
             wasmCtfeSem3Tried[cast(void*) fd] = true;
-            if (ipForceSemantic3Gagged(fd))
+            if (ipForceSemantic3Gagged(fd) || wasmCtfePreSemantic3(fd))
                 preSemErrors = true;
         }
         wasmCtfeStubFuncs = stubs;
@@ -1495,8 +1534,9 @@ private bool wasmCtfeGenerateOnce(FuncDeclaration root, ref OutBuffer objbuf, ou
     out FuncDeclaration[] needSem3)
 {
     import dmd.dmsc : backend_init_wasm_ctfe, backend_reinit_host;
-    import dmd.backend.wasm.selflink : wasmSelfLink, wasmSelfLinkUnresolved;
-    import dmd.backend.wasm.obj : WasmObj_registerExportName;
+    import dmd.backend.wasm.selflink : wasmSelfLink, wasmSelfLinkUnresolved, wasmSelfLinkShared,
+        wasmSelfLinkDataBase, wasmSelfLinkDataSymbols;
+    import dmd.wasmctfe : wasmCtfeLinkSetup;
     import dmd.mangle : mangleExact;
 
     if (hostFuncDepth)
@@ -1548,7 +1588,11 @@ private bool wasmCtfeGenerateOnce(FuncDeclaration root, ref OutBuffer objbuf, ou
         ObjcGlue_initialize();
     backend_init_wasm_ctfe();
     const selfLinkSave = wasmSelfLink;
+    const sharedSave = wasmSelfLinkShared;
+    const dataBaseSave = wasmSelfLinkDataBase;
+    auto dataSymbolsSave = wasmSelfLinkDataSymbols;
     wasmSelfLink = true;
+    wasmCtfeLinkSetup();
     wasmSelfLinkUnresolved = null;
     wasmCtfeBuildActive = true;
     const oldCheckAction = global.params.checkAction;
@@ -1564,13 +1608,12 @@ private bool wasmCtfeGenerateOnce(FuncDeclaration root, ref OutBuffer objbuf, ou
     global.params.useAssert = CHECKENABLE.on;
     wasmCtfePoisoned = null;
     wasmCtfeBuiltFuncs = null;
+    wasmCtfeEmitted.setDim(0);
 
     const showGag = getenv("DMD_CTFE_SHOWGAG") !is null;
     const trace = wasmCtfeTraceGen;
     const oldGag = showGag ? global.gag : global.startGagging();
     obj_start(objbuf, "__wasmctfe.d");
-    const id = mangleExact(root).toDString;
-    WasmObj_registerExportName(id, id);
     wasmCtfeQueueDefinition(root);
     while (auto d = wasmCtfePopWork())
     {
@@ -1587,6 +1630,8 @@ private bool wasmCtfeGenerateOnce(FuncDeclaration root, ref OutBuffer objbuf, ou
             }
             if (fd.semanticRun < PASS.semantic3done)
             {
+                if (!fd.fbody)
+                    continue;
                 if (!(cast(void*) fd in wasmCtfeSem3Tried))
                     needSem3 ~= fd;
                 else if (trace)
@@ -1641,7 +1686,10 @@ private bool wasmCtfeGenerateOnce(FuncDeclaration root, ref OutBuffer objbuf, ou
         }
         const errsBefore = global.errors;
         const poisonBefore = wasmCtfePoisoned;
+        wasmCtfeEmitted.push(d);
+        wasmCtfeDataCtx = d.isFuncDeclaration() is null;
         toObjFile(d, false);
+        wasmCtfeDataCtx = false;
         const newPoison = poisonBefore ? null : wasmCtfePoisoned;
         if (auto sfd = d.isFuncDeclaration())
             if (sfd !is root && (newPoison || global.errors != errsBefore))
@@ -1671,6 +1719,9 @@ private bool wasmCtfeGenerateOnce(FuncDeclaration root, ref OutBuffer objbuf, ou
     wasmCtfeWipeCaches();
     wasmCtfeWipeCtypes();
     wasmSelfLink = selfLinkSave;
+    wasmSelfLinkShared = sharedSave;
+    wasmSelfLinkDataBase = dataBaseSave;
+    wasmSelfLinkDataSymbols = dataSymbolsSave;
     wasmSelfLinkUnresolved = null;
     backend_reinit_host();
     if (wasmCtfePoisoned)

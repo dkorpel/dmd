@@ -19,8 +19,6 @@ struct wasmtime_error_t;
 struct wasm_trap_t;
 struct wasmtime_caller_t;
 struct wasm_functype_t;
-struct wasm_externtype_t;
-struct wasm_importtype_t;
 struct wasm_frame_t;
 
 struct wasm_frame_vec_t
@@ -129,34 +127,43 @@ struct wasmtime_extern_t
     wasmtime_extern_union_t of;
 }
 
-struct wasm_importtype_vec_t
+struct wasm_valtype_t;
+
+struct wasm_valtype_vec_t
 {
     size_t size;
-    wasm_importtype_t** data;
+    wasm_valtype_t** data;
 }
+
+wasm_valtype_t* wasm_valtype_new(ubyte kind);
+void wasm_valtype_vec_new_uninitialized(wasm_valtype_vec_t*, size_t);
+wasm_functype_t* wasm_functype_new(wasm_valtype_vec_t* params, wasm_valtype_vec_t* results);
+void wasm_functype_delete(wasm_functype_t*);
 
 wasm_config_t* wasm_config_new();
 void wasmtime_config_wasm_memory64_set(wasm_config_t*, bool);
 void wasmtime_config_wasm_exceptions_set(wasm_config_t*, bool);
-void wasmtime_config_consume_fuel_set(wasm_config_t*, bool);
 void wasmtime_config_memory_init_cow_set(wasm_config_t*, bool);
 wasm_engine_t* wasm_engine_new_with_config(wasm_config_t*);
 
 wasmtime_store_t* wasmtime_store_new(wasm_engine_t*, void* data, void function(void*) finalizer);
 wasmtime_context_t* wasmtime_store_context(wasmtime_store_t*);
 void wasmtime_store_delete(wasmtime_store_t*);
-wasmtime_error_t* wasmtime_context_set_fuel(wasmtime_context_t*, ulong fuel);
+void wasmtime_store_limiter(wasmtime_store_t*, long memory_size, long table_elements, long instances,
+    long tables, long memories);
 
 wasmtime_error_t* wasmtime_module_new(wasm_engine_t*, const(ubyte)* wasm, size_t len, wasmtime_module_t**);
-void wasmtime_module_imports(const(wasmtime_module_t)*, wasm_importtype_vec_t*);
-void wasm_importtype_vec_delete(wasm_importtype_vec_t*);
-const(wasm_name_t)* wasm_importtype_module(const(wasm_importtype_t)*);
-const(wasm_name_t)* wasm_importtype_name(const(wasm_importtype_t)*);
-const(wasm_externtype_t)* wasm_importtype_type(const(wasm_importtype_t)*);
-const(wasm_functype_t)* wasm_externtype_as_functype_const(const(wasm_externtype_t)*);
+void wasmtime_module_delete(wasmtime_module_t*);
 
 wasmtime_linker_t* wasmtime_linker_new(wasm_engine_t*);
 void wasmtime_linker_delete(wasmtime_linker_t*);
+void wasmtime_linker_allow_shadowing(wasmtime_linker_t*, bool);
+wasmtime_error_t* wasmtime_linker_define(wasmtime_linker_t*, wasmtime_context_t*,
+    const(char)* module_, size_t module_len, const(char)* name, size_t name_len, const(wasmtime_extern_t)*);
+wasmtime_error_t* wasmtime_linker_define_instance(wasmtime_linker_t*, wasmtime_context_t*,
+    const(char)* name, size_t name_len, const(wasmtime_instance_t)*);
+bool wasmtime_linker_get(const(wasmtime_linker_t)*, wasmtime_context_t*,
+    const(char)* module_, size_t module_len, const(char)* name, size_t name_len, wasmtime_extern_t*);
 wasmtime_error_t* wasmtime_linker_define_func(
     wasmtime_linker_t*, const(char)* module_, size_t module_len,
     const(char)* name, size_t name_len, const(wasm_functype_t)*,
@@ -177,6 +184,9 @@ wasmtime_error_t* wasmtime_func_call(wasmtime_context_t*, const(wasmtime_func_t)
 wasmtime_context_t* wasmtime_caller_context(wasmtime_caller_t*);
 bool wasmtime_caller_export_get(wasmtime_caller_t*, const(char)* name, size_t name_len, wasmtime_extern_t*);
 bool wasmtime_table_get(wasmtime_context_t*, const(wasmtime_table_t)*, ulong index, wasmtime_val_t* val);
+wasmtime_error_t* wasmtime_table_set(wasmtime_context_t*, const(wasmtime_table_t)*, ulong index, const(wasmtime_val_t)*);
+wasmtime_error_t* wasmtime_table_grow(wasmtime_context_t*, const(wasmtime_table_t)*, ulong delta,
+    const(wasmtime_val_t)* init, ulong* prev_size);
 
 ubyte* wasmtime_memory_data(const(wasmtime_context_t)*, const(wasmtime_memory_t)*);
 size_t wasmtime_memory_data_size(const(wasmtime_context_t)*, const(wasmtime_memory_t)*);
@@ -195,4 +205,5 @@ void wasmtime_error_wasm_trace(const(wasmtime_error_t)*, wasm_frame_vec_t*);
 void wasm_trap_trace(const(wasm_trap_t)*, wasm_frame_vec_t*);
 void wasm_frame_vec_delete(wasm_frame_vec_t*);
 size_t wasm_frame_module_offset(const(wasm_frame_t)*);
+const(wasm_name_t)* wasmtime_frame_module_name(const(wasm_frame_t)*);
 void wasm_byte_vec_delete(wasm_byte_vec_t*);
