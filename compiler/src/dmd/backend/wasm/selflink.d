@@ -49,12 +49,6 @@ __gshared bool wasmSelfLinkImportMemory = false;
 /// the snippet's `stdout`/`stderr` onto its own libc's).
 __gshared uint[string] wasmSelfLinkDataSymbols;
 
-/// Name prefix of a data symbol whose address `selfLink` records in
-/// `wasmSelfLinkProbeAddr` (0 when absent).
-__gshared const(char)[] wasmSelfLinkProbeData;
-/// ditto
-__gshared uint wasmSelfLinkProbeAddr;
-
 /// Data symbols placed at `wasmSelfLinkPoisonBase` and above, beyond the most
 /// the memory can grow to, so that every access to them traps while their
 /// addresses can still be taken and compared. Their bytes are not emitted.
@@ -276,7 +270,6 @@ void selfLink(ref WasmModule wmod)
     foreach (i, ref f; wmod.funcs)
         if (f.sym && f.sym.Sident.ptr)
             wasmSelfLinkTableNames[i] = f.sym.identifier.idup;
-    wasmSelfLinkProbeAddr = 0;
     wasmSelfLinkDataExtents = null;
     foreach (ref const WasmDataSeg ds; wmod.dataSegs)
         if (ds.data && ds.data.length)
@@ -291,19 +284,6 @@ void selfLink(ref WasmModule wmod)
         }
         qsort(wasmSelfLinkDataExtents.ptr, wasmSelfLinkDataExtents.length, WasmDataExtent.sizeof, &cmp);
     }
-    if (wasmSelfLinkProbeData.length)
-        foreach (ref const WasmDataSeg ds; wmod.dataSegs)
-        {
-            if (!ds.sym || !ds.sym.Sident.ptr)
-                continue;
-            const name = ds.sym.identifier;
-            if (name.length >= wasmSelfLinkProbeData.length
-                && name[0 .. wasmSelfLinkProbeData.length] == wasmSelfLinkProbeData)
-            {
-                wasmSelfLinkProbeAddr = ds.offset;
-                break;
-            }
-        }
 }
 
 /// Resolve the code relocations a relocatable object leaves to wasm-ld.

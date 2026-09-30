@@ -318,9 +318,9 @@ private bool ipResultEqual(Expression astResult, Expression wasmResult, int dept
     if (auto wsl = wasmResult.isStructLiteralExp())
     {
         auto asl = astResult.isStructLiteralExp();
-        if (asl && asl.sd is wsl.sd && wsl.sd.isClassDeclaration())
+        auto cd = wsl.sd.isClassDeclaration();
+        if (asl && asl.sd is wsl.sd && cd && ipClassHasOverlap(cd))
         {
-            auto cd = wsl.sd.isClassDeclaration();
             const sz = cast(size_t) cd.structsize;
             auto ab = new ubyte[](sz);
             auto wb = new ubyte[](sz);
@@ -414,18 +414,18 @@ private bool ipResultEqual(Expression astResult, Expression wasmResult, int dept
     return strcmp(astResult.toChars(), wasmResult.toChars()) == 0;
 }
 
-private bool ipEncodeClassFields(ubyte[] buf, ClassDeclaration cd, Expressions* elems)
+private bool ipClassHasOverlap(ClassDeclaration cd)
 {
-    bool overlaps;
-    size_t total;
     for (auto c = cd; c; c = c.baseClass)
-    {
-        total += c.fields.length;
         foreach (v; c.fields)
             if (v.overlapped)
-                overlaps = true;
-    }
-    if (!overlaps || !elems)
+                return true;
+    return false;
+}
+
+private bool ipEncodeClassFields(ubyte[] buf, ClassDeclaration cd, Expressions* elems)
+{
+    if (!elems)
         return false;
     ptrdiff_t soFar = elems.length;
     for (auto c = cd; c; c = c.baseClass)
@@ -679,6 +679,7 @@ import dmd.aggregate : AggregateDeclaration, ClassKind;
 import dmd.dclass : ClassDeclaration, InterfaceDeclaration;
 import dmd.dtemplate : TemplateDeclaration, TemplateInstance;
 import dmd.dmsc : wasmCtfeSoftRealTarget;
+import dmd.backend.barray : Barray;
 import dmd.backend.wasm.softreal : SR, softRealNames, softRealPrefix;
 import dmd.glue.e2ir : wasmCtfeDollarInit;
 
@@ -1027,14 +1028,7 @@ private bool ipExprSupported(Expression e, out const(char)* why, VarDeclarations
             declaredOut.push(dv);
     foreach (vd; v.funcLocals)
     {
-        bool found = false;
-        foreach (dv; v.declared)
-            if (dv is vd)
-            {
-                found = true;
-                break;
-            }
-        if (found)
+        if (v.declared.contains(vd))
             continue;
         if (!enclosingOut || !ipHoistEnclosing(vd, why, declaredOut, enclosingOut, failAtOut))
         {
@@ -1053,10 +1047,8 @@ private bool ipExprSupported(Expression e, out const(char)* why, VarDeclarations
 private bool ipHoistEnclosing(VarDeclaration vd, out const(char)* why, VarDeclarations* declaredOut,
     VarDeclarations* enclosingOut, Expression* failAtOut)
 {
-    import dmd.init : ExpInitializer;
-    foreach (ev; *enclosingOut)
-        if (ev is vd)
-            return true;
+    if (enclosingOut.contains(vd))
+        return true;
     if (!(vd.isConst() || vd.isImmutable()) || (vd.storage_class & (STC.parameter | STC.ref_ | STC.out_ | STC.lazy_)))
         return false;
     auto ei = vd._init ? vd._init.isExpInitializer() : null;
@@ -1065,12 +1057,7 @@ private bool ipHoistEnclosing(VarDeclaration vd, out const(char)* why, VarDeclar
     enclosingOut.push(vd);
     if (!ipExprSupported(ei.exp, why, declaredOut, enclosingOut, null, failAtOut))
         return false;
-    foreach (i, ev; *enclosingOut)
-        if (ev is vd)
-        {
-            enclosingOut.remove(i);
-            break;
-        }
+    enclosingOut.remove(enclosingOut.find(vd));
     enclosingOut.push(vd);
     return true;
 }
@@ -1499,7 +1486,6 @@ private size_t ipArrayDepth(Type t)
 
 private bool ipIsArrayOpNode(Expression e)
 {
-    import dmd.tokens : EXP;
     if (!e.type || !e.type.toBasetype().isStaticOrDynamicArray())
         return false;
     switch (e.op)
@@ -1556,7 +1542,6 @@ private Expression ipArrayOpElem(Expression e, size_t depth, size_t i)
 {
     if (ipIsArrayOpNode(e) && ipArrayDepth(e.type) == depth)
     {
-        import dmd.tokens : EXP;
         auto et = e.type.toBasetype().nextOf();
         Expression operand(Expression x)
         {
@@ -1572,48 +1557,30 @@ private Expression ipArrayOpElem(Expression e, size_t depth, size_t i)
             c.type = et;
             return c;
         }
-        Expression r;
-        auto ue = e.isUnaExp();
-        if (!e.isBinExp())
+        auto r = e.copy();
+        if (auto be = r.isBinExp())
         {
-            auto a = fit(operand(ue.e1));
-            if (!a)
-                return null;
-            r = e.op == EXP.negate ? new NegExp(e.loc, a) : new ComExp(e.loc, a);
-        }
-        else
-        {
-            auto be = e.isBinExp();
             auto a = operand(be.e1);
             auto b = operand(be.e2);
             if (!a || !b)
                 return null;
             if (e.op != EXP.leftShift && e.op != EXP.rightShift && e.op != EXP.unsignedRightShift)
                 b = fit(b);
-            a = fit(a);
-            switch (e.op)
-            {
-                case EXP.add: r = new AddExp(e.loc, a, b); break;
-                case EXP.min: r = new MinExp(e.loc, a, b); break;
-                case EXP.mul: r = new MulExp(e.loc, a, b); break;
-                case EXP.div: r = new DivExp(e.loc, a, b); break;
-                case EXP.mod: r = new ModExp(e.loc, a, b); break;
-                case EXP.and: r = new AndExp(e.loc, a, b); break;
-                case EXP.or: r = new OrExp(e.loc, a, b); break;
-                case EXP.xor: r = new XorExp(e.loc, a, b); break;
-                case EXP.leftShift: r = new ShlExp(e.loc, a, b); break;
-                case EXP.rightShift: r = new ShrExp(e.loc, a, b); break;
-                case EXP.unsignedRightShift: r = new UshrExp(e.loc, a, b); break;
-                default: return null;
-            }
+            be.e1 = fit(a);
+            be.e2 = b;
+        }
+        else
+        {
+            auto ue = r.isUnaExp();
+            ue.e1 = fit(operand(ue.e1));
+            if (!ue.e1)
+                return null;
         }
         r.type = et;
         if (ipArrayDepth(et))
             return ipLowerArrayOp(r);
         return r;
     }
-    if (ipHasCall(e))
-        return null;
     if (auto ale = e.isArrayLiteralExp())
         return ale[i];
     Expression base = e;
@@ -1631,11 +1598,24 @@ private Expression ipArrayOpElem(Expression e, size_t depth, size_t i)
     return ie;
 }
 
+private bool ipArrayOpCallFree(Expression e, size_t depth)
+{
+    if (!(ipIsArrayOpNode(e) && ipArrayDepth(e.type) == depth))
+        return !ipHasCall(e);
+    bool operand(Expression x)
+    {
+        return ipArrayDepth(x.type) != depth || ipArrayOpCallFree(x, depth);
+    }
+    if (auto be = e.isBinExp())
+        return operand(be.e1) && operand(be.e2);
+    return operand(e.isUnaExp().e1);
+}
+
 private Expression ipLowerArrayOp(Expression e)
 {
     const depth = ipArrayDepth(e.type);
     size_t n;
-    if (!ipArrayOpLength(e, depth, n))
+    if (!ipArrayOpLength(e, depth, n) || n && !ipArrayOpCallFree(e, depth))
         return null;
     auto elems = new Expressions(n);
     foreach (i; 0 .. n)
@@ -2575,9 +2555,7 @@ private __gshared
     ulong ipHeapPtr;
     ulong ipHeapEnd;
     ulong ipErrnoCell;
-    IpAlloc* ipAllocs;
-    size_t ipAllocCount;
-    size_t ipAllocCap;
+    Barray!IpAlloc ipAllocs;
 }
 
 private struct IpAlloc
@@ -2587,18 +2565,12 @@ private struct IpAlloc
 
 private void ipRecordAlloc(ulong base, ulong sz) nothrow @nogc
 {
-    import core.stdc.stdlib : realloc;
-    if (ipAllocCount == ipAllocCap)
-    {
-        ipAllocCap = ipAllocCap ? ipAllocCap * 2 : 256;
-        ipAllocs = cast(IpAlloc*) realloc(ipAllocs, ipAllocCap * IpAlloc.sizeof);
-    }
-    ipAllocs[ipAllocCount++] = IpAlloc(base, sz, sz);
+    ipAllocs.push(IpAlloc(base, sz, sz));
 }
 
 private IpAlloc* ipAllocAt(ulong p) nothrow @nogc
 {
-    size_t lo = 0, hi = ipAllocCount;
+    size_t lo = 0, hi = ipAllocs.length;
     while (lo < hi)
     {
         const mid = (lo + hi) / 2;
@@ -3913,7 +3885,7 @@ private wasm_trap_t* ipGrowArray(wasmtime_caller_t* caller, ref wasmtime_memory_
     const need = oldBytes + addBytes;
     if (auto trap = ipBumpAlloc(caller, m, need + (need >> 1), r))
         return trap;
-    ipAllocs[ipAllocCount - 1].used = need;
+    ipAllocs[$ - 1].used = need;
     auto mem = ipMemSlice(caller, m);
     memmove(mem.ptr + r, mem.ptr + ptr, cast(size_t) oldBytes);
     return null;
@@ -4129,11 +4101,7 @@ private IpModule* ipGetModule(FuncDeclaration fd)
     const(char)[][] unresolved;
     const savedSuspend = buildActiveSuspended;
     buildActiveSuspended = 0;
-    import dmd.backend.wasm.selflink : wasmSelfLinkProbeData, wasmSelfLinkProbeAddr;
-    wasmSelfLinkProbeData = "_D4core8internal5newaa10ctfeOrders";
     const genOk = wasmCtfeGenerate(fd, buf, unresolved);
-    wasmSelfLinkProbeData = null;
-    const ordersAddr = wasmSelfLinkProbeAddr;
     buildActiveSuspended = savedSuspend;
     if (!genOk)
     {
@@ -4191,7 +4159,6 @@ private IpModule* ipGetModule(FuncDeclaration fd)
     im.mod = mod;
     const mangled = mangleExact(fd);
     im.exportName = mangled[0 .. strlen(mangled)];
-    im.ctfeOrdersAddr = ordersAddr;
     {
         import dmd.backend.wasm.obj : wasmModuleSites;
         im.sites = wasmModuleSites;
@@ -4201,23 +4168,23 @@ private IpModule* ipGetModule(FuncDeclaration fd)
         import dmd.backend.wasm.selflink : wasmSelfLinkDataExtents;
         im.dataExtents = wasmSelfLinkDataExtents;
         foreach (ref x; im.dataExtents)
+        {
             if (auto cd = x.name in wasmCtfeVtblClasses)
                 im.vtbls[x.start] = *cd;
+            else if (x.name.startsWith("_D4core8internal5newaa10ctfeOrders"))
+                im.ctfeOrdersAddr = x.start;
+        }
     }
     {
         import dmd.glue : wasmCtfeBuiltFuncs;
         import dmd.backend.wasm.selflink : wasmSelfLinkTableNames;
         FuncDeclaration[const(char)[]] byName;
         foreach (bf; wasmCtfeBuiltFuncs)
-        {
-            const mn = mangleExact(bf);
-            byName[mn[0 .. strlen(mn)]] = bf;
-        }
+            byName[mangleExact(bf).toDString] = bf;
         im.tableFuncs = new FuncDeclaration[](wasmSelfLinkTableNames.length);
         foreach (i, n; wasmSelfLinkTableNames)
             if (auto p = n in byName)
                 im.tableFuncs[i] = *p;
-        wasmCtfeBuiltFuncs = null;
     }
     import dmd.glue.tocsym : wasmCtfeStubFuncs;
     if (!wasmCtfeStubFuncs.length && !ipCircularVars.length)
@@ -4770,20 +4737,11 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
     if (args.length != tf.parameterList.length)
         return bail(fd, "arg count");
     const rty = resultType.toBasetype().ty;
-    const bool resultOk = ipResultType(resultType);
-    const bool zeroResult = !isCtor && resultOk && rty == Tsarray && resultType.size() == 0;
-    const bool sret = !isCtor && resultOk && !zeroResult && (rty == Tstruct || rty == Tarray || rty == Tsarray || rty == Tdelegate);
-    const bool classResult = !isCtor && resultOk && rty == Tclass;
-    const bool ptrResult = !isCtor && resultOk && (rty == Tpointer || rty == Taarray);
-    const bool vecResult = !isCtor && resultOk && rty == Tvector;
-    const bool voidResult = !isCtor && rty == Tvoid;
-    if (isCtor)
-    {
-        if (!ipMemType(resultType))
-            return bail(fd, "result type");
-    }
-    else if (!sret && !zeroResult && !classResult && !ptrResult && !vecResult && !voidResult && !ipScalarType(resultType))
+    if (isCtor ? !ipMemType(resultType) : rty != Tvoid && !ipResultType(resultType))
         return bail(fd, "result type");
+    const bool zeroResult = !isCtor && rty == Tsarray && resultType.size() == 0;
+    const bool sret = !isCtor && !zeroResult && (rty == Tstruct || rty == Tarray || rty == Tsarray || rty == Tdelegate);
+    const bool refResult = !isCtor && (rty == Tclass || rty == Tpointer || rty == Taarray);
     foreach (size_t i, Parameter p; tf.parameterList)
     {
         if (p.storageClass & (STC.ref_ | STC.out_ | STC.lazy_))
@@ -5082,7 +5040,7 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
     ipHeapPtr = 0;
     ipHeapEnd = 0;
     const ulong thisSize = thisExp ? cast(ulong) thisSd.type.size() : 0;
-    if (sret || memArgCount || thisExp || classResult || ptrResult)
+    if (sret || memArgCount || thisExp || refResult)
     {
         wasmtime_extern_t memExt, spExt;
         if (!wasmtime_instance_export_get(ctx, &inst, "memory".ptr, "memory".length, &memExt)
@@ -5162,9 +5120,13 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
     ipErrNoBody = false;
     ipThrowCount = 0;
     ipErrnoCell = 0;
-    ipAllocCount = 0;
+    ipAllocs.reset();
     ipUnionTagCount = 0;
-    ipDecodeMemo.setDim(0);
+    if (ipDecodeMemo.length)
+    {
+        ipDecodeMemo.setDim(0);
+        ipMemoHead = null;
+    }
     ipCtfeOrdersAddr = im.ctfeOrdersAddr;
     ipTableFuncs = im.tableFuncs;
     ipDataExtents = im.dataExtents;
@@ -5172,7 +5134,7 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
     if (auto err = wasmtime_context_set_fuel(ctx, 2_000_000_000))
         wasmtime_error_delete(err);
     wasmtime_val_t[1] results;
-    const nresults = (sret || zeroResult || resultType.toBasetype().ty == Tvoid) ? 0 : 1;
+    const nresults = (sret || zeroResult || rty == Tvoid) ? 0 : 1;
     ipDiscardRun = ipDiscardFd is fd;
     auto callErr = wasmtime_func_call(ctx, &fnExt.of.func, vals.ptr, nvals, results.ptr, nresults, &trap);
     ipDiscardRun = false;
@@ -5220,48 +5182,31 @@ private Expression tryWasmCtfeInprocOnce(FuncDeclaration fd, Expression thisExp,
         return ee;
     }
 
+    const(ubyte)[] memory()
+    {
+        return wasmtime_memory_data(ctx, &mem)[0 .. wasmtime_memory_data_size(ctx, &mem)];
+    }
     Expression resultExp;
     if (isCtor)
     {
-        const data = wasmtime_memory_data(ctx, &mem);
-        const dataLen = wasmtime_memory_data_size(ctx, &mem);
         if (ipIsP(results[0]))
-            resultExp = ipDecodeMem(data[0 .. dataLen], ipValP(results[0]), resultType, loc);
+            resultExp = ipDecodeMem(memory(), ipValP(results[0]), resultType, loc);
     }
     else if (sret)
-    {
-        const data = wasmtime_memory_data(ctx, &mem);
-        const dataLen = wasmtime_memory_data_size(ctx, &mem);
-        resultExp = ipDecodeMem(data[0 .. dataLen], sretAddr, resultType, loc);
-    }
+        resultExp = ipDecodeMem(memory(), sretAddr, resultType, loc);
     else if (zeroResult)
         resultExp = new ArrayLiteralExp(loc, resultType, new Expressions());
-    else if (classResult)
+    else if (refResult)
     {
-        const data = wasmtime_memory_data(ctx, &mem);
-        const dataLen = wasmtime_memory_data_size(ctx, &mem);
         if (ipIsP(results[0]))
-            resultExp = ipDecodeClassRef(data[0 .. dataLen], ipValP(results[0]), resultType, loc, 0);
+            resultExp = ipDecodeRef(memory(), ipValP(results[0]), resultType, loc, 0);
     }
-    else if (voidResult)
-    {
+    else if (rty == Tvoid)
         resultExp = CTFEExp.voidexp;
-    }
-    else if (vecResult)
+    else if (rty == Tvector)
     {
         if (results[0].kind == WASMTIME_V128)
             resultExp = ipDecodeMem(results[0].of.v128[], 0, resultType, loc);
-    }
-    else if (ptrResult)
-    {
-        const data = wasmtime_memory_data(ctx, &mem);
-        const dataLen = wasmtime_memory_data_size(ctx, &mem);
-        if (ipIsP(results[0]))
-            resultExp = rty == Taarray
-                ? ipDecodeAA(data[0 .. dataLen], ipValP(results[0]), resultType, loc, 0)
-                : resultType.toBasetype().nextOf().toBasetype().ty == Tfunction
-                ? ipDecodeFuncPtr(ipValP(results[0]), 0, resultType, loc)
-                : ipDecodePtr(data[0 .. dataLen], ipValP(results[0]), resultType, loc, 0);
     }
     else
         resultExp = ipDecodeScalar(results[0], resultType, loc);
@@ -5324,7 +5269,20 @@ private bool ipMemType(Type t, int depth = 0)
     return false;
 }
 
-private bool ipResultType(Type t, int depth = 0)
+private __gshared bool[void*] ipResultTypeOk;
+
+private bool ipResultType(Type t)
+{
+    auto tb = t.toBasetype();
+    if (ipScalarType(tb) || cast(void*) tb in ipResultTypeOk)
+        return true;
+    const ok = ipResultTypeAt(tb, 0);
+    if (ok)
+        ipResultTypeOk[cast(void*) tb] = true;
+    return ok;
+}
+
+private bool ipResultTypeAt(Type t, int depth)
 {
     if (depth > 8)
         return true;
@@ -5337,16 +5295,16 @@ private bool ipResultType(Type t, int depth = 0)
             auto n = tb.nextOf().toBasetype();
             if (n.ty == Tvoid || n.ty == Tfunction)
                 return true;
-            return ipResultType(n, depth + 1);
+            return ipResultTypeAt(n, depth + 1);
         case Tdelegate:
             return true;
         case Tclass:
             auto cd = tb.isTypeClass().sym;
             return !cd.isCPPinterface() && !cd.isCOMinterface();
         case Tarray, Tsarray:
-            return ipResultType(tb.nextOf(), depth + 1);
+            return ipResultTypeAt(tb.nextOf(), depth + 1);
         case Taarray:
-            return ipResultType(tb.isTypeAArray().index, depth + 1) && ipResultType(tb.nextOf(), depth + 1);
+            return ipResultTypeAt(tb.isTypeAArray().index, depth + 1) && ipResultTypeAt(tb.nextOf(), depth + 1);
         case Tvector:
             return ipScalarType(tb.isTypeVector().elementType());
         case Tstruct:
@@ -5354,7 +5312,7 @@ private bool ipResultType(Type t, int depth = 0)
             if (!sd.determineSize(sd.loc))
                 return false;
             foreach (i, v; sd.fields)
-                if (!ipOverlapDominated(sd, i) && !ipResultType(v.type, depth + 1))
+                if (!ipOverlapDominated(sd, i) && !ipResultTypeAt(v.type, depth + 1))
                     return false;
             return true;
         default:
@@ -5399,7 +5357,6 @@ private Expression ipDecodeClassRef(const(ubyte)[] mem, ulong objAddr, Type type
 {
     import dmd.glue.tocsym : wasmCtfeFindClass, wasmCtfeHasSubclass;
 
-    const dbg = getenv("DMD_CTFE_TRACEGEN") !is null;
     if (depth > ipDecodeMaxDepth)
         return null;
     if (objAddr == 0)
@@ -5408,7 +5365,7 @@ private Expression ipDecodeClassRef(const(ubyte)[] mem, ulong objAddr, Type type
     auto tc = type.toBasetype().isTypeClass();
     if (!tc)
     {
-        if (dbg) fprintf(stderr, "wasm-ctfe classref: not class type\n");
+        if (verbose) fprintf(stderr, "wasm-ctfe classref: not class type\n");
         return null;
     }
     {
@@ -5426,7 +5383,7 @@ private Expression ipDecodeClassRef(const(ubyte)[] mem, ulong objAddr, Type type
     const cpp = tc.sym.classKind == ClassKind.cpp;
     if (!cpp && !ipTINameOffset && (tc.sym.isInterfaceDeclaration() || wasmCtfeHasSubclass(tc.sym)))
     {
-        if (dbg) fprintf(stderr, "wasm-ctfe classref: no name offset\n");
+        if (verbose) fprintf(stderr, "wasm-ctfe classref: no name offset\n");
         return null;
     }
     if (tc.sym.isInterfaceDeclaration())
@@ -5448,12 +5405,12 @@ private Expression ipDecodeClassRef(const(ubyte)[] mem, ulong objAddr, Type type
     {
         if (!ipRdP(mem, vtbl, ci) || !ipRdP(mem, ci + ipTINameOffset, nlen) || !ipRdP(mem, ci + ipTINameOffset + ipPS, nptr))
         {
-            if (dbg) fprintf(stderr, "wasm-ctfe classref: read fail obj=%llx vtbl=%llx ci=%llx\n", objAddr, vtbl, ci);
+            if (verbose) fprintf(stderr, "wasm-ctfe classref: read fail obj=%llx vtbl=%llx ci=%llx\n", objAddr, vtbl, ci);
             return null;
         }
         if (nlen > 1024 || nptr > mem.length || nlen > mem.length - nptr)
         {
-            if (dbg) fprintf(stderr, "wasm-ctfe classref: bad name slice len=%llx ptr=%llx\n", nlen, nptr);
+            if (verbose) fprintf(stderr, "wasm-ctfe classref: bad name slice len=%llx ptr=%llx\n", nlen, nptr);
             return null;
         }
         cd = wasmCtfeFindClass(cast(const(char)[]) mem[cast(size_t) nptr .. cast(size_t)(nptr + nlen)]);
@@ -5462,14 +5419,14 @@ private Expression ipDecodeClassRef(const(ubyte)[] mem, ulong objAddr, Type type
         cd = tc.sym;
     if (!cd)
     {
-        if (dbg) fprintf(stderr, "wasm-ctfe classref: no class for '%.*s'\n", cast(int) nlen, mem.ptr + nptr);
+        if (verbose) fprintf(stderr, "wasm-ctfe classref: no class for '%.*s'\n", cast(int) nlen, mem.ptr + nptr);
         return null;
     }
     for (auto c = cd; c; c = c.baseClass)
     {
         if (c.ident == Id.TypeInfo)
         {
-            if (dbg) fprintf(stderr, "wasm-ctfe classref: TypeInfo result\n");
+            if (verbose) fprintf(stderr, "wasm-ctfe classref: TypeInfo result\n");
             return null;
         }
     }
@@ -5483,9 +5440,8 @@ private Expression ipDecodeClassRef(const(ubyte)[] mem, ulong objAddr, Type type
     auto elems = ipNewExps(total);
     auto se = new StructLiteralExp(loc, cast(StructDeclaration) cd, elems, cd.type);
     se.type = cd.type;
-    se.origin = se;
     se.ownedByCtfe = OwnedBy.ctfe;
-    ipDecodeMemo.push(IpMemo(objAddr, cd.type, se));
+    ipMemoPush(objAddr, cd.type, se);
     ptrdiff_t soFar = total;
     for (auto c = cd; c; c = c.baseClass)
     {
@@ -5499,7 +5455,7 @@ private Expression ipDecodeClassRef(const(ubyte)[] mem, ulong objAddr, Type type
             auto el = ipDecodeMem(mem, objAddr + v.offset, v.type, loc, depth + 1);
             if (!el)
             {
-                if (dbg) fprintf(stderr, "wasm-ctfe classref: field %s decode fail\n", v.toChars());
+                if (verbose) fprintf(stderr, "wasm-ctfe classref: field %s decode fail\n", v.toChars());
                 return null;
             }
             (*elems)[soFar + i] = el;
@@ -5511,12 +5467,13 @@ private Expression ipDecodeClassRef(const(ubyte)[] mem, ulong objAddr, Type type
 
 private struct IpMemo
 {
-    ulong addr;
     Type t;
     Expression e;
+    uint next;
 }
 
 private __gshared Array!IpMemo ipDecodeMemo;
+private __gshared uint[ulong] ipMemoHead;
 
 private enum ipDecodeMaxDepth = 400;
 
@@ -5614,7 +5571,7 @@ private Expression ipDecodeAA(const(ubyte)[] mem, ulong impl, Type type, Loc loc
     auto aale = new AssocArrayLiteralExp(loc, keys, values);
     aale.type = type;
     aale.ownedByCtfe = OwnedBy.ctfe;
-    ipDecodeMemo.push(IpMemo(impl, taa, aale));
+    ipMemoPush(impl, taa, aale);
     foreach (j, ent; ents)
     {
         auto k = ipDecodeMem(mem, ent, kt, loc, depth + 1);
@@ -5627,12 +5584,19 @@ private Expression ipDecodeAA(const(ubyte)[] mem, ulong impl, Type type, Loc loc
     return aale;
 }
 
+private void ipMemoPush(ulong addr, Type t, Expression e)
+{
+    auto head = addr in ipMemoHead;
+    ipDecodeMemo.push(IpMemo(t, e, head ? *head : 0));
+    ipMemoHead[addr] = cast(uint) ipDecodeMemo.length;
+}
+
 private Expression ipMemoFind(ulong addr, Type t)
 {
-    import dmd.typesem : equivalent;
-    foreach (ref m; ipDecodeMemo[])
-        if (m.addr == addr && m.t.equivalent(t))
-            return m.e;
+    auto head = addr in ipMemoHead;
+    for (uint i = head ? *head : 0; i; i = ipDecodeMemo[i - 1].next)
+        if (ipDecodeMemo[i - 1].t.equivalent(t))
+            return ipDecodeMemo[i - 1].e;
     return null;
 }
 
@@ -5753,7 +5717,7 @@ private Expression ipDecodePtr(const(ubyte)[] mem, ulong p, Type type, Loc loc, 
                 sle = new StructLiteralExp(loc, sd, elems, et);
                 sle.type = et;
                 sle.ownedByCtfe = OwnedBy.ctfe;
-                ipDecodeMemo.push(IpMemo(base, et, sle));
+                ipMemoPush(base, et, sle);
                 if (!ipFillStruct(mem, base, sd, elems, loc, depth))
                     return null;
             }
@@ -5771,18 +5735,36 @@ private Expression ipDecodePtr(const(ubyte)[] mem, ulong p, Type type, Loc loc, 
         auto elems = ipNewExps(cast(size_t) n);
         ale = new ArrayLiteralExp(loc, at, elems);
         ale.ownedByCtfe = OwnedBy.ctfe;
-        ipDecodeMemo.push(IpMemo(base, at, ale));
-        foreach (i; 0 .. cast(size_t) n)
-        {
-            auto el = ipDecodeMem(mem, base + i * esz, et, loc, depth + 1);
-            if (!el)
-                return null;
-            (*elems)[i] = el;
-        }
+        ipMemoPush(base, at, ale);
+        if (!ipFillElems(mem, base, et, esz, elems, loc, depth))
+            return null;
     }
     auto ie = new IndexExp(loc, ale, new IntegerExp(loc, (p - base) / esz, Type.tsize_t));
     ie.type = et;
     return new AddrExp(loc, ie, type);
+}
+
+private Expression ipDecodeRef(const(ubyte)[] mem, ulong p, Type type, Loc loc, int depth)
+{
+    auto tb = type.toBasetype();
+    if (tb.ty == Tclass)
+        return ipDecodeClassRef(mem, p, type, loc, depth);
+    if (tb.ty == Taarray)
+        return ipDecodeAA(mem, p, type, loc, depth);
+    if (tb.nextOf().toBasetype().ty == Tfunction)
+        return ipDecodeFuncPtr(p, 0, type, loc);
+    return ipDecodePtr(mem, p, type, loc, depth);
+}
+
+private bool ipFillElems(const(ubyte)[] mem, ulong addr, Type et, ulong esz, Expressions* elems, Loc loc, int depth)
+{
+    foreach (i, ref el; (*elems)[])
+    {
+        el = ipDecodeMem(mem, addr + i * esz, et, loc, depth + 1);
+        if (!el)
+            return false;
+    }
+    return true;
 }
 
 private Expression ipDecodeMem(const(ubyte)[] mem, ulong addr, Type type, Loc loc, int depth = 0)
@@ -5798,16 +5780,10 @@ private Expression ipDecodeMem(const(ubyte)[] mem, ulong addr, Type type, Loc lo
         import dmd.typesem : defaultInit;
         return defaultInit(type, loc);
     }
-    if (tb.ty == Tclass)
-        return ipDecodeClassRef(mem, ipRead(mem, addr, ipPS), type, loc, depth + 1);
-    if (tb.ty == Tpointer && tb.nextOf().toBasetype().ty == Tfunction)
-        return ipDecodeFuncPtr(ipRead(mem, addr, ipPS), 0, type, loc);
+    if (tb.ty == Tclass || tb.ty == Tpointer || tb.ty == Taarray)
+        return ipDecodeRef(mem, ipRead(mem, addr, ipPS), type, loc, depth + 1);
     if (tb.ty == Tdelegate)
         return ipDecodeFuncPtr(ipRead(mem, addr + ipPS, ipPS), ipRead(mem, addr, ipPS), type, loc);
-    if (tb.ty == Tpointer)
-        return ipDecodePtr(mem, ipRead(mem, addr, ipPS), type, loc, depth + 1);
-    if (tb.ty == Taarray)
-        return ipDecodeAA(mem, ipRead(mem, addr, ipPS), type, loc, depth + 1);
     if (auto tv = tb.isTypeVector())
     {
         auto el = ipDecodeMem(mem, addr, tv.basetype, loc, depth + 1);
@@ -5848,13 +5824,8 @@ private Expression ipDecodeMem(const(ubyte)[] mem, ulong addr, Type type, Loc lo
             return se;
         }
         auto elems = ipNewExps(cast(size_t) len);
-        foreach (i; 0 .. cast(size_t) len)
-        {
-            auto el = ipDecodeMem(mem, ptr + i * esz, et, loc, depth + 1);
-            if (!el)
-                return null;
-            (*elems)[i] = el;
-        }
+        if (!ipFillElems(mem, ptr, et, esz, elems, loc, depth))
+            return null;
         auto ale = new ArrayLiteralExp(loc, type, elems);
         ale.ownedByCtfe = OwnedBy.ctfe;
         return ale;
@@ -5865,13 +5836,8 @@ private Expression ipDecodeMem(const(ubyte)[] mem, ulong addr, Type type, Loc lo
         auto et = tb.nextOf();
         const esz = cast(size_t) et.toBasetype().size();
         auto elems = ipNewExps(n);
-        foreach (i; 0 .. n)
-        {
-            auto el = ipDecodeMem(mem, addr + i * esz, et, loc, depth + 1);
-            if (!el)
-                return null;
-            (*elems)[i] = el;
-        }
+        if (!ipFillElems(mem, addr, et, esz, elems, loc, depth))
+            return null;
         auto ale = new ArrayLiteralExp(loc, type, elems);
         ale.ownedByCtfe = OwnedBy.ctfe;
         return ale;

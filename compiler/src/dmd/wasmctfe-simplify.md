@@ -53,6 +53,20 @@ These came up during the reviews. None of them was verified or fixed.
   symbol first created by an earlier engine build keeps the wasm type, name
   and saved-register mask. ELF on x86-64 does not notice; Mach-O and AArch64
   hosts might.
+- **A vector literal counts as a literal without looking at its elements.**
+  `cast(int4) [f(), 1, 2, 3]` is returned as-is in strict mode, with `f()`
+  not evaluated. Recursing into the operand in `ipIsLiteral` would fix it.
+- **A scalar operand with a call is evaluated once per element in an unrolled
+  array operation.** `a[] * f()` runs `f()` n times. Avoiding it needs a
+  temporary.
+- **The bucket-walk fallback of `ipDecodeAA` finds no entries under `-m32`.**
+  It tests the filled mark with `cast(long) hash < 0`, but the hash is read
+  zero-extended from 4 bytes. It only matters when the order table has no
+  entry for the AA.
+- **The verify-mode comparison treats results nested deeper than 200 levels as
+  equal.** `ipResultEqual` stops cycles through pointers into arrays with a
+  depth cap, while struct literals use the pair stack. Using the stack for
+  array literals too would compare deep results for real.
 - **The `hdrgen.d` null guard fixes a bug that also exists on master.**
   `-ftime-trace` prints an enum while its members are still being analysed. It
   could go upstream as its own fix.
@@ -236,7 +250,7 @@ These came up during the reviews. None of them was verified or fixed.
 - **`ipEncodeArg` calling `ipEncodeVal` per element.** Not needed after both
   got the shared `ipPutFloat`.
 
-## a1e6f6a051 (fixes in the commit that adds this section)
+## a1e6f6a051 (fixes in e9db998e39)
 
 - **Tracking the live per-function backend state instead of the call depth, and
   reusing the function's own `deferToObj` list for deferred TypeInfos.** The
@@ -261,3 +275,31 @@ These came up during the reviews. None of them was verified or fixed.
 - **Finding all functions that need semantic3 in one build attempt.** Each
   attempt finds only the next layer, so a call chain of depth k needs k+1
   builds (limit 64). Redesign.
+
+## 04d80e220c, 9055d76cdd (fixes in the commit that adds this section)
+
+One fix changed behaviour on purpose: the address of the AA order table now
+comes from the data extents. The probe it replaces was switched off by a nested
+build, so an AA result could come back in bucket order (a mismatch in verify
+mode).
+
+- **Dropping `wasmCtfeBuiltFuncs` in favour of the list of functions that got
+  code (`wasmCtfeObjMarked`).** The first list also holds functions that return
+  before code generation, so a pointer to such a function would stop decoding.
+- **`isOverlappedWith` in `ipOverlapDominated`.** It compares bit ranges, so
+  bit-fields that share a storage unit in a union would both be decoded.
+- **`isUnaArrayOp`/`isBinArrayOp` from `arrayop.d` in `ipIsArrayOpNode`, and
+  dropping the shift operators.** The shifts look unreachable for array
+  operands, but that was not verified.
+- **One `wasmCtfeNewItem` helper for all engine-build allocations in
+  `e2ir.d`.** The pointer branch now reuses the existing store code and the
+  struct branch uses the class branch's form; the five
+  `_d_allocmemory` call expressions are still written out.
+- **Recording function names in `selfLink` only on request, and building the
+  table-slot map on the first function pointer decode.** Needs a new switch;
+  small gain.
+- **One pass over tuple elements in `tryWasmCtfeExpr`.** The remaining double
+  walk is only over all-literal prefixes.
+- **The defensive null checks at the top of `ipDecodePtr` and `ipDecodeAA`.**
+  They cannot fail with the single caller they have now; kept for future
+  callers.

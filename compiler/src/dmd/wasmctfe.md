@@ -781,9 +781,9 @@ verify compares the pointees, not the shapes.
 
 ### AA results are read through the CTFE order table
 
-An AA result is an `Impl*`. `selfLink` records the address of
-`core.internal.newaa.ctfeOrders` (`wasmSelfLinkProbeData`), and the
-decoder walks that table's entries for the impl. The result is an
+An AA result is an `Impl*`. The data extents that `selfLink` records
+give the address of `core.internal.newaa.ctfeOrders`, and the decoder
+walks that table's entries for the impl. The result is an
 `AssocArrayLiteralExp` in insertion order, which is exactly the AST
 interpreter's order. A null impl decodes as `null`.
 

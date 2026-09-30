@@ -1569,13 +1569,11 @@ elem* toElem(Expression e, ref IRState irs)
             {
                 ex = el_bin(OPcall, TYnptr, el_var(getRtlsym(RTLSYM.ALLOCMEMORY)),
                     el_long(TYsize_t, sd.structsize));
-                Symbol* tsi = symbol_genauto(TYnptr);
-                elem* eeq = el_bin(OPeq, TYnptr, el_var(tsi), ex);
-                elem* einit = elAssign(el_una(OPind, TYstruct, el_var(tsi)),
-                    el_var(toInitializer(sd)), null, Type_toCtype(tclass));
-                ex = el_combine(el_combine(eeq, einit), el_var(tsi));
+                ex = el_una(OPind, TYstruct, ex);
+                ex = elAssign(ex, el_var(toInitializer(sd)), null, Type_toCtype(tclass));
+                ex = el_una(OPaddr, TYnptr, ex);
             }
-            else if (!irs.params.useGC && !wasmCtfeBuildActive)
+            else if (!irs.params.useGC)
             {
                 // new is allowed in CTFE, so this can only be checked at codegen
                 irs.eSink.error(ne.loc, "`new` expression `%s` requires the GC which is not available with `-betterC`", ne.toErrMsg());
@@ -1679,30 +1677,9 @@ elem* toElem(Expression e, ref IRState irs)
                 // Call _d_newitemT()
                 e = toElem(ne.lowering, irs);
             else if (wasmCtfeBuildActive)
-            {
-                Type tn = tp.next.toBasetype();
                 e = el_bin(OPcall, TYnptr, el_var(getRtlsym(RTLSYM.ALLOCMEMORY)),
-                    el_long(TYsize_t, tn.size(ne.loc)));
-                if (!(ne.arguments && ne.arguments.length == 1))
-                {
-                    Symbol* ts = symbol_genauto(Type_toCtype(tp));
-                    elem* eeq1 = el_bin(OPeq, TYnptr, el_var(ts), e);
-                    elem* einit;
-                    if (auto tsd = tn.isTypeStruct())
-                    {
-                        elem* ederef = el_una(OPind, TYstruct, el_var(ts));
-                        einit = elAssign(ederef, el_var(toInitializer(tsd.sym)), null, Type_toCtype(tn));
-                    }
-                    else
-                    {
-                        elem* ev = toElem(tn.defaultInitLiteral(ne.loc), irs);
-                        einit = el_bin(OPeq, ev.Ety, el_una(OPind, ev.Ety, el_var(ts)), ev);
-                    }
-                    e = el_combine(eeq1, einit);
-                    e = el_combine(e, el_var(ts));
-                }
-            }
-            else if (!irs.params.useGC && !wasmCtfeBuildActive)
+                    el_long(TYsize_t, tp.next.size(ne.loc)));
+            else if (!irs.params.useGC)
             {
                 irs.eSink.error(ne.loc, "`new` expression `%s` requires the GC which is not available with `-betterC`", ne.toErrMsg());
                 return el_long(TYnptr, 0);
@@ -1710,11 +1687,14 @@ elem* toElem(Expression e, ref IRState irs)
             else
                 assert(0, "This case should have been rewritten to `_d_newitemT` in the semantic phase");
 
-            if (ne.arguments && ne.arguments.length == 1)
+            Expression einit = ne.arguments && ne.arguments.length == 1 ? (*ne.arguments)[0] : null;
+            if (!einit && wasmCtfeBuildActive && !ne.lowering && !ne.placement)
+                einit = tp.next.toBasetype().defaultInitLiteral(ne.loc);
+            if (einit)
             {
                 /* ezprefix, ts=_d_newitemT(ti), *ts=arguments[0], ts
                  */
-                elem* e2 = toElem((*ne.arguments)[0], irs);
+                elem* e2 = toElem(einit, irs);
 
                 Symbol* ts = symbol_genauto(Type_toCtype(tp));
                 elem* eeq1 = el_bin(OPeq, TYnptr, el_var(ts), e);
