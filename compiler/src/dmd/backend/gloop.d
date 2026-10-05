@@ -1149,7 +1149,7 @@ private void markInvariants(ref GlobalOptimizer go, int gref, block* gblock, vec
                     {
                         tmp = vec_calloc(go.defnod.length);
                         //filterrd(tmp,rd,v);
-                        listrds(go, rd,n1,tmp,null);
+                        listrds(go.defnod, rd,n1,tmp,null);
                         for (i = 0; (i = cast(uint) vec_index(i, tmp)) < go.defnod.length; ++i)
                             if (go.defnod[i].DNelem != n &&
                                 vec_testbit(go.defnod[i].DNblock.Bdfoidx,lv))
@@ -1256,7 +1256,7 @@ private void markInvariants(ref GlobalOptimizer go, int gref, block* gblock, vec
                 {
                     tmp = vec_calloc(go.defnod.length);
                     //filterrd(tmp,rd,v);       // only the RDs pertaining to v
-                    listrds(go, rd,n,tmp,null);  // only the RDs pertaining to v
+                    listrds(go.defnod, rd,n,tmp,null);  // only the RDs pertaining to v
 
                     // if (no RDs within loop)
                     //  then it's loop invariant
@@ -1579,7 +1579,7 @@ Lnextlis:
                     //        return;
 
                     //filterrd(tmp,dfo[i].Binrd,v);
-                    listrds(go, bo.dfo[i].Binrd,n.E1,tmp,null);
+                    listrds(go.defnod, bo.dfo[i].Binrd,n.E1,tmp,null);
                     uint j;
                     for (j = 0; (j = cast(uint) vec_index(j, tmp)) < go.defnod.length; ++j)  // for each RD of v in Binrd
                     {
@@ -1601,7 +1601,7 @@ Lnextlis:
                 //         <can't move this assignment>
 
                 //filterrd(tmp,b.Binrd,v);
-                listrds(go, b.Binrd,n.E1,tmp,null);
+                listrds(go.defnod, b.Binrd,n.E1,tmp,null);
                 uint j;
                 for (j = 0; (j = cast(uint) vec_index(j, tmp)) < go.defnod.length; ++j)  // for each RD of v in Binrd
                 {
@@ -1993,7 +1993,7 @@ private void loopiv(ref GlobalOptimizer go, ref BlockOpt bo, ref Loop l)
 {
     if (debugc) printf("loopiv(%p)\n", &l);
     assert(l.Livlist.length == 0 && l.Lopeqlist.length == 0);
-    elimspec(go, l, bo.dfo);
+    elimspec(go.changes, l, bo.dfo);
     if (doflow)
     {
         flowrd(go, bo);         /* compute reaching defs                */
@@ -2001,14 +2001,14 @@ private void loopiv(ref GlobalOptimizer go, ref BlockOpt bo, ref Loop l)
         flowae(go, bo);         // compute available expressions
         doflow = false;
     }
-    findbasivs(go, l);          /* find basic induction variables       */
-    findopeqs(go, l);           // find op= variables
+    findbasivs(go.defnod, l);          /* find basic induction variables       */
+    findopeqs(go.defnod, l);           // find op= variables
     findivfams(bo, l);          /* find IV families                     */
     elimfrivivs(bo, l);         /* eliminate less useful family IVs     */
-    intronvars(go, l);          /* introduce new variables              */
-    elimbasivs(go, bo, l);      /* eliminate basic IVs                  */
+    intronvars(go.changes, l);          /* introduce new variables              */
+    elimbasivs(go.changes, bo, l);      /* eliminate basic IVs                  */
     if (!addblk)                // adding a block changes the Binlv
-        elimopeqs(go, bo, l);   // eliminate op= variables
+        elimopeqs(go.changes, bo, l);   // eliminate op= variables
 
     foreach (ref iv; l.Livlist)
         iv.reset();
@@ -2033,7 +2033,7 @@ private void loopiv(ref GlobalOptimizer go, ref BlockOpt bo, ref Loop l)
  */
 
 @trusted
-private void findbasivs(ref GlobalOptimizer go, ref Loop l)
+private void findbasivs(ref Barray!DefNode defnod, ref Loop l)
 {
     vec_t poss,notposs;
     elem* n;
@@ -2046,12 +2046,12 @@ private void findbasivs(ref GlobalOptimizer go, ref Loop l)
 
     /* for each def in go.defnod[] that is within loop l     */
 
-    foreach (const i; 0 .. go.defnod.length)
+    foreach (const i; 0 .. defnod.length)
     {
-        if (!vec_testbit(go.defnod[i].DNblock.Bdfoidx,l.Lloop))
+        if (!vec_testbit(defnod[i].DNblock.Bdfoidx,l.Lloop))
             continue;               /* def is not in the loop       */
 
-        n = go.defnod[i].DNelem;
+        n = defnod[i].DNelem;
         elem_debug(n);
         if (OTassign(n.Eoper) && n.E1.Eoper == OPvar)
         {
@@ -2137,14 +2137,14 @@ private void findbasivs(ref GlobalOptimizer go, ref Loop l)
         /* the parent of the increment elem for it.                     */
 
         /* First find the go.defnod[]      */
-        foreach (j; 0 .. go.defnod.length)
+        foreach (j; 0 .. defnod.length)
         {
             /* If go.defnod is a def of i and it is in the loop        */
-            if (go.defnod[j].DNelem.E1 &&     /* OPasm are def nodes  */
-                go.defnod[j].DNelem.E1.Vsym == s &&
-                vec_testbit(go.defnod[j].DNblock.Bdfoidx,l.Lloop))
+            if (defnod[j].DNelem.E1 &&     /* OPasm are def nodes  */
+                defnod[j].DNelem.E1.Vsym == s &&
+                vec_testbit(defnod[j].DNblock.Bdfoidx,l.Lloop))
             {
-                biv.IVincr = el_parent(go.defnod[j].DNelem, go.defnod[j].DNblock.Belem);
+                biv.IVincr = el_parent(defnod[j].DNelem, defnod[j].DNblock.Belem);
                 assert(s == (*biv.IVincr).E1.Vsym);
 
                 debug if (debugc)
@@ -2173,7 +2173,7 @@ private void findbasivs(ref GlobalOptimizer go, ref Loop l)
  */
 
 @trusted
-private void findopeqs(ref GlobalOptimizer go, ref Loop l)
+private void findopeqs(ref Barray!DefNode defnod, ref Loop l)
 {
     vec_t poss,notposs;
     elem* n;
@@ -2186,12 +2186,12 @@ private void findopeqs(ref GlobalOptimizer go, ref Loop l)
 
     // for each def in go.defnod[] that is within loop l
 
-    foreach (i; 0 .. go.defnod.length)
+    foreach (i; 0 .. defnod.length)
     {
-        if (!vec_testbit(go.defnod[i].DNblock.Bdfoidx,l.Lloop))
+        if (!vec_testbit(defnod[i].DNblock.Bdfoidx,l.Lloop))
             continue;               // def is not in the loop
 
-        n = go.defnod[i].DNelem;
+        n = defnod[i].DNelem;
         elem_debug(n);
         if (OTopeq(n.Eoper) && n.E1.Eoper == OPvar)
         {
@@ -2273,14 +2273,14 @@ private void findopeqs(ref GlobalOptimizer go, ref Loop l)
         // the parent of the increment elem for it.
 
         // First find the go.defnod[]
-        foreach (j; 0 .. go.defnod.length)
+        foreach (j; 0 .. defnod.length)
         {
             // If go.defnod is a def of i and it is in the loop
-            if (go.defnod[j].DNelem.E1 &&     // OPasm are def nodes
-                go.defnod[j].DNelem.E1.Vsym == s &&
-                vec_testbit(go.defnod[j].DNblock.Bdfoidx,l.Lloop))
+            if (defnod[j].DNelem.E1 &&     // OPasm are def nodes
+                defnod[j].DNelem.E1.Vsym == s &&
+                vec_testbit(defnod[j].DNblock.Bdfoidx,l.Lloop))
             {
-                biv.IVincr = el_parent(go.defnod[j].DNelem, go.defnod[j].DNblock.Belem);
+                biv.IVincr = el_parent(defnod[j].DNelem, defnod[j].DNblock.Belem);
                 assert(s == (*biv.IVincr).E1.Vsym);
 
                 debug if (debugc)
@@ -2572,7 +2572,7 @@ private void elimfrivivs(ref BlockOpt bo, ref Loop l)
  */
 
 @trusted
-private void intronvars(ref GlobalOptimizer go, ref Loop l)
+private void intronvars(ref uint changes, ref Loop l)
 {
     elem* T;
     elem* ne;
@@ -2593,7 +2593,7 @@ private void intronvars(ref GlobalOptimizer go, ref Loop l)
 
             /* If induction variable can be written as a simple function */
             /* of a previous induction variable, skip it.                */
-            if (funcprev(go, biv, fl))
+            if (funcprev(changes, biv, fl))
                 continue;
 
             ty = fl.FLty;
@@ -2647,7 +2647,7 @@ private void intronvars(ref GlobalOptimizer go, ref Loop l)
             el_free(*fl.FLpelem);
             *fl.FLpelem = T;           /* replace elem n with ref to T  */
             doflow = true;              /* redo flow analysis           */
-            go.changes++;
+            changes++;
         } /* for */
     } /* for */
 }
@@ -2669,7 +2669,7 @@ private void intronvars(ref GlobalOptimizer go, ref Loop l)
  */
 
 @trusted
-private bool funcprev(ref GlobalOptimizer go, ref Iv biv, ref famlist fl)
+private bool funcprev(ref uint changes, ref Iv biv, ref famlist fl)
 {
     tym_t tymin;
     int sz;
@@ -2794,7 +2794,7 @@ private bool funcprev(ref GlobalOptimizer go, ref Iv biv, ref famlist fl)
         fls.FLtemp.Sflags |= SFLnotbasiciv;
 
         fl.FLtemp = FLELIM;            /* mark iv as being gone        */
-        go.changes++;
+        changes++;
         doflow = true;
         return true;                    /* it was replaced              */
     }
@@ -2806,7 +2806,7 @@ private bool funcprev(ref GlobalOptimizer go, ref Iv biv, ref famlist fl)
  */
 
 @trusted
-private void elimbasivs(ref GlobalOptimizer go, ref BlockOpt bo, ref Loop l)
+private void elimbasivs(ref uint changes, ref BlockOpt bo, ref Loop l)
 {
     if (debugc) printf("elimbasivs(%p)\n", &l);
     foreach (ref biv; l.Livlist)
@@ -3007,7 +3007,7 @@ private void elimbasivs(ref GlobalOptimizer go, ref BlockOpt bo, ref Loop l)
                 printf("\n");
             }
 
-            go.changes++;
+            changes++;
             doflow = true;                  /* redo flow analysis   */
 
             /* if X is live on entry to any successor S outside loop */
@@ -3082,7 +3082,7 @@ private void elimbasivs(ref GlobalOptimizer go, ref BlockOpt bo, ref Loop l)
                                 ne,b.Belem);
                     else
                         b.Belem = ne;
-                    go.changes++;
+                    changes++;
                     doflow = true;  /* redo flow analysis   */
                 } /* for each successor */
             } /* foreach exit block */
@@ -3117,7 +3117,7 @@ private void elimbasivs(ref GlobalOptimizer go, ref BlockOpt bo, ref Loop l)
                 ei.E1.Ety = TYint;
             }
 
-            go.changes++;
+            changes++;
             doflow = true;                  /* redo flow analysis   */
           L1:
         }
@@ -3129,7 +3129,7 @@ private void elimbasivs(ref GlobalOptimizer go, ref BlockOpt bo, ref Loop l)
  */
 
 @trusted
-private void elimopeqs(ref GlobalOptimizer go, ref BlockOpt bo, ref Loop l)
+private void elimopeqs(ref uint changes, ref BlockOpt bo, ref Loop l)
 {
     elem** pref;
     Symbol* X;
@@ -3181,7 +3181,7 @@ private void elimopeqs(ref GlobalOptimizer go, ref BlockOpt bo, ref Loop l)
                 einc.E1.Ety = TYint;
             }
 
-            go.changes++;
+            changes++;
             doflow = true;                      // redo flow analysis
         L1:
         }
@@ -3495,14 +3495,14 @@ private int countrefs2(const(elem)* e, const Symbol* s)
 
 @trusted
 private
-void elimspec(ref GlobalOptimizer go, const ref Loop loop, block*[] dfo)
+void elimspec(ref uint changes, const ref Loop loop, block*[] dfo)
 {
     // Visit each block in loop
     for (size_t i = 0; (i = vec_index(i, loop.Lloop)) < dfo.length; ++i)
     {
         auto b = dfo[i];
         if (b.Belem)
-            elimspecwalk(go, &b.Belem);
+            elimspecwalk(changes, &b.Belem);
     }
 }
 
@@ -3511,18 +3511,18 @@ void elimspec(ref GlobalOptimizer go, const ref Loop loop, block*[] dfo)
  */
 
 @trusted
-private void elimspecwalk(ref GlobalOptimizer go, elem** pn)
+private void elimspecwalk(ref uint changes, elem** pn)
 {
     elem* n;
 
     n = *pn;
     assert(n);
     if (OTunary(n.Eoper))
-        elimspecwalk(go, &n.E1);
+        elimspecwalk(changes, &n.E1);
     else if (OTbinary(n.Eoper))
     {
-        elimspecwalk(go, &n.E1);
-        elimspecwalk(go, &n.E2);
+        elimspecwalk(changes, &n.E1);
+        elimspecwalk(changes, &n.E2);
         if (OTrel(n.Eoper))
         {
             elem* e1 = n.E1;
@@ -3548,11 +3548,11 @@ private void elimspecwalk(ref GlobalOptimizer go, elem** pn)
                 n.E2.Ety = n.Ety;
                 n.Eoper = OPcomma;
 
-                go.changes++;
+                changes++;
                 doflow = true;
 
-                elimspecwalk(go, &n.E1);
-                elimspecwalk(go, &n.E2);
+                elimspecwalk(changes, &n.E1);
+                elimspecwalk(changes, &n.E2);
             }
 
             /* Rewrite ((X op= e2) rel e3) into ((X op= e2),(X rel e3))
@@ -3598,8 +3598,8 @@ private void elimspecwalk(ref GlobalOptimizer go, elem** pn)
                 //go.changes++;
                 doflow = true;
 
-                elimspecwalk(go, &n.E1);
-                elimspecwalk(go, &n.E2);
+                elimspecwalk(changes, &n.E1);
+                elimspecwalk(changes, &n.E2);
             }
         }
   }

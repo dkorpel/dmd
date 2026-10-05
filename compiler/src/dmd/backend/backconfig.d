@@ -354,7 +354,7 @@ static if (0)
 
     go.AArch64 = arm;
     if (optimize)
-        go_flag(go, cast(char*)"-o".ptr);
+        go_flag(go.mfoptim, cast(char*)"-o".ptr);
 
     if (symdebug)
     {

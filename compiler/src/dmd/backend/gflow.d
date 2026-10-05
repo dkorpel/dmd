@@ -172,7 +172,7 @@ private void rdgenkill(ref GlobalOptimizer go, ref BlockOpt bo)
             asgdefelems(b, b.Belem, go.defnod[], i);    // fill in go.defnod[]
     assert(i == 0);
 
-    initDNunambigVectors(go, go.defnod[]);
+    initDNunambigVectors(go.dnunambig, go.defnod[]);
 
     foreach (b; bo.dfo[])    // for each block
     {
@@ -183,7 +183,7 @@ private void rdgenkill(ref GlobalOptimizer go, ref BlockOpt bo)
         vec_free(b.Boutrd);
 
         /* calculate and create new vectors */
-        rdelem(go, b.Bgen, b.Bkill, b.Belem, deftop);
+        rdelem(go.defnod, b.Bgen, b.Bkill, b.Belem, deftop);
         if (b.bc == BC.asm_)
         {
             vec_clear(b.Bkill);        // KILL nothing
@@ -280,7 +280,7 @@ private void asgdefelems(block* b,elem* n, DefNode[] defnod, ref size_t i)
  */
 
 @trusted
-private void initDNunambigVectors(ref GlobalOptimizer go, DefNode[] defnod)
+private void initDNunambigVectors(ref Barray!vec_base_t dnunambig, DefNode[] defnod)
 {
     //printf("initDNunambigVectors()\n");
     const size_t numbits = defnod.length;
@@ -295,7 +295,7 @@ private void initDNunambigVectors(ref GlobalOptimizer go, DefNode[] defnod)
         elem* e = defnod[i].DNelem;
         if (OTassign(e.Eoper) && e.E1.Eoper == OPvar)
         {
-            vec_t v = &go.dnunambig[j] + 2;
+            vec_t v = &dnunambig[j] + 2;
             assert(vec_dim(v) == 0);
             vec_dim(v) = dim;
             vec_numbits(v) = numbits;
@@ -303,7 +303,7 @@ private void initDNunambigVectors(ref GlobalOptimizer go, DefNode[] defnod)
             defnod[i].DNunambig = v;
         }
     }
-    assert(j <= go.dnunambig.length);
+    assert(j <= dnunambig.length);
 
     foreach (const i; 0 .. defnod.length)
     {
@@ -381,12 +381,12 @@ private void fillInDNunambig(vec_t v, elem* e, size_t start, DefNode[] defnod)
  *      n = elem tree to evaluate for GEN and KILL
  *      deftop = number of bits in vectors
  */
-private void rdelem(ref GlobalOptimizer go, out vec_t GEN, out vec_t KILL, elem* n, uint deftop)
+private void rdelem(ref Barray!DefNode defnod, out vec_t GEN, out vec_t KILL, elem* n, uint deftop)
 {
     GEN  = vec_calloc(deftop);
     KILL = vec_calloc(deftop);
     if (n)
-        accumrd(go, GEN, KILL, n, deftop);
+        accumrd(defnod, GEN, KILL, n, deftop);
 }
 
 /**************************************
@@ -394,19 +394,19 @@ private void rdelem(ref GlobalOptimizer go, out vec_t GEN, out vec_t KILL, elem*
  */
 
 @trusted
-private void accumrd(ref GlobalOptimizer go, vec_t GEN,vec_t KILL,elem* n,uint deftop)
+private void accumrd(ref Barray!DefNode defnod, vec_t GEN,vec_t KILL,elem* n,uint deftop)
 {
     assert(GEN && KILL && n);
     const op = n.Eoper;
     if (OTunary(op))
-        accumrd(go, GEN, KILL, n.E1, deftop);
+        accumrd(defnod, GEN, KILL, n.E1, deftop);
     else if (OTbinary(op))
     {
         if (op == OPcolon || op == OPcolon2)
         {
             vec_t Gl,Kl,Gr,Kr;
-            rdelem(go, Gl, Kl, n.E1, deftop);
-            rdelem(go, Gr, Kr, n.E2, deftop);
+            rdelem(defnod, Gl, Kl, n.E1, deftop);
+            rdelem(defnod, Gr, Kr, n.E2, deftop);
 
             switch (el_returns(n.E1) * 2 | int(el_returns(n.E2)))
             {
@@ -458,9 +458,9 @@ private void accumrd(ref GlobalOptimizer go, vec_t GEN,vec_t KILL,elem* n,uint d
         }
         else if (op == OPandand || op == OPoror)
         {
-            accumrd(go, GEN, KILL, n.E1, deftop);
+            accumrd(defnod, GEN, KILL, n.E1, deftop);
             vec_t Gr,Kr;
-            rdelem(go, Gr, Kr, n.E2, deftop);
+            rdelem(defnod, Gr, Kr, n.E2, deftop);
             if (el_returns(n.E2))
                 vec_orass(GEN,Gr);      // GEN |= Gr
 
@@ -469,18 +469,18 @@ private void accumrd(ref GlobalOptimizer go, vec_t GEN,vec_t KILL,elem* n,uint d
         }
         else if (OTrtol(op) && ERTOL(n))
         {
-            accumrd(go, GEN, KILL, n.E2, deftop);
-            accumrd(go, GEN, KILL, n.E1, deftop);
+            accumrd(defnod, GEN, KILL, n.E2, deftop);
+            accumrd(defnod, GEN, KILL, n.E1, deftop);
         }
         else
         {
-            accumrd(go, GEN, KILL, n.E1, deftop);
-            accumrd(go, GEN, KILL, n.E2, deftop);
+            accumrd(defnod, GEN, KILL, n.E1, deftop);
+            accumrd(defnod, GEN, KILL, n.E2, deftop);
         }
     }
 
     if (OTdef(op))                  /* if definition elem           */
-        updaterd(go.defnod, n, GEN, KILL);
+        updaterd(defnod, n, GEN, KILL);
 }
 
 /******************** AVAILABLE EXPRESSIONS ***********************/

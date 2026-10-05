@@ -267,16 +267,16 @@ void block_visit(block* b)
 /*****************************
  * Compute number of parents (Bcount) of each basic block.
  * Params:
- *      go = optimizer globals
+ *      changes = # of optimizations performed
  *      bstart = first block in list
  */
 @trusted
 public
-void block_compbcount(ref GlobalOptimizer go, block* bstart)
+void block_compbcount(ref uint changes, block* bstart)
 {
     block_clearvisit(bstart);
     block_visit(bstart);                    // visit all reachable blocks
-    elimblks(bo, go.changes);           // eliminate unvisited blocks
+    elimblks(bo, changes);           // eliminate unvisited blocks
 }
 
 /*******************************
@@ -447,7 +447,7 @@ void blockopt(bool AArch64, ref GlobalOptimizer go, ref BlockOpt bo, ref uint ch
             bropt(bo, changes);          // branch optimization
             brrear(bo);                  // branch rearrangement
             blident(bo, changes);        // combine identical blocks
-            blreturn(go, bo, changes);   // split out return blocks
+            blreturn(go.mfoptim, bo, changes);   // split out return blocks
             if (!(go.mfoptim & MFtime))  // if optimized for space instead of time
                 bltailmerge(bo.startblock, changes); // do tail merging
             brtailrecursion(bo, changes);        // do tail recursion
@@ -512,7 +512,7 @@ void blockopt(bool AArch64, ref GlobalOptimizer go, ref BlockOpt bo, ref uint ch
 
         bropt(bo, changes);               /* branch optimization           */
         brrear(bo);                       /* branch rearrangement          */
-        comsubs(go, bo);                  /* eliminate common subexpressions */
+        comsubs(go.changes, bo);                  /* eliminate common subexpressions */
 
         debug if (debugb)
         {
@@ -1202,9 +1202,9 @@ private void blident(ref BlockOpt bo, ref uint changes)
  */
 
 @trusted
-private void blreturn(ref GlobalOptimizer go, ref BlockOpt bo, uint changes)
+private void blreturn(ref mftype mfoptim, ref BlockOpt bo, uint changes)
 {
-    if (!(go.mfoptim & MFtime))            /* if optimized for space       */
+    if (!(mfoptim & MFtime))            /* if optimized for space       */
     {
         int retcount = 0;               // number of return counts
 

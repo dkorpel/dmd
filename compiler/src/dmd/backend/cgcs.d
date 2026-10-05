@@ -47,11 +47,11 @@ nothrow:
  */
 
 @trusted
-public void comsubs(ref GlobalOptimizer go, ref BlockOpt bo)
+public void comsubs(ref uint changes, ref BlockOpt bo)
 {
     debug if (debugx) printf("comsubs(%p)\n",bo.startblock);
 
-    comsubs2(bo.startblock, cgcsdata, go, bo);
+    comsubs2(bo.startblock, cgcsdata, changes, bo);
 
     debug if (debugx)
         printf("done with comsubs()\n");
@@ -68,10 +68,10 @@ alias hash_t = uint;    // for hash values
  * String together as many blocks as we can.
  */
 @trusted
-void comsubs2(block* startblock, ref CGCS cgcs, ref GlobalOptimizer go, ref BlockOpt bo)
+void comsubs2(block* startblock, ref CGCS cgcs, ref uint changes, ref BlockOpt bo)
 {
     // No longer just compute Bcount - eliminate unreachable blocks too
-    block_compbcount(go, bo.startblock);
+    block_compbcount(changes, bo.startblock);
 
     cgcs.start();
 

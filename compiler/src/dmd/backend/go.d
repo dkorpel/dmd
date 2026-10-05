@@ -179,7 +179,7 @@ else
  *      !=0     recognized
  */
 @trusted
-int go_flag(ref GlobalOptimizer go, char* cp)
+int go_flag(ref mftype mfoptim, char* cp)
 {
     enum GL     // indices of various flags in flagtab[]
     {
@@ -197,8 +197,8 @@ int go_flag(ref GlobalOptimizer go, char* cp)
 
     //printf("go_flag('%s')\n", cp);
     uint flag = binary(cp + 1,cast(const(char)**)flagtab.ptr,GL.MAX);
-    if (go.mfoptim == 0 && flag != -1)
-        go.mfoptim = MFall & ~MFvbe;
+    if (mfoptim == 0 && flag != -1)
+        mfoptim = MFall & ~MFvbe;
 
     if (*cp == '-')                     /* a regular -whatever flag     */
     {                                   /* cp -> flag string            */
@@ -220,15 +220,15 @@ int go_flag(ref GlobalOptimizer go, char* cp)
             case GL.time:
             case GL.tree:
             case GL.vbe:
-                go.mfoptim &= ~flagmftab[flag];    /* clear bits   */
+                mfoptim &= ~flagmftab[flag];    /* clear bits   */
                 break;
             case GL.o:
             case GL.O:
             case GL.none:
-                go.mfoptim |= MFall & ~MFvbe;      // inverse of -all
+                mfoptim |= MFall & ~MFvbe;      // inverse of -all
                 break;
             case GL.space:
-                go.mfoptim |= MFtime;      /* inverse of -time     */
+                mfoptim |= MFtime;      /* inverse of -time     */
                 break;
             case -1:                    /* not in flagtab[]     */
                 goto badflag;
@@ -256,13 +256,13 @@ int go_flag(ref GlobalOptimizer go, char* cp)
             case GL.time:
             case GL.tree:
             case GL.vbe:
-                go.mfoptim |= flagmftab[flag];     /* set bits     */
+                mfoptim |= flagmftab[flag];     /* set bits     */
                 break;
             case GL.none:
-                go.mfoptim &= ~MFall;      /* inverse of +all      */
+                mfoptim &= ~MFall;      /* inverse of +all      */
                 break;
             case GL.space:
-                go.mfoptim &= ~MFtime;     /* inverse of +time     */
+                mfoptim &= ~MFtime;     /* inverse of +time     */
                 break;
             case -1:                    /* not in flagtab[]     */
                 goto badflag;
@@ -270,10 +270,10 @@ int go_flag(ref GlobalOptimizer go, char* cp)
                 assert(0);
         }
     }
-    if (go.mfoptim)
+    if (mfoptim)
     {
-        go.mfoptim |= MFtree | MFdc;       // always do at least this much
-        config.flags4 |= (go.mfoptim & MFtime) ? CFG4speed : CFG4space;
+        mfoptim |= MFtree | MFdc;       // always do at least this much
+        config.flags4 |= (mfoptim & MFtime) ? CFG4speed : CFG4space;
     }
     else
     {
@@ -383,7 +383,7 @@ void optfunc(ref CGstate cg, ref GlobalOptimizer go, ref BlockOpt bo)
         go.changes = 0;                 // no changes yet
         sliceStructs(globsym, bo.startblock);
         if (go.mfoptim & MFcnp)
-            constprop(go, bo, go.changes);  /* make relationals unsigned     */
+            constprop(go.defnod, bo, go.changes);  /* make relationals unsigned     */
         if (go.mfoptim & (MFli | MFliv))
             loopopt(cg.AArch64, go, bo);                /* remove loop invariants and    */
                                         /* induction vars                */
@@ -399,7 +399,7 @@ void optfunc(ref CGstate cg, ref GlobalOptimizer go, ref BlockOpt bo)
             continue;
 
         if (go.mfoptim & MFcnp)
-            constprop(go, bo, go.changes); /* constant propagation          */
+            constprop(go.defnod, bo, go.changes); /* constant propagation          */
         if (go.mfoptim & MFcp)
             copyprop(go, bo);           /* do copy propagation           */
 
@@ -434,7 +434,7 @@ void optfunc(ref CGstate cg, ref GlobalOptimizer go, ref BlockOpt bo)
         if (go.mfoptim & MFlocal)
             localize(bo, go.changes);      // improve expression locality
         if (go.mfoptim & MFda)
-            rmdeadass(go, bo, go.changes); /* remove dead assignments       */
+            rmdeadass(bo, go.changes); /* remove dead assignments       */
 
         if (debugc) printf("changes = %d\n", go.changes);
         if (!(go.changes && go.mfoptim & MFloop && (clock() - starttime) < 30 * CLOCKS_PER_SEC))

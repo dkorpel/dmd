@@ -32,6 +32,7 @@ import dmd.backend.ty;
 import dmd.backend.type;
 
 import dmd.backend.dvec;
+import dmd.backend.barray : Barray;
 
 
 nothrow:
@@ -296,12 +297,12 @@ void WRblockarray(block*[] bl)
 }
 
 @trusted
-void WRdefnod(ref GlobalOptimizer go)
+void WRdefnod(ref Barray!DefNode defnod)
 {
-    foreach (i; 0 .. go.defnod.length)
+    foreach (i; 0 .. defnod.length)
     {
-        printf("defnod[%d] in B%u = (", go.defnod[i].DNblock.Bdfoidx, cast(uint)i);
-        WReqn(go.defnod[i].DNelem);
+        printf("defnod[%d] in B%u = (", defnod[i].DNblock.Bdfoidx, cast(uint)i);
+        WReqn(defnod[i].DNelem);
         printf(");\n");
     }
 }

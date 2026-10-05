@@ -1229,7 +1229,7 @@ int el_countCommas(const(elem)* e)
  * Needed iff floating point code can't load immediate constants.
  */
 private @trusted
-elem* el_convfloat(ref GlobalOptimizer go, elem* e)
+elem* el_convfloat(ref uint changes, elem* e)
 {
     //printf("el_convfloat()\n"); elem_print(e);
     ubyte[32] buffer = void;
@@ -1245,7 +1245,7 @@ elem* el_convfloat(ref GlobalOptimizer go, elem* e)
     else if (loadconst(e, 0))
         return e;
 
-    go.changes++;
+    changes++;
     tym_t ty = e.Ety;
     int sz = tysize(ty);
     assert(sz <= buffer.length);
@@ -1319,13 +1319,13 @@ elem* el_convfloat(ref GlobalOptimizer go, elem* e)
 /************************************
  * Convert AArch64 128 bit floating point constant to a read-only symbol.
  * Params:
- *      go = optimizer state
+ *      changes = # of optimizations performed
  *      e  = floating point constant
  * Returns:
  *      read-only constant variable
  */
 private @trusted
-elem* el_convreal(ref GlobalOptimizer go, elem* e)
+elem* el_convreal(ref uint changes, elem* e)
 {
     //printf("el_convreal()\n"); elem_print(e);
     ubyte[32] buffer = void;
@@ -1374,7 +1374,7 @@ elem* el_convreal(ref GlobalOptimizer go, elem* e)
     elem* ep = el_ptr(s);
     elem* ec = el_una(OPind, ty, ep);
 
-    go.changes++;
+    changes++;
     //printf("s: %s %d:x%x\n", s.Sident, s.Sseg, s.Soffset);
     return ec;
 }
@@ -1385,13 +1385,13 @@ elem* el_convreal(ref GlobalOptimizer go, elem* e)
  */
 
 private @trusted
-elem* el_convxmm(ref GlobalOptimizer go, elem* e)
+elem* el_convxmm(ref uint changes, elem* e)
 {
     // Do not convert if the constants can be loaded with the special XMM instructions
     if (loadxmmconst(e))
         return e;
 
-    go.changes++;
+    changes++;
     tym_t ty = e.Ety;
     int sz = tysize(ty);
     assert(sz <= Vconst.sizeof);
@@ -1540,13 +1540,13 @@ elem* el_convert(ref GlobalOptimizer go, elem* e)
 
         case OPconst:
             if (tyvector(e.Ety))
-                e = el_convxmm(go, e);
+                e = el_convxmm(go.changes, e);
             else if (tyfloating(e.Ety))
             {
                 if (config.inline8087)
-                    e = el_convfloat(go, e);
+                    e = el_convfloat(go.changes, e);
                 else if (go.AArch64)
-                    e = el_convreal(go, e);
+                    e = el_convreal(go.changes, e);
             }
             break;
 

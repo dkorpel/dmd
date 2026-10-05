@@ -983,7 +983,7 @@ void writefunc2(ref CGstate cg, Symbol* sfunc, ref GlobalOptimizer go, ref Block
     }
 
     block_pred(bo.startblock);              // compute predecessors to blocks
-    block_compbcount(go, bo.startblock);    // eliminate unreachable blocks
+    block_compbcount(go.changes, bo.startblock);    // eliminate unreachable blocks
 
     debug { } else
     {
