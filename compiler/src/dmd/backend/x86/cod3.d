@@ -568,10 +568,10 @@ void cod3_align(ref CGstate cg, int seg)
  *      nbytes = number of bytes to adjust stack pointer
  */
 @trusted
-void cod3_stackadj(ref CodeBuilder cdb, int nbytes)
+void cod3_stackadj(ref CGstate cg, ref CodeBuilder cdb, int nbytes)
 {
     //printf("cod3_stackadj(%d)\n", nbytes);
-    if (cgstate.AArch64)
+    if (cg.AArch64)
     {
         if (nbytes == 0)
             return;
@@ -1022,13 +1022,13 @@ private code* callFinallyBlock(ref CGstate cg, block* bf, regm_t retregs)
     {   npush += REGSIZE;
         if (npush & (STACKALIGN - 1))
         {   nalign = STACKALIGN - (npush & (STACKALIGN - 1));
-            cod3_stackadj(cdbs, nalign);
+            cod3_stackadj(cg, cdbs, nalign);
         }
     }
     cdbs.genc(0xE8,0,FL.unde,0,FL.block,cast(targ_size_t)bf);
     cgstate.regcon.immed.mval = 0;
     if (nalign)
-        cod3_stackadj(cdbs, -nalign);
+        cod3_stackadj(cg, cdbs, -nalign);
     cdbs.append(cdbr);
     return cdbs.finish();
 }
@@ -1368,13 +1368,13 @@ static if (NTEXCEPTIONS)
                     // (reg1,reg2) = (lreg,mreg)
                     if (reg1 == mreg)
                     {
-                        genmovreg(cdb, reg2, mreg);
-                        genmovreg(cdb, reg1, lreg);
+                        genmovreg(cg, cdb, reg2, mreg);
+                        genmovreg(cg, cdb, reg1, lreg);
                     }
                     else
                     {
-                        genmovreg(cdb, reg1, lreg);
-                        genmovreg(cdb, reg2, mreg);
+                        genmovreg(cg, cdb, reg1, lreg);
+                        genmovreg(cg, cdb, reg2, mreg);
                     }
                 }
                 if (reg1 != NOREG)
@@ -1456,21 +1456,21 @@ static if (NTEXCEPTIONS)
                         // spill
                         pop87();
                         pop87();
-                        cdb.genfltreg(0xD9, 3, tysize(TYfloat));
+                        cdb.genfltreg(cg, 0xD9, 3, tysize(TYfloat));
                         genfwait(cdb);
-                        cdb.genfltreg(0xD9, 3, 0);
+                        cdb.genfltreg(cg, 0xD9, 3, 0);
                         genfwait(cdb);
                         // reload
                         if (config.exe == EX_WIN64)
                         {
                             assert(reg1 == AX);
-                            cdb.genfltreg(LOD, reg1, 0);
+                            cdb.genfltreg(cg, LOD, reg1, 0);
                             code_orrex(cdb.last(), REX_W);
                         }
                         else
                         {
                             assert(reg1 == XMM0);
-                            cdb.genxmmreg(xmmload(TYdouble), reg1, 0, TYdouble);
+                            cdb.genxmmreg(cg, xmmload(TYdouble), reg1, 0, TYdouble);
                         }
                     }
                     else
@@ -1487,13 +1487,13 @@ static if (NTEXCEPTIONS)
                     // (reg1,reg2) = (lreg,mreg)
                     if (reg1 == mreg)
                     {
-                        genmovreg(cdb, reg2, mreg);
-                        genmovreg(cdb, reg1, lreg);
+                        genmovreg(cg, cdb, reg2, mreg);
+                        genmovreg(cg, cdb, reg1, lreg);
                     }
                     else
                     {
-                        genmovreg(cdb, reg1, lreg);
-                        genmovreg(cdb, reg2, mreg);
+                        genmovreg(cg, cdb, reg1, lreg);
+                        genmovreg(cg, cdb, reg2, mreg);
                     }
                 }
                 if (reg1 != NOREG)
@@ -2274,7 +2274,7 @@ else
                 regm_t scratchm = ALLREGS & ~(mask(reg) | mBX);
                 const r1 = allocreg(cdb,scratchm,TYint);
 
-                genmovreg(cdb,r1,BX);              // MOV R1,EBX
+                genmovreg(cg, cdb,r1,BX);              // MOV R1,EBX
                 cdb.genc1(0x2B,modregxrm(2,r1,4),FL.switch_,0);   // SUB R1,disp[reg*4][EBX]
                 cdb.last().IEV1.Vswitch = b;
                 cdb.last().Isib = modregrm(2,reg,BX);
@@ -2339,7 +2339,7 @@ else
 
             makeitextern(gotsym);
 
-            genmovreg(cdb, DX, DI);    // MOV EDX, EDI
+            genmovreg(cg, cdb, DX, DI);    // MOV EDX, EDI
                                         // ADD EDI,offset of switch table
             cdb.gencs(0x81,modregrm(3,0,DI),FL.switch_,null);
             cdb.last().IEV2.Vswitch = b;
@@ -3220,9 +3220,9 @@ void genpop(ref CodeBuilder cdb, reg_t reg)
  */
 
 @trusted
-void genmovreg(ref CodeBuilder cdb, reg_t to, reg_t from, tym_t tym = TYMAX)
+void genmovreg(ref CGstate cg, ref CodeBuilder cdb, reg_t to, reg_t from, tym_t tym = TYMAX)
 {
-    if (cgstate.AArch64)
+    if (cg.AArch64)
         return dmd.backend.arm.cod3.genmovreg(cdb, cast(reg_t)to, cast(reg_t)from, tym);
 
     // register kind. ex: GPR,XMM,SEG
@@ -3301,7 +3301,7 @@ void genmulimm(ref CodeBuilder cdb,reg_t r1,reg_t r2,targ_int imm)
     switch (imm)
     {
         case 1:
-            genmovreg(cdb,r1,r2);
+            genmovreg(cgstate, cdb,r1,r2);
             break;
 
         case 5:
@@ -3582,7 +3582,7 @@ L3:
 
                 if (mreg & 1 && cg.regcon.immed.value[r] == value)
                 {
-                    genmovreg(cdb,reg,r);
+                    genmovreg(cg, cdb,reg,r);
                     goto done;
                 }
                 r++;
@@ -3698,7 +3698,7 @@ void prolog_ifunc(ref CodeBuilder cdb, tym_t* tyf)
 
     genregs(cdb,0x8B,BP,SP);     // MOV BP,SP
     if (localsize)
-        cod3_stackadj(cdb, cast(int)localsize);
+        cod3_stackadj(cgstate, cdb, cast(int)localsize);
 
     *tyf |= mTYloadds;
 }
@@ -3836,7 +3836,7 @@ void prolog_frame(ref CGstate cg, ref CodeBuilder cdb, bool farfunc, ref uint xl
             {
                 /* SUB sp,sp,#16+xlocalsize
                  */
-                cod3_stackadj(cdb, 16 + xlocalsize);
+                cod3_stackadj(cg, cdb, 16 + xlocalsize);
 
                 assert((xlocalsize & 0xF) == 0); // 16 byte aligned
 
@@ -3956,7 +3956,7 @@ void prolog_frameadj(ref CGstate cg, ref CodeBuilder cdb, tym_t tyf, uint xlocal
              *      SUB     ESP, xlocalsize % 0x1000
              */
             movregconst(cg,cdb, reg, xlocalsize / 0x1000, false);
-            cod3_stackadj(cdb, 0x1000);
+            cod3_stackadj(cg, cdb, 0x1000);
             code_orflag(cdb.last(), CF.targ2);
             cdb.gen2sib(0x85, modregrm(0,SP,4),modregrm(0,4,SP));
             if (I64)
@@ -3968,7 +3968,7 @@ void prolog_frameadj(ref CGstate cg, ref CodeBuilder cdb, tym_t tyf, uint xlocal
                 cdb.genc2(JNE,0,cast(targ_uns)-12);
             }
             cg.regimmed_set(reg,0);             // reg is now 0
-            cod3_stackadj(cdb, xlocalsize & 0xFFF);
+            cod3_stackadj(cg, cdb, xlocalsize & 0xFFF);
             useregs(cg, mask(reg));
         }
     }
@@ -3981,7 +3981,7 @@ static if (0)
            stp x29,x30,[sp,#xlocalsize]
            add x29,sp,#xlocalsize
          */
-        cod3_stackadj(cdb, 16 + xlocalsize);
+        cod3_stackadj(cg, cdb, 16 + xlocalsize);
 
         assert((xlocalsize & 0xF) == 0); // 16 byte aligned
 
@@ -4030,7 +4030,7 @@ static if (0)
             *pushalloc = true;
         }
         else
-            cod3_stackadj(cdb, xlocalsize);
+            cod3_stackadj(cg, cdb, xlocalsize);
     }
 }
 
@@ -4042,7 +4042,7 @@ void prolog_frameadj2(ref CGstate cg, ref CodeBuilder cdb, tym_t tyf, uint xloca
     {
         /* sub sp,sp,#xlocalsize
          */
-        cod3_stackadj(cdb, xlocalsize);
+        cod3_stackadj(cg, cdb, xlocalsize);
         return;
     }
 
@@ -4059,7 +4059,7 @@ void prolog_frameadj2(ref CGstate cg, ref CodeBuilder cdb, tym_t tyf, uint xloca
         *pushalloc = true;
     }
     else
-        cod3_stackadj(cdb, xlocalsize);
+        cod3_stackadj(cg, cdb, xlocalsize);
 }
 
 @trusted
@@ -4160,7 +4160,7 @@ void prolog_saveregs(ref CGstate cg, ref CodeBuilder cdb, regm_t topush, int cfa
             if (isXMMreg(reg))
             {
                 // SUB RSP,16
-                cod3_stackadj(cdb, 16);
+                cod3_stackadj(cg, cdb, 16);
                 // MOVUPD 0[RSP],xmm
                 cdb.genc1(STOUPD,modregxrm(2,reg-XMM0,4) + 256*modregrm(0,4,SP),FL.const_,0);
                 cg.EBPtoESP += 16;
@@ -4262,7 +4262,7 @@ private void epilog_restoreregs(ref CGstate cg, ref CodeBuilder cdb, regm_t topo
                     // MOVUPD xmm,0[RSP]
                     cdb.genc1(LODUPD,modregxrm(2,reg-XMM0,4) + 256*modregrm(0,4,SP),FL.const_,0);
                     // ADD RSP,16
-                    cod3_stackadj(cdb, -16);
+                    cod3_stackadj(cg, cdb, -16);
                 }
                 else
                 {
@@ -4793,7 +4793,7 @@ void prolog_loadparams(ref CGstate cg, ref CodeBuilder cdb, tym_t tyf, bool push
             else
             {
                 //printf("test1 mov %s, %s\n", regstring[r], regstring[preg]);
-                genmovreg(cdb,r,preg);
+                genmovreg(cg, cdb,r,preg);
                 if (I64 && sz == 8)
                     code_orrex(cdb.last(), REX_W);
             }
@@ -5063,7 +5063,7 @@ void epilog(ref CGstate cg, block* b)
             cdbx.genpop(regx);                     // POP regx
         }
         else if (xlocalsize)
-            cod3_stackadj(cdbx, cast(int)-xlocalsize);
+            cod3_stackadj(cg, cdbx, cast(int)-xlocalsize);
     }
     if (b.bc == BC.ret || b.bc == BC.retexp)
     {

@@ -522,7 +522,7 @@ static if (0)
         static if (MARS)
         {
             if (config.exe == EX_WIN64)
-                win64_pdata(sfunc, localsize);
+                win64_pdata(cg, sfunc, localsize);
         }
 
         static if (MARS)
@@ -1450,7 +1450,7 @@ private void blcodgen(ref CGstate cg, block* bl)
         }
         if ((cg.regcon.cse.mops & cg.regcon.cse.mval) != cg.regcon.cse.mops)
         {
-            cse_save(cdb,cg.regcon.cse.mops & ~cg.regcon.cse.mval);
+            cse_save(cg, cdb,cg.regcon.cse.mops & ~cg.regcon.cse.mval);
         }
         cdb.append(cdbstore);
         cdb.append(cdbload);
@@ -1994,7 +1994,7 @@ void getregs(ref CodeBuilder cdb, regm_t r)
     cg.msavereg &= ~r;                     // regs that are destroyed
     cg.regcon.immed.mval &= ~r;
     if (ms)
-        cse_save(cdb, ms);
+        cse_save(cgstate, cdb, ms);
 }
 
 /*************************
@@ -2017,10 +2017,9 @@ void getregsNoSave(ref CGstate cg, regm_t r)
  */
 
 @trusted
-private void cse_save(ref CodeBuilder cdb, regm_t ms)
+private void cse_save(ref CGstate cg, ref CodeBuilder cdb, regm_t ms)
 {
     //printf("cse_save() ms: %s\n", regm_str(ms));
-    CGstate* cg = &cgstate;
     assert((ms & cg.regcon.cse.mops) == ms);
 
     cg.regcon.cse.mops &= ~ms;
@@ -2068,12 +2067,12 @@ private void cse_save(ref CodeBuilder cdb, regm_t ms)
         ms &= ~mask(reg);           /* turn off reg bit in ms       */
 
         // If we can simply reload the CSE, we don't need to save it
-        if (cse_simple(cgstate, &cse.csimple, cse.e))
+        if (cse_simple(cg, &cse.csimple, cse.e))
             cse.flags |= CSEsimple;
         else
         {
-            CSE.updateSizeAndAlign(cgstate, cse.e);
-            gen_storecse(cgstate, cdb, cse.e.Ety, reg, cse.slot);
+            CSE.updateSizeAndAlign(cg, cse.e);
+            gen_storecse(cg, cdb, cse.e.Ety, reg, cse.slot);
             cg.reflocal = true;
         }
     }
@@ -2102,7 +2101,7 @@ void getregs_imm(ref CodeBuilder cdb, regm_t r)
 void cse_flush(ref CodeBuilder cdb, int do87)
 {
     //dbg_printf("cse_flush()\n");
-    cse_save(cdb,cgstate.regcon.cse.mops);      // save any CSEs to memory
+    cse_save(cgstate, cdb,cgstate.regcon.cse.mops);      // save any CSEs to memory
     if (do87)
         save87(cdb);    // save any 8087 temporaries
 }
@@ -3100,10 +3099,10 @@ void scodelem(ref CGstate cg, ref CodeBuilder cdb, elem* e,ref regm_t pretregs,r
 
                     if (touse & mj)
                     {
-                        genmovreg(cdbs1,j,i);
+                        genmovreg(cg, cdbs1,j,i);
 
                         CodeBuilder cdbs2; cdbs2.ctor();
-                        genmovreg(cdbs2, i, j);
+                        genmovreg(cg, cdbs2, i, j);
 
                         cs2 = cat(cdbs2.finish(),cs2);
 
@@ -3144,11 +3143,11 @@ void scodelem(ref CGstate cg, ref CodeBuilder cdb, elem* e,ref regm_t pretregs,r
             regm_t mval_save = cg.regcon.immed.mval;
             cg.regcon.immed.mval = 0;      // prevent reghasvalue() optimizations
                                         // because c hasn't been executed yet
-            cod3_stackadj(cdbs1, sz);
+            cod3_stackadj(cg, cdbs1, sz);
             cg.regcon.immed.mval = mval_save;
             cdbs1.genadjesp(sz);
 
-            cod3_stackadj(cdbs2, -sz);
+            cod3_stackadj(cg, cdbs2, -sz);
             cdbs2.genadjesp(-sz);
         }
         cdbs2.append(cs2);

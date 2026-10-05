@@ -1055,7 +1055,7 @@ void epilog(ref CGstate cg, block* b)
                     /* ADD sp,sp,#off
                      * ADD sp,sp,#off + lsl #12
                      */
-                    cod3_stackadj(cdbx, cast(int)(-(16 + xlocalsize)));
+                    cod3_stackadj(cg, cdbx, cast(int)(-(16 + xlocalsize)));
                 }
             }
         }
@@ -1078,7 +1078,7 @@ void epilog(ref CGstate cg, block* b)
     else if (xlocalsize)
     {
         if (log) printf("epilog: xlocalsize %d\n", cast(int)xlocalsize);
-        cod3_stackadj(cdbx, cast(int)-xlocalsize);
+        cod3_stackadj(cg, cdbx, cast(int)-xlocalsize);
     }
 
     if (b.bc == BC.ret || b.bc == BC.retexp)

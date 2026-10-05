@@ -585,7 +585,7 @@ void cdorth(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         const lrreg = findreglsw(rretregs);
         genregs(cdb,0x03,lreg,lrreg);              // ADD lreg,lrreg
         code_orflag(cdb.last(),CF.psw);
-        genmovreg(cdb,lrreg,CX);      // MOV lrreg,CX
+        genmovreg(cg, cdb,lrreg,CX);      // MOV lrreg,CX
         cdb.genc2(0x81,modregrm(3,2,mreg),0);      // ADC mreg,0
         genshift(cdb);                             // MOV CX,offset __AHSHIFT
         cdb.gen2(0xD3,modregrm(3,4,mreg));         // SHL mreg,CL
@@ -1255,7 +1255,7 @@ void cdmul(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
                     codelem(cg,cdb,e1.E1,retregs,false);    // eval left leaf
                     const reg = findreg(retregs);
                     getregs(cdb,mAX);
-                    genmovreg(cdb,AX,reg);            // MOV AX,reg
+                    genmovreg(cg, cdb,AX,reg);            // MOV AX,reg
                     loadea(cg,cdb,e2,cs,0xF7,4,REGSIZE,mAX | mDX | mskl(reg),mAX | mDX);  // MUL EA+2
                     getregs(cdb,retregs);
                     cdb.gen1(0x90 + reg);                          // XCHG AX,reg
@@ -1410,7 +1410,7 @@ void cddiv(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
                 if (mgt)
                     cdb.gen2(0x03,grex | modregrmx(3,DX,reg));          // ADD EDX,R1
                 getregsNoSave(cg, mAX);                                     // EAX no longer contains 'm'
-                genmovreg(cdb, AX, reg);                   // MOV EAX,R1
+                genmovreg(cg, cdb, AX, reg);                   // MOV EAX,R1
                 cdb.genc2(0xC1,grex | modregrm(3,7,AX),sz * 8 - 1);     // SAR EAX,31
                 if (shpost)
                     cdb.genc2(0xC1,grex | modregrm(3,7,DX),shpost);     // SAR EDX,shpost
@@ -1461,10 +1461,10 @@ void cddiv(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
                             cdb.gen2(0x0FAF,grex | modregrmx(3,AX,DX));     // IMUL EAX,EDX
                         }
                         cdb.gen2(0x2B,grex | modregxrm(3,reg,AX));          // SUB R1,EAX
-                        genmovreg(cdb, AX, r3);                // MOV EAX,r3
+                        genmovreg(cg, cdb, AX, r3);                // MOV EAX,r3
                         if (neg)
                             cdb.gen2(0xF7,grex | modregrm(3,3,AX));         // NEG EAX
-                        genmovreg(cdb, DX, reg);               // MOV EDX,R1
+                        genmovreg(cg, cdb, DX, reg);               // MOV EDX,R1
                         resregx = mDX | mAX;
                         break;
 
@@ -1508,11 +1508,11 @@ void cddiv(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
                     codelem(cg,cdb,e1,regm,false);       // eval left leaf
                     reg = findreg(regm);
                     getregs(cdb,mAX | mDX);
-                    genmovreg(cdb,AX,reg);                   // MOV EAX,reg
+                    genmovreg(cg, cdb,AX,reg);                   // MOV EAX,reg
                     movregconst(cg, cdb, DX, cast(targ_size_t)m, (sz == 8) ? 0x40 : 0);  // MOV EDX,m
                     getregs(cdb,regm | mDX | mAX);
                     cdb.gen2(0xF7,grex | modregrmx(3,4,DX));              // MUL EDX
-                    genmovreg(cdb,AX,reg);                   // MOV EAX,reg
+                    genmovreg(cg, cdb,AX,reg);                   // MOV EAX,reg
                     cdb.gen2(0x2B,grex | modregrm(3,AX,DX));              // SUB EAX,EDX
                     cdb.genc2(0xC1,grex | modregrm(3,5,AX),1);            // SHR EAX,1
                     regm_t regm3 = cg.allregs;
@@ -1544,7 +1544,7 @@ void cddiv(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
                     if (reg != AX)
                     {
                         getregs(cdb,mAX);
-                        genmovreg(cdb,AX,reg);                 // MOV EAX,reg
+                        genmovreg(cg, cdb,AX,reg);                 // MOV EAX,reg
                     }
                     if (shpre)
                     {
@@ -1606,8 +1606,8 @@ void cddiv(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
                         }
                         getregs(cdb,regm);
                         cdb.gen2(0x2B,grex | modregxrm(3,reg,AX));        // SUB reg,EAX
-                        genmovreg(cdb, AX, r3);              // MOV EAX,r3
-                        genmovreg(cdb, DX, reg);             // MOV EDX,reg
+                        genmovreg(cg, cdb, AX, r3);              // MOV EAX,r3
+                        genmovreg(cg, cdb, DX, reg);             // MOV EDX,reg
                         resreg = mDX | mAX;
                         break;
 
@@ -1642,7 +1642,7 @@ void cddiv(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
                 {
                     reg_t r1 = allocScratchReg(cdb, cg.allregs & ~retregs);
 
-                    genmovreg(cdb,r1,rhi);                                        // MOV  r1,rhi
+                    genmovreg(cg, cdb,r1,rhi);                                        // MOV  r1,rhi
                     if (pow2 == 1)
                         cdb.genc2(0xC1,grex | modregrmx(3,5,r1),REGSIZE * 8 - 1); // SHR  r1,31
                     else
@@ -1659,11 +1659,11 @@ void cddiv(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
                 {
                     reg_t r1 = allocScratchReg(cdb, cg.allregs & ~retregs);
 
-                    genmovreg(cdb,r1,rhi);                                        // MOV r1,rhi
+                    genmovreg(cg, cdb,r1,rhi);                                        // MOV r1,rhi
                     cdb.genc2(0xC1,grex | modregrmx(3,7,r1),REGSIZE * 8 - 1);     // SAR r1,31
                     cdb.gen2(0x03,grex | modregxrmx(3,rlo,r1));                   // ADD rlo,r1
                     cdb.genc2(0x81,grex | modregxrmx(3,2,rhi),0);                 // ADC rhi,0
-                    cdb.genmovreg(rlo,rhi);                                       // MOV rlo,rhi
+                    genmovreg(cg, cdb, rlo,rhi);                                       // MOV rlo,rhi
                     cdb.genc2(0xC1,grex | modregrmx(3,7,rhi),REGSIZE * 8 - 1);    // SAR rhi,31
                 }
                 else if (pow2 < 63)
@@ -1671,9 +1671,9 @@ void cddiv(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
                     reg_t r1 = allocScratchReg(cdb, cg.allregs & ~retregs);
                     reg_t r2 = allocScratchReg(cdb, cg.allregs & ~(retregs | mask(r1)));
 
-                    genmovreg(cdb,r1,rhi);                                        // MOV r1,rhi
+                    genmovreg(cg, cdb,r1,rhi);                                        // MOV r1,rhi
                     cdb.genc2(0xC1,grex | modregrmx(3,7,r1),REGSIZE * 8 - 1);     // SAR r1,31
-                    cdb.genmovreg(r2,r1);                                         // MOV r2,r1
+                    genmovreg(cg, cdb, r2,r1);                                         // MOV r2,r1
 
                     if (pow2 == 33)
                     {
@@ -1688,7 +1688,7 @@ void cddiv(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
                         cdb.gen2(0x13,grex | modregxrmx(3,rhi,r2));                    // ADC rhi,r2
                     }
 
-                    cdb.genmovreg(rlo,rhi);                                       // MOV rlo,rhi
+                    genmovreg(cg, cdb, rlo,rhi);                                       // MOV rlo,rhi
                     cdb.genc2(0xC1,grex | modregrmx(3,7,rlo),pow2 - 32);          // SAR rlo,pow2-32
                     cdb.genc2(0xC1,grex | modregrmx(3,7,rhi),REGSIZE * 8 - 1);    // SAR rhi,31
                 }
@@ -1728,7 +1728,7 @@ void cddiv(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
 
                 if (pow2 < 32)
                 {
-                    cdb.genmovreg(r1,rhi);                                    // MOV r1,rhi
+                    genmovreg(cg, cdb, r1,rhi);                                    // MOV r1,rhi
                     cdb.genc2(0xC1,grex | modregrmx(3,7,r1),REGSIZE * 8 - 1); // SAR r1,31
                     cdb.gen2(0x33,grex | modregxrmx(3,rlo,r1));               // XOR rlo,r1
                     cdb.gen2(0x2B,grex | modregxrmx(3,rlo,r1));               // SUB rlo,r1
@@ -1739,7 +1739,7 @@ void cddiv(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
                 }
                 else if (pow2 == 32)
                 {
-                    cdb.genmovreg(r1,rhi);                                      // MOV r1,rhi
+                    genmovreg(cg, cdb, r1,rhi);                                      // MOV r1,rhi
                     cdb.genc2(0xC1,grex | modregrmx(3,7,r1),REGSIZE * 8 - 1);   // SAR r1,31
                     cdb.gen2(0x03,grex | modregxrmx(3,rlo,r1));                 // ADD rlo,r1
                     cdb.gen2(0x2B,grex | modregxrmx(3,rlo,r1));                 // SUB rlo,r1
@@ -1749,9 +1749,9 @@ void cddiv(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
                 {
                     reg_t r2 = allocScratchReg(cdb, cg.allregs & ~(retregs | mask(r1)));
 
-                    cdb.genmovreg(r1,rhi);                                      // MOV  r1,rhi
+                    genmovreg(cg, cdb, r1,rhi);                                      // MOV  r1,rhi
                     cdb.genc2(0xC1,grex | modregrmx(3,7,r1),REGSIZE * 8 - 1);   // SAR  r1,31
-                    cdb.genmovreg(r2,r1);                                       // MOV  r2,r1
+                    genmovreg(cg, cdb, r2,r1);                                       // MOV  r2,r1
                     cdb.genc2(0x0FAC,grex | modregrm(3,r2,r1),64-pow2);         // SHRD r1,r2,64-pow2
                     cdb.genc2(0xC1,grex | modregrmx(3,5,r2),64-pow2);           // SHR  r2,64-pow2
                     cdb.gen2(0x03,grex | modregxrmx(3,rlo,r1));                 // ADD  rlo,r1
@@ -1800,7 +1800,7 @@ void cddiv(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
                     getregs(cdb,retregs);
 
                     reg_t r = allocScratchReg(cdb, cg.allregs & ~retregs);
-                    genmovreg(cdb,r,reg);                        // MOV r,reg
+                    genmovreg(cg, cdb,r,reg);                        // MOV r,reg
                     cdb.genc2(0xC1,grex | modregxrmx(3,5,r),(sz * 8 - 1)); // SHR r,31
                     cdb.gen2(0x03,grex | modregxrmx(3,reg,r));   // ADD reg,r
                     cdb.gen2(0xD1,grex | modregrmx(3,7,reg));    // SAR reg,1
@@ -2951,7 +2951,7 @@ void cdshift(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
                     {
                         if (oper == OPshl)
                             swap(resreg, sreg);
-                        genmovreg(cdb,sreg,resreg);  // MOV sreg,resreg
+                        genmovreg(cg, cdb,sreg,resreg);  // MOV sreg,resreg
                         if (oper == OPashr)
                             cdb.gen1(0x99);                       // CWD
                         else
@@ -3047,14 +3047,14 @@ void cdshift(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
                             //      MOV lreg,hreg
                             //      XOR hreg,hreg
                             cdb.genc2(0xC1,rex | modregrm(3,s1,hreg),shiftcnt - (REGSIZE * 8));
-                            genmovreg(cdb,lreg,hreg);
+                            genmovreg(cg, cdb,lreg,hreg);
                             movregconst(cg,cdb,hreg,0,0);
                         }
                         else if (oper == OPashr)
                         {   //      MOV     lreg,hreg
                             //      SAR     hreg,31
                             //      SHRD    lreg,hreg,shiftcnt
-                            genmovreg(cdb,lreg,hreg);
+                            genmovreg(cg, cdb,lreg,hreg);
                             cdb.genc2(0xC1,rex | modregrm(3,s1,hreg),(REGSIZE * 8) - 1);
                             cdb.genc2(0x0FAC,rex | modregrm(3,hreg,lreg),shiftcnt - (REGSIZE * 8));
                         }
@@ -3063,7 +3063,7 @@ void cdshift(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
                             //      MOV hreg,lreg
                             //      XOR lreg,lreg
                             cdb.genc2(0xC1,rex | modregrm(3,s1,lreg),shiftcnt - (REGSIZE * 8));
-                            genmovreg(cdb,hreg,lreg);
+                            genmovreg(cg, cdb,hreg,lreg);
                             movregconst(cg,cdb,lreg,0,0);
                         }
                     }
@@ -3141,7 +3141,7 @@ void cdshift(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
                         if (REGSIZE == 2)
                             cdb1.genc2(0x80,modregrm(3,4,CX),REGSIZE * 8 - 1);
                         cdb1.gen2(0xD3,modregrm(3,4,lreg));
-                        genmovreg(cdb1,hreg,lreg);
+                        genmovreg(cg, cdb1,hreg,lreg);
                         genregs(cdb1,0x31,lreg,lreg);
 
                         genjmp(cdb,JNE,FL.code,cast(block*)cl1);
@@ -3165,7 +3165,7 @@ void cdshift(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
 
                             if (REGSIZE == 2)
                                 cdb1.genc2(0x80,modregrm(3,4,CX),REGSIZE * 8 - 1);
-                            genmovreg(cdb1,lreg,hreg);
+                            genmovreg(cg, cdb1,lreg,hreg);
                             cdb1.genc2(0xC1,modregrm(3,s1,hreg),31);
                             cdb1.gen2(0x0FAD,modregrm(3,hreg,lreg));
                         }
@@ -3186,7 +3186,7 @@ void cdshift(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
                             if (REGSIZE == 2)
                                 cdb1.genc2(0x80,modregrm(3,4,CX),REGSIZE * 8 - 1);
                             cdb1.gen2(0xD3,modregrm(3,5,hreg));
-                            genmovreg(cdb1,lreg,hreg);
+                            genmovreg(cg, cdb1,lreg,hreg);
                             genregs(cdb1,0x31,hreg,hreg);
                         }
                         genjmp(cdb,JNE,FL.code,cast(block*)cl1);
@@ -3888,7 +3888,7 @@ void cdstrcpy(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     code_orrex(cdb.last(),rex);
     genregs(cdb,0x2B,DI,CX);                    // SUB DI,CX
     code_orrex(cdb.last(),rex);
-    genmovreg(cdb,SI,DI);          // MOV SI,DI
+    genmovreg(cg, cdb,SI,DI);          // MOV SI,DI
 
     // Load DS with right value
     switch (ty2)
@@ -3938,7 +3938,7 @@ void cdstrcpy(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     if (need_DS)
         cdb.gen1(0x1F);                     // POP DS
     if (pretregs)
-        genmovreg(cdb,AX,DI);               // MOV AX,DI
+        genmovreg(cg, cdb,AX,DI);               // MOV AX,DI
     cdb.gen1(0xF3);                         // REP
     cdb.gen1(0xA4);                              // MOVSB
 
@@ -4047,7 +4047,7 @@ void cdmemcpy(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
 
     if (pretregs)                              // if need return value
     {   getregs(cdb,mAX);
-        genmovreg(cdb,AX,DI);
+        genmovreg(cg, cdb,AX,DI);
     }
 
     if (0 && I32 && config.flags4 & CFG4speed)
@@ -4067,7 +4067,7 @@ void cdmemcpy(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
          * L2:  nop
          */
         getregs(cdb,mSI | mDI | mCX | mDX);
-        genmovreg(cdb,DX,CX);                  // MOV EDX,ECX
+        genmovreg(cg, cdb,DX,CX);                  // MOV EDX,ECX
         cdb.genc2(0xC1,modregrm(3,5,CX),2);                 // SHR ECX,2
         code* cx = gennop(null);
         genjmp(cdb, JE, FL.code, cast(block*)cx);  // JZ L1
@@ -4078,7 +4078,7 @@ void cdmemcpy(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
 
         code* cnop = gennop(null);
         genjmp(cdb, JE, FL.code, cast(block*)cnop);  // JZ L2
-        genmovreg(cdb,CX,DX);                    // MOV ECX,EDX
+        genmovreg(cg, cdb,CX,DX);                    // MOV ECX,EDX
         cdb.gen1(0xF3);                          // REPE
         cdb.gen1(0xA4);                          // MOVSB
         cdb.append(cnop);
@@ -4228,7 +4228,7 @@ void cdmemset(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     if (pretregs)                              // if need return value
     {
         getregs(cdb,mBX);
-        genmovreg(cdb,BX,DI);                   // MOV EBX,EDI
+        genmovreg(cg, cdb,BX,DI);                   // MOV EBX,EDI
     }
 
     if (enumbytes.Eoper == OPconst)
@@ -4377,7 +4377,7 @@ private void cdmemsetn(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pr
             mregbx = cg.allregs & ~(mregidx | mregcx | retregs3);
         const regbx = allocreg(cdb, mregbx, TYnptr);
         getregs(cdb, mregbx);
-        genmovreg(cdb,regbx,idxreg);            // MOV BX,DI
+        genmovreg(cg, cdb,regbx,idxreg);            // MOV BX,DI
     }
 
     getregs(cdb,mask(idxreg) | mCX);            // modify DI and CX
@@ -5135,7 +5135,7 @@ void cdabs(ref CGstate cg, ref CodeBuilder cdb,elem* e, ref regm_t pretregs)
             reg = findreg(retregs);
             r = allocScratchReg(cdb, cg.allregs & ~retregs);
             getregs(cdb,retregs);
-            genmovreg(cdb,r,reg);                     // MOV r,reg
+            genmovreg(cg, cdb,r,reg);                     // MOV r,reg
             cdb.genc2(0xC1,modregrmx(3,7,r),REGSIZE * 8 - 1);      // SAR r,31/63
             code_orrex(cdb.last(), rex);
         }
@@ -5717,12 +5717,12 @@ void cdddtor(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         if (STACKALIGN >= 16)
         {
             nalign = STACKALIGN - REGSIZE;
-            cod3_stackadj(cdb, nalign);
+            cod3_stackadj(cg, cdb, nalign);
         }
         cg.calledafunc = 1;
         genjmp(cdb,0xE8,FL.code,cast(block*)c);   // CALL Ldtor
         if (nalign)
-            cod3_stackadj(cdb, -nalign);
+            cod3_stackadj(cg, cdb, -nalign);
 
         code* cnop = gennop(null);
 

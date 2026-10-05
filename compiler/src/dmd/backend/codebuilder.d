@@ -386,21 +386,21 @@ assert(op != BADINS);
      * Generate code to deal with floatreg.
      */
     @trusted
-    void genfltreg(opcode_t opcode,int reg,targ_size_t offset)
+    void genfltreg(ref CGstate cg, opcode_t opcode,int reg,targ_size_t offset)
     {
-        cgstate.floatreg = true;
-        cgstate.reflocal = true;
+        cg.floatreg = true;
+        cg.reflocal = true;
         if ((opcode & ~7) == 0xD8)
             genfwait(this);
         genc1(opcode,modregxrm(2,reg,BPRM),FL.fltreg,offset);
     }
 
     @trusted
-    void genxmmreg(opcode_t opcode,reg_t xreg,targ_size_t offset, tym_t tym)
+    void genxmmreg(ref CGstate cg, opcode_t opcode,reg_t xreg,targ_size_t offset, tym_t tym)
     {
         assert(isXMMreg(xreg));
-        cgstate.floatreg = true;
-        cgstate.reflocal = true;
+        cg.floatreg = true;
+        cg.reflocal = true;
         genc1(opcode,modregxrm(2,xreg - XMM0,BPRM),FL.fltreg,offset);
         checkSetVex(last(), tym);
     }

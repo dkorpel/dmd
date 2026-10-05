@@ -131,7 +131,7 @@ struct Cinfo
  */
 
 @trusted
-private void cgsched_pentium(code** pc,regm_t scratch)
+private void cgsched_pentium(ref CGstate cg, code** pc,regm_t scratch)
 {
     //printf("scratch = x%02x\n",scratch);
     if (config.target_scheduler >= TARGET_80486)
@@ -142,8 +142,8 @@ private void cgsched_pentium(code** pc,regm_t scratch)
         {
             if (config.target_cpu == TARGET_Pentium ||
                 config.target_cpu == TARGET_PentiumMMX)
-                *pc = simpleops(cgstate, *pc,scratch);
-            *pc = schedule(cgstate, *pc,0);
+                *pc = simpleops(cg, *pc,scratch);
+            *pc = schedule(cg, *pc,0);
         }
     }
 }
@@ -162,7 +162,7 @@ public void cgsched_block(block* b)
 
         scratch &= ~(b.Bregcon.used | b.Bregcon.params | cgstate.mfuncreg);
         scratch &= ~(b.Bregcon.immed.mval | b.Bregcon.cse.mval);
-        cgsched_pentium(&b.Bcode,scratch);
+        cgsched_pentium(cgstate, &b.Bcode,scratch);
         //printf("after schedule:\n"); code_print_list(b.Bcode);
     }
 }

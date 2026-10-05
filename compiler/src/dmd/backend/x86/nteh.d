@@ -322,7 +322,7 @@ void nteh_prolog(ref CGstate cg, ref CodeBuilder cdb)
     }
 
     cdb.append(cdb2);
-    cod3_stackadj(cdb, 8);
+    cod3_stackadj(cg, cdb, 8);
 }
 
 /*********************************
@@ -544,7 +544,7 @@ void cdsetjmp(ref CGstate cg, ref CodeBuilder cdb, elem* e,ref regm_t pretregs)
     getregs(cdb,~getRtlsym(cg, RTLSYM.SETJMP3).Sregsaved & (ALLREGS | mES));
     cdb.gencs(0xE8,0,FL.func,getRtlsym(cg, RTLSYM.SETJMP3));      // CALL __setjmp3
 
-    cod3_stackadj(cdb, -(cg.stackpush - stackpushsave));
+    cod3_stackadj(cg, cdb, -(cg.stackpush - stackpushsave));
     cdb.genadjesp(-(cg.stackpush - stackpushsave));
 
     cg.stackpush = stackpushsave;
@@ -600,7 +600,7 @@ void nteh_unwind(ref CGstate cg, ref CodeBuilder cdb,regm_t saveregs,uint stop_i
     ++nargs;
 
     cdbx.gencs(0xE8,0,FL.func,getRtlsym(cg, local_unwind));  // CALL _local_unwind()
-    cod3_stackadj(cdbx, -nargs * 4);
+    cod3_stackadj(cg, cdbx, -nargs * 4);
 
     cdb.append(cdbs);
     cdb.append(cdbx);

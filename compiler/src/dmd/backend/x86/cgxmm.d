@@ -125,12 +125,12 @@ void movxmmconst(ref CGstate cg, ref CodeBuilder cdb, reg_t xreg, tym_t ty, Vcon
         u.s = value;
         targ_long* p = &u.l[0];
         movregconst(cg,cdb,r,p[0],0);
-        cdb.genfltreg(STO,r,0);                     // MOV floatreg,r
+        cdb.genfltreg(cg, STO,r,0);                     // MOV floatreg,r
         movregconst(cg,cdb,r,p[1],0);
-        cdb.genfltreg(STO,r,4);                     // MOV floatreg+4,r
+        cdb.genfltreg(cg, STO,r,4);                     // MOV floatreg+4,r
 
         const op = xmmload(TYdouble, true);
-        cdb.genxmmreg(op,xreg,0,TYdouble);          // MOVSD XMMreg,floatreg
+        cdb.genxmmreg(cg, op,xreg,0,TYdouble);          // MOVSD XMMreg,floatreg
     }
     else
     {

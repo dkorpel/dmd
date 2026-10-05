@@ -50,7 +50,7 @@ else
  *      localsize = offset to symbols on stack
  */
 @trusted
-public void win64_pdata(Symbol* sf, targ_size_t localsize)
+public void win64_pdata(ref CGstate cg, Symbol* sf, targ_size_t localsize)
 {
     //printf("win64_pdata()\n");
     assert(config.exe == EX_WIN64);
@@ -66,7 +66,7 @@ public void win64_pdata(Symbol* sf, targ_size_t localsize)
     symbol_keep(spdata);
     symbol_debug(spdata);
 
-    Symbol* sunwind = win64_unwind(cgstate, sf, localsize);
+    Symbol* sunwind = win64_unwind(cg, sf, localsize);
 
     /* 3 pointers are emitted:
      *  1. pointer to start of function sf
@@ -76,7 +76,7 @@ public void win64_pdata(Symbol* sf, targ_size_t localsize)
 
     auto dtb = DtBuilder(0);
     dtb.xoff(sf,0,TYint);       // Note the TYint, these are 32 bit fixups
-    dtb.xoff(sf,cast(uint)(cgstate.retoffset + cgstate.retsize),TYint);
+    dtb.xoff(sf,cast(uint)(cg.retoffset + cg.retsize),TYint);
     dtb.xoff(sunwind,0,TYint);
     spdata.Sdt = dtb.finish();
 

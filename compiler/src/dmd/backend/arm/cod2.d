@@ -1567,7 +1567,7 @@ void cdmemset(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
             if (!retregs)
                 retregs = cg.allregs & ~(nbytesregs | valueregs | dstregs);
             reg_t retreg = allocreg(cdb,retregs,TYnptr);
-            genmovreg(cdb,retreg,dstreg);           // MOV retreg,dstreg
+            genmovreg(cg, cdb,retreg,dstreg);           // MOV retreg,dstreg
         }
 
         const uint numbytes = cast(uint)el_tolong(enumbytes);
@@ -1700,7 +1700,7 @@ private void cdmemsetn(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pr
             mRp = cg.allregs & ~(dregs | cregs | vregs);
         Rp = allocreg(cdb, mRp, TYnptr);
         getregs(cdb, mRp);
-        genmovreg(cdb,Rp,Rd);            // MOV Rp,Rd
+        genmovreg(cg, cdb,Rp,Rd);            // MOV Rp,Rd
     }
 
     // allocate limit register Rl
@@ -1740,7 +1740,7 @@ private void cdmemsetn(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pr
     cdb.gen1(INSTR.addsub_ext(1,op,S,opt,Rc,option,imm3,Rd,Rl));
 
     if (Rp != Rd)
-        genmovreg(cdb,Rp,Rd);
+        genmovreg(cg, cdb,Rp,Rd);
 
     if (szv == 2)
     {

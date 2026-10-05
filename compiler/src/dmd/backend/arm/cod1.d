@@ -1676,7 +1676,7 @@ void callclib(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint clib, ref regm_
         int npush = npushed * REGSIZE + cg.stackpush;
         if (npush & (STACKALIGN - 1))
         {   nalign = STACKALIGN - (npush & (STACKALIGN - 1));
-            cod3_stackadj(cdb, nalign);
+            cod3_stackadj(cg, cdb, nalign);
         }
     }
 
@@ -1685,7 +1685,7 @@ void callclib(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint clib, ref regm_
 
 
     if (nalign)
-        cod3_stackadj(cdb, -nalign);
+        cod3_stackadj(cg, cdb, -nalign);
     cg.calledafunc = 1;
 
     cdb.append(cdbpop);
@@ -1914,7 +1914,7 @@ void cdfunc(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t pretregs)
 //printf("STACKALIGN: %d\n", STACKALIGN);
     uint numalign = -numpara & (STACKALIGN - 1);  // number of bytes needed to align the argument stack to STACKALIGN
 //printf("numalign: %d numpara: %d\n", numalign, numpara);
-    cod3_stackadj(cdb, numalign + numpara);
+    cod3_stackadj(cg, cdb, numalign + numpara);
     cdb.genadjesp(numalign + numpara);
     cg.stackpush += numalign + numpara;
     stackpushsave += numalign + numpara;
@@ -2068,9 +2068,9 @@ void cdfunc(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t pretregs)
                 else foreach (v; 0 .. 2)
                 {
                     if (v ^ (preg != mreg))
-                        genmovreg(cdb, preg, lreg, ty1);
+                        genmovreg(cg, cdb, preg, lreg, ty1);
                     else
-                        genmovreg(cdb, preg2, mreg, ty2);
+                        genmovreg(cg, cdb, preg2, mreg, ty2);
                 }
 
                 retregs = (mask(preg) | mask(preg2)) & ~mask(NOREG);
@@ -2104,7 +2104,7 @@ void cdfunc(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t pretregs)
     {   // Allocate stack space for four entries anyway
         // https://msdn.microsoft.com/en-US/library/ew5tede7%28v=vs.100%29
         {   uint sz = 4 * REGSIZE;
-            cod3_stackadj(cdb, sz);
+            cod3_stackadj(cg, cdb, sz);
             cdb.genadjesp(sz);
             cg.stackpush += sz;
         }
@@ -2190,7 +2190,7 @@ private void funccall(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint numpara
 
             regm_t regm = INSTR.ALLREGS & ~DESREGS;
             reg_t r = allocreg(cdbe, regm, TYnptr); // r becomes amount to allocate
-            genmovreg(cdbe,r,R9,TYMAX);             // MOV r,R9  since r is preserved by ___chkstk_darwin
+            genmovreg(cg, cdbe,r,R9,TYMAX);             // MOV r,R9  since r is preserved by ___chkstk_darwin
 
             enum reg_t R16 = 16;                    // scratch register
 
@@ -2205,9 +2205,9 @@ private void funccall(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint numpara
             if (!retregs)
                 retregs = INSTR.ALLREGS;
             reg_t r2 = allocreg(cdbe, retregs, TYnptr);
-            genmovreg(cdbe,r2,INSTR.SP,TYMAX);                 // MOV  r2,SP
+            genmovreg(cg, cdbe,r2,INSTR.SP,TYMAX);                 // MOV  r2,SP
             cdbe.gen1(INSTR.subs_addsub_shift(1,r,0,0,r2,r2)); // SUBS r2,r2,r
-            genmovreg(cdbe,INSTR.SP,r2,TYMAX);                 // MOV  SP,r2
+            genmovreg(cg, cdbe,INSTR.SP,r2,TYMAX);                 // MOV  SP,r2
 
             cdb.append(cdbe);
             freenode(cg, e1);
@@ -2411,9 +2411,9 @@ static if (0)
             for (int v = 0; v < 2; v++)
             {
                 if (v ^ (reg2 != lreg))
-                    genmovreg(cdb,lreg,reg1);
+                    genmovreg(cg, cdb,lreg,reg1);
                 else
-                    genmovreg(cdb,mreg,reg2);
+                    genmovreg(cg, cdb,mreg,reg2);
             }
             retregs = mask(lreg) | mask(mreg);
         }
@@ -2432,21 +2432,21 @@ static if (0)
         if (config.exe == EX_WIN64)
         {
             assert(reg1 == AX);
-            cdb.genfltreg(STO, reg1, 0);
+            cdb.genfltreg(cg, STO, reg1, 0);
             code_orrex(cdb.last(), REX_W);
         }
         else
         {
             assert(reg1 == XMM0);
-            cdb.genxmmreg(xmmstore(TYdouble), reg1, 0, TYdouble);
+            cdb.genxmmreg(cg, xmmstore(TYdouble), reg1, 0, TYdouble);
         }
         // reload real
         push87(cdb);
-        cdb.genfltreg(0xD9, 0, 0);
+        cdb.genfltreg(cg, 0xD9, 0, 0);
         genfwait(cdb);
         // reload imaginary
         push87(cdb);
-        cdb.genfltreg(0xD9, 0, tysize(TYfloat));
+        cdb.genfltreg(cg, 0xD9, 0, tysize(TYfloat));
         genfwait(cdb);
 
         retregs = mST01;
@@ -2735,7 +2735,7 @@ void loaddata(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t outretreg
                 loadea(cg, cdb, e, cs, opmv, nreg, 0, 0, 0);    // MOV nregL,data
                 if (reg != nreg)
                 {
-                    genmovreg(cdb, reg, nreg);   // MOV reg,nreg
+                    genmovreg(cg, cdb, reg, nreg);   // MOV reg,nreg
                     cssave(cg, e, mask(nreg), false);
                 }
             }
