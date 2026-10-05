@@ -605,12 +605,44 @@ bool[size_t] reachSet(size_t g)
     return reach;
 }
 
-bool isLeaf(size_t g, size_t f, bool[size_t] reach)
+__gshared bool[size_t] doneMemo;
+__gshared bool[size_t] doneBusy;
+__gshared string[size_t] problemMemo;
+
+string problemOf(size_t g, size_t f)
+{
+    if (auto p = f in problemMemo)
+        return *p;
+    string problem;
+    group(g, f, paramName(g, ""), 10, problem);
+    problemMemo[f] = problem;
+    return problem;
+}
+
+bool settled(size_t g, size_t f, bool[size_t] reach)
+{
+    if (auto p = f in doneMemo)
+        return *p;
+    if (f in doneBusy)
+        return true;
+    doneBusy[f] = true;
+    bool r = globals[g].users.canFind(f) ? problemOf(g, f).length && calleesSettled(g, f, reach) : calleesSettled(g, f, reach);
+    doneBusy.remove(f);
+    doneMemo[f] = r;
+    return r;
+}
+
+bool calleesSettled(size_t g, size_t f, bool[size_t] reach)
 {
     foreach (c; funcs[f].calls)
-        if (c != f && c in reach)
+        if (c != f && c in reach && !settled(g, c, reach))
             return false;
     return true;
+}
+
+bool isLeaf(size_t g, size_t f, bool[size_t] reach)
+{
+    return calleesSettled(g, f, reach);
 }
 
 string rel(string file)
@@ -637,7 +669,7 @@ void report(string only)
             continue;
         foreach (u; gl.users)
         {
-            auto why = candidateProblem(g, u, paramName(g, ""));
+            auto why = problemOf(g, u);
             printf("  %s %-30s %-28s refs=%-3zu callers=%-3zu %s\n", isLeaf(g, u, reach) ? "leaf".ptr : "    ".ptr,
                 funcs[u].name.toStringz, rel(funcs[u].file).toStringz, funcs[u].globalRefs[g].length,
                 funcs[u].callers.length, why.length ? why.toStringz : "ok".ptr);
