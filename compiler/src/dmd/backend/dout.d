@@ -989,7 +989,7 @@ void writefunc2(ref CGstate cg, Symbol* sfunc, ref GlobalOptimizer go, ref Block
     {
         if (debugb)
         {
-            WRfunc(cg, "codegen", funcsym_p, bo.startblock);
+            WRfunc(cg.AArch64, "codegen", funcsym_p, bo.startblock);
         }
     }
 

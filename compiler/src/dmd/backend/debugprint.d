@@ -487,10 +487,10 @@ void numberBlocks(block* startblock)
  *      startblock = intermediate code
  */
 @trusted
-void WRfunc(ref CGstate cg, const char* msg, Symbol* sfunc, block* startblock)
+void WRfunc(bool AArch64, const char* msg, Symbol* sfunc, block* startblock)
 {
     printf("............%s...%s()\n", msg, sfunc.Sident.ptr);
     numberBlocks(startblock);
     for (block* b = startblock; b; b = b.Bnext)
-        WRblock(cg.AArch64, b);
+        WRblock(AArch64, b);
 }

@@ -81,7 +81,7 @@ void genDwarfEh(ref CGstate cg, Funcsym* sfunc, int seg, OutBuffer* et, bool sca
 
 static if (0)
 {
-    WRfunc(cg, "genDwarfEH()", funcsym_p, startblock);
+    WRfunc(cg.AArch64, "genDwarfEH()", funcsym_p, startblock);
     printf("-------------------------\n");
 }
 

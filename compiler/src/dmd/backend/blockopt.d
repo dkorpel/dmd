@@ -469,7 +469,7 @@ void blockopt(ref CGstate cg, ref GlobalOptimizer go, ref BlockOpt bo, ref uint 
 
         debug if (debugw)
         {
-            WRfunc(cg, "After blockopt()", funcsym_p, bo.startblock);
+            WRfunc(cg.AArch64, "After blockopt()", funcsym_p, bo.startblock);
         }
     }
     else
@@ -516,7 +516,7 @@ void blockopt(ref CGstate cg, ref GlobalOptimizer go, ref BlockOpt bo, ref uint 
 
         debug if (debugb)
         {
-            WRfunc(cg, "After blockopt()", funcsym_p, bo.startblock);
+            WRfunc(cg.AArch64, "After blockopt()", funcsym_p, bo.startblock);
         }
     }
 }

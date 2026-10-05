@@ -3706,7 +3706,7 @@ bool loopunroll(ref CGstate cg, ref GlobalOptimizer go, ref BlockOpt bo, ref Loo
         return false;
     l.Lhead.Bflags |= BFL.keepRolled;
     if (log)
-        WRfunc(cg, "loop", funcsym_p, bo.startblock);
+        WRfunc(cg.AArch64, "loop", funcsym_p, bo.startblock);
 
     if (l.Lhead.Btry || l.Ltail.Btry)
         return false;

@@ -311,7 +311,7 @@ void optfunc(ref CGstate cg, ref GlobalOptimizer go, ref BlockOpt bo)
 
     debug if (debugb)
     {
-        WRfunc(cg, "before optimization", funcsym_p, bo.startblock);
+        WRfunc(cg.AArch64, "before optimization", funcsym_p, bo.startblock);
     }
 
     if (localgot)
@@ -459,7 +459,7 @@ void optfunc(ref CGstate cg, ref GlobalOptimizer go, ref BlockOpt bo)
 
     debug if (debugb)
     {
-        WRfunc(cg, "after optimization", funcsym_p, bo.startblock);
+        WRfunc(cg.AArch64, "after optimization", funcsym_p, bo.startblock);
     }
 
     // Prepare for code generator
