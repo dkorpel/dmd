@@ -838,7 +838,30 @@ bool declLike(string file, uint off)
     if (i == 0 || i == size_t.max)
         return false;
     const p = tks[i - 1].value;
-    return p == TOK.identifier || p == TOK.mul || p == TOK.rightBracket || (p >= TOK.void_ && p <= TOK.bool_);
+    with (TOK) return p == identifier || p == mul || p == rightBracket || (p >= void_ && p <= bool_) ||
+        p == const_ || p == immutable_ || p == auto_ || p == static_ || p == ref_ || p == out_ || p == in_ || p == scope_ || p == shared_ || p == gshared || p == enum_;
+}
+
+bool localUse(string file, Tok tok)
+{
+    foreach (ref o; funcs)
+        if (o.file == file && o.nameOff < tok.off && tok.off < o.endOff && o.localNames.canFind(tok.ident))
+            return true;
+    return false;
+}
+
+bool memberCall(string file, Tok tok)
+{
+    auto tks = allTokens(file);
+    const i = tokIndex(file, tok.off);
+    if (i < 2 || tks[i - 1].value != TOK.dot)
+        return false;
+    if (tks[i - 2].value != TOK.identifier)
+        return true;
+    foreach (m; mods)
+        if (m.ident && m.ident.toString == tks[i - 2].ident)
+            return false;
+    return true;
 }
 
 bool unseenCall(string file, Tok tok)
@@ -895,7 +918,9 @@ string unexplainedUse(size_t f)
             const key = file ~ ":" ~ tok.off.to!string;
             if (key in known || key in varUses || inImport(file, tok.off) || unseenCall(file, tok))
                 continue;
-            if (declLike(file, tok.off) && deadCallOpen(file, tok) == uint.max)
+            if (deadCallOpen(file, tok) == uint.max && (declLike(file, tok.off) || localUse(file, tok)))
+                continue;
+            if (memberCall(file, tok))
                 continue;
             return lineOf(file, tok.off);
         }
