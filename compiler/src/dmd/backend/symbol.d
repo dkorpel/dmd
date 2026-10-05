@@ -544,7 +544,7 @@ debug
                 func_t* f = s.Sfunc;
 
                 debug assert(f);
-                blocklist_free(bo, &f.Fstartblock);
+                blocklist_free(bo.block_freelist, &f.Fstartblock);
                 freesymtab(f.Flocsym[].ptr,0,f.Flocsym.length);
 
                 f.Flocsym.dtor();

@@ -80,7 +80,7 @@ void* util_realloc(void* p, size_t n, size_t size)
 @trusted
 void flowrd(ref GlobalOptimizer go, ref BlockOpt bo)
 {
-    rdgenkill(go, bo);        /* Compute Bgen and Bkill for RDs       */
+    rdgenkill(go, bo.dfo);        /* Compute Bgen and Bkill for RDs       */
     if (go.defnod.length == 0)     /* if no definition elems               */
         return;             /* no analysis to be done               */
 
@@ -139,12 +139,12 @@ void flowrd(ref GlobalOptimizer go, ref BlockOpt bo)
  */
 
 @trusted
-private void rdgenkill(ref GlobalOptimizer go, ref BlockOpt bo)
+private void rdgenkill(ref GlobalOptimizer go, ref Barray!(block*) dfo)
 {
     /* Compute number of definition elems. */
     uint num_unambig_def = 0;
     uint deftop = 0;
-    foreach (b; bo.dfo[])    // for each block
+    foreach (b; dfo[])    // for each block
         if (b.Belem)
         {
             deftop += numdefelems(b.Belem, num_unambig_def);
@@ -167,14 +167,14 @@ private void rdgenkill(ref GlobalOptimizer go, ref BlockOpt bo)
 
     go.defnod.setLength(deftop);
     size_t i = deftop;
-    foreach_reverse (b; bo.dfo[])    // for each block
+    foreach_reverse (b; dfo[])    // for each block
         if (b.Belem)
             asgdefelems(b, b.Belem, go.defnod[], i);    // fill in go.defnod[]
     assert(i == 0);
 
     initDNunambigVectors(go.dnunambig, go.defnod[]);
 
-    foreach (b; bo.dfo[])    // for each block
+    foreach (b; dfo[])    // for each block
     {
         /* dump any existing vectors */
         vec_free(b.Bgen);
@@ -525,7 +525,7 @@ void flowcp(ref GlobalOptimizer go, ref BlockOpt bo)
 @trusted
 private void flowaecp(ref GlobalOptimizer go, ref BlockOpt bo)
 {
-    aecpgenkill(go, bo);   // Compute Bgen and Bkill for AEs or CPs
+    aecpgenkill(go, bo.dfo);   // Compute Bgen and Bkill for AEs or CPs
     if (go.exptop <= 1)        /* if no expressions                    */
         return;
 
@@ -652,7 +652,7 @@ private void flowaecp(ref GlobalOptimizer go, ref BlockOpt bo)
  */
 
 @trusted
-private void aecpgenkill(ref GlobalOptimizer go, ref BlockOpt bo)
+private void aecpgenkill(ref GlobalOptimizer go, ref Barray!(block*) dfo)
 {
     block* this_block;
 
@@ -763,7 +763,7 @@ private void aecpgenkill(ref GlobalOptimizer go, ref BlockOpt bo)
     go.expblk.setLength(0);             // dump any existing one
     go.expblk.push(null);
 
-    foreach (b; bo.dfo[])
+    foreach (b; dfo[])
     {
         if (b.Belem)
         {
@@ -794,7 +794,7 @@ private void aecpgenkill(ref GlobalOptimizer go, ref BlockOpt bo)
         {   dbg_printf("vptrkill "); vec_println(go.vptrkill); }
     }
 
-    foreach (i, b; bo.dfo[])
+    foreach (i, b; dfo[])
     {
         /* dump any existing vectors    */
         vec_free(b.Bin);
@@ -1003,11 +1003,11 @@ private void defstarkill(ref GlobalOptimizer go)
  */
 
 @trusted
-void genkillae(ref GlobalOptimizer go, ref BlockOpt bo)
+void genkillae(ref GlobalOptimizer go, ref Barray!(block*) dfo)
 {
     go.flowxx = AE;
     assert(go.exptop > 1);
-    foreach (b; bo.dfo[])
+    foreach (b; dfo[])
     {
         assert(b);
         vec_clear(b.Bgen);
@@ -1317,7 +1317,7 @@ private void accumaecpx(ref GlobalOptimizer go, elem* n)
 @trusted
 void flowlv(ref BlockOpt bo)
 {
-    lvgenkill(bo);            /* compute Bgen and Bkill for LVs.      */
+    lvgenkill(bo.dfo);            /* compute Bgen and Bkill for LVs.      */
     //assert(globsym.length);  /* should be at least some symbols      */
 
     /* Create a vector of all the variables that are live on exit   */
@@ -1404,7 +1404,7 @@ void flowlv(ref BlockOpt bo)
  */
 
 @trusted
-private void lvgenkill(ref BlockOpt bo)
+private void lvgenkill(ref Barray!(block*) dfo)
 {
     /* Compute ambigsym, a vector of all variables that could be    */
     /* referenced by a* e or a call.                                */
@@ -1425,7 +1425,7 @@ private void lvgenkill(ref BlockOpt bo)
         }
     }
 
-    foreach (b; bo.dfo[])
+    foreach (b; dfo[])
     {
         vec_free(b.Bgen);
         vec_free(b.Bkill);
@@ -1653,11 +1653,11 @@ private void accumlv(vec_t GEN, vec_t KILL, const(elem)* n, const vec_t ambigsym
  */
 
 @trusted
-void flowvbe(ref GlobalOptimizer go, ref BlockOpt bo)
+void flowvbe(ref GlobalOptimizer go, ref Barray!(block*) dfo)
 {
     if (&go) assert(0);
     go.flowxx = VBE;
-    aecpgenkill(go, bo);   // compute Bgen and Bkill for VBEs
+    aecpgenkill(go, dfo);   // compute Bgen and Bkill for VBEs
     if (go.exptop <= 1)     /* if no candidates for VBEs            */
         return;
 
@@ -1672,7 +1672,7 @@ void flowvbe(ref GlobalOptimizer go, ref BlockOpt bo)
     /*printf("defkill = "); vec_println(go.defkill);
     printf("starkill = "); vec_println(go.starkill);*/
 
-    foreach (b; bo.dfo[])
+    foreach (b; dfo[])
     {
         /*printf("block %p\n",b);
         printf("Bgen = "); vec_println(b.Bgen);
@@ -1695,7 +1695,7 @@ void flowvbe(ref GlobalOptimizer go, ref BlockOpt bo)
         anychng = false;
 
         /* for all blocks except return blocks in reverse dfo order */
-        foreach_reverse (b; bo.dfo[])
+        foreach_reverse (b; dfo[])
         {
             if (b.bc == BC.ret || b.bc == BC.retexp || b.bc == BC.exit)
                 continue;

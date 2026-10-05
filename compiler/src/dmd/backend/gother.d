@@ -1857,14 +1857,14 @@ public void verybusyexp(ref GlobalOptimizer go, ref BlockOpt bo, ref uint change
 {
     if (debugc) printf("verybusyexp()\n");
 
-    flowvbe(go, bo);                  /* compute VBEs                 */
+    flowvbe(go, bo.dfo);                  /* compute VBEs                 */
     if (go.exptop <= 1) return;        /* if no VBEs                   */
     assert(go.expblk.length);
     if (blockinit(bo))
         return;                     // can't handle ASM blocks
     compdom(bo);                    /* compute dominators           */
     /*setvecdim(go.exptop);*/
-    genkillae(go, bo);              /* compute Bgen and Bkill for   */
+    genkillae(go, bo.dfo);              /* compute Bgen and Bkill for   */
                                     /* AEs                          */
     /*chkvecdim(go.exptop,0);*/
 
@@ -1977,7 +1977,7 @@ public void verybusyexp(ref GlobalOptimizer go, ref BlockOpt bo, ref uint change
         {
             if (go.expnod[j] == null ||
                 !!OTleaf(go.expnod[j].Eoper) ||
-                !dom(bo, b,go.expblk[j]))
+                !dom(bo.dfo, b,go.expblk[j]))
                 vec_clearbit(j,b.Bout);
             else
                 done = false;

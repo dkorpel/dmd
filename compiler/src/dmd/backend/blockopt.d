@@ -62,14 +62,14 @@ __gshared BlockOpt bo;
 
 @trusted
 private
-pragma(inline, true) block* block_calloc_i(ref BlockOpt bo)
+pragma(inline, true) block* block_calloc_i(ref block* block_freelist)
 {
     block* b;
 
-    if (bo.block_freelist)
+    if (block_freelist)
     {
-        b = bo.block_freelist;
-        bo.block_freelist = b.Bnext;
+        b = block_freelist;
+        block_freelist = b.Bnext;
         *b = block();
     }
     else
@@ -80,7 +80,7 @@ pragma(inline, true) block* block_calloc_i(ref BlockOpt bo)
 public
 block* block_calloc(ref BlockOpt bo)
 {
-    return block_calloc_i(bo);
+    return block_calloc_i(bo.block_freelist);
 }
 
 /*********************************
@@ -106,13 +106,13 @@ Goal bc_goal(BC bc)
 
 @trusted
 private
-void block_term(ref BlockOpt bo)
+void block_term(ref block* block_freelist)
 {
-    while (bo.block_freelist)
+    while (block_freelist)
     {
-        block* b = bo.block_freelist.Bnext;
-        mem_free(bo.block_freelist);
-        bo.block_freelist = b;
+        block* b = block_freelist.Bnext;
+        mem_free(block_freelist);
+        block_freelist = b;
     }
 }
 
@@ -122,11 +122,11 @@ void block_term(ref BlockOpt bo)
 
 @trusted
 public
-void block_next(ref BlockOpt bo, BlockState* bctx, BC bc, block* bn)
+void block_next(ref block* block_freelist, BlockState* bctx, BC bc, block* bn)
 {
     bctx.curblock.bc = bc;
     if (!bn)
-        bn = block_calloc_i(bo);
+        bn = block_calloc_i(block_freelist);
     bctx.curblock.Bnext = bn;                // next block
     bctx.curblock = bctx.curblock.Bnext;     // new current block
     bctx.curblock.Btry = bctx.tryblock;
@@ -137,12 +137,12 @@ void block_next(ref BlockOpt bo, BlockState* bctx, BC bc, block* bn)
  * Finish up this block and start the next one.
  */
 public
-block* block_goto(ref BlockOpt bo, BlockState* bx, BC bc, block* bn)
+block* block_goto(ref block* block_freelist, BlockState* bx, BC bc, block* bn)
 {
     block* b;
 
     b = bx.curblock;
-    block_next(bo, bx,bc,bn);
+    block_next(block_freelist, bx,bc,bn);
     b.Bsucc.push(bx.curblock);
     return bx.curblock;
 }
@@ -158,13 +158,13 @@ version (COMPILE)
 private
 void block_goto()
 {
-    block_goto(block_calloc(bo));
+    block_goto((block_calloc(bo)).block_freelist);
 }
 
 private
 void block_goto(block* bn)
 {
-    block_goto(bn,bn);
+    block_goto(bn.block_freelist,bn);
 }
 
 private
@@ -179,7 +179,7 @@ void block_goto(block* bgoto,block* bnew)
         bc = BC.asm_;
     else
         bc = BC.goto_;            // fall thru to next block
-    block_next(bc,bnew);
+    block_next(bc.block_freelist,bnew);
 }
 
 }
@@ -283,13 +283,13 @@ void block_compbcount(ref uint changes, block* bstart)
  * Free list of blocks.
  */
 public
-void blocklist_free(ref BlockOpt bo, block** pb)
+void blocklist_free(ref block* block_freelist, block** pb)
 {
     block* bn;
     for (block* b = *pb; b; b = bn)
     {
         bn = b.Bnext;
-        block_free(bo, b);
+        block_free(block_freelist, b);
     }
     *pb = null;
 }
@@ -325,7 +325,7 @@ void block_optimizer_free(block* b)
 
 @trusted
 private
-void block_free(ref BlockOpt bo, block* b)
+void block_free(ref block* block_freelist, block* b)
 {
     assert(b);
     if (b.Belem)
@@ -357,8 +357,8 @@ void block_free(ref BlockOpt bo, block* b)
         default:
             break;
     }
-    b.Bnext = bo.block_freelist;
-    bo.block_freelist = b;
+    b.Bnext = block_freelist;
+    block_freelist = b;
 }
 
 /****************************
@@ -444,16 +444,16 @@ void blockopt(bool AArch64, ref GlobalOptimizer go, ref BlockOpt bo, ref uint ch
         {
             //printf("changes = %d, count = %d, dfo.length = %d\n",changes,count,dfo.length);
             changes = 0;
-            bropt(bo, changes);          // branch optimization
-            brrear(bo);                  // branch rearrangement
-            blident(bo, changes);        // combine identical blocks
+            bropt(bo.startblock, changes);          // branch optimization
+            brrear(bo.startblock);                  // branch rearrangement
+            blident(bo.startblock, changes);        // combine identical blocks
             blreturn(go.mfoptim, bo, changes);   // split out return blocks
             if (!(go.mfoptim & MFtime))  // if optimized for space instead of time
                 bltailmerge(bo.startblock, changes); // do tail merging
             brtailrecursion(bo, changes);        // do tail recursion
-            brcombine(bo, changes);      // convert graph to expressions
-            blexit(bo, changes);
-            brmin(bo, changes);          // minimize branching
+            brcombine(bo.startblock, changes);      // convert graph to expressions
+            blexit(bo.startblock, changes);
+            brmin(bo.startblock, changes);          // minimize branching
 
             // Switched to one block per Statement, do not undo it
             enum merge = false;
@@ -510,8 +510,8 @@ void blockopt(bool AArch64, ref GlobalOptimizer go, ref BlockOpt bo, ref uint ch
             bo.startblock.Belem = el_combine(e, bo.startblock.Belem);
         }
 
-        bropt(bo, changes);               /* branch optimization           */
-        brrear(bo);                       /* branch rearrangement          */
+        bropt(bo.startblock, changes);               /* branch optimization           */
+        brrear(bo.startblock);                       /* branch rearrangement          */
         comsubs(go.changes, bo);                  /* eliminate common subexpressions */
 
         debug if (debugb)
@@ -529,7 +529,7 @@ void blockopt(bool AArch64, ref GlobalOptimizer go, ref BlockOpt bo, ref uint ch
 
 @trusted
 private
-void brcombine(ref BlockOpt bo, ref uint changes)
+void brcombine(ref block* startblock, ref uint changes)
 {
     debug if (debugc) printf("brcombine()\n");
     //WRfunc("brcombine()", funcsym_p, startblock);
@@ -542,7 +542,7 @@ void brcombine(ref BlockOpt bo, ref uint changes)
     do
     {
         int anychanges = 0;
-        for (block* b = bo.startblock; b; b = b.Bnext)   // for each block
+        for (block* b = startblock; b; b = b.Bnext)   // for each block
         {
             /* Look for [e1 IFFALSE L3,L2] L2: [e2 GOTO L3] L3: [e3]    */
             /* Replace with [(e1 && e2),e3]                             */
@@ -556,7 +556,7 @@ void brcombine(ref BlockOpt bo, ref uint changes)
                     continue;
                 if (b2 == b3)
                     continue;
-                if (b2 == bo.startblock)
+                if (b2 == startblock)
                     continue;
                 if (b2.Belem && !OTleaf(b2.Belem.Eoper))
                     continue;
@@ -577,7 +577,7 @@ void brcombine(ref BlockOpt bo, ref uint changes)
                     debug if (debugc) printf("brcombine(): if !e1 then e2 => e1 || e2\n");
                     anychanges++;
                 }
-                else if (b3.Bpred.length > 1 || b3 == bo.startblock)
+                else if (b3.Bpred.length > 1 || b3 == startblock)
                     continue;
                 if ((bc2 == BC.retexp && b3.bc == BC.retexp)
                          //|| (bc2 == BC.ret && b3.bc == BC.ret)
@@ -660,10 +660,10 @@ void brcombine(ref BlockOpt bo, ref uint changes)
  */
 
 @trusted
-private void bropt(ref BlockOpt bo, ref uint changes)
+private void bropt(ref block* startblock, ref uint changes)
 {
     debug if (debugc) printf("bropt()\n");
-    for (block* b = bo.startblock; b; b = b.Bnext)   // for each block
+    for (block* b = startblock; b; b = b.Bnext)   // for each block
     {
         elem** pn = &(b.Belem);
         if (OPTIMIZER && *pn)
@@ -786,10 +786,10 @@ private void bropt(ref BlockOpt bo, ref uint changes)
  */
 
 @trusted
-private void brrear(ref BlockOpt bo)
+private void brrear(ref block* startblock)
 {
     debug if (debugc) printf("brrear()\n");
-    for (block* b = bo.startblock; b; b = b.Bnext)   // for each block
+    for (block* b = startblock; b; b = b.Bnext)   // for each block
     {
         foreach (i, bl; b.Bsucc[])
         {   /* For each transfer of control block pointer   */
@@ -970,7 +970,7 @@ private void elimblks(ref BlockOpt bo, ref uint changes)
     for ( ; bf; bf = b)
     {
         b = bf.Bnext;
-        block_free(bo, bf);
+        block_free(bo.block_freelist, bf);
     }
 
     debug if (debugc) printf("elimblks done\n");
@@ -1060,7 +1060,7 @@ private int mergeblks(ref BlockOpt bo)
                     bL2.Bnext = bo.startblock.Bnext;
                     bo.startblock = bL2;   // new start
 
-                    block_free(bo, b);
+                    block_free(bo.block_freelist, b);
                     break;              // dfo[] is now invalid
                 }
             }
@@ -1074,13 +1074,13 @@ private int mergeblks(ref BlockOpt bo)
  */
 
 @trusted
-private void blident(ref BlockOpt bo, ref uint changes)
+private void blident(ref block* startblock, ref uint changes)
 {
     debug if (debugc) printf("blident()\n");
-    assert(bo.startblock);
+    assert(startblock);
 
     block* bnext;
-    for (block* bn = bo.startblock; bn; bn = bnext)
+    for (block* bn = startblock; bn; bn = bnext)
     {
         bnext = bn.Bnext;
         if (bn.Bflags & BFL.separate)
@@ -1157,7 +1157,7 @@ private void blident(ref BlockOpt bo, ref uint changes)
                 }
 
                 // if bn is startblock, eliminate b instead of bn
-                if (bn == bo.startblock)
+                if (bn == startblock)
                 {
                     goto Lcontinue;     // can't handle predecessors to startblock
                     // unreachable code
@@ -1261,7 +1261,7 @@ private void blreturn(ref mftype mfoptim, ref BlockOpt bo, uint changes)
             }
         }
 
-        blident(bo, changes);           /* combine return blocks        */
+        blident(bo.startblock, changes);           /* combine return blocks        */
     }
 }
 
@@ -1561,10 +1561,10 @@ unittest
  */
 
 @trusted
-private void brmin(ref BlockOpt bo, ref uint changes)
+private void brmin(ref block* startblock, ref uint changes)
 {
     debug if (debugc) printf("brmin()\n");
-    debug assert(bo.startblock);
+    debug assert(startblock);
 
     static pure bool isExceptionHandler(block* b)
     {
@@ -1572,7 +1572,7 @@ private void brmin(ref BlockOpt bo, ref uint changes)
     }
 
     Lbb:
-    for (block* b = bo.startblock.Bnext; b && b.Bnext; b = b.Bnext)
+    for (block* b = startblock.Bnext; b && b.Bnext; b = b.Bnext)
     {
         switch (b.bc)
         {
@@ -1949,10 +1949,10 @@ private elem* assignparams(elem** pe,int* psi,elem** pe2)
  */
 
 @trusted
-private void emptyloops(ref BlockOpt bo, ref uint changes)
+private void emptyloops(ref block* startblock, ref uint changes)
 {
     debug if (debugc) printf("emptyloops()\n");
-    for (block* b = bo.startblock; b; b = b.Bnext)
+    for (block* b = startblock; b; b = b.Bnext)
     {
         if (b.bc == BC.iftrue &&
             b.Bsucc[0] == b &&
@@ -2020,10 +2020,10 @@ private void emptyloops(ref BlockOpt bo, ref uint changes)
  */
 
 @trusted
-private void funcsideeffects(ref BlockOpt bo)
+private void funcsideeffects(ref block* startblock)
 {
     //printf("funcsideeffects('%s')\n",funcsym_p.Sident);
-    for (block* b = bo.startblock; b; b = b.Bnext)
+    for (block* b = startblock; b; b = b.Bnext)
     {
         if (b.Belem && funcsideeffect_walk(b.Belem))
         {
@@ -2244,13 +2244,13 @@ private void blassertsplit(ref BlockOpt bo, ref uint changes)
  * Detect exit blocks and move them to the end.
  */
 @trusted
-private void blexit(ref BlockOpt bo, ref uint changes)
+private void blexit(ref block* startblock, ref uint changes)
 {
     debug if (debugc)
         printf("blexit()\n");
 
     Barray!(block*) bexits;
-    for (block* b = bo.startblock; b; b = b.Bnext)
+    for (block* b = startblock; b; b = b.Bnext)
     {
         /* Not sure of effect of jumping out of a try block
          */
@@ -2262,7 +2262,7 @@ private void blexit(ref BlockOpt bo, ref uint changes)
             /* If b is not already at the end, put it at the end
              * because we don't care about speed for BC.exit blocks
              */
-            if (b != bo.startblock && b.Bnext && b.Bnext.bc != BC.exit)
+            if (b != startblock && b.Bnext && b.Bnext.bc != BC.exit)
                 bexits.push(b);
             continue;
         }
@@ -2278,7 +2278,7 @@ private void blexit(ref BlockOpt bo, ref uint changes)
         }
         b.Bsucc.dtor();
 
-        if (b != bo.startblock && b.Bnext)
+        if (b != startblock && b.Bnext)
             bexits.push(b);
 
         debug if (debugc)
@@ -2292,7 +2292,7 @@ private void blexit(ref BlockOpt bo, ref uint changes)
     /* First remove them from the list of blocks
      */
     size_t i = 0;
-    block** pb = &bo.startblock.Bnext;
+    block** pb = &startblock.Bnext;
     while (1)
     {
         if (i == bexits.length)

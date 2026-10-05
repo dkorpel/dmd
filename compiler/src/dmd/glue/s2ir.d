@@ -111,12 +111,12 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
 
     void block_next(BlockState* bctx, BC bc, block* bn)
     {
-        return dmd.backend.blockopt.block_next(bo, bctx, bc, bn);
+        return dmd.backend.blockopt.block_next(bo.block_freelist, bctx, bc, bn);
     }
 
     block* block_goto(BlockState* bx, BC bc, block* bn)
     {
-        return dmd.backend.blockopt.block_goto(bo, bx, bc, bn);
+        return dmd.backend.blockopt.block_goto(bo.block_freelist, bx, bc, bn);
     }
 
     /****************************************

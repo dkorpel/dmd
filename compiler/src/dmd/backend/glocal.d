@@ -76,7 +76,7 @@ struct loc_t
 // temporary generation and register usage.
 
 @trusted
-void localize(ref BlockOpt bo, ref uint changes)
+void localize(ref block* startblock, ref uint changes)
 {
     if (debugc) printf("localize()\n");
 
@@ -85,7 +85,7 @@ void localize(ref BlockOpt bo, ref uint changes)
     // Table should not get any larger than the symbol table
     loctab.setLength(globsym.length);
 
-    foreach (b; BlockRange(bo.startblock))       // for each block
+    foreach (b; BlockRange(startblock))       // for each block
     {
         loctab.setLength(0);                     // start over for each block
         if (b.Belem &&

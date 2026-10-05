@@ -317,9 +317,9 @@ private void compdom(block*[] dfo)
  */
 
 @trusted
-bool dom(ref BlockOpt bo, const block* A, const block* B)
+bool dom(ref Barray!(block*) dfo, const block* A, const block* B)
 {
-    assert(A && B && bo.dfo && bo.dfo[A.Bdfoidx] == A);
+    assert(A && B && dfo && dfo[A.Bdfoidx] == A);
     return vec_testbit(A.Bdfoidx,B.Bdom) != 0;
 }
 
@@ -342,8 +342,8 @@ private void findloops(ref BlockOpt bo, block*[] dfo, ref Loops loops)
         foreach (s; b.Bsucc[])
         {
             assert(s);
-            if (dom(bo, s, b))              // if s dominates b
-                buildloop(bo, loops, s, b); // we found a loop
+            if (dom(bo.dfo, s, b))              // if s dominates b
+                buildloop(bo.dfo, loops, s, b); // we found a loop
         }
     }
 
@@ -387,7 +387,7 @@ private uint loop_weight(uint weight, int factor) pure
  */
 
 @trusted
-private void buildloop(ref BlockOpt bo, ref Loops ploops, block* head, block* tail)
+private void buildloop(ref Barray!(block*) dfo, ref Loops ploops, block* head, block* tail)
 {
     //printf("buildloop()\n");
 
@@ -414,7 +414,7 @@ private void buildloop(ref BlockOpt bo, ref Loops ploops, block* head, block* ta
             // Calculate loop contents separately so we get the Bweights
             // done accurately.
 
-            vec_t v = vec_calloc(bo.dfo.length);
+            vec_t v = vec_calloc(dfo.length);
             vec_setbit(head.Bdfoidx,v);
             head.Bweight = loop_weight(head.Bweight, 1);
             insert(tail,v);
@@ -430,8 +430,8 @@ private void buildloop(ref BlockOpt bo, ref Loops ploops, block* head, block* ta
     /* Allocate loop entry        */
     l = ploops.push();
 
-    l.Lloop = vec_calloc(bo.dfo.length);    // allocate loop bit vector
-    l.Lexit = vec_calloc(bo.dfo.length);    // bit vector for exit blocks
+    l.Lloop = vec_calloc(dfo.length);    // allocate loop bit vector
+    l.Lexit = vec_calloc(dfo.length);    // bit vector for exit blocks
     l.Lhead = head;
     l.Ltail = tail;
     l.Lpreheader = null;
@@ -449,11 +449,11 @@ L1:
     // for each block in this loop
     foreach (i; VecRange(l.Lloop))
     {
-        if (bo.dfo[i].bc == BC.ret || bo.dfo[i].bc == BC.retexp || bo.dfo[i].bc == BC.exit)
+        if (dfo[i].bc == BC.ret || dfo[i].bc == BC.retexp || dfo[i].bc == BC.exit)
             vec_setbit(i,l.Lexit); /* ret blocks are exit blocks */
         else
         {
-            foreach (bl; bo.dfo[i].Bsucc[])
+            foreach (bl; dfo[i].Bsucc[])
                 if (!vec_testbit(bl.Bdfoidx,l.Lloop))
                 {
                     vec_setbit(i,l.Lexit);
@@ -2003,8 +2003,8 @@ private void loopiv(ref GlobalOptimizer go, ref BlockOpt bo, ref Loop l)
     }
     findbasivs(go.defnod, l);          /* find basic induction variables       */
     findopeqs(go.defnod, l);           // find op= variables
-    findivfams(bo, l);          /* find IV families                     */
-    elimfrivivs(bo, l);         /* eliminate less useful family IVs     */
+    findivfams(bo.dfo, l);          /* find IV families                     */
+    elimfrivivs(bo.dfo, l);         /* eliminate less useful family IVs     */
     intronvars(go.changes, l);          /* introduce new variables              */
     elimbasivs(go.changes, bo, l);      /* eliminate basic IVs                  */
     if (!addblk)                // adding a block changes the Binlv
@@ -2308,14 +2308,14 @@ private void findopeqs(ref Barray!DefNode defnod, ref Loop l)
  */
 
 @trusted
-private void findivfams(ref BlockOpt bo, ref Loop l)
+private void findivfams(ref Barray!(block*) dfo, ref Loop l)
 {
     if (debugc) printf("findivfams(%p)\n", &l);
     foreach (ref biv; l.Livlist)
     {
-        for (uint i = 0; (i = cast(uint) vec_index(i, l.Lloop)) < bo.dfo.length; ++i)  // for each block in loop
-            if (bo.dfo[i].Belem)
-                ivfamelems(&biv,&(bo.dfo[i].Belem));
+        for (uint i = 0; (i = cast(uint) vec_index(i, l.Lloop)) < dfo.length; ++i)  // for each block in loop
+            if (dfo[i].Belem)
+                ivfamelems(&biv,&(dfo[i].Belem));
         /* Fold all the constant expressions in c1 and c2.      */
         foreach (ref fl; biv.IVfamily)
         {
@@ -2518,7 +2518,7 @@ private void ivfamelems(Iv* biv,elem** pn)
  */
 
 @trusted
-private void elimfrivivs(ref BlockOpt bo, ref Loop l)
+private void elimfrivivs(ref Barray!(block*) dfo, ref Loop l)
 {
     foreach (ref biv; l.Livlist)
     {
@@ -2530,7 +2530,7 @@ private void elimfrivivs(ref BlockOpt bo, ref Loop l)
         if (debugc) printf("nfams = %d\n", cast(int)nfams);
 
         /* Compute number of references to biv  */
-        if (onlyref(bo, biv.IVbasic,l,*biv.IVincr,nrefs))
+        if (onlyref(dfo, biv.IVbasic,l,*biv.IVincr,nrefs))
                 nrefs--;
         if (debugc) printf("nrefs = %d\n",nrefs);
         assert(nrefs + 1 >= nfams);
@@ -2822,7 +2822,7 @@ private void elimbasivs(ref uint changes, ref BlockOpt bo, ref Loop l)
         assert(symbol_isintab(X));
         tym_t ty = X.ty();
         int refcount;
-        elem** pref = onlyref(bo, X,l,einc,refcount);
+        elem** pref = onlyref(bo.dfo, X,l,einc,refcount);
 
         /* if only ref of X is of the form (X) or (X relop e) or (e relop X) */
         if (pref != null && refcount <= 1)
@@ -2830,7 +2830,7 @@ private void elimbasivs(ref uint changes, ref BlockOpt bo, ref Loop l)
             if (!biv.IVfamily.length)
                 continue;
 
-            if (catchRef(bo, X, l))
+            if (catchRef(bo.dfo, X, l))
                 continue;
 
             elem* ref_ = *pref;
@@ -3148,7 +3148,7 @@ private void elimopeqs(ref uint changes, ref BlockOpt bo, ref Loop l)
 
         X = biv.IVbasic;
         assert(symbol_isintab(X));
-        pref = onlyref(bo, X,l,*biv.IVincr,refcount);
+        pref = onlyref(bo.dfo, X,l,*biv.IVincr,refcount);
 
         // if only ref of X is of the form (X) or (X relop e) or (e relop X)
         if (pref != null && refcount <= 1)
@@ -3339,13 +3339,13 @@ Lf2:
  *      true if x is used outside the try block
  */
 @trusted
-private bool catchRef(ref BlockOpt bo, Symbol* x, ref Loop l)
+private bool catchRef(ref Barray!(block*) dfo, Symbol* x, ref Loop l)
 {
     block* btry = l.Lhead.Btry;
     if (!btry)
         return false;   // not in a try block
 
-    foreach (i, b; bo.dfo[])
+    foreach (i, b; dfo[])
     {
         if (vec_testbit(b.Bdfoidx, l.Lloop))
             continue;
@@ -3381,7 +3381,7 @@ private __gshared
 }
 
 @trusted
-private elem ** onlyref(ref BlockOpt bo, Symbol* x, ref Loop l,elem* incn, out int refcount)
+private elem ** onlyref(ref Barray!(block*) dfo, Symbol* x, ref Loop l,elem* incn, out int refcount)
 {
     uint i;
 
@@ -3397,9 +3397,9 @@ private elem ** onlyref(ref BlockOpt bo, Symbol* x, ref Loop l,elem* incn, out i
     assert(X.Ssymnum < globsym.length && incn);
     int count = 0;
     nd = null;
-    for (i = 0; (i = cast(uint) vec_index(i, l.Lloop)) < bo.dfo.length; ++i)  // for each block in loop
+    for (i = 0; (i = cast(uint) vec_index(i, l.Lloop)) < dfo.length; ++i)  // for each block in loop
     {
-        block* b = bo.dfo[i];
+        block* b = dfo[i];
         if (b.Belem)
         {
             count += countrefs(&b.Belem,b.bc == BC.iftrue);

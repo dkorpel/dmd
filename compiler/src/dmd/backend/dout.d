@@ -1037,7 +1037,7 @@ void writefunc2(ref CGstate cg, Symbol* sfunc, ref GlobalOptimizer go, ref Block
     else
     {
         sfunc.Sfunc.Fstartblock = null;
-        blocklist_free(bo, &bo.startblock);
+        blocklist_free(bo.block_freelist, &bo.startblock);
     }
 
     objmod.func_term(sfunc);

@@ -432,7 +432,7 @@ void optfunc(ref CGstate cg, ref GlobalOptimizer go, ref BlockOpt bo)
          * code generation which assumes at most one (localgotoffset).
          */
         if (go.mfoptim & MFlocal)
-            localize(bo, go.changes);      // improve expression locality
+            localize(bo.startblock, go.changes);      // improve expression locality
         if (go.mfoptim & MFda)
             rmdeadass(bo, go.changes); /* remove dead assignments       */
 
