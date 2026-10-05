@@ -66,7 +66,7 @@ public void win64_pdata(Symbol* sf, targ_size_t localsize)
     symbol_keep(spdata);
     symbol_debug(spdata);
 
-    Symbol* sunwind = win64_unwind(sf, localsize);
+    Symbol* sunwind = win64_unwind(cgstate, sf, localsize);
 
     /* 3 pointers are emitted:
      *  1. pointer to start of function sf
@@ -108,7 +108,7 @@ private bool symbol_iscomdat3(Symbol* s)
  *      generated symbol referring to unwind data
  */
 @trusted
-private Symbol* win64_unwind(Symbol* sf, targ_size_t localsize)
+private Symbol* win64_unwind(ref CGstate cg, Symbol* sf, targ_size_t localsize)
 {
     // Generate the unwind name, which is $unwind$funcname
     size_t sflen = strlen(sf.Sident.ptr);
@@ -121,7 +121,7 @@ private Symbol* win64_unwind(Symbol* sf, targ_size_t localsize)
     symbol_keep(sunwind);
     symbol_debug(sunwind);
 
-    sunwind.Sdt = unwind_data(cgstate, localsize);
+    sunwind.Sdt = unwind_data(cg, localsize);
     sunwind.Sseg = symbol_iscomdat3(sf) ? MsCoffObj_seg_xdata_comdat(sf) : MsCoffObj_seg_xdata();
     sunwind.Salignment = 1;
     outdata(sunwind);

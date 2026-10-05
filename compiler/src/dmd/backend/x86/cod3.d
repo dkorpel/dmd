@@ -2994,9 +2994,9 @@ bool cse_simple(ref CGstate cg, code* c, elem* e)
  *      slot = index into common subexpression save area
  */
 @trusted
-void gen_storecse(ref CodeBuilder cdb, tym_t tym, reg_t reg, size_t slot)
+void gen_storecse(ref CGstate cg, ref CodeBuilder cdb, tym_t tym, reg_t reg, size_t slot)
 {
-    if (cgstate.AArch64)
+    if (cg.AArch64)
         return dmd.backend.arm.cod3.gen_storecse(cdb,tym,reg,slot);
 
     //printf("gen_storecse()\n");
@@ -3033,9 +3033,9 @@ void gen_testcse(ref CodeBuilder cdb, tym_t tym, uint sz, size_t slot)
 }
 
 @trusted
-void gen_loadcse(ref CodeBuilder cdb, tym_t tym, reg_t reg, size_t slot)
+void gen_loadcse(ref CGstate cg, ref CodeBuilder cdb, tym_t tym, reg_t reg, size_t slot)
 {
-    if (cgstate.AArch64)
+    if (cg.AArch64)
         return dmd.backend.arm.cod3.gen_loadcse(cdb,tym,reg,slot);
 
     //printf("gen_loadcse()\n");
@@ -3704,20 +3704,20 @@ void prolog_ifunc(ref CodeBuilder cdb, tym_t* tyf)
 }
 
 @trusted
-void prolog_ifunc2(ref CodeBuilder cdb, tym_t tyf, tym_t tym, bool pushds)
+void prolog_ifunc2(ref CGstate cg, ref CodeBuilder cdb, tym_t tyf, tym_t tym, bool pushds)
 {
     /* Determine if we need to reload DS        */
     if (tyf & mTYloadds)
     {
         if (!pushds)                           // if not already pushed
             cdb.gen1(0x1E);                    // PUSH DS
-        cgstate.spoff += _tysize[TYint];
+        cg.spoff += _tysize[TYint];
         cdb.genc(0xC7, modregrm(3,0,AX), FL.unde, 0, FL.datseg, cast(targ_uns) 0); // MOV  AX,DGROUP
         code* c = cdb.last();
         c.IEV2.Vseg = DATA;
         c.Iflags ^= CF.seg | CF.off;            // turn off CF.off, on CF.seg
         cdb.gen2(0x8E,modregrm(3,3,AX));       // MOV  DS,AX
-        useregs(cgstate, mAX);
+        useregs(cg, mAX);
     }
 
     if (tym == TYifunc)
@@ -3725,7 +3725,7 @@ void prolog_ifunc2(ref CodeBuilder cdb, tym_t tyf, tym_t tym, bool pushds)
 }
 
 @trusted
-void prolog_16bit_windows_farfunc(ref CodeBuilder cdb, tym_t* tyf, bool* pushds)
+void prolog_16bit_windows_farfunc(ref CGstate cg, ref CodeBuilder cdb, tym_t* tyf, bool* pushds)
 {
     int wflags = config.wflags;
     if (wflags & WFreduced && !(*tyf & mTYexport))
@@ -3733,7 +3733,7 @@ void prolog_16bit_windows_farfunc(ref CodeBuilder cdb, tym_t* tyf, bool* pushds)
         wflags &= ~(WFdgroup | WFds | WFss);
     }
 
-    getregsNoSave(cgstate, mAX);                     // should not have any value in AX
+    getregsNoSave(cg, mAX);                     // should not have any value in AX
 
     int segreg;
     switch (wflags & (WFdgroup | WFds | WFss))
@@ -3777,7 +3777,7 @@ void prolog_16bit_windows_farfunc(ref CodeBuilder cdb, tym_t* tyf, bool* pushds)
     {
         cdb.gen1(0x1E);                       // PUSH DS
         *pushds = true;
-        cgstate.BPoff = -REGSIZE;
+        cg.BPoff = -REGSIZE;
     }
     if (wflags & (WFds | WFss | WFdgroup))
         cdb.gen2(0x8E,modregrm(3,3,AX));      // MOV  DS,AX
@@ -5406,7 +5406,7 @@ void cod3_thunk(Symbol* sthunk,Symbol* sfunc,uint p,tym_t thisty,
     code* c = cdb.finish();
     pinholeopt(c,null);
     targ_size_t framehandleroffset;
-    codout(seg,c,null,framehandleroffset);
+    codout(cgstate, seg,c,null,framehandleroffset);
     code_free(c);
 
     sthunk.Soffset = thunkoffset;
@@ -7353,9 +7353,9 @@ nothrow:
  */
 
 @trusted
-uint codout(int seg, code* c, Barray!ubyte* disasmBuf, ref targ_size_t framehandleroffset)
+uint codout(ref CGstate cg, int seg, code* c, Barray!ubyte* disasmBuf, ref targ_size_t framehandleroffset)
 {
-    if (cgstate.AArch64)
+    if (cg.AArch64)
         return dmd.backend.arm.cod3.codout(seg, c, disasmBuf, framehandleroffset);
 
     ubyte rm,mod;
@@ -7378,7 +7378,7 @@ uint codout(int seg, code* c, Barray!ubyte* disasmBuf, ref targ_size_t framehand
     {
         debug
         {
-        if (debugc) { printf("off=%02x, sz=%d, ",cast(int)ggen.getOffset(),cast(int)calccodsize(cgstate, c)); code_print(cgstate, c); }
+        if (debugc) { printf("off=%02x, sz=%d, ",cast(int)ggen.getOffset(),cast(int)calccodsize(cg, c)); code_print(cg, c); }
         uint startOffset = ggen.getOffset();
         }
 
@@ -7406,7 +7406,7 @@ uint codout(int seg, code* c, Barray!ubyte* disasmBuf, ref targ_size_t framehand
                 if (op != NOP)
                     break;
                 debug
-                assert(calccodsize(cgstate, c) == 0);
+                assert(calccodsize(cg, c) == 0);
 
                 continue;
 
@@ -7423,7 +7423,7 @@ uint codout(int seg, code* c, Barray!ubyte* disasmBuf, ref targ_size_t framehand
                     ggen.offset += objmod.bytes(seg,ggen.offset,c.IEV1.data);
                 }
                 debug
-                assert(calccodsize(cgstate, c) == c.IEV1.data.length);
+                assert(calccodsize(cg, c) == c.IEV1.data.length);
 
                 continue;
 
@@ -7798,10 +7798,10 @@ uint codout(int seg, code* c, Barray!ubyte* disasmBuf, ref targ_size_t framehand
         }
 
         debug
-        if (ggen.getOffset() - startOffset != calccodsize(cgstate, c))
+        if (ggen.getOffset() - startOffset != calccodsize(cg, c))
         {
-            printf("actual: %d, calc: %d\n", cast(int)(ggen.getOffset() - startOffset), cast(int)calccodsize(cgstate, c));
-            code_print(cgstate, c);
+            printf("actual: %d, calc: %d\n", cast(int)(ggen.getOffset() - startOffset), cast(int)calccodsize(cg, c));
+            code_print(cg, c);
             assert(0);
         }
     }

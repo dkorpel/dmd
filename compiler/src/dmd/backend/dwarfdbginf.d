@@ -1856,7 +1856,7 @@ static if (1)
      * End of code gen for function.
      */
     public
-    void dwarf_func_term(Symbol* sfunc)
+    void dwarf_func_term(ref CGstate cg, Symbol* sfunc)
     {
         //printf("dwarf_func_term(sfunc = '%s')\n", sfunc.Sident.ptr);
 
@@ -1864,16 +1864,16 @@ static if (1)
         {
             if (config.objfmt == OBJ_MACH && AArch64())
             {
-                bool ehunwind = doUnwindEhFrame(cgstate);
+                bool ehunwind = doUnwindEhFrame(cg);
                 IDXSEC dfseg = dwarf_compact_unwind_alloc();
                 OutBuffer* buf = SegData[dfseg].SDbuf;
                 buf.reserve(32 * 10);    // 32 bytes per instance of struct compact_unwind_entry
 
-                writeCompactUnwindEntry(*buf, dfseg, sfunc, getRtlsymPersonality(cgstate), ehunwind);
+                writeCompactUnwindEntry(*buf, dfseg, sfunc, getRtlsymPersonality(cg), ehunwind);
             }
             else
             {
-                bool ehunwind = doUnwindEhFrame(cgstate);
+                bool ehunwind = doUnwindEhFrame(cg);
 
                 IDXSEC dfseg = dwarf_eh_frame_alloc();
 
@@ -1882,7 +1882,7 @@ static if (1)
 
                 uint* poffset = ehunwind ? &CIE_offset_unwind : &CIE_offset_no_unwind;
                 if (*poffset == ~0)
-                    *poffset = writeEhFrameHeader(dfseg, buf, getRtlsymPersonality(cgstate), ehunwind);
+                    *poffset = writeEhFrameHeader(dfseg, buf, getRtlsymPersonality(cg), ehunwind);
 
                 writeEhFrameFDE(dfseg, sfunc, ehunwind, *poffset);
             }
@@ -2058,8 +2058,8 @@ static if (1)
         debug_info.buf.writeuLEB128(sfunc.Sfunc.Fstartline.Scharnum); // DW_AT_decl_column
 
         // DW_AT_low_pc and DW_AT_high_pc
-        dwarf_appreladdr(debug_info.seg, debug_info.buf, seg, cgstate.funcoffset);
-        dwarf_appreladdr(debug_info.seg, debug_info.buf, seg, cgstate.funcoffset + sfunc.Ssize);
+        dwarf_appreladdr(debug_info.seg, debug_info.buf, seg, cg.funcoffset);
+        dwarf_appreladdr(debug_info.seg, debug_info.buf, seg, cg.funcoffset + sfunc.Ssize);
 
         // DW_AT_frame_base
         if (config.objfmt == OBJ_ELF)
@@ -2132,7 +2132,7 @@ static if (1)
                             //    sa.Sident.ptr, sa.Sscope.Sident.ptr, closptr_off, memb_off);
 
                             debug_info.buf.writeByte(DW_OP_fbreg);
-                            debug_info.buf.writesLEB128(cast(uint)(cgstate.Auto.size + cgstate.BPoff - cgstate.Para.size + closptr_off)); // closure pointer offset from frame base
+                            debug_info.buf.writesLEB128(cast(uint)(cg.Auto.size + cg.BPoff - cg.Para.size + closptr_off)); // closure pointer offset from frame base
                             debug_info.buf.writeByte(DW_OP_deref);
                             debug_info.buf.writeByte(DW_OP_plus_uconst);
                             debug_info.buf.writeuLEB128(cast(uint)memb_off); // closure variable offset
@@ -2144,11 +2144,11 @@ static if (1)
                                 sa.Sclass == SC.parameter)
                                 debug_info.buf.writesLEB128(cast(int)sa.Soffset);
                             else if (sa.Sclass == SC.fastpar)
-                                debug_info.buf.writesLEB128(cast(int)(cgstate.Fast.size + cgstate.BPoff - cgstate.Para.size + sa.Soffset));
+                                debug_info.buf.writesLEB128(cast(int)(cg.Fast.size + cg.BPoff - cg.Para.size + sa.Soffset));
                             else if (sa.Sclass == SC.bprel)
-                                debug_info.buf.writesLEB128(cast(int)(-cgstate.Para.size + sa.Soffset));
+                                debug_info.buf.writesLEB128(cast(int)(-cg.Para.size + sa.Soffset));
                             else
-                                debug_info.buf.writesLEB128(cast(int)(cgstate.Auto.size + cgstate.BPoff - cgstate.Para.size + sa.Soffset));
+                                debug_info.buf.writesLEB128(cast(int)(cg.Auto.size + cg.BPoff - cg.Para.size + sa.Soffset));
                         }
                         debug_info.buf.buf[soffset] = cast(ubyte)(debug_info.buf.length() - soffset - 1);
                         break;
@@ -2172,14 +2172,14 @@ static if (1)
 
         if (sd.SDaranges_offset)
             // Extend existing entry size
-            *cast(ulong*)(debug_aranges.buf.buf + sd.SDaranges_offset + _tysize[TYnptr]) = cgstate.funcoffset + sfunc.Ssize;
+            *cast(ulong*)(debug_aranges.buf.buf + sd.SDaranges_offset + _tysize[TYnptr]) = cg.funcoffset + sfunc.Ssize;
         else
         {   // Add entry
             sd.SDaranges_offset = cast(uint)debug_aranges.buf.length();
             // address of start of .text segment
             dwarf_appreladdr(debug_aranges.seg, debug_aranges.buf, seg, 0);
             // size of .text segment
-            append_addr(debug_aranges.buf, cgstate.funcoffset + sfunc.Ssize);
+            append_addr(debug_aranges.buf, cg.funcoffset + sfunc.Ssize);
         }
 
         /* ============= debug_ranges =========================== */
@@ -2188,13 +2188,13 @@ static if (1)
          * indicate this by adding to the debug_ranges
          */
         // start of function and end of function
-        dwarf_appreladdr(debug_ranges.seg, debug_ranges.buf, seg, cgstate.funcoffset);
-        dwarf_appreladdr(debug_ranges.seg, debug_ranges.buf, seg, cgstate.funcoffset + sfunc.Ssize);
+        dwarf_appreladdr(debug_ranges.seg, debug_ranges.buf, seg, cg.funcoffset);
+        dwarf_appreladdr(debug_ranges.seg, debug_ranges.buf, seg, cg.funcoffset + sfunc.Ssize);
 
         /* ============= debug_loc =========================== */
 
-        assert(cgstate.Para.size >= 2 * REGSIZE);
-        assert(cgstate.Para.size < 63); // avoid sLEB128 encoding
+        assert(cg.Para.size >= 2 * REGSIZE);
+        assert(cg.Para.size < 63); // avoid sLEB128 encoding
         ushort op_size = 0x0002;
         ushort loc_op;
         reg_t bp = BP;
@@ -2207,24 +2207,24 @@ static if (1)
 
         // set the entry for this function in .debug_loc segment
         // after call
-        dwarf_appreladdr(debug_loc.seg, debug_loc.buf, seg, cgstate.funcoffset + 0);
-        dwarf_appreladdr(debug_loc.seg, debug_loc.buf, seg, cgstate.funcoffset + 1);
+        dwarf_appreladdr(debug_loc.seg, debug_loc.buf, seg, cg.funcoffset + 0);
+        dwarf_appreladdr(debug_loc.seg, debug_loc.buf, seg, cg.funcoffset + 1);
 
-        loc_op = cast(ushort)(((cgstate.Para.size - REGSIZE) << 8) | (DW_OP_breg0 + dwarf_regno(sp)));
+        loc_op = cast(ushort)(((cg.Para.size - REGSIZE) << 8) | (DW_OP_breg0 + dwarf_regno(sp)));
         debug_loc.buf.write32(loc_op << 16 | op_size);
 
         // after push EBP
-        dwarf_appreladdr(debug_loc.seg, debug_loc.buf, seg, cgstate.funcoffset + 1);
-        dwarf_appreladdr(debug_loc.seg, debug_loc.buf, seg, cgstate.funcoffset + 3);
+        dwarf_appreladdr(debug_loc.seg, debug_loc.buf, seg, cg.funcoffset + 1);
+        dwarf_appreladdr(debug_loc.seg, debug_loc.buf, seg, cg.funcoffset + 3);
 
-        loc_op = cast(ushort)(((cgstate.Para.size) << 8) | (DW_OP_breg0 + dwarf_regno(sp)));
+        loc_op = cast(ushort)(((cg.Para.size) << 8) | (DW_OP_breg0 + dwarf_regno(sp)));
         debug_loc.buf.write32(loc_op << 16 | op_size);
 
         // after mov EBP, ESP
-        dwarf_appreladdr(debug_loc.seg, debug_loc.buf, seg, cgstate.funcoffset + 3);
-        dwarf_appreladdr(debug_loc.seg, debug_loc.buf, seg, cgstate.funcoffset + sfunc.Ssize);
+        dwarf_appreladdr(debug_loc.seg, debug_loc.buf, seg, cg.funcoffset + 3);
+        dwarf_appreladdr(debug_loc.seg, debug_loc.buf, seg, cg.funcoffset + sfunc.Ssize);
 
-        loc_op = cast(ushort)(((cgstate.Para.size) << 8) | (DW_OP_breg0 + dwarf_regno(bp)));
+        loc_op = cast(ushort)(((cg.Para.size) << 8) | (DW_OP_breg0 + dwarf_regno(bp)));
         debug_loc.buf.write32(loc_op << 16 | op_size);
 
         // 2 zero addresses to end loc_list
@@ -3338,9 +3338,9 @@ static if (1)
      *      retoffset = offset from start of function to epilog
      */
     public
-    void dwarf_except_gentables(Funcsym* sfunc, uint startoffset, uint retoffset)
+    void dwarf_except_gentables(ref CGstate cg, Funcsym* sfunc, uint startoffset, uint retoffset)
     {
-        if (!doUnwindEhFrame(cgstate))
+        if (!doUnwindEhFrame(cg))
             return;
 
         int seg = dwarf_except_table_alloc(sfunc);
@@ -3365,7 +3365,7 @@ static if (1)
             sfunc.Sfunc.LSDAsym = s;
         }
         import dmd.backend.dwarfeh : dwehtable;
-        genDwarfEh(cgstate, sfunc, seg, buf, (cgstate.usednteh & EHcleanup) != 0, startoffset, retoffset, dwehtable);
+        genDwarfEh(cg, sfunc, seg, buf, (cg.usednteh & EHcleanup) != 0, startoffset, retoffset, dwehtable);
     }
 
 }
@@ -3375,7 +3375,7 @@ else
     void dwarf_CFA_set_loc(uint location) { }
     void dwarf_CFA_set_reg_offset(int reg, int offset) { }
     void dwarf_CFA_offset(int reg, int offset) { }
-    void dwarf_except_gentables(Funcsym* sfunc, uint startoffset, uint retoffset) { }
+    void dwarf_except_gentables(cgstate, Funcsym* sfunc, uint startoffset, uint retoffset) { }
 }
 
 version (Windows)

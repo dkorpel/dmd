@@ -443,7 +443,7 @@ void nteh_framehandler(ref CGstate cg, Symbol* sfunc, Symbol* scopetable)
         code* c = cdb.finish();
         pinholeopt(c,null);
         targ_size_t framehandleroffset;
-        codout(sfunc.Sseg,c,null,framehandleroffset);
+        codout(cg, sfunc.Sseg,c,null,framehandleroffset);
         code_free(c);
     }
 }

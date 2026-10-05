@@ -417,7 +417,7 @@ void codgenx(ref CGstate cg, Symbol* sfunc)
     // Emit the generated code
     if (eecontext.EEcompile == 1)
     {
-        codout(sfunc.Sseg,eecontext.EEcode,null,framehandleroffset);
+        codout(cg, sfunc.Sseg,eecontext.EEcode,null,framehandleroffset);
         code_free(eecontext.EEcode);
     }
     else
@@ -457,7 +457,7 @@ void codgenx(ref CGstate cg, Symbol* sfunc)
             }
             assert(b.Boffset == Offset(sfunc.Sseg));
 
-            codout(sfunc.Sseg,b.Bcode,(config.vasm ? &disasmBuf : null), framehandleroffset);   // output code
+            codout(cg, sfunc.Sseg,b.Bcode,(config.vasm ? &disasmBuf : null), framehandleroffset);   // output code
         }
 static if (0)
         if (coffset != Offset(sfunc.Sseg))
@@ -535,12 +535,12 @@ static if (0)
             if (cg.usednteh & (EHtry | EHcleanup) &&   // saw BC.try_ or BC._try or OPddtor
                 config.ehmethod == EHmethod.EH_DM)
             {
-                except_gentables();
+                except_gentables(cg);
             }
             if (config.ehmethod == EHmethod.EH_DWARF)
             {
                 sfunc.Sfunc.Fstartblock = bo.startblock;
-                dwarf_except_gentables(sfunc, cast(uint)cg.startoffset, cast(uint)cg.retoffset);
+                dwarf_except_gentables(cg, sfunc, cast(uint)cg.startoffset, cast(uint)cg.retoffset);
                 sfunc.Sfunc.Fstartblock = null;
             }
         }
@@ -949,7 +949,7 @@ else
 
     if (I16 && config.wflags & WFwindows && farfunc)
     {
-        prolog_16bit_windows_farfunc(cdbx, &tyf, &pushds);
+        prolog_16bit_windows_farfunc(cg, cdbx, &tyf, &pushds);
         enter = false;                  // don't use ENTER instruction
         cg.hasframe = true;        // we have a stack frame
     }
@@ -1033,7 +1033,7 @@ Lcont:
         return;
     }
 
-    prolog_ifunc2(cdb, tyf, tym, pushds);
+    prolog_ifunc2(cg, cdb, tyf, tym, pushds);
 
     static if (NTEXCEPTIONS == 2)
     {
@@ -2073,7 +2073,7 @@ private void cse_save(ref CodeBuilder cdb, regm_t ms)
         else
         {
             CSE.updateSizeAndAlign(cgstate, cse.e);
-            gen_storecse(cdb, cse.e.Ety, reg, cse.slot);
+            gen_storecse(cgstate, cdb, cse.e.Ety, reg, cse.slot);
             cg.reflocal = true;
         }
     }
@@ -2394,7 +2394,7 @@ private void comsub(ref CodeBuilder cdb,elem* e, ref regm_t pretregs)
                     {
                         retregs = XMMREGS;
                         reg = allocreg(cdb,retregs,tym);
-                        gen_loadcse(cdb, cse.e.Ety, reg, cse.slot);
+                        gen_loadcse(cgstate, cdb, cse.e.Ety, reg, cse.slot);
                         cg.regcon.cse.mval |= mask(reg); // cs is in a reg
                         cg.regcon.cse.value[reg] = e;
                         fixresult(*cg,cdb,e,retregs,pretregs);
@@ -2418,7 +2418,7 @@ private void comsub(ref CodeBuilder cdb,elem* e, ref regm_t pretregs)
                     else if (byte_ && !(retregs & BYTEREGS))
                         retregs = BYTEREGS;
                     reg = allocreg(cdb,retregs,tym);
-                    gen_loadcse(cdb, cse.e.Ety, reg, cse.slot);
+                    gen_loadcse(cgstate, cdb, cse.e.Ety, reg, cse.slot);
                 L10:
                     cg.regcon.cse.mval |= mask(reg); // cs is in a reg
                     cg.regcon.cse.value[reg] = e;
@@ -2578,7 +2578,7 @@ private void loadcse(ref CodeBuilder cdb,elem* e,reg_t reg,regm_t regm)
             cg.regcon.cse.value[reg] = e;
             cg.regcon.cse.mval |= mask(reg);
             getregs(cdb,mask(reg));
-            gen_loadcse(cdb, cse.e.Ety, reg, cse.slot);
+            gen_loadcse(cgstate, cdb, cse.e.Ety, reg, cse.slot);
             return;
         }
     }

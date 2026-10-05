@@ -42,14 +42,14 @@ package(dmd) @property @nogc nothrow auto @trusted NPTRSIZE() { return _tysize[T
  */
 
 @trusted
-Symbol* except_gentables()
+Symbol* except_gentables(ref CGstate cg)
 {
     //printf("except_gentables()\n");
     if (config.ehmethod == EHmethod.EH_DM && !(funcsym_p.Sfunc.Fflags & Feh_none))
     {
         // BUG: alloca() changes the stack size, which is not reflected
         // in the fixed eh tables.
-        if (cgstate.Alloca.size)
+        if (cg.Alloca.size)
             error(Srcpos.init, "cannot mix `core.std.stdlib.alloca()` and exception handling in `%s()`", &funcsym_p.Sident[0]);
 
         char[13+5+1] name = void;
@@ -60,7 +60,7 @@ Symbol* except_gentables()
         symbol_keep(s);
         //symbol_debug(s);
 
-        except_fillInEHTable(cgstate, s);
+        except_fillInEHTable(cg, s);
 
         outdata(s);                 // output the scope table
 

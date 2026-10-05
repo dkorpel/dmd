@@ -2720,7 +2720,7 @@ void MachObj_func_term(Symbol* sfunc)
 {
     //dbg_printf("MachObj_func_term(%s) offset %x, Coffset %x symidx %d\n",
     //           sfunc.Sident.ptr, sfunc.Soffset,SegData[cseg].SDoffset,sfunc.Sxtrnnum);
-    dwarf_func_term(sfunc);
+    dwarf_func_term(cgstate, sfunc);
 }
 
 /********************************
