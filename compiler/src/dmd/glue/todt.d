@@ -647,7 +647,7 @@ void Expression_toDt(Expression e, ref DtBuilder dtb)
     {
         if (Type t = isType(e.obj))
         {
-            TypeInfo_toObjFile(e, e.loc, t);
+            TypeInfo_toObjFile(cgstate, e, e.loc, t);
             Symbol* s = toSymbol(t.vtinfo);
             dtb.xoff(s, 0);
             return;
@@ -1276,7 +1276,7 @@ private extern (C++) class TypeInfoDtVisitor : Visitor
     {
         //printf("TypeInfoConstDeclaration.toDt() %s\n", toChars());
         Type tm = d.tinfo.mutableOf().merge();
-        TypeInfo_toObjFile(null, d.loc, tm);
+        TypeInfo_toObjFile(cgstate, null, d.loc, tm);
         classFieldsToDt(Type.typeinfoconst, new Expressions(new SymOffExp(d.loc, tm.vtinfo, 0)), *dtb);
     }
 
@@ -1284,7 +1284,7 @@ private extern (C++) class TypeInfoDtVisitor : Visitor
     {
         //printf("TypeInfoInvariantDeclaration.toDt() %s\n", toChars());
         Type tm = d.tinfo.mutableOf().merge();
-        TypeInfo_toObjFile(null, d.loc, tm);
+        TypeInfo_toObjFile(cgstate, null, d.loc, tm);
         classFieldsToDt(Type.typeinfoinvariant, new Expressions(new SymOffExp(d.loc, tm.vtinfo, 0)), *dtb);
     }
 
@@ -1292,7 +1292,7 @@ private extern (C++) class TypeInfoDtVisitor : Visitor
     {
         //printf("TypeInfoSharedDeclaration.toDt() %s\n", toChars());
         Type tm = d.tinfo.unSharedOf().merge();
-        TypeInfo_toObjFile(null, d.loc, tm);
+        TypeInfo_toObjFile(cgstate, null, d.loc, tm);
         classFieldsToDt(Type.typeinfoshared, new Expressions(new SymOffExp(d.loc, tm.vtinfo, 0)), *dtb);
     }
 
@@ -1300,7 +1300,7 @@ private extern (C++) class TypeInfoDtVisitor : Visitor
     {
         //printf("TypeInfoWildDeclaration.toDt() %s\n", toChars());
         Type tm = d.tinfo.mutableOf().merge();
-        TypeInfo_toObjFile(null, d.loc, tm);
+        TypeInfo_toObjFile(cgstate, null, d.loc, tm);
         classFieldsToDt(Type.typeinfowild, new Expressions(new SymOffExp(d.loc, tm.vtinfo, 0)), *dtb);
     }
 
@@ -1327,7 +1327,7 @@ private extern (C++) class TypeInfoDtVisitor : Visitor
         // TypeInfo for enum members
         if (sd.memtype)
         {
-            TypeInfo_toObjFile(null, d.loc, sd.memtype);
+            TypeInfo_toObjFile(cgstate, null, d.loc, sd.memtype);
             dtb.xoff(toSymbol(sd.memtype.vtinfo), 0);
         }
         else
@@ -1360,7 +1360,7 @@ private extern (C++) class TypeInfoDtVisitor : Visitor
     {
         //printf("TypeInfoPointerDeclaration.toDt()\n");
         auto tc = d.tinfo.isTypePointer();
-        TypeInfo_toObjFile(null, d.loc, tc.next);
+        TypeInfo_toObjFile(cgstate, null, d.loc, tc.next);
         classFieldsToDt(Type.typeinfopointer,
             new Expressions(new SymOffExp(d.loc, tc.next.vtinfo, 0)), *dtb);
     }
@@ -1369,7 +1369,7 @@ private extern (C++) class TypeInfoDtVisitor : Visitor
     {
         //printf("TypeInfoArrayDeclaration.toDt()\n");
         auto tc = d.tinfo.isTypeDArray();
-        TypeInfo_toObjFile(null, d.loc, tc.next);
+        TypeInfo_toObjFile(cgstate, null, d.loc, tc.next);
         classFieldsToDt(Type.typeinfoarray,
             new Expressions(new SymOffExp(d.loc, tc.next.vtinfo, 0)), *dtb);
     }
@@ -1378,7 +1378,7 @@ private extern (C++) class TypeInfoDtVisitor : Visitor
     {
         //printf("TypeInfoStaticArrayDeclaration.toDt()\n");
         auto tc = d.tinfo.isTypeSArray();
-        TypeInfo_toObjFile(null, d.loc, tc.next);
+        TypeInfo_toObjFile(cgstate, null, d.loc, tc.next);
         classFieldsToDt(Type.typeinfostaticarray, new Expressions(
             new SymOffExp(d.loc, tc.next.vtinfo, 0),
             new IntegerExp(d.loc, tc.dim.toInteger(), Type.tsize_t)), *dtb);
@@ -1388,7 +1388,7 @@ private extern (C++) class TypeInfoDtVisitor : Visitor
     {
         //printf("TypeInfoVectorDeclaration.toDt()\n");
         auto tc = d.tinfo.isTypeVector();
-        TypeInfo_toObjFile(null, d.loc, tc.basetype);
+        TypeInfo_toObjFile(cgstate, null, d.loc, tc.basetype);
         classFieldsToDt(Type.typeinfovector,
             new Expressions(new SymOffExp(d.loc, tc.basetype.vtinfo, 0)), *dtb);
     }
@@ -1397,9 +1397,9 @@ private extern (C++) class TypeInfoDtVisitor : Visitor
     {
         //printf("TypeInfoAssociativeArrayDeclaration.toDt()\n");
         auto tc = d.tinfo.isTypeAArray();
-        TypeInfo_toObjFile(null, d.loc, tc.next);
-        TypeInfo_toObjFile(null, d.loc, tc.index);
-        TypeInfo_toObjFile(null, d.loc, d.entry);
+        TypeInfo_toObjFile(cgstate, null, d.loc, tc.next);
+        TypeInfo_toObjFile(cgstate, null, d.loc, tc.index);
+        TypeInfo_toObjFile(cgstate, null, d.loc, d.entry);
         classFieldsToDt(Type.typeinfoassociativearray, new Expressions(
             new SymOffExp(d.loc, tc.next.vtinfo, 0),
             new SymOffExp(d.loc, tc.index.vtinfo, 0),
@@ -1419,7 +1419,7 @@ private extern (C++) class TypeInfoDtVisitor : Visitor
 
         auto tc = d.tinfo.isTypeFunction();
 
-        TypeInfo_toObjFile(null, d.loc, tc.next);
+        TypeInfo_toObjFile(cgstate, null, d.loc, tc.next);
         dtb.xoff(toSymbol(tc.next.vtinfo), 0); // TypeInfo for function return value
 
         const name = d.tinfo.deco;
@@ -1443,7 +1443,7 @@ private extern (C++) class TypeInfoDtVisitor : Visitor
 
         auto tc = d.tinfo.isTypeDelegate();
 
-        TypeInfo_toObjFile(null, d.loc, tc.next.nextOf());
+        TypeInfo_toObjFile(cgstate, null, d.loc, tc.next.nextOf());
         dtb.xoff(toSymbol(tc.next.nextOf().vtinfo), 0); // TypeInfo for delegate return value
 
         const name = d.tinfo.deco;
@@ -1573,7 +1573,7 @@ private extern (C++) class TypeInfoDtVisitor : Visitor
                 // m_argi
                 if (auto t = sd.argType(i))
                 {
-                    TypeInfo_toObjFile(null, d.loc, t);
+                    TypeInfo_toObjFile(cgstate, null, d.loc, t);
                     dtb.xoff(toSymbol(t.vtinfo), 0);
                 }
                 else
@@ -1620,7 +1620,7 @@ private extern (C++) class TypeInfoDtVisitor : Visitor
         auto args = new Expressions(tu.arguments.length);
         foreach (i, arg; *tu.arguments)
         {
-            TypeInfo_toObjFile(null, d.loc, arg.type);
+            TypeInfo_toObjFile(cgstate, null, d.loc, arg.type);
             (*args)[i] = new SymOffExp(d.loc, arg.type.vtinfo, 0);
         }
         // TypeInfo_Tuple has one field: TypeInfo[] elements. Derive its type from the

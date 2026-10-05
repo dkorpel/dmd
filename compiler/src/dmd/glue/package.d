@@ -95,7 +95,7 @@ import dmd.utils;
  *  multiobj = break one object file into multiple ones
  *  verbose = print progress message when generatig code
  */
-public void generateCodeAndWrite(Module[] modules, const(char)*[] libmodules,
+public void generateCodeAndWrite(ref CGstate cg, Module[] modules, const(char)*[] libmodules,
                           const(char)[] libname, const(char)[] objdir,
                           bool writeLibrary, bool obj, bool oneobj, bool multiobj,
                           bool verbose)
@@ -148,7 +148,7 @@ public void generateCodeAndWrite(Module[] modules, const(char)*[] libmodules,
             }
             if (verbose)
                 eSink.message(Loc.initial, "code      %s", m.toChars());
-            genObjFile(cgstate, m, false, false);
+            genObjFile(cg, m, false, false);
         }
         if (!global.errors && firstm)
         {
@@ -165,9 +165,9 @@ public void generateCodeAndWrite(Module[] modules, const(char)*[] libmodules,
             if (verbose)
                 eSink.message(Loc.initial, "code      %s", m.toChars());
             obj_start(objbuf, m.srcfile.toChars());
-            genObjFile(cgstate, m, multiobj && m.filetype != FileType.c, false);   // a C file is one translation unit
+            genObjFile(cg, m, multiobj && m.filetype != FileType.c, false);   // a C file is one translation unit
             obj_end(objbuf, library, m.objfile.toString());
-            obj_write_deferred(cgstate, objbuf, library, glue.obj_symbols_towrite);
+            obj_write_deferred(cg, objbuf, library, glue.obj_symbols_towrite);
             if (global.errors && !writeLibrary)
                 m.deleteObjFile();
         }

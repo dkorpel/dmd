@@ -382,7 +382,7 @@ elem* toElemDtor(Expression e, ref IRState irs, elem* ehidden = null)
         er = el_combine(er, eh);
     }
     else
-        er = toElem(e, irs);
+        er = toElem(cgstate, e, irs);
     const endi = irs.varsInScope.length;
 
     irs.mayThrow = mayThrowSave;
@@ -681,7 +681,7 @@ elem* toEfilenamePtr(Module m)
  * Returns:
  *      backend elem tree
  */
-elem* toElem(Expression e, ref IRState irs)
+elem* toElem(ref CGstate cg, Expression e, ref IRState irs)
 {
     elem* visit(Expression e)
     {
@@ -1013,7 +1013,7 @@ elem* toElem(Expression e, ref IRState irs)
     elem* visitDeclaration(DeclarationExp de)
     {
         //printf("DeclarationExp.toElem() %s\n", de.toChars());
-        elem* e = Dsymbol_toElem(cgstate, de.declaration, irs);
+        elem* e = Dsymbol_toElem(cg, de.declaration, irs);
         if (e && de.type && de.type.toBasetype().ty == Tvoid)
             e.Ety = TYvoid;
         return e;
@@ -1049,7 +1049,7 @@ elem* toElem(Expression e, ref IRState irs)
         auto tc = ex.type.toBasetype().isTypeClass();
         assert(tc);
         // generate **classptr to get the classinfo
-        elem* result = toElem(ex, irs);
+        elem* result = toElem(cg, ex, irs);
         result = el_una(OPind,TYnptr,result);
         result = el_una(OPind,TYnptr,result);
         // Add extra indirection for interfaces
@@ -1295,7 +1295,7 @@ elem* toElem(Expression e, ref IRState irs)
             {
                 if (ne.placement)
                 {
-                    ex = toElem(ne.placement, irs);
+                    ex = toElem(cg, ne.placement, irs);
                     ex = addressElem(ex, ne.newtype.toBasetype(), false);
                 }
                 else
@@ -1336,7 +1336,7 @@ elem* toElem(Expression e, ref IRState irs)
                 // assert(!(irs.params.ehnogc && ne.thrownew),
                 //     "This should have been rewritten to `_d_newThrowable` in the semantic phase.");
 
-                ex = toElem(ne.lowering, irs);
+                ex = toElem(cg, ne.lowering, irs);
                 ectype = null;
 
                 if (cd.isNested())
@@ -1371,7 +1371,7 @@ elem* toElem(Expression e, ref IRState irs)
                     int i = cdp.isClassDeclaration().isBaseOf(cdthis, &offset);
                     assert(i);
                 }
-                elem* ethis = toElem(ne.thisexp, irs);
+                elem* ethis = toElem(cg, ne.thisexp, irs);
                 if (offset)
                     ethis = el_bin(OPadd, TYnptr, ethis, el_long(TYsize_t, offset));
 
@@ -1409,7 +1409,7 @@ elem* toElem(Expression e, ref IRState irs)
             if (ne.member)
             {
                 if (ne.argprefix)
-                    ezprefix = toElem(ne.argprefix, irs);
+                    ezprefix = toElem(cg, ne.argprefix, irs);
                 // Call constructor
                 ez = callfunc(ne.loc, irs, 1, ne.type, ez, ectype, ne.member, ne.member.type, null, ne.arguments);
             }
@@ -1440,12 +1440,12 @@ elem* toElem(Expression e, ref IRState irs)
 
             if (ne.placement)
             {
-                ex = toElem(ne.placement, irs);
+                ex = toElem(cg, ne.placement, irs);
                 //ex = addressElem(ex, tclass, false);
             }
             else if (auto lowering = ne.lowering)
                 // Call _d_newitemT()
-                ex = toElem(ne.lowering, irs);
+                ex = toElem(cg, ne.lowering, irs);
             else if (!irs.params.useGC)
             {
                 // new is allowed in CTFE, so this can only be checked at codegen
@@ -1460,7 +1460,7 @@ elem* toElem(Expression e, ref IRState irs)
             elem* ev = el_same(ex);
 
             if (ne.argprefix)
-                ezprefix = toElem(ne.argprefix, irs);
+                ezprefix = toElem(cg, ne.argprefix, irs);
             if (ne.member)
             {
                 if (sd.isNested())
@@ -1511,25 +1511,25 @@ elem* toElem(Expression e, ref IRState irs)
         }
         else if (auto tda = t.isTypeDArray())
         {
-            elem* ezprefix = ne.argprefix ? toElem(ne.argprefix, irs) : null;
+            elem* ezprefix = ne.argprefix ? toElem(cg, ne.argprefix, irs) : null;
 
             assert(ne.arguments && ne.arguments.length >= 1);
             assert(ne.lowering);
-            e = toElem(ne.lowering, irs);
+            e = toElem(cg, ne.lowering, irs);
             e = el_combine(ezprefix, e);
         }
         else if (auto tp = t.isTypePointer())
         {
-            elem* ezprefix = ne.argprefix ? toElem(ne.argprefix, irs) : null;
+            elem* ezprefix = ne.argprefix ? toElem(cg, ne.argprefix, irs) : null;
 
             if (ne.placement)
             {
-                e = toElem(ne.placement, irs);
+                e = toElem(cg, ne.placement, irs);
                 e = addressElem(e, ne.newtype.toBasetype(), false);
             }
             else if (auto lowering = ne.lowering)
                 // Call _d_newitemT()
-                e = toElem(ne.lowering, irs);
+                e = toElem(cg, ne.lowering, irs);
             else if (!irs.params.useGC)
             {
                 irs.eSink.error(ne.loc, "`new` expression `%s` requires the GC which is not available with `-betterC`", ne.toErrMsg());
@@ -1542,7 +1542,7 @@ elem* toElem(Expression e, ref IRState irs)
             {
                 /* ezprefix, ts=_d_newitemT(ti), *ts=arguments[0], ts
                  */
-                elem* e2 = toElem((*ne.arguments)[0], irs);
+                elem* e2 = toElem(cg, (*ne.arguments)[0], irs);
 
                 Symbol* ts = symbol_genauto(Type_toCtype(tp));
                 elem* eeq1 = el_bin(OPeq, TYnptr, el_var(ts), e);
@@ -1564,7 +1564,7 @@ elem* toElem(Expression e, ref IRState irs)
                 return el_long(TYnptr, 0);
             }
             assert(ne.lowering, "This case should have been rewritten to `_d_aaNew` in the semantic phase");
-            return toElem(ne.lowering, irs);
+            return toElem(cg, ne.lowering, irs);
         }
         else
         {
@@ -1583,7 +1583,7 @@ elem* toElem(Expression e, ref IRState irs)
 
     elem* visitNeg(NegExp ne)
     {
-        elem* e = toElem(ne.e1, irs);
+        elem* e = toElem(cg, ne.e1, irs);
         Type tb1 = ne.e1.type.toBasetype();
 
         assert(tb1.ty != Tarray && tb1.ty != Tsarray);
@@ -1616,7 +1616,7 @@ elem* toElem(Expression e, ref IRState irs)
 
     elem* visitCom(ComExp ce)
     {
-        elem* e1 = toElem(ce.e1, irs);
+        elem* e1 = toElem(cg, ce.e1, irs);
         Type tb1 = ce.e1.type.toBasetype();
         tym_t ty = totym(ce.type);
 
@@ -1655,7 +1655,7 @@ elem* toElem(Expression e, ref IRState irs)
 
     elem* visitNot(NotExp ne)
     {
-        elem* e = el_una(OPnot, totym(ne.type), toElem(ne.e1, irs));
+        elem* e = el_una(OPnot, totym(ne.type), toElem(cg, ne.e1, irs));
         elem_setLoc(e,ne.loc);
         return e;
     }
@@ -1688,7 +1688,7 @@ elem* toElem(Expression e, ref IRState irs)
         tym_t ororty = ae.type && ae.type.toBasetype().ty == Tnoreturn ? TYnoreturn : TYvoid;
         if (irs.params.checkAction == CHECKACTION.C)
         {
-            auto econd = toElem(ae.e1, irs);
+            auto econd = toElem(cg, ae.e1, irs);
             auto ea = callCAssert(irs, ae.loc, ae.e1, ae.msg, null);
             auto eo = el_bin(OPoror, ororty, econd, ea);
             elem_setLoc(eo, ae.loc);
@@ -1700,14 +1700,14 @@ elem* toElem(Expression e, ref IRState irs)
             /* Generate:
              *  ae.e1 || halt
              */
-            auto econd = toElem(ae.e1, irs);
+            auto econd = toElem(cg, ae.e1, irs);
             auto ea = genHalt(ae.loc);
             auto eo = el_bin(OPoror, ororty, econd, ea);
             elem_setLoc(eo, ae.loc);
             return eo;
         }
 
-        e = toElem(ae.e1, irs);
+        e = toElem(cg, ae.e1, irs);
         Symbol* ts = null;
         elem* einv = null;
         Type t1 = ae.e1.type.toBasetype();
@@ -1811,8 +1811,8 @@ elem* toElem(Expression e, ref IRState irs)
     elem* visitPost(PostExp pe)
     {
         //printf("PostExp.toElem() '%s'\n", pe.toChars());
-        elem* e = toElem(pe.e1, irs);
-        elem* einc = toElem(pe.e2, irs);
+        elem* e = toElem(cg, pe.e1, irs);
+        elem* einc = toElem(cg, pe.e2, irs);
         e = el_bin((pe.op == EXP.plusPlus) ? OPpostinc : OPpostdec,
                     e.Ety,e,einc);
         elem_setLoc(e,pe.loc);
@@ -1836,8 +1836,8 @@ elem* toElem(Expression e, ref IRState irs)
 
         tym_t tym = totym(be.type);
 
-        elem* el = toElem(be.e1, irs);
-        elem* er = toElem(be.e2, irs);
+        elem* el = toElem(cg, be.e1, irs);
+        elem* er = toElem(cg, be.e2, irs);
 
         elem* e = el_bin(op,tym,el,er);
 
@@ -1872,7 +1872,7 @@ elem* toElem(Expression e, ref IRState irs)
             }
             assert(depth > 0);
 
-            el = toElem(e1, irs);
+            el = toElem(cg, e1, irs);
             el = addressElem(el, e1.type.pointerTo());
             ev = el_same(el);
 
@@ -1891,11 +1891,11 @@ elem* toElem(Expression e, ref IRState irs)
         }
         else
         {
-            el = toElem(be.e1, irs);
+            el = toElem(cg, be.e1, irs);
 
             if (el.Eoper == OPbit)
             {
-                elem* er = toElem(be.e2, irs);
+                elem* er = toElem(cg, be.e2, irs);
                 elem* e = el_bin(op, tym, el, er);
                 elem_setLoc(e,be.loc);
                 return e;
@@ -1907,7 +1907,7 @@ elem* toElem(Expression e, ref IRState irs)
             el = el_una(OPind, tym, el);
             ev = el_una(OPind, tym, ev);
         }
-        elem* er = toElem(be.e2, irs);
+        elem* er = toElem(cg, be.e2, irs);
 
         if (tybasic(er.Ety) == TYnoreturn)
             op = OPcomma;
@@ -1976,7 +1976,7 @@ elem* toElem(Expression e, ref IRState irs)
      */
     elem* eval_Darray(Expression e)
     {
-        elem* ex = toElem(e, irs);
+        elem* ex = toElem(cg, e, irs);
         ex = array_toDarray(e.type, ex);
         if (irs.target.os == Target.OS.Windows && irs.target.isX86_64)
         {
@@ -2001,7 +2001,7 @@ elem* toElem(Expression e, ref IRState irs)
         }
 
         if (auto lowering = ce.lowering)
-            return toElem(lowering, irs);
+            return toElem(cg, lowering, irs);
 
         assert(0, "This case should have been rewritten to `_d_arraycatnTX` in the semantic phase");
     }
@@ -2031,8 +2031,8 @@ elem* toElem(Expression e, ref IRState irs)
             isFloating(e.type))
         {
             assert(!isComplex(e.type));
-            elem* el = toElem(e.e1, irs);
-            elem* er = toElem(e.e2, irs);
+            elem* el = toElem(cg, e.e1, irs);
+            elem* er = toElem(cg, e.e2, irs);
 
             tym_t tym1 = tybasic(typemask(el));
             RTLSYM rtlsym;
@@ -2095,8 +2095,8 @@ elem* toElem(Expression e, ref IRState irs)
         }
         else if (t1.ty == Tvector)
         {
-            elem* e1 = toElem(ce.e1, irs);
-            elem* e2 = toElem(ce.e2, irs);
+            elem* e1 = toElem(cg, ce.e1, irs);
+            elem* e2 = toElem(cg, ce.e2, irs);
 
             tym_t tym = totym(ce.type);
             elem* ex;  // store side effects in ex
@@ -2242,7 +2242,7 @@ elem* toElem(Expression e, ref IRState irs)
         {
             if (auto lowering = ee.lowering)
             {
-                e = toElem(lowering, irs);
+                e = toElem(cg, lowering, irs);
                 elem_setLoc(e, ee.loc);
             }
             else
@@ -2254,8 +2254,8 @@ elem* toElem(Expression e, ref IRState irs)
                 // For a!=b: a.length!=b.length || (a.length != 0 || memcmp(a.ptr, b.ptr, size)!=0)
                 // size is a.length*sizeof(a[0]) for dynamic arrays, or sizeof(a) for static arrays.
 
-                elem* earr1 = toElem(ee.e1, irs);
-                elem* earr2 = toElem(ee.e2, irs);
+                elem* earr1 = toElem(cg, ee.e1, irs);
+                elem* earr2 = toElem(cg, ee.e2, irs);
                 elem* eptr1, eptr2; // Pointer to data, to pass to memcmp
                 elem* elen1, elen2; // Length, for comparison
                 elem* esiz1, esiz2; // Data size, to pass to memcmp
@@ -2379,9 +2379,9 @@ elem* toElem(Expression e, ref IRState irs)
         else if (t1.ty == Tstruct || t1.isFloating())
         {
             // Do bit compare of struct's
-            elem* es1 = toElem(ie.e1, irs);
+            elem* es1 = toElem(cg, ie.e1, irs);
             es1 = addressElem(es1, ie.e1.type);
-            elem* es2 = toElem(ie.e2, irs);
+            elem* es2 = toElem(cg, ie.e2, irs);
             es2 = addressElem(es2, ie.e2.type);
             // In case of `real`, don't compare padding bits
             // https://issues.dlang.org/show_bug.cgi?id=3632
@@ -2403,9 +2403,9 @@ elem* toElem(Expression e, ref IRState irs)
         else if (t1.isStaticOrDynamicArray() && t2.isStaticOrDynamicArray())
         {
 
-            elem* ea1 = toElem(ie.e1, irs);
+            elem* ea1 = toElem(cg, ie.e1, irs);
             ea1 = array_toDarray(t1, ea1);
-            elem* ea2 = toElem(ie.e2, irs);
+            elem* ea2 = toElem(cg, ie.e2, irs);
             ea2 = array_toDarray(t2, ea2);
 
             e = el_bin(eop, totym(ie.type), ea1, ea2);
@@ -2458,7 +2458,7 @@ elem* toElem(Expression e, ref IRState irs)
             to generate any code for the noreturen variable.
          */
         if (ae.e2.type.isTypeNoreturn())
-            return setResult(toElem(ae.e2, irs));
+            return setResult(toElem(cg, ae.e2, irs));
 
         Type t1b = ae.e1.type.toBasetype();
 
@@ -2482,9 +2482,9 @@ elem* toElem(Expression e, ref IRState irs)
                 Type tb = ta.nextOf().toBasetype();
                 uint sz = cast(uint)tb.size();
 
-                elem* n1 = toElem(are.e1, irs);
-                elem* elwr = are.lwr ? toElem(are.lwr, irs) : null;
-                elem* eupr = are.upr ? toElem(are.upr, irs) : null;
+                elem* n1 = toElem(cg, are.e1, irs);
+                elem* elwr = are.lwr ? toElem(cg, are.lwr, irs) : null;
+                elem* eupr = are.upr ? toElem(cg, are.upr, irs) : null;
 
                 elem* n1x = n1;
 
@@ -2494,7 +2494,7 @@ elem* toElem(Expression e, ref IRState irs)
                 if (auto ts = ta.isTypeSArray())
                 {
                     n1 = array_toPtr(ta, n1);
-                    enbytes = toElem(ts.dim, irs);
+                    enbytes = toElem(cg, ts.dim, irs);
                     n1x = n1;
                     n1 = el_same(n1x);
                     einit = resolveLengthVar(are.lengthVar, &n1, ta);
@@ -2536,7 +2536,7 @@ elem* toElem(Expression e, ref IRState irs)
                 einit = el_combine(einit, elwrx);
                 einit = el_combine(einit, euprx);
 
-                elem* evalue = toElem(ae.e2, irs);
+                elem* evalue = toElem(cg, ae.e2, irs);
 
                 version (none)
                 {
@@ -2582,8 +2582,8 @@ elem* toElem(Expression e, ref IRState irs)
                 /* It's array1[]=array2[]
                  * which is a memcpy
                  */
-                elem* eto = toElem(ae.e1, irs);
-                elem* efrom = toElem(ae.e2, irs);
+                elem* eto = toElem(cg, ae.e1, irs);
+                elem* efrom = toElem(cg, ae.e2, irs);
 
                 // https://github.com/dlang/dmd/issues/22659
                 // LHS is a SliceExp with static array type from cast(T[n]) slice.
@@ -2710,9 +2710,9 @@ elem* toElem(Expression e, ref IRState irs)
             assert(ve.var.storage_class & (STC.out_ | STC.ref_));
 
             // It'll be initialized to an address
-            elem* e = toElem(ae.e2, irs);
+            elem* e = toElem(cg, ae.e2, irs);
             e = addressElem(e, ae.e2.type);
-            elem* es = toElem(ae.e1, irs);
+            elem* es = toElem(cg, ae.e1, irs);
             if (es.Eoper == OPind)
                 es = es.E1;
             else
@@ -2725,7 +2725,7 @@ elem* toElem(Expression e, ref IRState irs)
         }
 
         tym_t tym = totym(ae.type);
-        elem* e1 = toElem(ae.e1, irs);
+        elem* e1 = toElem(cg, ae.e1, irs);
 
         elem* e1x;
 
@@ -2760,7 +2760,7 @@ elem* toElem(Expression e, ref IRState irs)
             if (ve.var.storage_class & STC.lazy_)
             {
                 assert(ae.op == EXP.construct || ae.op == EXP.blit);
-                elem* e = el_bin(OPeq, tym, e1, toElem(ae.e2, irs));
+                elem* e = el_bin(OPeq, tym, e1, toElem(cg, ae.e2, irs));
                 return setResult2(e);
             }
 
@@ -2841,7 +2841,7 @@ elem* toElem(Expression e, ref IRState irs)
             /* Implement:
              *  (struct = struct)
              */
-            elem* e2 = toElem(ae.e2, irs);
+            elem* e2 = toElem(cg, ae.e2, irs);
 
             elem* e = elAssign(e1, e2, ae.e1.type, null);
             return setResult2(e);
@@ -2918,8 +2918,8 @@ elem* toElem(Expression e, ref IRState irs)
                 if (auto ve1 = ae.e1.isVectorArrayExp())
                 {
                     // Use an OPeq rather than an OPstreq
-                    e1 = toElem(ve1.e1, irs);
-                    elem* e2 = toElem(ae.e2, irs);
+                    e1 = toElem(cg, ve1.e1, irs);
+                    elem* e2 = toElem(cg, ae.e2, irs);
                     e2.Ety = e1.Ety;
                     elem* e = el_bin(OPeq, e2.Ety, e1, e2);
                     return setResult2(e);
@@ -2948,7 +2948,7 @@ elem* toElem(Expression e, ref IRState irs)
                 lvalueElem = true;
             }
 
-            elem* e2 = toElem(ae.e2, irs);
+            elem* e2 = toElem(cg, ae.e2, irs);
 
             if (!postblit && !destructor ||
                 ae.op == EXP.construct && !lvalueElem && postblit ||
@@ -2972,7 +2972,7 @@ elem* toElem(Expression e, ref IRState irs)
         }
         else
         {
-            elem* e = el_bin(OPeq, tym, e1, toElem(ae.e2, irs));
+            elem* e = el_bin(OPeq, tym, e1, toElem(cg, ae.e2, irs));
             return setResult2(e);
         }
         assert(0);
@@ -3027,13 +3027,13 @@ elem* toElem(Expression e, ref IRState irs)
 
         const hookName = lowerToArrayCtor ? "_d_arrayctor" : "_d_arraysetctor";
         assert(ae.lowering, "This case should have been rewritten to `" ~ hookName ~ "` in the semantic phase");
-        return toElem(ae.lowering, irs);
+        return toElem(cg, ae.lowering, irs);
     }
 
 
     elem* visitLoweredAssign(LoweredAssignExp e)
     {
-        return toElem(e.lowering, irs);
+        return toElem(cg, e.lowering, irs);
     }
 
     /***************************************
@@ -3071,8 +3071,8 @@ elem* toElem(Expression e, ref IRState irs)
                 assert(tb1.ty == Tarray);
                 Type tb1n = tb1.nextOf().toBasetype();
 
-                elem* e1 = toElem(ce.e1, irs);
-                elem* e2 = toElem(ce.e2, irs);
+                elem* e1 = toElem(cg, ce.e1, irs);
+                elem* e2 = toElem(cg, ce.e2, irs);
 
                 /* Because e1 is an lvalue, refer to it via a pointer to it in the form
                 * of ev. Put any side effects into re1
@@ -3115,7 +3115,7 @@ elem* toElem(Expression e, ref IRState irs)
                 }
 
                 if (auto lowering = ce.lowering)
-                    e = toElem(lowering, irs);
+                    e = toElem(cg, lowering, irs);
                 else if (ce.op == EXP.concatenateAssign)
                     assert(0, "This case should have been rewritten to `_d_arrayappendT` in the semantic phase");
                 else
@@ -3221,7 +3221,7 @@ elem* toElem(Expression e, ref IRState irs)
     {
         tym_t tym = totym(aae.type);
 
-        elem* el = toElem(aae.e1, irs);
+        elem* el = toElem(cg, aae.e1, irs);
         elem* er = toElemDtor(aae.e2, irs);
         elem* e = el_bin(aae.op == EXP.andAnd ? OPandand : OPoror,tym,el,er);
 
@@ -3278,9 +3278,9 @@ elem* toElem(Expression e, ref IRState irs)
 
     elem* visitUshr(UshrExp se)
     {
-        elem* eleft  = toElem(se.e1, irs);
+        elem* eleft  = toElem(cg, se.e1, irs);
         eleft.Ety = touns(eleft.Ety);
-        elem* eright = toElem(se.e2, irs);
+        elem* eright = toElem(cg, se.e2, irs);
         elem* e = el_bin(OPshr, totym(se.type), eleft, eright);
         elem_setLoc(e, se.loc);
         return e;
@@ -3307,10 +3307,10 @@ elem* toElem(Expression e, ref IRState irs)
             return incUsageElem(irs, e.loc);
         }
 
-        elem* eleft  = toElem(ce.e1, irs);
+        elem* eleft  = toElem(cg, ce.e1, irs);
         eleft = el_combine(inlineCoverage(ce.e1), eleft);
 
-        elem* eright = toElem(ce.e2, irs);
+        elem* eright = toElem(cg, ce.e2, irs);
         eright = el_combine(inlineCoverage(ce.e2), eright);
 
         elem* e = el_combine(eleft, eright);
@@ -3329,15 +3329,15 @@ elem* toElem(Expression e, ref IRState irs)
         auto ctfecond = ce.econd.op == EXP.not ? (cast(NotExp)ce.econd).e1 : ce.econd;
         if (auto ve = ctfecond.isVarExp())
             if (ve.var && ve.var.ident == Id.ctfe)
-                return toElem(ctfecond is ce.econd ? ce.e2 : ce.e1, irs);
+                return toElem(cg, ctfecond is ce.econd ? ce.e2 : ce.e1, irs);
 
-        elem* ec = toElem(ce.econd, irs);
+        elem* ec = toElem(cg, ce.econd, irs);
 
-        elem* eleft = toElem(ce.e1, irs);
+        elem* eleft = toElem(cg, ce.e1, irs);
         if (irs.params.cov && ce.e1.loc.linnum)
             eleft = el_combine(incUsageElem(irs, ce.e1.loc), eleft);
 
-        elem* eright = toElem(ce.e2, irs);
+        elem* eright = toElem(cg, ce.e2, irs);
         if (irs.params.cov && ce.e2.loc.linnum)
             eright = el_combine(incUsageElem(irs, ce.e2.loc), eright);
 
@@ -3426,7 +3426,7 @@ elem* toElem(Expression e, ref IRState irs)
                 setClosureVarOffset(fd);
         }
 
-        elem* e = toElem(dve.e1, irs);
+        elem* e = toElem(cg, dve.e1, irs);
         Type tb1 = dve.e1.type.toBasetype();
         tym_t typ = TYnptr;
         if (tb1.ty != Tclass && tb1.ty != Tpointer)
@@ -3509,7 +3509,7 @@ elem* toElem(Expression e, ref IRState irs)
             ve.type = de.vthis2.type;
             ve = new AddrExp(de.loc, ve);
             ve.type = de.vthis2.type.pointerTo();
-            ethis2 = toElem(ve, irs);
+            ethis2 = toElem(cg, ve, irs);
 
             if (irs.nullDerefCheck())
             {
@@ -3522,7 +3522,7 @@ elem* toElem(Expression e, ref IRState irs)
         {
             ep = el_ptr(sfunc);
             if (de.e1.op == EXP.null_)
-                ethis = toElem(de.e1, irs);
+                ethis = toElem(cg, de.e1, irs);
             else
                 ethis = getEthis(de.loc, irs, de.func, de.func.toParentLocal());
 
@@ -3531,7 +3531,7 @@ elem* toElem(Expression e, ref IRState irs)
         }
         else
         {
-            ethis = toElem(de.e1, irs);
+            ethis = toElem(cg, de.e1, irs);
             if (de.e1.type.ty != Tclass && de.e1.type.ty != Tpointer)
                 ethis = addressElem(ethis, de.e1.type);
 
@@ -3594,7 +3594,7 @@ elem* toElem(Expression e, ref IRState irs)
     {
         // Just a pass-thru to e1
         //printf("DotTypeExp.toElem() %s\n", dte.toChars());
-        elem* e = toElem(dte.e1, irs);
+        elem* e = toElem(cg, dte.e1, irs);
         elem_setLoc(e, dte.loc);
         return e;
     }
@@ -3630,7 +3630,7 @@ elem* toElem(Expression e, ref IRState irs)
         }
         else
         {
-            elem* e = toElem(ae.e1, irs);
+            elem* e = toElem(cg, ae.e1, irs);
             e = addressElem(e, ae.e1.type);
             e.Ety = totym(ae.type);
             elem_setLoc(e, ae.loc);
@@ -3641,7 +3641,7 @@ elem* toElem(Expression e, ref IRState irs)
     elem* visitPtr(PtrExp pe)
     {
         //printf("PtrExp.toElem() %s\n", pe.toChars());
-        elem* e = toElem(pe.e1, irs);
+        elem* e = toElem(cg, pe.e1, irs);
         if (tybasic(e.Ety) == TYnptr &&
             pe.e1.type.nextOf() &&
             pe.e1.type.nextOf().isImmutable())
@@ -3673,7 +3673,7 @@ elem* toElem(Expression e, ref IRState irs)
             assert(tb.ty != Taarray);
         }
         //e1.type.print();
-        elem* e = toElem(de.e1, irs);
+        elem* e = toElem(cg, de.e1, irs);
         tb = de.e1.type.toBasetype();
         RTLSYM rtl;
         switch (tb.ty)
@@ -3763,13 +3763,13 @@ elem* toElem(Expression e, ref IRState irs)
         }
         else if (ve.type.size() == ve.e1.type.size())
         {
-            e = toElem(ve.e1, irs);
+            e = toElem(cg, ve.e1, irs);
             e.Ety = totym(ve.type);  // paint vector type on it
         }
         else
         {
             // Create vecfill(e1)
-            elem* e1 = toElem(ve.e1, irs);
+            elem* e1 = toElem(cg, ve.e1, irs);
             e = el_una(OPvecfill, totym(ve.type), e1);
         }
         elem_setLoc(e, ve.loc);
@@ -3785,14 +3785,14 @@ elem* toElem(Expression e, ref IRState irs)
             // https://issues.dlang.org/show_bug.cgi?id=19607
             // When viewing a vector literal as an array, build the underlying array directly.
             if (ve.e1.op == EXP.arrayLiteral)
-                result = toElem(ve.e1, irs);
+                result = toElem(cg, ve.e1, irs);
             else
             {
                 // Generate: stmp[0 .. dim] = e1
                 type* tarray = Type_toCtype(vae.type);
                 Symbol* stmp = symbol_genauto(tarray);
                 result = setArray(ve.e1, el_ptr(stmp), el_long(TYsize_t, tarray.Tdim),
-                                  ve.e1.type, toElem(ve.e1, irs), irs, EXP.blit);
+                                  ve.e1.type, toElem(cg, ve.e1, irs), irs, EXP.blit);
                 result = el_combine(result, el_var(stmp));
                 result.ET = tarray;
             }
@@ -3800,7 +3800,7 @@ elem* toElem(Expression e, ref IRState irs)
         else
         {
             // For other vector expressions this just a paint operation.
-            elem* e = toElem(vae.e1, irs);
+            elem* e = toElem(cg, vae.e1, irs);
             type* tarray = Type_toCtype(vae.type);
             // Take the address then repaint,
             // this makes it swap to the right registers
@@ -3819,19 +3819,19 @@ elem* toElem(Expression e, ref IRState irs)
         version (none)
         {
             printf("CastExp.toElem()\n");
-            ce.print(cgstate);
+            ce.print(cg);
             printf("\tfrom: %s\n", ce.e1.type.toChars());
             printf("\tto  : %s\n", ce.to.toChars());
         }
         // When there is a lowering availabe, use that
-        elem* e = ce.lowering is null ? toElem(ce.e1, irs) : toElem(ce.lowering, irs);
+        elem* e = ce.lowering is null ? toElem(cg, ce.e1, irs) : toElem(cg, ce.lowering, irs);
 
         return toElemCast(ce, e, false, irs);
     }
 
     elem* visitArrayLength(ArrayLengthExp ale)
     {
-        elem* e = toElem(ale.e1, irs);
+        elem* e = toElem(cg, ale.e1, irs);
         e = el_una((target.isX86_64 || target.isAArch64) ? OP128_64 : OP64_32, totym(ale.type), e);
         elem_setLoc(e, ale.loc);
         return e;
@@ -3840,7 +3840,7 @@ elem* toElem(Expression e, ref IRState irs)
     elem* visitDelegatePtr(DelegatePtrExp dpe)
     {
         // *cast(void**)(&dg)
-        elem* e = toElem(dpe.e1, irs);
+        elem* e = toElem(cg, dpe.e1, irs);
         Type tb1 = dpe.e1.type.toBasetype();
         e = addressElem(e, tb1);
         e = el_una(OPind, totym(dpe.type), e);
@@ -3851,7 +3851,7 @@ elem* toElem(Expression e, ref IRState irs)
     elem* visitDelegateFuncptr(DelegateFuncptrExp dfpe)
     {
         // *cast(void**)(&dg + size_t.sizeof)
-        elem* e = toElem(dfpe.e1, irs);
+        elem* e = toElem(cg, dfpe.e1, irs);
         Type tb1 = dfpe.e1.type.toBasetype();
         e = addressElem(e, tb1);
         e = el_bin(OPadd, TYnptr, e, el_long(TYsize_t, (target.isX86_64 || target.isAArch64) ? 8 : 4));
@@ -3866,7 +3866,7 @@ elem* toElem(Expression e, ref IRState irs)
         Type tb = se.type.toBasetype();
         assert(tb.isStaticOrDynamicArray());
         Type t1 = se.e1.type.toBasetype();
-        elem* e = toElem(se.e1, irs);
+        elem* e = toElem(cg, se.e1, irs);
         if (se.lwr)
         {
             uint sz = cast(uint)t1.nextOf().size();
@@ -3883,8 +3883,8 @@ elem* toElem(Expression e, ref IRState irs)
             //  TYdarray if t.ty == Tarray
             //  TYptr if t.ty == Tsarray or Tpointer
 
-            elem* elwr = toElem(se.lwr, irs);
-            elem* eupr = toElem(se.upr, irs);
+            elem* elwr = toElem(cg, se.lwr, irs);
+            elem* eupr = toElem(cg, se.upr, irs);
             elem* elwr2 = el_sideeffect(eupr) ? el_copytotmp(elwr) : el_same(elwr);
             elem* eupr2 = eupr;
 
@@ -3998,7 +3998,7 @@ elem* toElem(Expression e, ref IRState irs)
     elem* visitIndex(IndexExp ie)
     {
         elem* e;
-        elem* n1 = toElem(ie.e1, irs);
+        elem* n1 = toElem(cg, ie.e1, irs);
         elem* eb = null;
 
         //printf("IndexExp.toElem() %s\n", ie.toChars());
@@ -4009,7 +4009,7 @@ elem* toElem(Expression e, ref IRState irs)
         }
 
         elem* einit = resolveLengthVar(ie.lengthVar, &n1, t1);
-        elem* n2 = toElem(ie.e2, irs);
+        elem* n2 = toElem(cg, ie.e2, irs);
 
         if (irs.arrayBoundsCheck() && !ie.indexIsInBounds)
         {
@@ -4064,10 +4064,10 @@ elem* toElem(Expression e, ref IRState irs)
         //printf("TupleExp.toElem() %s\n", te.toChars());
         elem* e = null;
         if (te.e0)
-            e = toElem(te.e0, irs);
+            e = toElem(cg, te.e0, irs);
         foreach (el; *te.exps)
         {
-            elem* ep = toElem(el, irs);
+            elem* ep = toElem(cg, el, irs);
             e = el_combine(e, ep);
         }
         return e;
@@ -4118,7 +4118,7 @@ elem* toElem(Expression e, ref IRState irs)
                         ale.toChars(), ale.loc.toChars());
                     assert(0);
                 }
-                e = toElem(ale.lowering, irs);
+                e = toElem(cg, ale.lowering, irs);
 
                 Symbol* stmp = symbol_genauto(Type_toCtype(Type.tvoid.pointerTo()));
                 e = el_bin(OPeq, TYnptr, el_var(stmp), e);
@@ -4154,7 +4154,7 @@ elem* toElem(Expression e, ref IRState irs)
     {
         //printf("AssocArrayLiteralExp.toElem() %s\n", aale.toChars());
         if (aale.lowering)
-            return toElem(aale.lowering, irs);
+            return toElem(cg, aale.lowering, irs);
 
         assert(false, "no lowering for associative array literal");
     }
@@ -4324,7 +4324,7 @@ elem* toElemRVO(Expression e, elem* ehidden, ref IRState irs, Type forceType = n
      */
     elem* blitToStorage(Expression e)
     {
-        elem* e1 = toElem(e, irs);
+        elem* e1 = toElem(cgstate, e, irs);
 
         if (tybasic(e1.Ety) == TYnoreturn)
             return e1;
@@ -4351,7 +4351,7 @@ elem* toElemRVO(Expression e, elem* ehidden, ref IRState irs, Type forceType = n
     elem* doCommaRVO(CommaExp ce)
     {
         assert(ce.e1 && ce.e2);
-        elem* eleft  = toElem(ce.e1, irs);
+        elem* eleft  = toElem(cgstate, ce.e1, irs);
         elem* eright = toElemRVO(ce.e2, ehidden, irs, forceType, offset);
         elem* e = el_combine(eleft, eright);
         if (e)
@@ -4367,7 +4367,7 @@ elem* toElemRVO(Expression e, elem* ehidden, ref IRState irs, Type forceType = n
             if (ve.var && ve.var.ident == Id.ctfe)
                 return toElemRVO(ctfecond is ce.econd ? ce.e2 : ce.e1, ehidden, irs, forceType, offset);
 
-        elem* ec = toElem(ce.econd, irs);
+        elem* ec = toElem(cgstate, ce.econd, irs);
 
         elem* eleft = toElemRVO(ce.e1, ehidden, irs, forceType, offset);
         if (irs.params.cov && ce.e1.loc.linnum)
@@ -4486,7 +4486,7 @@ elem* toElemRVO(Expression e, elem* ehidden, ref IRState irs, Type forceType = n
             }
             else
             {
-                ex = toElem(element, irs);
+                ex = toElem(cgstate, element, irs);
             }
 
             e1 = el_combine(e1, ex);
@@ -4585,14 +4585,14 @@ elem* Dsymbol_toElem(ref CGstate cg, Dsymbol s, ref IRState irs)
             if (vd._init)
             {
                 if (auto ie = vd._init.isExpInitializer())
-                    e = toElem(ie.exp, irs);
+                    e = toElem(cg, ie.exp, irs);
             }
 
             /* Mark the point of construction of a variable that needs to be destructed.
              */
             if (vd.needsScopeDtor())
             {
-                elem* edtor = toElem(vd.edtor, irs);
+                elem* edtor = toElem(cg, vd.edtor, irs);
                 elem* ed = null;
                 if (irs.isNothrow())
                 {
@@ -4737,7 +4737,7 @@ elem* ExpressionsToStaticArray(ref IRState irs, Loc loc, Expressions* exps, Symb
 
         /* Generate: *(&stmp + i * szelem) = element[i]
          */
-        elem* ep = toElem(el, irs);
+        elem* ep = toElem(cgstate, el, irs);
         elem* ev = tybasic(stmp.Stype.Tty) == TYnptr ? el_var(stmp) : el_ptr(stmp);
         ev = el_bin(OPadd, TYnptr, ev, el_long(TYsize_t, offset + i * szelem));
 
@@ -5786,7 +5786,7 @@ elem* callfunc(Loc loc,
 
         foreach (const i, arg; *arguments)
         {
-            elem* ea = toElem(arg, irs);
+            elem* ea = toElem(cgstate, arg, irs);
             Parameter param = null;
 
             if (i - j < tf.parameterList.length && i >= j)
@@ -6514,7 +6514,7 @@ elem* sarray_toDarray(Loc loc, Type tfrom, Type tto, elem* e)
 elem* getTypeInfo(Expression e, Type t, ref IRState irs)
 {
     assert(t.ty != Terror);
-    TypeInfo_toObjFile(e, e.loc, t);
+    TypeInfo_toObjFile(cgstate, e, e.loc, t);
     elem* result = el_ptr(toExtSymbol(t.vtinfo));
     return result;
 }
@@ -6833,7 +6833,7 @@ elem* toElemCall(CallExp ce, ref IRState irs, elem* ehidden = null)
             ehidden = null;
         }
         else
-            ec = toElem(dve.e1, irs);
+            ec = toElem(cgstate, dve.e1, irs);
 
         ectype = dve.e1.type.toBasetype();
 
@@ -6940,11 +6940,11 @@ elem* toElemCall(CallExp ce, ref IRState irs, elem* ehidden = null)
             }
         }
 
-        ec = toElem(ce.e1, irs);
+        ec = toElem(cgstate, ce.e1, irs);
     }
     else
     {
-        ec = toElem(ce.e1, irs);
+        ec = toElem(cgstate, ce.e1, irs);
         if (ce.arguments && ce.arguments.length)
         {
             /* The idea is to enforce expressions being evaluated left to right,
@@ -6981,7 +6981,7 @@ elem* toElemCall(CallExp ce, ref IRState irs, elem* ehidden = null)
         ve.type = ce.vthis2.type;
         ve = new AddrExp(ce.loc, ve);
         ve.type = ce.vthis2.type.pointerTo();
-        ethis2 = toElem(ve, irs);
+        ethis2 = toElem(cgstate, ve, irs);
     }
     elem* ecall = callfunc(ce.loc, irs, ce.directcall, ce.type, ec, ectype, fd, t1, ehidden, ce.arguments, null, ethis2);
 
@@ -7201,7 +7201,7 @@ elem* toElemStructLit(StructLiteralExp sle, ref IRState irs, EXP op, Symbol* sym
         Type t2b = element.type.toBasetype();
         if (t1b.ty == Tsarray)
         {
-            elem* ep = toElem(element, irs);
+            elem* ep = toElem(cgstate, element, irs);
             e1 = el_bin(OPadd, TYnptr, e1, el_long(TYsize_t, v.offset));
             if (t2b.implicitConvTo(t1b))
             {
@@ -7249,7 +7249,7 @@ elem* toElemStructLit(StructLiteralExp sle, ref IRState irs, EXP op, Symbol* sym
         }
         if (bf)
         {
-            elem* ep = toElem(element, irs);
+            elem* ep = toElem(cgstate, element, irs);
             if (!vbf || vbf.offset + vbf.type.size() <= v.offset)
             {
                 /* Initialize entire location the bitfield is in
@@ -7274,7 +7274,7 @@ elem* toElemStructLit(StructLiteralExp sle, ref IRState irs, EXP op, Symbol* sym
         }
         else
         {
-            elem* ep = toElem(element, irs);
+            elem* ep = toElem(cgstate, element, irs);
             e1 = elAssign(e1, ep, v.type, e1.ET);
         }
 

@@ -2856,7 +2856,7 @@ void codelem(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs,uin
                         regm_t retregs = pretregs & mST0 ? mXMM0 : mXMM0|mXMM1;
                         (*cdxxx[op])(cg,cdb,e,retregs);
                         cssave(cg, e,retregs,!OTleaf(op));
-                        fixresult(cgstate,cdb, e, retregs, pretregs);
+                        fixresult(cg,cdb, e, retregs, pretregs);
                         goto L1;
                     }
                     if (tysize(e.Ety) == 1)
@@ -2943,7 +2943,7 @@ void codelem(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs,uin
                     pretregs = tyfloating(e.Ety) ? INSTR.FLOATREGS : INSTR.ALLREGS;
                 }
             }
-            loaddata(cgstate,cdb,e,pretregs);
+            loaddata(cg,cdb,e,pretregs);
             break;
     }
     cssave(cg, e,pretregs,!OTleaf(op));

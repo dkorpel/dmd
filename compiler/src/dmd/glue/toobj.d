@@ -153,7 +153,7 @@ void write_instance_pointers(Type type, Symbol* s, uint offset)
  *      t   = the type to generate the `TypeInfo` object for
  */
 package(dmd.glue)
-void TypeInfo_toObjFile(Expression e, Loc loc, Type t)
+void TypeInfo_toObjFile(ref CGstate cg, Expression e, Loc loc, Type t)
 {
     // printf("TypeInfo_toObjFIle() %s\n", torig.toChars());
     genTypeInfo(e, loc, t, null);
@@ -173,7 +173,7 @@ void TypeInfo_toObjFile(Expression e, Loc loc, Type t)
     {
         // Generate a COMDAT for other TypeInfos not available as builtins in druntime -
         // but only once per compiler run (into the first referencing object file).
-        toObjFile(cgstate, t.vtinfo, global.params.multiobj);
+        toObjFile(cg, t.vtinfo, global.params.multiobj);
     }
 }
 
@@ -1234,7 +1234,7 @@ private void genClassInfoForClass(ClassDeclaration cd, Symbol* sinit)
 
     auto dtb = DtBuilder(0);
 
-    ClassInfoToDt(dtb, cd, sinit);
+    ClassInfoToDt(cgstate, dtb, cd, sinit);
 
     csym.Sdt = dtb.finish();
     // ClassInfo cannot be const data, because we use the monitor on it
@@ -1243,7 +1243,7 @@ private void genClassInfoForClass(ClassDeclaration cd, Symbol* sinit)
         objmod.export_symbol(csym, 0);
 }
 
-private void ClassInfoToDt(ref DtBuilder dtb, ClassDeclaration cd, Symbol* sinit)
+private void ClassInfoToDt(ref CGstate cg, ref DtBuilder dtb, ClassDeclaration cd, Symbol* sinit)
 {
     /* The layout is:
        {
@@ -1447,7 +1447,7 @@ Louter:
     foreach (i; 0 .. cd.vtblInterfaces.length)
     {
         BaseClass* b = (*cd.vtblInterfaces)[i];
-        offset += emitVtbl(cgstate, dtb, b, b.vtbl, cd, i);
+        offset += emitVtbl(cg, dtb, b, b.vtbl, cd, i);
     }
 
     // Put out the overriding interface vtbl[]s.
@@ -1461,7 +1461,7 @@ Louter:
             FuncDeclarations bvtbl;
             if (b.fillVtbl(cd, &bvtbl, 0))
             {
-                offset += emitVtbl(cgstate, dtb, b, bvtbl, pc, i);
+                offset += emitVtbl(cg, dtb, b, bvtbl, pc, i);
             }
         }
     }

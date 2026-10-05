@@ -375,7 +375,7 @@ void optfunc(ref CGstate cg, ref GlobalOptimizer go, ref BlockOpt bo)
          * https://issues.dlang.org/show_bug.cgi?id=23857
          */
         if (iter == 1)
-            scanForInlines(funcsym_p);
+            scanForInlines(cg, funcsym_p);
 
         if (go.mfoptim & MFdc)
             blockopt(cg, go, bo, go.changes); // do block optimization
@@ -385,7 +385,7 @@ void optfunc(ref CGstate cg, ref GlobalOptimizer go, ref BlockOpt bo)
         if (go.mfoptim & MFcnp)
             constprop(go, bo, go.changes);  /* make relationals unsigned     */
         if (go.mfoptim & (MFli | MFliv))
-            loopopt(go, bo);                /* remove loop invariants and    */
+            loopopt(cg, go, bo);                /* remove loop invariants and    */
                                         /* induction vars                */
                                         /* do loop rotation              */
         else

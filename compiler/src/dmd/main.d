@@ -806,7 +806,7 @@ private int tryMain(const(char)[][] argv, out Param params)
         ObjcGlue_initialize();
         timeTraceBeginEvent(TimeTraceEventType.codegenGlobal);
         scope (exit) timeTraceEndEvent(TimeTraceEventType.codegenGlobal);
-        generateCodeAndWrite(modules[], libmodules[], params.libname, params.objdir,
+        generateCodeAndWrite(cgstate, modules[], libmodules[], params.libname, params.objdir,
                             driverParams.lib, params.obj, driverParams.oneobj, params.multiobj,
                             params.v.verbose);
     }
