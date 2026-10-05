@@ -605,6 +605,7 @@ bool[size_t] reachSet(size_t g)
     return reach;
 }
 
+__gshared string[] skipNames;
 __gshared bool[size_t] doneMemo;
 __gshared bool[size_t] doneBusy;
 __gshared string[size_t] problemMemo;
@@ -626,7 +627,7 @@ bool settled(size_t g, size_t f, bool[size_t] reach)
     if (f in doneBusy)
         return true;
     doneBusy[f] = true;
-    bool r = globals[g].users.canFind(f) ? problemOf(g, f).length && calleesSettled(g, f, reach) : calleesSettled(g, f, reach);
+    bool r = globals[g].users.canFind(f) ? skipNames.canFind(funcs[f].name) || problemOf(g, f).length && calleesSettled(g, f, reach) : calleesSettled(g, f, reach);
     doneBusy.remove(f);
     doneMemo[f] = r;
     return r;
@@ -1005,6 +1006,7 @@ void planEdits(size_t g, size_t f, string pname)
     auto fn = &funcs[f];
     auto t = text(fn.file);
     auto pn = existingParam(f, g);
+    const hadParam = pn.length > 0;
     uint[2][] deleted;
     if (!pn.length)
     {
@@ -1024,6 +1026,8 @@ void planEdits(size_t g, size_t f, string pname)
         foreach (off; globalRefOffsets(f, g))
             if (!deleted.any!(d => off >= d[0] && off < d[1]))
                 edits[fn.file] ~= Edit(off, cast(uint) globals[g].name.length, pn);
+    if (hadParam)
+        return;
     foreach (ref c; calls)
     {
         if (c.callee != f)
@@ -1147,6 +1151,7 @@ int main(string[] args)
     const g = gs[0];
     const pn = paramName(g, pname);
     auto skip = skipList.split(",");
+    skipNames = skip;
     auto only = onlyList.split(",");
     auto reach = reachSet(g);
     size_t[] chosen;
