@@ -390,25 +390,25 @@ static if (0)
     cfg.useTypeInfo = useTypeInfo;
     cfg.useExceptions = useExceptions;
 
-    cod3_setdefault();
+    cod3_setdefault(cgstate);
     if (arm)
     {
         cfg.fpxmmregs = false; // add SIMD support later
         util_setAArch64(cfg.exe);
         type_init();
-        cod3_setAArch64();
+        cod3_setAArch64(cgstate);
     }
     else if (model == 64)
     {
         util_set64(cfg.exe);
         type_init();
-        cod3_set64();
+        cod3_set64(cgstate);
     }
     else
     {
         util_set32(cfg.exe);
         type_init();
-        cod3_set32();
+        cod3_set32(cgstate);
     }
 
     if (cfg.objfmt == OBJ_MACH)

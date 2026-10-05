@@ -776,7 +776,7 @@ void FuncDeclaration_toObjFile(FuncDeclaration fd, bool multiobj)
 
         foreach (sp; params[0 .. pi])
         {
-            if (fpr.alloc(sp.Stype, sp.Stype.Tty, sp.Spreg, sp.Spreg2))
+            if (fpr.alloc(cgstate, sp.Stype, sp.Stype.Tty, sp.Spreg, sp.Spreg2))
             {
                 // successful allocation
                 //printf("ident %s reg %d reg2 %d\n", sp.Sident.ptr, sp.Spreg, sp.Spreg2);

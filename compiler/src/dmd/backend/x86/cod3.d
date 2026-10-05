@@ -326,9 +326,8 @@ bool hasModregrm(scope const code* c)
  */
 
 @trusted
-void cod3_setdefault()
+void cod3_setdefault(ref CGstate cg)
 {
-    CGstate* cg = &cgstate;
 
     cg.BP = BP;
     cg.fregsaved = mBP | mSI | mDI;
@@ -343,9 +342,8 @@ void cod3_setdefault()
  * Fix global variables for 386.
  */
 @trusted
-void cod3_set32()
+void cod3_set32(ref CGstate cg)
 {
-    CGstate* cg = &cgstate;
 
     cg.BP = BP;
 
@@ -378,9 +376,8 @@ void cod3_set32()
  */
 
 @trusted
-void cod3_set64()
+void cod3_set64(ref CGstate cg)
 {
-    CGstate* cg = &cgstate;
 
     cg.BP = BP;
 
@@ -415,9 +412,8 @@ void cod3_set64()
  */
 
 @trusted
-void cod3_setAArch64()
+void cod3_setAArch64(ref CGstate cg)
 {
-    CGstate* cg = &cgstate;
     cg.AArch64 = true;
 
     /* Register usage per "AArch64 Procedure Call Standard"
@@ -5161,10 +5157,10 @@ static if (0)
  */
 
 @trusted
-targ_size_t cod3_spoff()
+targ_size_t cod3_spoff(ref CGstate cg)
 {
     //printf("spoff = x%x, localsize = x%x\n", cast(int)cgstate.spoff, cast(int)localsize);
-    return cgstate.spoff + localsize;
+    return cg.spoff + localsize;
 }
 
 @trusted
@@ -6091,9 +6087,8 @@ void assignaddrc(ref CGstate cg, code* c)
  */
 
 @trusted
-targ_size_t cod3_bpoffset(Symbol* s)
+targ_size_t cod3_bpoffset(ref CGstate cg, Symbol* s)
 {
-    CGstate* cg = &cgstate;
 
     symbol_debug(s);
     targ_size_t offset = s.Soffset;

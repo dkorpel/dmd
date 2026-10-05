@@ -253,7 +253,7 @@ private symtab_t* calcLexicalScope(Symbol* sfn, return ref symtab_t symtab) retu
     if(dupcnt == 0)
         return paramcnt > 0 ? &sortedSymtab : &symtab;
 
-    sortLineOffsets();
+    sortLineOffsets(cgstate);
 
     // precalc the lexical blocks to emit so that identically named symbols don't overlap
     lifeTimes.setLength(dupcnt);
@@ -261,8 +261,8 @@ private symtab_t* calcLexicalScope(Symbol* sfn, return ref symtab_t symtab) retu
     for (SYMIDX si = 0; si < dupcnt; si++)
     {
         lifeTimes[si].sym = sortedSymtab[uniquecnt + si];
-        lifeTimes[si].offCreate = cast(int)getLineOffset(lifeTimes[si].sym.lposscopestart.Slinnum);
-        lifeTimes[si].offDestroy = cast(int)getLineOffset(lifeTimes[si].sym.lnoscopeend);
+        lifeTimes[si].offCreate = cast(int)getLineOffset(cgstate, lifeTimes[si].sym.lposscopestart.Slinnum);
+        lifeTimes[si].offDestroy = cast(int)getLineOffset(cgstate, lifeTimes[si].sym.lnoscopeend);
     }
     qsort(lifeTimes[].ptr, dupcnt, (lifeTimes[0]).sizeof, &cmpLifeTime);
 
@@ -363,7 +363,7 @@ private extern (C) static int cmpLineOffsets(scope const void* off1, scope const
     return loff1.linnum - loff2.linnum;
 }
 
-private void sortLineOffsets()
+private void sortLineOffsets(ref CGstate cg)
 {
     if (lineOffsets.length == 0)
         return;
@@ -371,7 +371,7 @@ private void sortLineOffsets()
     // remember the offset to the next recorded offset on another line
     for (int i = 1; i < lineOffsets.length; i++)
         lineOffsets[i-1].diffNextOffset = cast(uint)(lineOffsets[i].offset - lineOffsets[i-1].offset);
-    lineOffsets[lineOffsets.length - 1].diffNextOffset = cast(uint)(cgstate.retoffset + cgstate.retsize - lineOffsets[lineOffsets.length - 1].offset);
+    lineOffsets[lineOffsets.length - 1].diffNextOffset = cast(uint)(cg.retoffset + cg.retsize - lineOffsets[lineOffsets.length - 1].offset);
 
     // sort line records and remove duplicate lines preferring smaller offsets
     qsort(lineOffsets[].ptr, lineOffsets.length, (lineOffsets[0]).sizeof, &cmpLineOffsets);
@@ -382,11 +382,11 @@ private void sortLineOffsets()
     lineOffsets.setLength(j + 1);
 }
 
-private targ_size_t getLineOffset(int linnum)
+private targ_size_t getLineOffset(ref CGstate cg, int linnum)
 {
     int idx = findLineIndex(linnum);
     if (idx >= lineOffsets.length || lineOffsets[idx].linnum < linnum)
-        return cgstate.retoffset + cgstate.retsize; // function length
+        return cg.retoffset + cg.retsize; // function length
     if (idx > 0 && lineOffsets[idx].linnum != linnum)
         // for inexact line numbers, use the offset following the previous line
         return lineOffsets[idx-1].offset + lineOffsets[idx-1].diffNextOffset;

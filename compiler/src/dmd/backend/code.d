@@ -387,8 +387,8 @@ struct FuncParamRegs
     static FuncParamRegs create(tym_t tyf) { return FuncParamRegs_create(tyf); }
 
     @trusted
-    bool alloc(type* t, tym_t ty, out reg_t reg1, out reg_t reg2)
-    { return FuncParamRegs_alloc(cgstate, this, t, ty, reg1, reg2); }
+    bool alloc(ref CGstate cg, type* t, tym_t ty, out reg_t reg1, out reg_t reg2)
+    { return FuncParamRegs_alloc(cg, this, t, ty, reg1, reg2); }
 
   private:
   public: // for the moment

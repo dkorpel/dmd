@@ -131,7 +131,7 @@ void except_fillInEHTable(Symbol* s)
     //printf("ehtables: func = %s, offset = x%x, startblock.Boffset = x%x\n", funcsym_p.Sident, funcsym_p.Soffset, startblock.Boffset);
 
     // Get offset of ESP from EBP
-    long spoff = cod3_spoff();
+    long spoff = cod3_spoff(cgstate);
     dtb.dword(cast(int)spoff);
     sz += 4;
 
@@ -345,7 +345,7 @@ void except_fillInEHTable(Symbol* s)
 
                 dtb.xoff(bcatch.Bcatchtype,0,TYnptr);
 
-                dtb.size(cod3_bpoffset(b.jcatchvar));     // EBP offset
+                dtb.size(cod3_bpoffset(cgstate, b.jcatchvar));     // EBP offset
 
                 // catch handler address
                 if (config.ehmethod == EHmethod.EH_DM)

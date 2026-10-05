@@ -2077,7 +2077,7 @@ private void cse_save(ref CodeBuilder cdb, regm_t ms)
             cse.flags |= CSEsimple;
         else
         {
-            CSE.updateSizeAndAlign(cse.e);
+            CSE.updateSizeAndAlign(cgstate, cse.e);
             gen_storecse(cdb, cse.e.Ety, reg, cse.slot);
             cg.reflocal = true;
         }
