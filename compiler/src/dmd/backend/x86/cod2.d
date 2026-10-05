@@ -2472,7 +2472,7 @@ void cdcond(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         if (retregs & ~cg.regcon.mvar)
             retregs &= ~cg.regcon.mvar;    // don't disturb register variables
         // NOTE: see my email (sign extension bug? possible fix, some questions
-        const reg = regwithvalue(cdb,retregs,cast(targ_size_t)e21.Vllong,
+        const reg = regwithvalue(cg, cdb,retregs,cast(targ_size_t)e21.Vllong,
                                  tysize(e21.Ety) == 8 ? 64|8 : 8);
         retregs = mask(reg);
 
@@ -2832,7 +2832,7 @@ void cdshift(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
                 {   // Handle (shtlng)s << 16
                     regm_t r = retregs & mMSW;
                     codelem(cg,cdb,e1.E1,r,false);      // eval left leaf
-                    resreg = regwithvalue(cdb,retregs & mLSW,0,0);
+                    resreg = regwithvalue(cg, cdb,retregs & mLSW,0,0);
                     getregs(cg, cdb,r);
                     retregs = r | mask(resreg);
                     if (forccs)
@@ -3527,7 +3527,7 @@ void cdind(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
  */
 
 @trusted
-private code* cod2_setES(tym_t ty)
+private code* cod2_setES(ref CGstate cg, tym_t ty)
 {
     if (config.exe & EX_flat)
         return null;
@@ -3552,7 +3552,7 @@ private code* cod2_setES(tym_t ty)
             {   push = 0x16;            // PUSH SS
             L1:
                 // Must load ES
-                getregs(cgstate, cdb,mES);
+                getregs(cg, cdb,mES);
                 cdb.gen1(push);
                 cdb.gen1(0x07);         // POP ES
             }
@@ -3587,11 +3587,11 @@ void cdstrlen(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t pretregs)
     codelem(cg,cdb,e.E1,retregs,false);
 
     // Make sure ES contains proper segment value
-    cdb.append(cod2_setES(ty1));
+    cdb.append(cod2_setES(cg, ty1));
 
     ubyte rex = I64 ? REX_W : 0;
 
-    getregs_imm(cdb,mAX | mCX);
+    getregs_imm(cg, cdb,mAX | mCX);
     movregconst(cg,cdb,AX,0,1);               // MOV AL,0
     movregconst(cg,cdb,CX,-cast(targ_size_t)1,I64 ? 64 : 0);  // MOV CX,-1
     getregs(cg, cdb,mDI|mCX);
@@ -3655,8 +3655,8 @@ void cdstrcmp(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t pretregs)
     scodelem(cg,cdb,e.E2,retregs,retregs1,false);
 
     // Make sure ES contains proper segment value
-    cdb.append(cod2_setES(ty2));
-    getregs_imm(cdb,mAX | mCX);
+    cdb.append(cod2_setES(cg, ty2));
+    getregs_imm(cg, cdb,mAX | mCX);
 
     ubyte rex = I64 ? REX_W : 0;
 
@@ -3773,7 +3773,7 @@ void cdmemcmp(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     scodelem(cg,cdb,e.E2,retregs3,retregs | retregs1,false);
 
     // Make sure ES contains proper segment value
-    cdb.append(cod2_setES(ty2));
+    cdb.append(cod2_setES(cg, ty2));
 
     // Load DS with right value
     switch (tybasic(ty1))
@@ -3818,7 +3818,7 @@ void cdmemcmp(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     {
         if (pretregs != mPSW)                      // if not flags only
         {
-            regwithvalue(cdb,mAX,0,0);         // put 0 in AX
+            regwithvalue(cg, cdb,mAX,0,0);         // put 0 in AX
         }
     }
 
@@ -3877,8 +3877,8 @@ void cdstrcpy(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     codelem(cg,cdb,e.E2,retregs,false);
 
     // Make sure ES contains proper segment value
-    cdb.append(cod2_setES(ty2));
-    getregs_imm(cdb,mAX | mCX);
+    cdb.append(cod2_setES(cg, ty2));
+    getregs_imm(cg, cdb,mAX | mCX);
     movregconst(cg,cdb,AX,0,1);       // MOV AL,0
     movregconst(cg,cdb,CX,-1,I64?64:0);  // MOV CX,-1
     getregs(cg, cdb,mAX|mCX|mSI|mDI);
@@ -3931,7 +3931,7 @@ void cdstrcpy(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
 
     // Make sure ES contains proper segment value
     if (ty2 != TYnptr || ty1 != ty2)
-        cdb.append(cod2_setES(ty1));
+        cdb.append(cod2_setES(cg, ty1));
     else
     {}                              // ES is already same as DS
 
@@ -4007,7 +4007,7 @@ void cdmemcpy(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     ubyte rex = I64 ? REX_W : 0;
 
     // Make sure ES contains proper segment value
-    cdb.append(cod2_setES(ty1));
+    cdb.append(cod2_setES(cg, ty1));
 
     // Load DS with right value
     switch (tybasic(ty2))
@@ -4185,7 +4185,7 @@ void cdmemset(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     retregs3 = mAX;
     if (valueIsConst)
     {
-        regwithvalue(cdb, mAX, value, I64?64:0);
+        regwithvalue(cg, cdb, mAX, value, I64?64:0);
         getregs(cg, cdb, mAX);
         cg.regimmed_set(AX, value);
         freenode(cg, evalue);
@@ -4208,7 +4208,7 @@ void cdmemset(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         {
             genregs(cdb,MOVZXb,AX,AX);                    // MOVZX EAX,AL
             regm_t regm = cg.allregs & ~(mAX | retregs2);
-            const r = regwithvalue(cdb,regm,cast(targ_size_t)0x01010101_01010101,64); // MOV reg,0x01010101_01010101
+            const r = regwithvalue(cg, cdb,regm,cast(targ_size_t)0x01010101_01010101,64); // MOV reg,0x01010101_01010101
             cdb.gen2(0x0FAF,grex | modregrmx(3,AX,r));        // IMUL RAX,reg
         }
     }
@@ -4223,7 +4223,7 @@ void cdmemset(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     reg = DI; //findreg(retregs1);
 
     // Make sure ES contains proper segment value
-    cdb.append(cod2_setES(ty1));
+    cdb.append(cod2_setES(cg, ty1));
 
     if (pretregs)                              // if need return value
     {
@@ -4239,7 +4239,7 @@ void cdmemset(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         getregs(cg, cdb,mDI);
         if (const numwords = numbytes / COPYSIZE)
         {
-            regwithvalue(cdb,mCX,numwords, 0);
+            regwithvalue(cg, cdb,mCX,numwords, 0);
             getregs(cg, cdb,mCX);
             cdb.gen1(0xF3);                     // REP
             cdb.gen1(STOS);                     // STOSW/D
@@ -4367,7 +4367,7 @@ private void cdmemsetn(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pr
     reg_t idxreg = findreg(mregidx);
 
     // Make sure ES contains proper segment value
-    cdb.append(cod2_setES(ty1));
+    cdb.append(cod2_setES(cg, ty1));
 
     regm_t mregbx = 0;
     if (pretregs)                              // if need return value
@@ -4514,7 +4514,7 @@ void cdstreq(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     {
         if (tyreg(e1.E1.Ety))
             dstregs = mDI;
-        cdb.append(cod2_setES(e1.E1.Ety));
+        cdb.append(cod2_setES(cg, e1.E1.Ety));
         scodelem(cg,cdb,e1.E1,dstregs,srcregs,false);
     }
     else
@@ -4549,7 +4549,7 @@ void cdstreq(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     {
         // Generate REP MOVSQ if the size is a multiple of 8
         numbytes /= REGSIZE;
-        getregs_imm(cdb,mCX);
+        getregs_imm(cg, cdb,mCX);
         movregconst(cg,cdb,CX,numbytes,0);
         cdb.gen1(0xF3);
         cdb.gen1(REX | REX_W);
@@ -4562,7 +4562,7 @@ void cdstreq(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         const COPYSIZE = REGSIZE < 4 ? REGSIZE : 4;
         targ_size_t remainder = numbytes & (COPYSIZE - 1);
         numbytes /= COPYSIZE;            // number of words
-        getregs_imm(cdb,mCX);
+        getregs_imm(cg, cdb,mCX);
         movregconst(cg,cdb,CX,numbytes,0);   // # of bytes/words
         cdb.gen1(0xF3);                 // REP
         cdb.gen1(0xA5);                 // REP MOVSD

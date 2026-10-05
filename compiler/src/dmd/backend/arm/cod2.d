@@ -854,7 +854,7 @@ void cdcond(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         if (retregs & ~cg.regcon.mvar)
             retregs &= ~cg.regcon.mvar;    // don't disturb register variables
         // NOTE: see my email (sign extension bug? possible fix, some questions
-        const reg = regwithvalue(cdb,retregs,cast(targ_size_t)e21.Vllong,
+        const reg = regwithvalue(cg, cdb,retregs,cast(targ_size_t)e21.Vllong,
                                  tysize(e21.Ety) == 8 ? 64|8 : 8);
         retregs = mask(reg);
 
@@ -1544,7 +1544,7 @@ void cdmemset(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
             valueregs = cg.allregs & ~(pretregs | nbytesregs);
             if (!valueregs)
                 valueregs = cg.allregs & ~nbytesregs;
-            valuereg = regwithvalue(cdb, valueregs, value, 64);
+            valuereg = regwithvalue(cg, cdb, valueregs, value, 64);
             valueregs = mask(valuereg);
             getregs(cg, cdb, valueregs);
             valuereg = findreg(valueregs);
@@ -1575,7 +1575,7 @@ void cdmemset(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         if (const n = numbytes & ~(REGSIZE - 1))
         {
             regm_t limits = cg.allregs & ~(nbytesregs | valueregs | dstregs | retregs);
-            reg_t limit = regwithvalue(cdb,limits,n / REGSIZE,64);      // MOV limit,#n / REGSIZE
+            reg_t limit = regwithvalue(cg, cdb,limits,n / REGSIZE,64);      // MOV limit,#n / REGSIZE
             getregs(cg, cdb,limits);                                        // we're going to overwrite `limit`
             cdb.gen1(INSTR.addsub_ext(1,0,0,0,limit,6,3,dstreg,limit)); // ADD limit,dstreg,limit,UXTW #3
 
@@ -2733,7 +2733,7 @@ void floatPost(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         regm_t vretregs = INSTR.FLOATREGS & ~mask(cs.reg);
         reg_t vreg = allocreg(cdb,vretregs,ty1);
         double value = sz == 8 ? e2.Vdouble : e2.Vfloat;
-        loadFloatRegConst(cdb,vreg,value,sz);                   // FMOV vreg,value
+        loadFloatRegConst(cg, cdb,vreg,value,sz);                   // FMOV vreg,value
 
         switch (e.Eoper)
         {
@@ -2764,7 +2764,7 @@ void floatPost(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     regm_t vretregs = INSTR.FLOATREGS & ~mask(reg) & ~mask(resultreg);
     reg_t vreg = allocreg(cdb,vretregs,ty1);
     double value = sz == 8 ? e2.Vdouble : e2.Vfloat;
-    loadFloatRegConst(cdb,vreg,value,sz);       // FMOV vreg,value
+    loadFloatRegConst(cg, cdb,vreg,value,sz);       // FMOV vreg,value
 
     switch (e.Eoper)
     {
@@ -2789,7 +2789,7 @@ void floatPost(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     if (e1.Ecount ||                          // if lvalue is a CSE or
         regvar)                               // rvalue can't be a CSE
     {
-        getregs_imm(cdb,retregs);             // necessary if both lvalue and
+        getregs_imm(cg, cdb,retregs);             // necessary if both lvalue and
                                               //  rvalue are CSEs (since a reg
                                               //  can hold only one e at a time)
         cssave(cg, e1,retregs,!OTleaf(e1.Eoper)); // if lvalue is a CSE
@@ -2867,7 +2867,7 @@ void complexPost(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs
 
         regm_t vretregs = INSTR.FLOATREGS & ~retregs;
         reg_t vreg = allocreg(cdb,vretregs,ty1);
-        loadFloatRegConst(cdb,vreg,1,sz);                   // FMOV vreg,value
+        loadFloatRegConst(cg, cdb,vreg,1,sz);                   // FMOV vreg,value
 
         switch (e.Eoper)
         {
@@ -2900,7 +2900,7 @@ void complexPost(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs
 
     regm_t vretregs = INSTR.FLOATREGS & ~retregs & ~resultregs;
     reg_t vreg = allocreg(cdb,vretregs,ty1);
-    loadFloatRegConst(cdb,vreg,1,sz);       // FMOV vreg,value
+    loadFloatRegConst(cg, cdb,vreg,1,sz);       // FMOV vreg,value
 
     switch (e.Eoper)
     {
@@ -2928,7 +2928,7 @@ void complexPost(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs
     if (e1.Ecount ||                          // if lvalue is a CSE or
         regvar)                               // rvalue can't be a CSE
     {
-        getregs_imm(cdb,retregs);             // necessary if both lvalue and
+        getregs_imm(cg, cdb,retregs);             // necessary if both lvalue and
                                               //  rvalue are CSEs (since a reg
                                               //  can hold only one e at a time)
         cssave(cg, e1,retregs,!OTleaf(e1.Eoper)); // if lvalue is a CSE

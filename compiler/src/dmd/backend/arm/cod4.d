@@ -151,7 +151,7 @@ void cdeq(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
                 reg_t r = allocreg(cdb, m, tyml);
                 const p = cast(targ_size_t*) &(e2.EV);
                 if (r >= 32)
-                    loadFloatRegConst(cdb,r,e2.EV.Vdouble,sz);
+                    loadFloatRegConst(cg, cdb,r,e2.EV.Vdouble,sz);
                 else
                     movregconst(cg,cdb,r,*p,(sz == 8) ? 64 : 0);
                 storeToEA(cs,r,sz);
@@ -249,7 +249,7 @@ void cdeq(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     if (e1.Ecount ||                    // if lvalue is a CSE or
         regvar)                         // rvalue can't be a CSE
     {
-        getregs_imm(cdb,retregs);       // necessary if both lvalue and
+        getregs_imm(cg, cdb,retregs);       // necessary if both lvalue and
                                         //  rvalue are CSEs (since a reg
                                         //  can hold only one e at a time)
         cssave(cg, e1,retregs,!OTleaf(e1.Eoper));     // if lvalue is a CSE
@@ -583,7 +583,7 @@ void floatOpAss(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         if (e1.Ecount ||                     // if lvalue is a CSE or
             regvar)                          // rvalue can't be a CSE
         {
-            getregs_imm(cdb,retregs);        // necessary if both lvalue and
+            getregs_imm(cg, cdb,retregs);        // necessary if both lvalue and
                                              //  rvalue are CSEs (since a reg
                                              //  can hold only one e at a time)
             cssave(cg, e1,retregs,!OTleaf(e1.Eoper)); // if lvalue is a CSE
@@ -753,7 +753,7 @@ void floatOpAss(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     if (e1.Ecount ||                     // if lvalue is a CSE or
         regvar)                          // rvalue can't be a CSE
     {
-        getregs_imm(cdb,retregs);        // necessary if both lvalue and
+        getregs_imm(cg, cdb,retregs);        // necessary if both lvalue and
                                          //  rvalue are CSEs (since a reg
                                          //  can hold only one e at a time)
         cssave(cg, e1,retregs,!OTleaf(e1.Eoper)); // if lvalue is a CSE

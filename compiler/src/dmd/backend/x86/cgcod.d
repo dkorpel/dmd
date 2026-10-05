@@ -2082,11 +2082,10 @@ private void cse_save(ref CGstate cg, ref CodeBuilder cdb, regm_t ms)
  */
 
 @trusted
-void getregs_imm(ref CodeBuilder cdb, regm_t r)
+void getregs_imm(ref CGstate cg, ref CodeBuilder cdb, regm_t r)
 {
-    CGstate* cg = &cgstate;
     regm_t save = cg.regcon.immed.mval;
-    getregs(cgstate, cdb,r);
+    getregs(cg, cdb,r);
     cg.regcon.immed.mval = save;
 }
 
@@ -2475,7 +2474,7 @@ private void comsub(ref CodeBuilder cdb,elem* e, ref regm_t pretregs)
             if (!regm)
                 regm = xMSW & xALLREGS;
             msreg = allocreg(cdb,regm,TYint);
-            loadcse(cdb,e,msreg,xMSW);
+            loadcse(cgstate, cdb,e,msreg,xMSW);
         }
 
         regm = pretregs & xLSW;
@@ -2488,7 +2487,7 @@ private void comsub(ref CodeBuilder cdb,elem* e, ref regm_t pretregs)
             if (!regm)
                 regm = xLSW;
             lsreg = allocreg(cdb,regm,TYint);
-            loadcse(cdb,e,lsreg,xLSW);
+            loadcse(cgstate, cdb,e,lsreg,xLSW);
         }
 
         regm = mask(msreg) | mask(lsreg);       /* mask of result       */
@@ -2505,7 +2504,7 @@ private void comsub(ref CodeBuilder cdb,elem* e, ref regm_t pretregs)
             {
                 assert(cast(int) reg >= 0 && reg <= 7);
                 if (mask(reg) & csemask)
-                    loadcse(cdb,e,reg,mask(reg));
+                    loadcse(cgstate, cdb,e,reg,mask(reg));
             }
             regm_t regm = DOUBLEREGS_16;
             fixresult(*cg,cdb,e,regm,pretregs);
@@ -2563,20 +2562,19 @@ reload:                                 /* reload result from memory    */
  */
 
 @trusted
-private void loadcse(ref CodeBuilder cdb,elem* e,reg_t reg,regm_t regm)
+private void loadcse(ref CGstate cg, ref CodeBuilder cdb,elem* e,reg_t reg,regm_t regm)
 {
     foreach (ref cse; CSE.filter(e))
     {
         //printf("CSE[%d] = %p, regm = %s\n", i, cse.e, regm_str(cse.regm));
         if (cse.regm & regm)
         {
-            CGstate* cg = &cgstate;
             cg.reflocal = true;
             cse.flags |= CSEload;    /* it was loaded        */
             cg.regcon.cse.value[reg] = e;
             cg.regcon.cse.mval |= mask(reg);
-            getregs(cgstate, cdb,mask(reg));
-            gen_loadcse(cgstate, cdb, cse.e.Ety, reg, cse.slot);
+            getregs(cg, cdb,mask(reg));
+            gen_loadcse(cg, cdb, cse.e.Ety, reg, cse.slot);
             return;
         }
     }

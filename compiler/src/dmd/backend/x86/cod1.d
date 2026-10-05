@@ -4704,7 +4704,7 @@ void pushParams(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint stackalign, t
             }
             else if (sz)
             {
-                getregs_imm(cdb, mCX | retregs);
+                getregs_imm(cg, cdb, mCX | retregs);
                                                     // MOV CX,sz/2
                 movregconst(cg,cdb, CX, npushes, 0);
                 if (!doneoff)
@@ -5024,7 +5024,7 @@ void pushParams(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint stackalign, t
                 {
                     if (I64 && regsize == 8 && value != cast(int)value)
                     {
-                        reg = regwithvalue(cdb,cg.allregs,value,64);
+                        reg = regwithvalue(cg, cdb,cg.allregs,value,64);
                         goto Preg;          // cannot push imm64 unless it is sign extended 32 bit value
                     }
                     if (regsize == REGSIZE && reghasvalue(cg, cg.allregs,value,reg))
@@ -5033,7 +5033,7 @@ void pushParams(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint stackalign, t
                 }
                 else
                 {
-                    reg = regwithvalue(cdb, cg.allregs, value, 0);
+                    reg = regwithvalue(cg, cdb, cg.allregs, value, 0);
                 Preg:
                     genpush(cdb,reg);         // PUSH reg
                 }

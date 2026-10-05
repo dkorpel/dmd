@@ -2604,8 +2604,8 @@ void loaddata(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t outretreg
                 }
                 else if (sz == 32)
                     assert(0);          // TODO AArch64 for Linux
-                loadFloatRegConst(cdb,vreg_re,value_re,sz / 2);
-                loadFloatRegConst(cdb,vreg_im,value_im,sz / 2);
+                loadFloatRegConst(cg, cdb,vreg_re,value_re,sz / 2);
+                loadFloatRegConst(cg, cdb,vreg_im,value_im,sz / 2);
                 fixresult(cg, cdb, e, forregs, outretregs);
                 return;
             }
@@ -2616,7 +2616,7 @@ void loaddata(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t outretreg
             else if (sz == 16)
                 // cannot implicitly convert expression `(*e).EV.Vreal` of type `longdouble_soft` to `double` [D:\a\1\s\compiler\src\vcbuild\dmd.vcxproj]
                 value = cast(double)e.Vreal;
-            loadFloatRegConst(cdb,vreg,value,sz);
+            loadFloatRegConst(cg, cdb,vreg,value,sz);
             fixresult(cg, cdb, e, forregs, outretregs);
             return;
         }

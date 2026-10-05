@@ -535,20 +535,20 @@ public void genfwait(ref CodeBuilder cdb)
  */
 
 @trusted
-private void cg87_87topsw(ref CodeBuilder cdb)
+private void cg87_87topsw(ref CGstate cg, ref CodeBuilder cdb)
 {
     /* Note that SAHF is not available on some early I64 processors
      * and will cause a seg fault
      */
     assert(!NOSAHF);
-    getregs(cgstate, cdb,mAX);
+    getregs(cg, cdb,mAX);
     if (config.target_cpu >= TARGET_80286)
         cdb.genf2(0xDF,0xE0);             // FSTSW AX
     else
     {
-        cdb.genfltreg(cgstate, 0xD8+5,7,0);        // FSTSW floatreg[BP]
+        cdb.genfltreg(cg, 0xD8+5,7,0);        // FSTSW floatreg[BP]
         genfwait(cdb);          // FWAIT
-        cdb.genfltreg(cgstate, 0x8A,4,1);          // MOV AH,floatreg+1[BP]
+        cdb.genfltreg(cg, 0x8A,4,1);          // MOV AH,floatreg+1[BP]
     }
     cdb.gen1(0x9E);                       // SAHF
     code_orflag(cdb.last(),CF.psw);
@@ -570,7 +570,7 @@ private void genjmpifC2(ref CodeBuilder cdb, code* ctarget)
     }
     else
     {
-        cg87_87topsw(cdb);
+        cg87_87topsw(cgstate, cdb);
         genjmp(cdb, JP, FL.code, cast(block*)ctarget);  // JP ctarget
     }
 }
@@ -601,7 +601,7 @@ private void genftst(ref CGstate cg, ref CodeBuilder cdb,elem* e,int pop)
     else if (config.flags4 & CFG4fastfloat)  // if fast floating point
     {
         cdb.genf2(0xD9,0xE4);                // FTST
-        cg87_87topsw(cdb);                   // put 8087 flags in CPU flags
+        cg87_87topsw(cg, cdb);                   // put 8087 flags in CPU flags
         if (pop)
         {
             cdb.genf2(0xDD,modregrm(3,3,0)); // FPOP
@@ -617,7 +617,7 @@ private void genftst(ref CGstate cg, ref CodeBuilder cdb,elem* e,int pop)
         pop87();
         if (pop)
             pop87();
-        cg87_87topsw(cdb);                   // put 8087 flags in CPU flags
+        cg87_87topsw(cg, cdb);                   // put 8087 flags in CPU flags
     }
     else
     {
@@ -1094,7 +1094,7 @@ void orth87(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
                     else
                     {
                         cdb.genf2(0xD9,0xE4);            // FTST
-                        cg87_87topsw(cdb);
+                        cg87_87topsw(cg, cdb);
                     }
                     cdb.genf2(0xDD,modregrm(3,3,0));     // FPOP
                     pop87();
@@ -1142,7 +1142,7 @@ void orth87(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
                     else if (config.target_cpu >= TARGET_80386)
                     {
                         cdb.gen2(0xDA,0xE9);      // FUCOMPP
-                        cg87_87topsw(cdb);
+                        cg87_87topsw(cg, cdb);
                         pop87();
                         pop87();
                     }
@@ -1855,7 +1855,7 @@ L5:
                 note87(eleft,eoffset,0);    // don't trash this value
             retregs = ALLREGS & mLSW;
             codelem(cg,cdb,e.E1,retregs,false);
-            reg = regwithvalue(cdb,ALLREGS & mMSW,0,0);  // 0-extend
+            reg = regwithvalue(cg, cdb,ALLREGS & mMSW,0,0);  // 0-extend
             retregs |= mask(reg);
             mf1 = MFlong;
             goto L3;
@@ -1923,7 +1923,7 @@ L5:
     }
     if (op == 3)                    // FCOMP
     {   pop87();                    // extra pop was done
-        cg87_87topsw(cdb);
+        cg87_87topsw(cg, cdb);
     }
     fixresult87(cg,cdb,e,((op == 3) ? mPSW : mST0),outretregs);
     if (NDPP)
@@ -3637,23 +3637,23 @@ private void genctst(ref CodeBuilder cdb,elem* e,int pop)
         cdb.gen2(0xDA,0xE9);                   // FUCOMPP
         pop87();
         pop87();
-        cg87_87topsw(cdb);                     // put 8087 flags in CPU flags
+        cg87_87topsw(cgstate, cdb);                     // put 8087 flags in CPU flags
         cdb.gen2(0xD9,0xEE);                   // FLDZ
         cdb.gen2(0xDA,0xE9);                   // FUCOMPP
         pop87();
         genjmp(cdb,JNE,FL.code,cast(block*) cnop); // JNE     L1
         genjmp(cdb,JP, FL.code,cast(block*) cnop); // JP      L1
-        cg87_87topsw(cdb);                     // put 8087 flags in CPU flags
+        cg87_87topsw(cgstate, cdb);                     // put 8087 flags in CPU flags
     }
     else
     {
         cdb.gen2(0xDD,0xE1);                   // FUCOM
-        cg87_87topsw(cdb);                     // put 8087 flags in CPU flags
+        cg87_87topsw(cgstate, cdb);                     // put 8087 flags in CPU flags
         cdb.gen2(0xDD,0xEA);                   // FUCOMP ST(2)
         pop87();
         genjmp(cdb,JNE,FL.code,cast(block*) cnop); // JNE     L1
         genjmp(cdb,JP, FL.code,cast(block*) cnop); // JP      L1
-        cg87_87topsw(cdb);                     // put 8087 flags in CPU flags
+        cg87_87topsw(cgstate, cdb);                     // put 8087 flags in CPU flags
     }
     cdb.append(cdbnop);
 }

@@ -134,7 +134,7 @@ void movxmmconst(ref CGstate cg, ref CodeBuilder cdb, reg_t xreg, tym_t ty, Vcon
     }
     else
     {
-        const reg = regwithvalue(cdb,ALLREGS,value,(sz == 8) ? 64 : 0);
+        const reg = regwithvalue(cg, cdb,ALLREGS,value,(sz == 8) ? 64 : 0);
         cdb.gen2(LODD,modregxrmx(3,xreg-XMM0,reg));     // MOVD xreg,reg
         if (sz == 8)
             code_orrex(cdb.last(), REX_W);
@@ -318,7 +318,7 @@ void xmmeq(ref CGstate cg, ref CodeBuilder cdb, elem* e, opcode_t op, elem* e1, 
         getlvalue(cg,cdb,cs,e1,retregs,RM.store);       // get lvalue (cl == CNIL if regvar)
     }
 
-    getregs_imm(cdb,regvar ? varregm : 0);
+    getregs_imm(cg, cdb,regvar ? varregm : 0);
 
     const reg = findreg(retregs & XMMREGS);
     cs.Irm |= modregrm(0,(reg - XMM0) & 7,0);
@@ -335,7 +335,7 @@ void xmmeq(ref CGstate cg, ref CodeBuilder cdb, elem* e, opcode_t op, elem* e1, 
     if (e1.Ecount ||                     // if lvalue is a CSE or
         regvar)                           // rvalue can't be a CSE
     {
-        getregs_imm(cdb,retregs);        // necessary if both lvalue and
+        getregs_imm(cg, cdb,retregs);        // necessary if both lvalue and
                                         //  rvalue are CSEs (since a reg
                                         //  can hold only one e at a time)
         cssave(cg, e1,retregs,!OTleaf(e1.Eoper));     // if lvalue is a CSE
@@ -584,7 +584,7 @@ void xmmopass(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     if (e1.Ecount ||                     // if lvalue is a CSE or
         regvar)                           // rvalue can't be a CSE
     {
-        getregs_imm(cdb,retregs);        // necessary if both lvalue and
+        getregs_imm(cg, cdb,retregs);        // necessary if both lvalue and
                                         //  rvalue are CSEs (since a reg
                                         //  can hold only one e at a time)
         cssave(cg, e1,retregs,!OTleaf(e1.Eoper));     // if lvalue is a CSE
@@ -672,7 +672,7 @@ void xmmpost(ref CGstate cg,ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     if (e1.Ecount ||                     // if lvalue is a CSE or
         regvar)                           // rvalue can't be a CSE
     {
-        getregs_imm(cdb,retregs); // necessary if both lvalue and
+        getregs_imm(cg, cdb,retregs); // necessary if both lvalue and
                                         //  rvalue are CSEs (since a reg
                                         //  can hold only one e at a time)
         cssave(cg, e1,retregs,!OTleaf(e1.Eoper));     // if lvalue is a CSE

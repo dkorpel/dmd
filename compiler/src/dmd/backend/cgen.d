@@ -234,17 +234,17 @@ bool reghasvalue(ref CGstate cg, regm_t regm,targ_size_t value, out reg_t preg)
  *      the register selected
  */
 @trusted
-reg_t regwithvalue(ref CodeBuilder cdb,regm_t regm,targ_size_t value, regm_t flags)
+reg_t regwithvalue(ref CGstate cg, ref CodeBuilder cdb,regm_t regm,targ_size_t value, regm_t flags)
 {
     //printf("regwithvalue(value = %lld)\n", cast(long)value);
     reg_t found;
-    if (reghasvalue(cgstate, regm,value,found))
+    if (reghasvalue(cg, regm,value,found))
         return found; // already have a register with the right value in it
 
-    regm_t save = cgstate.regcon.immed.mval;
+    regm_t save = cg.regcon.immed.mval;
     const reg = allocreg(cdb,regm,TYint);  // allocate register
-    cgstate.regcon.immed.mval = save;
-    movregconst(cgstate,cdb,reg,value,flags);   // store value into reg
+    cg.regcon.immed.mval = save;
+    movregconst(cg,cdb,reg,value,flags);   // store value into reg
     return reg;
 }
 
