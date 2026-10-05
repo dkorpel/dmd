@@ -996,7 +996,7 @@ void writefunc2(ref CGstate cg, Symbol* sfunc, ref GlobalOptimizer go, ref Block
     if (go.mfoptim)
     {
         OPTIMIZER = 1;
-        optfunc(go, bo);                    /* optimize function            */
+        optfunc(cg, go, bo);                    /* optimize function            */
         OPTIMIZER = 0;
     }
     else

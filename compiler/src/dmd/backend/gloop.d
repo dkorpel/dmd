@@ -47,6 +47,7 @@ char symbol_isintab(const Symbol* s) { return sytab[s.Sclass] & SCSS; }
 
 import dmd.backend.gother : findloopparameters;
 import dmd.backend.x86.cgcod : cgstate;
+import dmd.backend.code : CGstate;
 
 alias Loops = Rarray!Loop;
 
@@ -805,7 +806,7 @@ restart:
         {
             foreach (ref l; startloop)
             {
-                if (loopunroll(go, bo, l))
+                if (loopunroll(cgstate, go, bo, l))
                 {
                     compdfo(bo.dfo, bo.startblock);  // compute depth-first order
                     blockinit(bo);
@@ -3693,7 +3694,7 @@ private void unrollWalker(elem* e, uint defnum, Symbol* v, targ_llong increment,
  *      true if loop was unrolled
  */
 @trusted
-bool loopunroll(ref GlobalOptimizer go, ref BlockOpt bo, ref Loop l)
+bool loopunroll(ref CGstate cg, ref GlobalOptimizer go, ref BlockOpt bo, ref Loop l)
 {
     const bool log = false;
     if (log) printf("loopunroll(%p)\n", &l);
@@ -3705,7 +3706,7 @@ bool loopunroll(ref GlobalOptimizer go, ref BlockOpt bo, ref Loop l)
         return false;
     l.Lhead.Bflags |= BFL.keepRolled;
     if (log)
-        WRfunc(cgstate, "loop", funcsym_p, bo.startblock);
+        WRfunc(cg, "loop", funcsym_p, bo.startblock);
 
     if (l.Lhead.Btry || l.Ltail.Btry)
         return false;

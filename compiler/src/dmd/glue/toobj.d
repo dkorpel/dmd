@@ -1169,7 +1169,7 @@ uint classInfoSize()
  * Returns:
  *    number of bytes emitted
  */
-private size_t emitVtbl(ref DtBuilder dtb, BaseClass* b, ref FuncDeclarations bvtbl, ClassDeclaration pc, size_t k)
+private size_t emitVtbl(ref CGstate cg, ref DtBuilder dtb, BaseClass* b, ref FuncDeclarations bvtbl, ClassDeclaration pc, size_t k)
 {
     //printf("\toverriding vtbl[] for %s\n", b.sym.toChars());
     ClassDeclaration id = b.sym;
@@ -1194,7 +1194,7 @@ private size_t emitVtbl(ref DtBuilder dtb, BaseClass* b, ref FuncDeclarations bv
             {
                 offset2 -= fd.interfaceVirtual.offset;
             }
-            dtb.xoff(toThunkSymbol(cgstate, fd, offset2), 0, TYnptr);
+            dtb.xoff(toThunkSymbol(cg, fd, offset2), 0, TYnptr);
         }
         else
             dtb.size(0);
@@ -1447,7 +1447,7 @@ Louter:
     foreach (i; 0 .. cd.vtblInterfaces.length)
     {
         BaseClass* b = (*cd.vtblInterfaces)[i];
-        offset += emitVtbl(dtb, b, b.vtbl, cd, i);
+        offset += emitVtbl(cgstate, dtb, b, b.vtbl, cd, i);
     }
 
     // Put out the overriding interface vtbl[]s.
@@ -1461,7 +1461,7 @@ Louter:
             FuncDeclarations bvtbl;
             if (b.fillVtbl(cd, &bvtbl, 0))
             {
-                offset += emitVtbl(dtb, b, bvtbl, pc, i);
+                offset += emitVtbl(cgstate, dtb, b, bvtbl, pc, i);
             }
         }
     }

@@ -6145,7 +6145,7 @@ void pinholeopt(ref CGstate cg, code* c,block* b)
 
     debug
     {
-        __gshared int tested; if (!tested) { tested++; pinholeopt_unittest(); }
+        __gshared int tested; if (!tested) { tested++; pinholeopt_unittest(cg); }
     }
 
     debug
@@ -6716,7 +6716,7 @@ void pinholeopt(ref CGstate cg, code* c,block* b)
 debug
 {
 @trusted
-private void pinholeopt_unittest()
+private void pinholeopt_unittest(ref CGstate cg)
 {
     //printf("pinholeopt_unittest()\n");
     static struct CS
@@ -6791,7 +6791,7 @@ private void pinholeopt_unittest()
         cs.IEV1.Vsize_t = pin.ev1;
         cs.IEV2.Vsize_t = pin.ev2;
         cs.Iflags = cast(CF)pin.flags;
-        pinholeopt(cgstate, &cs, null);
+        pinholeopt(cg, &cs, null);
         if (cs.Iop != pout.op)
         {   printf("[%d] Iop = x%02x, pout = x%02x\n", i, cs.Iop, pout.op);
             assert(0);

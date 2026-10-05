@@ -1013,7 +1013,7 @@ elem* toElem(Expression e, ref IRState irs)
     elem* visitDeclaration(DeclarationExp de)
     {
         //printf("DeclarationExp.toElem() %s\n", de.toChars());
-        elem* e = Dsymbol_toElem(de.declaration, irs);
+        elem* e = Dsymbol_toElem(cgstate, de.declaration, irs);
         if (e && de.type && de.type.toBasetype().ty == Tvoid)
             e.Ety = TYvoid;
         return e;
@@ -4558,25 +4558,25 @@ elem* toElemRVO(Expression e, elem* ehidden, ref IRState irs, Type forceType = n
 /**************************************
  * Mirrors logic in Dsymbol_canThrow().
  */
-elem* Dsymbol_toElem(Dsymbol s, ref IRState irs)
+elem* Dsymbol_toElem(ref CGstate cg, Dsymbol s, ref IRState irs)
 {
     //printf("Dsymbol_toElem() %s\n", s.toChars());
     elem* e = null;
 
     void symbolDg(Dsymbol s)
     {
-        e = el_combine(e, Dsymbol_toElem(s, irs));
+        e = el_combine(e, Dsymbol_toElem(cg, s, irs));
     }
 
     if (auto vd = s.isVarDeclaration())
     {
         s = s.toAlias();
         if (s != vd)
-            return Dsymbol_toElem(s, irs);
+            return Dsymbol_toElem(cg, s, irs);
         if (vd.storage_class & STC.manifest)
             return null;
         if (vd.isStatic() || vd.storage_class & (STC.extern_ | STC.tls | STC.gshared))
-            toObjFile(cgstate, vd, false);
+            toObjFile(cg, vd, false);
         else
         {
             Symbol* sp = toSymbol(s);

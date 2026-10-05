@@ -148,7 +148,7 @@ public void generateCodeAndWrite(Module[] modules, const(char)*[] libmodules,
             }
             if (verbose)
                 eSink.message(Loc.initial, "code      %s", m.toChars());
-            genObjFile(m, false, false);
+            genObjFile(cgstate, m, false, false);
         }
         if (!global.errors && firstm)
         {
@@ -165,9 +165,9 @@ public void generateCodeAndWrite(Module[] modules, const(char)*[] libmodules,
             if (verbose)
                 eSink.message(Loc.initial, "code      %s", m.toChars());
             obj_start(objbuf, m.srcfile.toChars());
-            genObjFile(m, multiobj && m.filetype != FileType.c, false);   // a C file is one translation unit
+            genObjFile(cgstate, m, multiobj && m.filetype != FileType.c, false);   // a C file is one translation unit
             obj_end(objbuf, library, m.objfile.toString());
-            obj_write_deferred(objbuf, library, glue.obj_symbols_towrite);
+            obj_write_deferred(cgstate, objbuf, library, glue.obj_symbols_towrite);
             if (global.errors && !writeLibrary)
                 m.deleteObjFile();
         }
@@ -1125,7 +1125,7 @@ private __gshared Glue glue;
  *      symbols_towrite = array of Dsymbols
  */
 extern (D)
-private void obj_write_deferred(ref OutBuffer objbuf, Library library, ref Dsymbols symbols_towrite)
+private void obj_write_deferred(ref CGstate cg, ref OutBuffer objbuf, Library library, ref Dsymbols symbols_towrite)
 {
     // this array can grow during the loop; do not replace with foreach
     for (size_t i = 0; i < symbols_towrite.length; ++i)
@@ -1163,7 +1163,7 @@ private void obj_write_deferred(ref OutBuffer objbuf, Library library, ref Dsymb
             // it doesn't make sense to make up a module if we don't know where to put the symbol
             //  so output it into its own object file without ModuleInfo
             objmod.initfile(idbuf.peekChars(), null, mname);
-            toObjFile(cgstate, s, false);
+            toObjFile(cg, s, false);
             objmod.termfile();
         }
         else
@@ -1175,7 +1175,7 @@ private void obj_write_deferred(ref OutBuffer objbuf, Library library, ref Dsymb
             md.md = m.md;
             md.aimports.push(m);       // it only 'imports' m
 
-            genObjFile(md, false, true);
+            genObjFile(cg, md, false, true);
         }
 
         /* Set object file name to be source name with sequence number,
@@ -1209,7 +1209,7 @@ private void obj_write_deferred(ref OutBuffer objbuf, Library library, ref Dsymb
  */
 
 extern (D)
-private Symbol* callFuncsAndGates(Module m, Symbol*[] sctors, StaticDtorDeclaration[] ectorgates,
+private Symbol* callFuncsAndGates(ref CGstate cg, Module m, Symbol*[] sctors, StaticDtorDeclaration[] ectorgates,
         const(char)* id)
 {
     if (!sctors.length && !ectorgates.length)
@@ -1251,7 +1251,7 @@ private Symbol* callFuncsAndGates(Module m, Symbol*[] sctors, StaticDtorDeclarat
     b.Belem = ector;
     sctor.Sfunc.Fstartline.Sfilename = m.arg.xarraydup.ptr;
     sctor.Sfunc.Fstartblock = b;
-    writefunc(cgstate, sctor); // hand off to backend
+    writefunc(cg, sctor); // hand off to backend
 
     return sctor;
 }
@@ -1321,7 +1321,7 @@ private void obj_end(ref OutBuffer objbuf, Library library, const(char)[] objfil
  * Generate .obj file for Module.
  */
 
-private void genObjFile(Module m, bool multiobj, bool doppelganger)
+private void genObjFile(ref CGstate cg, Module m, bool multiobj, bool doppelganger)
 {
     //EEcontext* ee = env.getEEcontext();
 
@@ -1434,7 +1434,7 @@ private void genObjFile(Module m, bool multiobj, bool doppelganger)
     {
         auto member = (*m.members)[i];
         //printf("toObjFile %s %s\n", member.kind(), member.toChars());
-        toObjFile(cgstate, member, multiobj);
+        toObjFile(cg, member, multiobj);
     }
 
     Symbol* msictor;
@@ -1512,23 +1512,23 @@ private void genObjFile(Module m, bool multiobj, bool doppelganger)
             b.Belem = glue.eictor;
             msictor.Sfunc.Fstartline.Sfilename = m.arg.xarraydup.ptr;
             msictor.Sfunc.Fstartblock = b;
-            writefunc(cgstate, msictor);
+            writefunc(cg, msictor);
         }
 
-        msctor = callFuncsAndGates(m, glue.sctors[], glue.ectorgates[], "__modctor");
-        msdtor = callFuncsAndGates(m, glue.sdtors[], null, "__moddtor");
+        msctor = callFuncsAndGates(cg, m, glue.sctors[], glue.ectorgates[], "__modctor");
+        msdtor = callFuncsAndGates(cg, m, glue.sdtors[], null, "__moddtor");
         m.hasCDtor = true;
 
         if (glue.sisharedctors.length > 0)
         {
             if (msictor)
                 glue.sisharedctors.shift(msictor);
-            msictor = callFuncsAndGates(m, glue.sisharedctors[], null, "__modsharedictor");
+            msictor = callFuncsAndGates(cg, m, glue.sisharedctors[], null, "__modsharedictor");
         }
 
-        mssharedctor = callFuncsAndGates(m, glue.ssharedctors[], cast(StaticDtorDeclaration[])glue.esharedctorgates[], "__modsharedctor");
-        msshareddtor = callFuncsAndGates(m, glue.sshareddtors[], null, "__modshareddtor");
-        mstest = callFuncsAndGates(m, glue.stests[], null, "__modtest");
+        mssharedctor = callFuncsAndGates(cg, m, glue.ssharedctors[], cast(StaticDtorDeclaration[])glue.esharedctorgates[], "__modsharedctor");
+        msshareddtor = callFuncsAndGates(cg, m, glue.sshareddtors[], null, "__modshareddtor");
+        mstest = callFuncsAndGates(cg, m, glue.stests[], null, "__modtest");
 
         if (doppelganger)
             genModuleInfo(m, msictor, msctor, msdtor, mssharedctor, msshareddtor, mstest);

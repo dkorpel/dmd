@@ -171,12 +171,12 @@ void scanForInlines(Symbol* sfunc)
             if (b.Belem)
             {
                 //elem_print(b.Belem);
-                b.Belem = scanExpressionForInlines(b.Belem);
+                b.Belem = scanExpressionForInlines(cgstate, b.Belem);
             }
         if (eecontext.EEelem)
         {
             const marksi = globsym.length;
-            eecontext.EEelem = scanExpressionForInlines(eecontext.EEelem);
+            eecontext.EEelem = scanExpressionForInlines(cgstate, eecontext.EEelem);
             eecontext_convs(marksi);
         }
         f.Fflags &= ~Finlinenest;
@@ -242,24 +242,24 @@ bool canInlineExpression(elem* e)
  *      replacement tree
  */
 @trusted
-elem* scanExpressionForInlines(elem* e)
+elem* scanExpressionForInlines(ref CGstate cg, elem* e)
 {
     //printf("scanExpressionForInlines(%p)\n",e);
     const op = e.Eoper;
     if (OTbinary(op))
     {
-        e.E1 = scanExpressionForInlines(e.E1);
-        e.E2 = scanExpressionForInlines(e.E2);
+        e.E1 = scanExpressionForInlines(cg, e.E1);
+        e.E2 = scanExpressionForInlines(cg, e.E2);
         if (op == OPcall)
-            e = tryInliningCall(cgstate, e);
+            e = tryInliningCall(cg, e);
     }
     else if (OTunary(op))
     {
         assert(op != OPstrctor);  // never happens in MARS
-        e.E1 = scanExpressionForInlines(e.E1);
+        e.E1 = scanExpressionForInlines(cg, e.E1);
         if (op == OPucall)
         {
-            e = tryInliningCall(cgstate, e);
+            e = tryInliningCall(cg, e);
         }
     }
     else /* leaf */
@@ -429,7 +429,7 @@ private elem* inlineCall(ref CGstate cg, elem* e,Symbol* sfunc)
     {
         ec.Esrcpos = e.Esrcpos;         // save line information
         f.Fflags |= Finlinenest;        // prevent recursive inlining
-        ec = scanExpressionForInlines(ec); // look for more cases
+        ec = scanExpressionForInlines(cg, ec); // look for more cases
         f.Fflags &= ~Finlinenest;
     }
     else
