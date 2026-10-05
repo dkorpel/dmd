@@ -418,7 +418,7 @@ bool obj_linkerdirective(scope const(char)* directive)
     return objmod.linkerdirective(directive);
 }
 
-void FuncDeclaration_toObjFile(FuncDeclaration fd, bool multiobj)
+void FuncDeclaration_toObjFile(ref CGstate cg, FuncDeclaration fd, bool multiobj)
 {
     ClassDeclaration cd = fd.parent.isClassDeclaration();
     //printf("FuncDeclaration_toObjFile(%p, %s.%s)\n", fd, fd.parent.toChars(), fd.toChars());
@@ -776,7 +776,7 @@ void FuncDeclaration_toObjFile(FuncDeclaration fd, bool multiobj)
 
         foreach (sp; params[0 .. pi])
         {
-            if (fpr.alloc(cgstate, sp.Stype, sp.Stype.Tty, sp.Spreg, sp.Spreg2))
+            if (fpr.alloc(cg, sp.Stype, sp.Stype.Tty, sp.Spreg, sp.Spreg2))
             {
                 // successful allocation
                 //printf("ident %s reg %d reg2 %d\n", sp.Sident.ptr, sp.Spreg, sp.Spreg2);
@@ -998,7 +998,7 @@ void FuncDeclaration_toObjFile(FuncDeclaration fd, bool multiobj)
     cstate.CSpsymtab = symtabsave;
 
     if (fd.isExport() || driverParams.exportVisibility == ExpVis.public_)
-        objmod.export_symbol(s, cast(uint)cgstate.Para.offset);
+        objmod.export_symbol(s, cast(uint)cg.Para.offset);
 
     if (fd.isCrtCtor)
         objmod.setModuleCtorDtor(s, true);

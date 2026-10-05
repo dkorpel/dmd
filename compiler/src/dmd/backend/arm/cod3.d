@@ -1132,7 +1132,7 @@ Lret:
 // cod3_spoff
 
 @trusted
-void gen_spill_reg(ref CodeBuilder cdb, Symbol* s, bool toreg)
+void gen_spill_reg(ref CGstate cg, ref CodeBuilder cdb, Symbol* s, bool toreg)
 {
     code cs;
     const regm_t keepmsk = 0;
@@ -1144,7 +1144,7 @@ void gen_spill_reg(ref CodeBuilder cdb, Symbol* s, bool toreg)
     bool isPair = isRegisterPair(true, tybasic(s.Stype.Tty), 0);
     if (isPair)
         sz /= 2;
-    getlvalue(cgstate,cdb,cs,e,keepmsk,rm);
+    getlvalue(cg,cdb,cs,e,keepmsk,rm);
     if (toreg)
         loadFromEA(cs,s.Sreglsw,(sz < 4 ? 4 : sz),sz);
     else
@@ -1176,7 +1176,7 @@ void gen_spill_reg(ref CodeBuilder cdb, Symbol* s, bool toreg)
  *      i =       offset into vtbl[] (-1 for D)
  */
 @trusted
-void cod3_thunk(Symbol* sthunk,Symbol* sfunc,uint p,tym_t thisty,
+void cod3_thunk(ref CGstate cg, Symbol* sthunk,Symbol* sfunc,uint p,tym_t thisty,
         uint d,int i,uint d2)
 {
     assert(p == 0 && i == -1 && d2 == 0); // for single inheritance
@@ -1184,7 +1184,7 @@ void cod3_thunk(Symbol* sthunk,Symbol* sfunc,uint p,tym_t thisty,
     targ_size_t thunkoffset;
 
     int seg = sthunk.Sseg;
-    cod3_align(cgstate, seg);
+    cod3_align(cg, seg);
 
     // Skip over return address
     tym_t thunkty = tybasic(sthunk.ty());
@@ -1228,11 +1228,11 @@ void cod3_thunk(Symbol* sthunk,Symbol* sfunc,uint p,tym_t thisty,
     {
         localgot = null;                // no local variables
         CodeBuilder cdbgot; cdbgot.ctor();
-        load_localgot(cgstate,cdbgot);          // load GOT in EBX
+        load_localgot(cg,cdbgot);          // load GOT in EBX
         code* c1 = cdbgot.finish();
         if (c1)
         {
-            assignaddrc(cgstate,c1);
+            assignaddrc(cg,c1);
             cdb.append(c1);
         }
     }

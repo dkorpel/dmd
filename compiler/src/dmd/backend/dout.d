@@ -63,7 +63,7 @@ void outthunk(Symbol* sthunk, Symbol* sfunc, uint p, tym_t thisty,
         targ_size_t d, int i, targ_size_t d2)
 {
     sthunk.Sseg = cseg;
-    cod3_thunk(sthunk,sfunc,p,thisty,cast(uint)d,i,cast(uint)d2);
+    cod3_thunk(cgstate, sthunk,sfunc,p,thisty,cast(uint)d,i,cast(uint)d2);
     sthunk.Sfunc.Fflags &= ~Fpending;
     sthunk.Sfunc.Fflags |= Foutput;   /* mark it as having been output */
 }
@@ -847,12 +847,12 @@ void out_regcand(Symbol*[] psymtab)
 void writefunc(Symbol* sfunc)
 {
     cstate.CSpsymtab = &globsym;
-    writefunc2(sfunc, go, bo);
+    writefunc2(cgstate, sfunc, go, bo);
     cstate.CSpsymtab = null;
 }
 
 @trusted private
-void writefunc2(Symbol* sfunc, ref GlobalOptimizer go, ref BlockOpt bo)
+void writefunc2(ref CGstate cg, Symbol* sfunc, ref GlobalOptimizer go, ref BlockOpt bo)
 {
     func_t* f = sfunc.Sfunc;
 
@@ -1021,12 +1021,12 @@ void writefunc2(Symbol* sfunc, ref GlobalOptimizer go, ref BlockOpt bo)
             objmod.codeseg(&funcsym_p.Sident[0], 1);
                                         // generate new code segment
         }
-        cod3_align(cgstate, cseg);               // align start of function
+        cod3_align(cg, cseg);               // align start of function
         objmod.func_start(sfunc);
     }
 
     //printf("codgen()\n");
-    codgen(sfunc);                  // generate code
+    codgen(cg, sfunc);                  // generate code
     //printf("after codgen for %s Coffset %x\n",sfunc.Sident.ptr,Offset(cseg));
     sfunc.Sfunc.Fstartblock = bo.startblock;
     bool saveForInlining = canInlineFunction(sfunc);
@@ -1060,7 +1060,7 @@ void writefunc2(Symbol* sfunc, ref GlobalOptimizer go, ref BlockOpt bo)
         sfunc.Sclass != SC.sinline &&
         !(sfunc.Sclass == SC.inline && !(config.flags2 & CFG2comdat)) &&
         sfunc.ty() & mTYexport)
-        objmod.export_symbol(sfunc,cast(uint)cgstate.Para.offset);      // export function definition
+        objmod.export_symbol(sfunc,cast(uint)cg.Para.offset);      // export function definition
 
     /* This is to make uplevel references to SCfastpar variables
      * from nested functions work.
@@ -1081,7 +1081,7 @@ void writefunc2(Symbol* sfunc, ref GlobalOptimizer go, ref BlockOpt bo)
      * are relative to the frame pointer.
      * Necessary for nested function access to lexically enclosing frames.
      */
-     cod3_adjSymOffsets(cgstate);
+     cod3_adjSymOffsets(cg);
 
     if (symbol_iscomdat2(sfunc))         // if generated a COMDAT
     {

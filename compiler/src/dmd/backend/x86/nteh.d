@@ -125,14 +125,14 @@ void nteh_filltables(ref CGstate cg)
  */
 
 @trusted
-void nteh_gentables(Symbol* sfunc)
+void nteh_gentables(ref CGstate cg, Symbol* sfunc)
 {
     Symbol* s = s_table;
     symbol_debug(s);
     //except_fillInEHTable(s);
 
     outdata(s);                 // output the scope table
-    nteh_framehandler(cgstate, sfunc, s);
+    nteh_framehandler(cg, sfunc, s);
     s_table = null;
 }
 

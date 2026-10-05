@@ -1119,7 +1119,7 @@ void outblkexitcode(ref CGstate cg, ref CodeBuilder cdb, block* bl, ref int anys
                 nextb.bc != BC.finally_)
             {
                 regm_t retregsx = 0;
-                gencodelem(cdb,e,retregsx,true);
+                gencodelem(cg, cdb,e,retregsx,true);
                 int toindex = nextb.Btry ? nextb.Btry.Bscope_index : -1;
                 assert(bl.Btry);
                 int fromindex = bl.Btry.Bscope_index;
@@ -1172,7 +1172,7 @@ void outblkexitcode(ref CGstate cg, ref CodeBuilder cdb, block* bl, ref int anys
         case_goto:
         {
             regm_t retregsx = 0;
-            gencodelem(cdb,e,retregsx,true);
+            gencodelem(cg, cdb,e,retregsx,true);
             if (anyspill)
             {   // Add in the epilog code
                 CodeBuilder cdbstore; cdbstore.ctor();
@@ -1223,7 +1223,7 @@ void outblkexitcode(ref CGstate cg, ref CodeBuilder cdb, block* bl, ref int anys
                 getregsNoSave(cg, lpadregs(cg));
 
                 regm_t retregsx = 0;
-                gencodelem(cdb,bl.Belem,retregsx,true);
+                gencodelem(cg, cdb,bl.Belem,retregsx,true);
 
                 // JMP bl.Bsucc[1]
                 nextb = bl.Bsucc[1];
@@ -1258,7 +1258,7 @@ void outblkexitcode(ref CGstate cg, ref CodeBuilder cdb, block* bl, ref int anys
             getregsNoSave(cg, lpadregs(cg));
 
             regm_t retregsx = 0;
-            gencodelem(cdb,bl.Belem,retregsx,true);
+            gencodelem(cg, cdb,bl.Belem,retregsx,true);
 
             // JMP bl.Bsucc[0]
             nextb = bl.Bsucc[0];
@@ -1268,7 +1268,7 @@ void outblkexitcode(ref CGstate cg, ref CodeBuilder cdb, block* bl, ref int anys
         case BC.finRet:
         {
             regm_t retregsx = 0;
-            gencodelem(cdb,e,retregsx,true);
+            gencodelem(cg, cdb,e,retregsx,true);
             if (ehmethod(funcsym_p) == EHmethod.EH_DWARF)
             {
             }
@@ -1295,7 +1295,7 @@ static if (NTEXCEPTIONS)
             // register assignments to variables used in filter blocks.
             getregsNoSave(cg, cg.allregs);
             regm_t retregsx = regmask(cg, e.Ety, TYnfunc);
-            gencodelem(cdb,e,retregsx,true);
+            gencodelem(cg, cdb,e,retregsx,true);
             cdb.gen1(0xC3);   // RET
             break;
         }
@@ -1339,7 +1339,7 @@ static if (NTEXCEPTIONS)
                         const usedsave = cg.regcon.used;
                         if (e.Eoper == OPconst)
                             cg.regcon.mvar = 0;
-                        gencodelem(cdb,e,retregs,true);
+                        gencodelem(cg, cdb,e,retregs,true);
                         cg.regcon.used = usedsave;
                         if (e.Eoper == OPvar)
                         {
@@ -1349,11 +1349,11 @@ static if (NTEXCEPTIONS)
                         }
                     }
                     else
-                        gencodelem(cdb,e,retregs,true);
+                        gencodelem(cg, cdb,e,retregs,true);
                 }
                 else
                 {
-                    gencodelem(cdb,e,retregs,true);
+                    gencodelem(cg, cdb,e,retregs,true);
                     //printf("retregs3: %s reg1reg2: %s lregmreg: %s\n", regm_str(retregs), regm_str(mask(reg1)|mask(reg2)), regm_str(mask(lreg)|mask(mreg)));
                 }
 
@@ -1417,12 +1417,12 @@ static if (NTEXCEPTIONS)
                     docommas(cdb,e);
                     usedsave = cg.regcon.used;
                     if (!OTleaf(e.Eoper))
-                        gencodelem(cdb,e,retregs,true);
+                        gencodelem(cg, cdb,e,retregs,true);
                     else
                     {
                         if (e.Eoper == OPconst)
                             cg.regcon.mvar = 0;
-                        gencodelem(cdb,e,retregs,true);
+                        gencodelem(cg, cdb,e,retregs,true);
                         cg.regcon.used = usedsave;
                         if (e.Eoper == OPvar)
                         {   Symbol* s = e.Vsym;
@@ -1434,7 +1434,7 @@ static if (NTEXCEPTIONS)
                 }
                 else
                 {
-                    gencodelem(cdb,e,retregs,true);
+                    gencodelem(cg, cdb,e,retregs,true);
                 }
 
                 if (reg1 == NOREG)
@@ -1503,7 +1503,7 @@ static if (NTEXCEPTIONS)
 
         case BC.ret:
             retregs = 0;
-            gencodelem(cdb,e,retregs,true);
+            gencodelem(cg, cdb,e,retregs,true);
         L4:
             if (AArch64)
             {
@@ -1562,7 +1562,7 @@ static if (NTEXCEPTIONS)
 
         case BC.exit:
             retregs = 0;
-            gencodelem(cdb,e,retregs,true);
+            gencodelem(cg, cdb,e,retregs,true);
             if (config.flags4 & CFG4optimized)
                 cg.mfuncreg = mfuncregsave;
             break;
@@ -4390,9 +4390,9 @@ void prolog_genvarargs(ref CGstate cg, ref CodeBuilder cdb, Symbol* sv)
  *      parmn = last named parameter
  */
 @trusted
-elem* prolog_genva_start(Symbol* sv, Symbol* parmn)
+elem* prolog_genva_start(ref CGstate cg, Symbol* sv, Symbol* parmn)
 {
-    if (cgstate.AArch64)
+    if (cg.AArch64)
         return dmd.backend.arm.cod3.prolog_genva_start(sv, parmn);
 
     enum Vregnum = 6;
@@ -5170,7 +5170,7 @@ void gen_spill_reg(ref CodeBuilder cdb, Symbol* s, bool toreg)
     if (cg.AArch64)
     {
         import dmd.backend.arm.cod3 : gen_spill_reg;
-        return gen_spill_reg(cdb, s, toreg);
+        return gen_spill_reg(cgstate, cdb, s, toreg);
     }
 
     code cs;
@@ -5233,19 +5233,19 @@ void gen_spill_reg(ref CodeBuilder cdb, Symbol* s, bool toreg)
  */
 
 @trusted
-void cod3_thunk(Symbol* sthunk,Symbol* sfunc,uint p,tym_t thisty,
+void cod3_thunk(ref CGstate cg, Symbol* sthunk,Symbol* sfunc,uint p,tym_t thisty,
         uint d,int i,uint d2)
 {
-    if (cgstate.AArch64)
+    if (cg.AArch64)
     {
         import dmd.backend.arm.cod3 : cod3_thunk;
-        return cod3_thunk(sthunk, sfunc, p, thisty, d, i, d2);
+        return cod3_thunk(cg, sthunk, sfunc, p, thisty, d, i, d2);
     }
 
     targ_size_t thunkoffset;
 
     int seg = sthunk.Sseg;
-    cod3_align(cgstate, seg);
+    cod3_align(cg, seg);
 
     // Skip over return address
     tym_t thunkty = tybasic(sthunk.ty());
@@ -5390,11 +5390,11 @@ void cod3_thunk(Symbol* sthunk,Symbol* sfunc,uint p,tym_t thisty,
         {
             localgot = null;                // no local variables
             CodeBuilder cdbgot; cdbgot.ctor();
-            load_localgot(cgstate,cdbgot);          // load GOT in EBX
+            load_localgot(cg,cdbgot);          // load GOT in EBX
             code* c1 = cdbgot.finish();
             if (c1)
             {
-                assignaddrc(cgstate,c1);
+                assignaddrc(cg,c1);
                 cdb.append(c1);
             }
         }
@@ -5406,7 +5406,7 @@ void cod3_thunk(Symbol* sthunk,Symbol* sfunc,uint p,tym_t thisty,
     code* c = cdb.finish();
     pinholeopt(c,null);
     targ_size_t framehandleroffset;
-    codout(cgstate, seg,c,null,framehandleroffset);
+    codout(cg, seg,c,null,framehandleroffset);
     code_free(c);
 
     sthunk.Soffset = thunkoffset;

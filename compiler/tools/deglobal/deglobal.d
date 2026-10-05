@@ -218,7 +218,11 @@ extern (C++) final class Collector : SemanticTimeTransitiveVisitor
     override void visit(VarExp e)
     {
         if (auto vd = e.var.isVarDeclaration())
+        {
             useGlobal(vd, e.loc);
+            if (cur != size_t.max)
+                varUses[funcs[cur].file ~ ":" ~ e.loc.off.to!string] = true;
+        }
         else if (auto fd = e.var.isFuncDeclaration())
             if (consumed !is e)
                 funcRef(fd);
@@ -440,6 +444,7 @@ struct Tok
 __gshared Tok[][string] fileTokens;
 __gshared Tok[][string] fileIdents;
 __gshared uint[2][][string] fileDead;
+__gshared bool[string] varUses;
 
 Tok[] allTokens(string file)
 {
@@ -826,6 +831,26 @@ uint[2][] patternLines(size_t f, size_t g, string pname)
     return r;
 }
 
+bool declLike(string file, uint off)
+{
+    auto tks = allTokens(file);
+    const i = tokIndex(file, off);
+    if (i == 0 || i == size_t.max)
+        return false;
+    const p = tks[i - 1].value;
+    return p == TOK.identifier || p == TOK.mul || p == TOK.rightBracket || (p >= TOK.void_ && p <= TOK.bool_);
+}
+
+bool unseenCall(string file, Tok tok)
+{
+    if ((file ~ ":" ~ tok.off.to!string) in varUses || declLike(file, tok.off))
+        return false;
+    const i = tokIndex(file, tok.off);
+    if (i > 0 && allTokens(file)[i - 1].value == TOK.dot)
+        return false;
+    return deadCallOpen(file, tok) != uint.max;
+}
+
 uint deadCallOpen(string file, Tok tok)
 {
     auto t = text(file);
@@ -842,9 +867,8 @@ string enclosingArg(string file, uint off, size_t g)
     return best == size_t.max ? globals[g].name : callerArg(best, g);
 }
 
-string unexplainedUse(size_t f)
+bool[string] knownUses(string name)
 {
-    const name = funcs[f].name;
     bool[string] known;
     foreach (ref o; funcs)
         if (o.name == name)
@@ -856,10 +880,25 @@ string unexplainedUse(size_t f)
             if (id != uint.max)
                 known[c.file ~ ":" ~ id.to!string] = true;
         }
+    return known;
+}
+
+string unexplainedUse(size_t f)
+{
+    const name = funcs[f].name;
+    auto known = knownUses(name);
     foreach (file; editableFiles())
         foreach (tok; identTokens(file))
-            if (tok.ident == name && (file ~ ":" ~ tok.off.to!string) !in known && !inImport(file, tok.off) && !(isDead(file, tok.off) && deadCallOpen(file, tok) != uint.max))
-                return lineOf(file, tok.off);
+        {
+            if (tok.ident != name)
+                continue;
+            const key = file ~ ":" ~ tok.off.to!string;
+            if (key in known || key in varUses || inImport(file, tok.off) || unseenCall(file, tok))
+                continue;
+            if (declLike(file, tok.off) && deadCallOpen(file, tok) == uint.max)
+                continue;
+            return lineOf(file, tok.off);
+        }
     return null;
 }
 
@@ -1055,9 +1094,10 @@ void planEdits(size_t g, size_t f, string pname)
         else
             edits[c.file] ~= Edit(c.off + 1, 0, ct[next] == ')' ? arg : arg ~ ", ");
     }
+    auto known = knownUses(fn.name);
     foreach (file; editableFiles())
         foreach (tok; identTokens(file))
-            if (tok.ident == fn.name && isDead(file, tok.off))
+            if (tok.ident == fn.name && (isDead(file, tok.off) || unseenCall(file, tok)) && (file ~ ":" ~ tok.off.to!string) !in known)
             {
                 const open = deadCallOpen(file, tok);
                 if (open == uint.max)

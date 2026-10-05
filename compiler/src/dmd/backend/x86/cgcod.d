@@ -79,9 +79,9 @@ regm_t BYTEREGS() { return I64 ? ALLREGS
  *      sfunc = function to generate code for
  */
 @trusted
-void codgen(Symbol* sfunc)
+void codgen(ref CGstate cg, Symbol* sfunc)
 {
-    codgenx(cgstate, sfunc);
+    codgenx(cg, sfunc);
 }
 
 /***********************
@@ -530,7 +530,7 @@ static if (0)
             if (cg.usednteh & NTEH_try)
             {
                 // Do this before code is emitted because we patch some instructions
-                nteh_gentables(sfunc);
+                nteh_gentables(cg, sfunc);
             }
             if (cg.usednteh & (EHtry | EHcleanup) &&   // saw BC.try_ or BC._try or OPddtor
                 config.ehmethod == EHmethod.EH_DM)

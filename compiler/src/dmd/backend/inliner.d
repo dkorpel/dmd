@@ -46,6 +46,7 @@ import dmd.backend.type;
 
 import dmd.backend.barray;
 import dmd.backend.x86.cgcod : cgstate;
+import dmd.backend.code : CGstate;
 
 nothrow:
 @safe:
@@ -420,7 +421,7 @@ private elem* inlineCall(elem* e,Symbol* sfunc)
      */
     if (e.Eoper == OPcall)
     {
-        elem* eargs = initializeParamsWithArgs(e.E2, sistart, globsym.length);
+        elem* eargs = initializeParamsWithArgs(cgstate, e.E2, sistart, globsym.length);
         ec = el_combine(eargs,ec);
     }
 
@@ -449,7 +450,7 @@ private elem* inlineCall(elem* e,Symbol* sfunc)
  *      expression representing the argument list
  */
 @trusted
-private elem* initializeParamsWithArgs(elem* eargs, SYMIDX sistart, SYMIDX siend)
+private elem* initializeParamsWithArgs(ref CGstate cg, elem* eargs, SYMIDX sistart, SYMIDX siend)
 {
     /* Create args[] and fill it with the arguments
      */
@@ -457,7 +458,7 @@ private elem* initializeParamsWithArgs(elem* eargs, SYMIDX sistart, SYMIDX siend
     assert(nargs < size_t.max / (2 * (elem*).sizeof));   // conservative overflow check
     elem*[] args = (cast(elem**)malloc(nargs * (elem*).sizeof))[0 .. nargs];
     elem** tmp = args.ptr;
-    el_paramArray(cgstate, &tmp, eargs);
+    el_paramArray(cg, &tmp, eargs);
 
     elem* ecopy;
 

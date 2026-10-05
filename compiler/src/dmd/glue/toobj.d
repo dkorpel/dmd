@@ -216,7 +216,7 @@ void toObjFile(Dsymbol ds, bool multiobj)
         override void visit(FuncDeclaration fd)
         {
             // in glue/package.d
-            FuncDeclaration_toObjFile(fd, multiobj);
+            FuncDeclaration_toObjFile(cgstate, fd, multiobj);
         }
 
         override void visit(ClassDeclaration cd)

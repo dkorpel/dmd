@@ -324,7 +324,7 @@ void genEEcode(ref CGstate cg)
     cod3_stackadj(cg, cdb, cast(int)(cg.EEStack.offset - REGSIZE));
     cdb.genpush(SI);                      // PUSH ESI
     cdb.genadjesp(cast(int)cg.EEStack.offset);
-    gencodelem(cdb, eecontext.EEelem, retregs, false);
+    gencodelem(cg, cdb, eecontext.EEelem, retregs, false);
     code* c = cdb.finish();
     assignaddrc(cg,c);
     pinholeopt(c,null);
