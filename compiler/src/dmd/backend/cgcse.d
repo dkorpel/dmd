@@ -106,7 +106,7 @@ struct CSE
      * Params: e = elem with a size and an alignment
      */
     @trusted
-    static void updateSizeAndAlign(ref CGstate cg, elem* e)
+    static void updateSizeAndAlign(ref bool enforcealign, elem* e)
     {
         if (I16)
             return;
@@ -124,7 +124,7 @@ struct CSE
         {
             alignment_ = alignsize;
             STACKALIGN = alignsize;
-            cg.enforcealign = true;
+            enforcealign = true;
         }
     }
 

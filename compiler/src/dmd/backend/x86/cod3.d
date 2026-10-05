@@ -530,9 +530,9 @@ void cod3_align_bytes(bool AArch64, int seg, size_t nbytes)
  *      seg = segment of function
  */
 @trusted
-void cod3_align(ref CGstate cg, int seg)
+void cod3_align(bool AArch64, int seg)
 {
-    if (cg.AArch64)
+    if (AArch64)
     {
         const nbytes = -Offset(seg) & 3;
         cod3_align_bytes(true, seg, nbytes);
@@ -568,10 +568,10 @@ void cod3_align(ref CGstate cg, int seg)
  *      nbytes = number of bytes to adjust stack pointer
  */
 @trusted
-void cod3_stackadj(ref CGstate cg, ref CodeBuilder cdb, int nbytes)
+void cod3_stackadj(bool AArch64, ref CodeBuilder cdb, int nbytes)
 {
     //printf("cod3_stackadj(%d)\n", nbytes);
-    if (cg.AArch64)
+    if (AArch64)
     {
         if (nbytes == 0)
             return;
@@ -705,7 +705,7 @@ regm_t regmask(ref CGstate cg, tym_t tym, tym_t tyf)
 {
     bool AArch64 = cg.AArch64;
     if (AArch64)
-        return dmd.backend.arm.cod3.regmask(cg, tym, tyf);
+        return dmd.backend.arm.cod3.regmask(cg.AArch64, tym, tyf);
 
     switch (tybasic(tym))
     {
@@ -873,12 +873,12 @@ void cgreg_dst_regs(reg_t* dst_integer_reg, reg_t* dst_float_reg)
 }
 
 @trusted
-void cgreg_set_priorities(ref CGstate cg, tym_t ty, out const(reg_t)[] pseq, out const(reg_t)[] pseqmsw)
+void cgreg_set_priorities(bool AArch64, tym_t ty, out const(reg_t)[] pseq, out const(reg_t)[] pseqmsw)
 {
     //printf("cgreg_set_priorities %s\n", regm_str(ty));
     const sz = tysize(ty);
 
-    if (cg.AArch64)
+    if (AArch64)
     {
         if (tyfloating(ty))
         {
@@ -1022,13 +1022,13 @@ private code* callFinallyBlock(ref CGstate cg, block* bf, regm_t retregs)
     {   npush += REGSIZE;
         if (npush & (STACKALIGN - 1))
         {   nalign = STACKALIGN - (npush & (STACKALIGN - 1));
-            cod3_stackadj(cg, cdbs, nalign);
+            cod3_stackadj(cg.AArch64, cdbs, nalign);
         }
     }
     cdbs.genc(0xE8,0,FL.unde,0,FL.block,cast(targ_size_t)bf);
     cg.regcon.immed.mval = 0;
     if (nalign)
-        cod3_stackadj(cg, cdbs, -nalign);
+        cod3_stackadj(cg.AArch64, cdbs, -nalign);
     cdbs.append(cdbr);
     return cdbs.finish();
 }
@@ -1368,13 +1368,13 @@ static if (NTEXCEPTIONS)
                     // (reg1,reg2) = (lreg,mreg)
                     if (reg1 == mreg)
                     {
-                        genmovreg(cg, cdb, reg2, mreg);
-                        genmovreg(cg, cdb, reg1, lreg);
+                        genmovreg(cg.AArch64, cdb, reg2, mreg);
+                        genmovreg(cg.AArch64, cdb, reg1, lreg);
                     }
                     else
                     {
-                        genmovreg(cg, cdb, reg1, lreg);
-                        genmovreg(cg, cdb, reg2, mreg);
+                        genmovreg(cg.AArch64, cdb, reg1, lreg);
+                        genmovreg(cg.AArch64, cdb, reg2, mreg);
                     }
                 }
                 if (reg1 != NOREG)
@@ -1487,13 +1487,13 @@ static if (NTEXCEPTIONS)
                     // (reg1,reg2) = (lreg,mreg)
                     if (reg1 == mreg)
                     {
-                        genmovreg(cg, cdb, reg2, mreg);
-                        genmovreg(cg, cdb, reg1, lreg);
+                        genmovreg(cg.AArch64, cdb, reg2, mreg);
+                        genmovreg(cg.AArch64, cdb, reg1, lreg);
                     }
                     else
                     {
-                        genmovreg(cg, cdb, reg1, lreg);
-                        genmovreg(cg, cdb, reg2, mreg);
+                        genmovreg(cg.AArch64, cdb, reg1, lreg);
+                        genmovreg(cg.AArch64, cdb, reg2, mreg);
                     }
                 }
                 if (reg1 != NOREG)
@@ -2274,7 +2274,7 @@ else
                 regm_t scratchm = ALLREGS & ~(mask(reg) | mBX);
                 const r1 = allocreg(cg, cdb,scratchm,TYint);
 
-                genmovreg(cg, cdb,r1,BX);              // MOV R1,EBX
+                genmovreg(cg.AArch64, cdb,r1,BX);              // MOV R1,EBX
                 cdb.genc1(0x2B,modregxrm(2,r1,4),FL.switch_,0);   // SUB R1,disp[reg*4][EBX]
                 cdb.last().IEV1.Vswitch = b;
                 cdb.last().Isib = modregrm(2,reg,BX);
@@ -2339,7 +2339,7 @@ else
 
             makeitextern(gotsym);
 
-            genmovreg(cg, cdb, DX, DI);    // MOV EDX, EDI
+            genmovreg(cg.AArch64, cdb, DX, DI);    // MOV EDX, EDI
                                         // ADD EDI,offset of switch table
             cdb.gencs(0x81,modregrm(3,0,DI),FL.switch_,null);
             cdb.last().IEV2.Vswitch = b;
@@ -2994,9 +2994,9 @@ bool cse_simple(ref CGstate cg, code* c, elem* e)
  *      slot = index into common subexpression save area
  */
 @trusted
-void gen_storecse(ref CGstate cg, ref CodeBuilder cdb, tym_t tym, reg_t reg, size_t slot)
+void gen_storecse(bool AArch64, ref CodeBuilder cdb, tym_t tym, reg_t reg, size_t slot)
 {
-    if (cg.AArch64)
+    if (AArch64)
         return dmd.backend.arm.cod3.gen_storecse(cdb,tym,reg,slot);
 
     //printf("gen_storecse()\n");
@@ -3033,9 +3033,9 @@ void gen_testcse(ref CodeBuilder cdb, tym_t tym, uint sz, size_t slot)
 }
 
 @trusted
-void gen_loadcse(ref CGstate cg, ref CodeBuilder cdb, tym_t tym, reg_t reg, size_t slot)
+void gen_loadcse(bool AArch64, ref CodeBuilder cdb, tym_t tym, reg_t reg, size_t slot)
 {
-    if (cg.AArch64)
+    if (AArch64)
         return dmd.backend.arm.cod3.gen_loadcse(cdb,tym,reg,slot);
 
     //printf("gen_loadcse()\n");
@@ -3220,9 +3220,9 @@ void genpop(ref CodeBuilder cdb, reg_t reg)
  */
 
 @trusted
-void genmovreg(ref CGstate cg, ref CodeBuilder cdb, reg_t to, reg_t from, tym_t tym = TYMAX)
+void genmovreg(bool AArch64, ref CodeBuilder cdb, reg_t to, reg_t from, tym_t tym = TYMAX)
 {
-    if (cg.AArch64)
+    if (AArch64)
         return dmd.backend.arm.cod3.genmovreg(cdb, cast(reg_t)to, cast(reg_t)from, tym);
 
     // register kind. ex: GPR,XMM,SEG
@@ -3301,7 +3301,7 @@ void genmulimm(ref CGstate cg, ref CodeBuilder cdb,reg_t r1,reg_t r2,targ_int im
     switch (imm)
     {
         case 1:
-            genmovreg(cg, cdb,r1,r2);
+            genmovreg(cg.AArch64, cdb,r1,r2);
             break;
 
         case 5:
@@ -3582,7 +3582,7 @@ L3:
 
                 if (mreg & 1 && cg.regcon.immed.value[r] == value)
                 {
-                    genmovreg(cg, cdb,reg,r);
+                    genmovreg(cg.AArch64, cdb,reg,r);
                     goto done;
                 }
                 r++;
@@ -3698,7 +3698,7 @@ void prolog_ifunc(ref CGstate cg, ref CodeBuilder cdb, tym_t* tyf)
 
     genregs(cdb,0x8B,BP,SP);     // MOV BP,SP
     if (localsize)
-        cod3_stackadj(cg, cdb, cast(int)localsize);
+        cod3_stackadj(cg.AArch64, cdb, cast(int)localsize);
 
     *tyf |= mTYloadds;
 }
@@ -3836,7 +3836,7 @@ void prolog_frame(ref CGstate cg, ref CodeBuilder cdb, bool farfunc, ref uint xl
             {
                 /* SUB sp,sp,#16+xlocalsize
                  */
-                cod3_stackadj(cg, cdb, 16 + xlocalsize);
+                cod3_stackadj(cg.AArch64, cdb, 16 + xlocalsize);
 
                 assert((xlocalsize & 0xF) == 0); // 16 byte aligned
 
@@ -3882,7 +3882,7 @@ static if (NTEXCEPTIONS == 2)
         if (cg.usednteh & (NTEH_try | NTEH_except | NTEHcpp | EHcleanup | EHtry | NTEHpassthru) && (config.ehmethod == EHmethod.EH_WIN32 && !(funcsym_p.Sfunc.Fflags & Feh_none) || config.ehmethod == EHmethod.EH_SEH))
         {
             nteh_prolog(cg, cdb);
-            int sz = nteh_contextsym_size(cg);
+            int sz = nteh_contextsym_size(cg.usednteh);
             assert(sz != 0);        // should be 5*4, not 0
             xlocalsize -= sz;      // sz is already subtracted from ESP
                                     // by nteh_prolog()
@@ -3956,7 +3956,7 @@ void prolog_frameadj(ref CGstate cg, ref CodeBuilder cdb, tym_t tyf, uint xlocal
              *      SUB     ESP, xlocalsize % 0x1000
              */
             movregconst(cg,cdb, reg, xlocalsize / 0x1000, false);
-            cod3_stackadj(cg, cdb, 0x1000);
+            cod3_stackadj(cg.AArch64, cdb, 0x1000);
             code_orflag(cdb.last(), CF.targ2);
             cdb.gen2sib(0x85, modregrm(0,SP,4),modregrm(0,4,SP));
             if (I64)
@@ -3968,7 +3968,7 @@ void prolog_frameadj(ref CGstate cg, ref CodeBuilder cdb, tym_t tyf, uint xlocal
                 cdb.genc2(JNE,0,cast(targ_uns)-12);
             }
             cg.regimmed_set(reg,0);             // reg is now 0
-            cod3_stackadj(cg, cdb, xlocalsize & 0xFFF);
+            cod3_stackadj(cg.AArch64, cdb, xlocalsize & 0xFFF);
             useregs(cg, mask(reg));
         }
     }
@@ -3981,7 +3981,7 @@ static if (0)
            stp x29,x30,[sp,#xlocalsize]
            add x29,sp,#xlocalsize
          */
-        cod3_stackadj(cg, cdb, 16 + xlocalsize);
+        cod3_stackadj(cg.AArch64, cdb, 16 + xlocalsize);
 
         assert((xlocalsize & 0xF) == 0); // 16 byte aligned
 
@@ -4030,7 +4030,7 @@ static if (0)
             *pushalloc = true;
         }
         else
-            cod3_stackadj(cg, cdb, xlocalsize);
+            cod3_stackadj(cg.AArch64, cdb, xlocalsize);
     }
 }
 
@@ -4042,7 +4042,7 @@ void prolog_frameadj2(ref CGstate cg, ref CodeBuilder cdb, tym_t tyf, uint xloca
     {
         /* sub sp,sp,#xlocalsize
          */
-        cod3_stackadj(cg, cdb, xlocalsize);
+        cod3_stackadj(cg.AArch64, cdb, xlocalsize);
         return;
     }
 
@@ -4059,7 +4059,7 @@ void prolog_frameadj2(ref CGstate cg, ref CodeBuilder cdb, tym_t tyf, uint xloca
         *pushalloc = true;
     }
     else
-        cod3_stackadj(cg, cdb, xlocalsize);
+        cod3_stackadj(cg.AArch64, cdb, xlocalsize);
 }
 
 @trusted
@@ -4160,7 +4160,7 @@ void prolog_saveregs(ref CGstate cg, ref CodeBuilder cdb, regm_t topush, int cfa
             if (isXMMreg(reg))
             {
                 // SUB RSP,16
-                cod3_stackadj(cg, cdb, 16);
+                cod3_stackadj(cg.AArch64, cdb, 16);
                 // MOVUPD 0[RSP],xmm
                 cdb.genc1(STOUPD,modregxrm(2,reg-XMM0,4) + 256*modregrm(0,4,SP),FL.const_,0);
                 cg.EBPtoESP += 16;
@@ -4262,7 +4262,7 @@ private void epilog_restoreregs(ref CGstate cg, ref CodeBuilder cdb, regm_t topo
                     // MOVUPD xmm,0[RSP]
                     cdb.genc1(LODUPD,modregxrm(2,reg-XMM0,4) + 256*modregrm(0,4,SP),FL.const_,0);
                     // ADD RSP,16
-                    cod3_stackadj(cg, cdb, -16);
+                    cod3_stackadj(cg.AArch64, cdb, -16);
                 }
                 else
                 {
@@ -4390,9 +4390,9 @@ void prolog_genvarargs(ref CGstate cg, ref CodeBuilder cdb, Symbol* sv)
  *      parmn = last named parameter
  */
 @trusted
-elem* prolog_genva_start(ref CGstate cg, Symbol* sv, Symbol* parmn)
+elem* prolog_genva_start(bool AArch64, Symbol* sv, Symbol* parmn)
 {
-    if (cg.AArch64)
+    if (AArch64)
         return dmd.backend.arm.cod3.prolog_genva_start(sv, parmn);
 
     enum Vregnum = 6;
@@ -4793,7 +4793,7 @@ void prolog_loadparams(ref CGstate cg, ref CodeBuilder cdb, tym_t tyf, bool push
             else
             {
                 //printf("test1 mov %s, %s\n", regstring[r], regstring[preg]);
-                genmovreg(cg, cdb,r,preg);
+                genmovreg(cg.AArch64, cdb,r,preg);
                 if (I64 && sz == 8)
                     code_orrex(cdb.last(), REX_W);
             }
@@ -5063,7 +5063,7 @@ void epilog(ref CGstate cg, block* b)
             cdbx.genpop(regx);                     // POP regx
         }
         else if (xlocalsize)
-            cod3_stackadj(cg, cdbx, cast(int)-xlocalsize);
+            cod3_stackadj(cg.AArch64, cdbx, cast(int)-xlocalsize);
     }
     if (b.bc == BC.ret || b.bc == BC.retexp)
     {
@@ -5157,10 +5157,10 @@ static if (0)
  */
 
 @trusted
-targ_size_t cod3_spoff(ref CGstate cg)
+targ_size_t cod3_spoff(targ_size_t spoff)
 {
     //printf("spoff = x%x, localsize = x%x\n", cast(int)cgstate.spoff, cast(int)localsize);
-    return cg.spoff + localsize;
+    return spoff + localsize;
 }
 
 @trusted
@@ -5244,7 +5244,7 @@ void cod3_thunk(ref CGstate cg, Symbol* sthunk,Symbol* sfunc,uint p,tym_t thisty
     targ_size_t thunkoffset;
 
     int seg = sthunk.Sseg;
-    cod3_align(cg, seg);
+    cod3_align(cg.AArch64, seg);
 
     // Skip over return address
     tym_t thunkty = tybasic(sthunk.ty());
@@ -5471,7 +5471,7 @@ int branch(ref CGstate cg, block* bl,int flag)
     {
         ubyte op;
 
-        csize = calccodsize(cg, c);
+        csize = calccodsize(cg.AArch64, c);
         cn = code_next(c);
         op = cast(ubyte)c.Iop;
         if ((op & ~0x0F) == 0x70 && c.Iflags & CF.jmp16 ||
@@ -5521,7 +5521,7 @@ int branch(ref CGstate cg, block* bl,int flag)
                     {
                         if (cr == ct)
                             break;
-                        disp += calccodsize(cg, cr);
+                        disp += calccodsize(cg.AArch64, cr);
                     }
 
                     if (!cr)
@@ -5534,7 +5534,7 @@ int branch(ref CGstate cg, block* bl,int flag)
                             if (cr == ct)
                                 s = 1;
                             if (s)
-                                disp += calccodsize(cg, cr);
+                                disp += calccodsize(cg.AArch64, cr);
                         }
                     }
 
@@ -5600,7 +5600,7 @@ int branch(ref CGstate cg, block* bl,int flag)
                     c.Iflags &= ~CF.jmp16;      // a branch is ok
                     bytesaved += I16 ? 3 : 4;
                 }
-                csize = calccodsize(cg, c);
+                csize = calccodsize(cg.AArch64, c);
             }
             else
                 bl.Bflags = cast(BFL)(bl.Bflags & ~cast(uint)BFL.jmpoptdone); // some JMPs left
@@ -5722,7 +5722,7 @@ void assignaddrc(ref CGstate cg, code* c)
         {
         if (0)
         {       printf("assignaddrc()\n");
-                code_print(cg, c);
+                code_print(cg.AArch64, c);
         }
         if (code_next(c) && code_next(code_next(c)) == c)
             assert(0);
@@ -6708,7 +6708,7 @@ void pinholeopt(ref CGstate cg, code* c,block* b)
     {
         printf("-pinholeopt(%p)\n",cstart);
         for (c = cstart; c; c = code_next(c))
-            code_print(cg, c);
+            code_print(cg.AArch64, c);
     }
 }
 
@@ -6811,7 +6811,7 @@ void simplify_code(code* c)
     if (config.flags4 & CFG4optimized &&
         (c.Iop == 0x81 || c.Iop == 0x80) &&
         c.IFL2 == FL.const_ &&
-        reghasvalue(cgstate, (c.Iop == 0x80) ? BYTEREGS : ALLREGS,I64 ? c.IEV2.Vsize_t : c.IEV2.Vlong,reg) &&
+        reghasvalue(cgstate.regcon.immed, (c.Iop == 0x80) ? BYTEREGS : ALLREGS,I64 ? c.IEV2.Vsize_t : c.IEV2.Vlong,reg) &&
         !(I16 && c.Iflags & CF.opsize)
        )
     {
@@ -6861,7 +6861,7 @@ void jmpaddr(ref CGstate cg, code* c)
             ad = 0;                 /* IP displacement              */
             while (ci && ci != ctarg)
             {
-                ad += calccodsize(cg, ci);
+                ad += calccodsize(cg.AArch64, ci);
                 ci = code_next(ci);
             }
             if (!ci)
@@ -6899,7 +6899,7 @@ void jmpaddr(ref CGstate cg, code* c)
             while (ci != c)
             {
                 assert(ci);
-                ad += calccodsize(cg, ci);
+                ad += calccodsize(cg.AArch64, ci);
                 ci = code_next(ci);
             }
             c.IEV2.Vpointer = (-ad) & 0xFF;
@@ -6918,7 +6918,7 @@ uint calcblksize(ref CGstate cg, code* c)
     uint size;
     for (size = 0; c; c = code_next(c))
     {
-        uint sz = calccodsize(cg, c);
+        uint sz = calccodsize(cg.AArch64, c);
         //printf("off=%02x, sz = %d, code %p: op=%02x\n", size, sz, c, c.Iop);
         size += sz;
     }
@@ -6934,9 +6934,9 @@ uint calcblksize(ref CGstate cg, code* c)
  */
 
 @trusted
-uint calccodsize(ref CGstate cg, code* c)
+uint calccodsize(bool AArch64, code* c)
 {
-    if (cg.AArch64)
+    if (AArch64)
     {
         import dmd.backend.arm.cod3 : calccodsize;
         return calccodsize(c);
@@ -7377,7 +7377,7 @@ uint codout(ref CGstate cg, int seg, code* c, Barray!ubyte* disasmBuf, ref targ_
     {
         debug
         {
-        if (debugc) { printf("off=%02x, sz=%d, ",cast(int)ggen.getOffset(),cast(int)calccodsize(cg, c)); code_print(cg, c); }
+        if (debugc) { printf("off=%02x, sz=%d, ",cast(int)ggen.getOffset(),cast(int)calccodsize(cg.AArch64, c)); code_print(cg.AArch64, c); }
         uint startOffset = ggen.getOffset();
         }
 
@@ -7405,7 +7405,7 @@ uint codout(ref CGstate cg, int seg, code* c, Barray!ubyte* disasmBuf, ref targ_
                 if (op != NOP)
                     break;
                 debug
-                assert(calccodsize(cg, c) == 0);
+                assert(calccodsize(cg.AArch64, c) == 0);
 
                 continue;
 
@@ -7422,7 +7422,7 @@ uint codout(ref CGstate cg, int seg, code* c, Barray!ubyte* disasmBuf, ref targ_
                     ggen.offset += objmod.bytes(seg,ggen.offset,c.IEV1.data);
                 }
                 debug
-                assert(calccodsize(cg, c) == c.IEV1.data.length);
+                assert(calccodsize(cg.AArch64, c) == c.IEV1.data.length);
 
                 continue;
 
@@ -7797,10 +7797,10 @@ uint codout(ref CGstate cg, int seg, code* c, Barray!ubyte* disasmBuf, ref targ_
         }
 
         debug
-        if (ggen.getOffset() - startOffset != calccodsize(cg, c))
+        if (ggen.getOffset() - startOffset != calccodsize(cg.AArch64, c))
         {
-            printf("actual: %d, calc: %d\n", cast(int)(ggen.getOffset() - startOffset), cast(int)calccodsize(cg, c));
-            code_print(cg, c);
+            printf("actual: %d, calc: %d\n", cast(int)(ggen.getOffset() - startOffset), cast(int)calccodsize(cg.AArch64, c));
+            code_print(cg.AArch64, c);
             assert(0);
         }
     }
@@ -8233,13 +8233,13 @@ private void do8bit(ref MiniCodeBuf pbuf, FL fl, ref evc uev)
 void codeListPrint(ref CGstate cg, code* c)
 {
     for (; c; c = code_next(c))
-        code_print(cg, c);
+        code_print(cg.AArch64, c);
 }
 
 @trusted
-void code_print(ref CGstate cg, scope code* c)
+void code_print(bool AArch64, scope code* c)
 {
-    debug assert(!cg.AArch64);
+    debug assert(!AArch64);
 
     ubyte ins;
     ubyte rexb;

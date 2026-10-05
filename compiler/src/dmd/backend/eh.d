@@ -131,7 +131,7 @@ void except_fillInEHTable(ref CGstate cg, Symbol* s)
     //printf("ehtables: func = %s, offset = x%x, startblock.Boffset = x%x\n", funcsym_p.Sident, funcsym_p.Soffset, startblock.Boffset);
 
     // Get offset of ESP from EBP
-    long spoff = cod3_spoff(cg);
+    long spoff = cod3_spoff(cg.spoff);
     dtb.dword(cast(int)spoff);
     sz += 4;
 
@@ -280,14 +280,14 @@ void except_fillInEHTable(ref CGstate cg, Symbol* s)
                             if (config.ehmethod == EHmethod.EH_WIN32)
                             {
                                 nteh_patchindex(cf, stack[stack.length - 1]);
-                                foffset += calccodsize(cg, cf);
+                                foffset += calccodsize(cg.AArch64, cf);
                                 cf = code_next(cf);
                             }
-                            foffset += calccodsize(cg, cf);
+                            foffset += calccodsize(cg.AArch64, cf);
                             while (!cf.isJumpOP())
                             {
                                 cf = code_next(cf);
-                                foffset += calccodsize(cg, cf);
+                                foffset += calccodsize(cg.AArch64, cf);
                             }
                             // https://issues.dlang.org/show_bug.cgi?id=9438
                             //cf = code_next(cf);
@@ -302,7 +302,7 @@ void except_fillInEHTable(ref CGstate cg, Symbol* s)
                         n++;
                     }
                     else
-                        eoffset += calccodsize(cg, c2);
+                        eoffset += calccodsize(cg.AArch64, c2);
                 }
                 //printf("boffset = %x, eoffset = %x, foffset = %x\n", boffset, eoffset, foffset);
                 dtb.dword(stack[stack.length - 1]);   // parent index
@@ -324,7 +324,7 @@ void except_fillInEHTable(ref CGstate cg, Symbol* s)
                 assert(stack.length != 0);
             }
         Lnodtor:
-            boffset += calccodsize(cg, c);
+            boffset += calccodsize(cg.AArch64, c);
         }
     }
         stack.dtor();

@@ -211,14 +211,14 @@ void gencodelem(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs,
  */
 
 @trusted
-bool reghasvalue(ref CGstate cg, regm_t regm,targ_size_t value, out reg_t preg)
+bool reghasvalue(ref immed_t immed, regm_t regm,targ_size_t value, out reg_t preg)
 {
     //printf("reghasvalue(%s, %llx)\n", regm_str(regm), cast(ulong)value);
     /* See if another register has the right value      */
     reg_t r = 0;
-    for (regm_t mreg = cg.regcon.immed.mval; mreg; mreg >>= 1)
+    for (regm_t mreg = immed.mval; mreg; mreg >>= 1)
     {
-        if (mreg & regm & 1 && cg.regcon.immed.value[r] == value)
+        if (mreg & regm & 1 && immed.value[r] == value)
         {   preg = r;
             return true;
         }
@@ -238,7 +238,7 @@ reg_t regwithvalue(ref CGstate cg, ref CodeBuilder cdb,regm_t regm,targ_size_t v
 {
     //printf("regwithvalue(value = %lld)\n", cast(long)value);
     reg_t found;
-    if (reghasvalue(cg, regm,value,found))
+    if (reghasvalue(cg.regcon.immed, regm,value,found))
         return found; // already have a register with the right value in it
 
     regm_t save = cg.regcon.immed.mval;

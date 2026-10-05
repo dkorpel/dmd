@@ -646,7 +646,7 @@ void cgreg_spillreg_epilog(ref CGstate cg, block* b,Symbol* s,ref CodeBuilder cd
  */
 
 @trusted
-private void cgreg_map(ref CGstate cg, Symbol* s, reg_t regmsw, reg_t reglsw)
+private void cgreg_map(ref regm_t mfuncreg, Symbol* s, reg_t regmsw, reg_t reglsw)
 {
     //assert(I64 || reglsw < 8);
 
@@ -696,7 +696,7 @@ private void cgreg_map(ref CGstate cg, Symbol* s, reg_t regmsw, reg_t reglsw)
     }
     s.Sreglsw = reglsw;
     s.Sregm = (1UL << reglsw);
-    cg.mfuncreg &= ~(1UL << reglsw);
+    mfuncreg &= ~(1UL << reglsw);
     if (regmsw != NOREG)
         vec_subass(s.Slvreg,regrange[regmsw]);
     vec_orass(regrange[reglsw],s.Slvreg);
@@ -720,7 +720,7 @@ private void cgreg_map(ref CGstate cg, Symbol* s, reg_t regmsw, reg_t reglsw)
         assert(regmsw < REGMAX);
         s.Sregmsw = regmsw;
         s.Sregm |= 1UL << regmsw;
-        cg.mfuncreg &= ~(1UL << regmsw);
+        mfuncreg &= ~(1UL << regmsw);
         vec_orass(regrange[regmsw],s.Slvreg);
 
         debug
@@ -740,10 +740,10 @@ private void cgreg_map(ref CGstate cg, Symbol* s, reg_t regmsw, reg_t reglsw)
  */
 
 @trusted
-void cgreg_unregister(ref CGstate cg, regm_t conflict)
+void cgreg_unregister(ref BackendPass pass, regm_t conflict)
 {
-    if (cg.pass == BackendPass.final_)
-        cg.pass = BackendPass.reg;                         // have to codegen at least one more time
+    if (pass == BackendPass.final_)
+        pass = BackendPass.reg;                         // have to codegen at least one more time
     foreach (s; globsym[])
     {
         if (s.Sfl == FL.reg && s.Sregm & conflict)
@@ -908,7 +908,7 @@ int cgreg_assign(ref CGstate cg, Symbol* retsym)
         // Select sequence of registers to try to map s onto
         const(reg_t)[] pseq;                     // sequence to try for LSW
         const(reg_t)[] pseqmsw = null;           // sequence to try for MSW, null if none
-        cgreg_set_priorities(cg, ty, pseq, pseqmsw);
+        cgreg_set_priorities(cg.AArch64, ty, pseq, pseqmsw);
 
         u.benefit = 0;
         for (int i = 0; i < pseq.length; i++)
@@ -1002,7 +1002,7 @@ Ltried:
 
     if (t.sym && t.benefit > 0)
     {
-        cgreg_map(cg,t.sym,t.regmsw,t.reglsw);
+        cgreg_map(cg.mfuncreg,t.sym,t.regmsw,t.reglsw);
         flag = true;
     }
 

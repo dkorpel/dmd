@@ -403,7 +403,7 @@ struct code
 
     void print(ref CGstate cg)               // pretty-printer
     {
-        code_print(cg, &this);
+        code_print(cg.AArch64, &this);
     }
 }
 

@@ -142,9 +142,9 @@ void REGSAVE_restore(const ref REGSAVE regsave, ref CodeBuilder cdb, reg_t reg, 
  */
 
 @trusted
-regm_t regmask(ref CGstate cg, tym_t tym, tym_t tyf)
+regm_t regmask(bool AArch64, tym_t tym, tym_t tyf)
 {
-    assert(cg.AArch64);
+    assert(AArch64);
 
     switch (tybasic(tym))
     {
@@ -982,7 +982,7 @@ void epilog(ref CGstate cg, block* b)
     {
         regm_t retregs = 0;
         if (b.bc == BC.retexp)
-            retregs = regmask(cg, b.Belem.Ety, tym);
+            retregs = regmask(cg.AArch64, b.Belem.Ety, tym);
         nteh_monitor_epilog(cg,cdbx,retregs);
         xlocalsize += 8;
     }
@@ -1055,7 +1055,7 @@ void epilog(ref CGstate cg, block* b)
                     /* ADD sp,sp,#off
                      * ADD sp,sp,#off + lsl #12
                      */
-                    cod3_stackadj(cg, cdbx, cast(int)(-(16 + xlocalsize)));
+                    cod3_stackadj(cg.AArch64, cdbx, cast(int)(-(16 + xlocalsize)));
                 }
             }
         }
@@ -1078,7 +1078,7 @@ void epilog(ref CGstate cg, block* b)
     else if (xlocalsize)
     {
         if (log) printf("epilog: xlocalsize %d\n", cast(int)xlocalsize);
-        cod3_stackadj(cg, cdbx, cast(int)-xlocalsize);
+        cod3_stackadj(cg.AArch64, cdbx, cast(int)-xlocalsize);
     }
 
     if (b.bc == BC.ret || b.bc == BC.retexp)
@@ -1184,7 +1184,7 @@ void cod3_thunk(ref CGstate cg, Symbol* sthunk,Symbol* sfunc,uint p,tym_t thisty
     targ_size_t thunkoffset;
 
     int seg = sthunk.Sseg;
-    cod3_align(cg, seg);
+    cod3_align(cg.AArch64, seg);
 
     // Skip over return address
     tym_t thunkty = tybasic(sthunk.ty());

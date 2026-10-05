@@ -58,9 +58,9 @@ private
 // member stable is not used for MARS or C++
 
 int nteh_EBPoffset_sindex()                   { return -4; }
-int nteh_EBPoffset_prev(ref CGstate cg)       { return -nteh_contextsym_size(cg) + 8; }
-int nteh_EBPoffset_info(ref CGstate cg)       { return -nteh_contextsym_size(cg) + 4; }
-int nteh_EBPoffset_esp(ref CGstate cg)        { return -nteh_contextsym_size(cg) + 0; }
+int nteh_EBPoffset_prev(ref CGstate cg)       { return -nteh_contextsym_size(cg.usednteh) + 8; }
+int nteh_EBPoffset_info(ref CGstate cg)       { return -nteh_contextsym_size(cg.usednteh) + 4; }
+int nteh_EBPoffset_esp(ref CGstate cg)        { return -nteh_contextsym_size(cg.usednteh) + 0; }
 
 int nteh_offset_sindex()        { return 16; }
 int nteh_offset_sindex_seh()    { return 20; }
@@ -188,19 +188,19 @@ Symbol* nteh_contextsym()
  * Returns: size of context symbol on stack.
  */
 @trusted
-uint nteh_contextsym_size(ref CGstate cg)
+uint nteh_contextsym_size(uint usednteh)
 {
     int sz;
 
-    if (cg.usednteh & NTEH_try)
+    if (usednteh & NTEH_try)
     {
         sz = 5 * 4;
     }
-    else if (cg.usednteh & NTEHcpp)
+    else if (usednteh & NTEHcpp)
     {
         sz = 5 * 4;                     // C++ context record
     }
-    else if (cg.usednteh & NTEHpassthru)
+    else if (usednteh & NTEHpassthru)
     {
         sz = 1 * 4;
     }
@@ -322,7 +322,7 @@ void nteh_prolog(ref CGstate cg, ref CodeBuilder cdb)
     }
 
     cdb.append(cdb2);
-    cod3_stackadj(cg, cdb, 8);
+    cod3_stackadj(cg.AArch64, cdb, 8);
 }
 
 /*********************************
@@ -544,7 +544,7 @@ void cdsetjmp(ref CGstate cg, ref CodeBuilder cdb, elem* e,ref regm_t pretregs)
     getregs(cg, cdb,~getRtlsym(RTLSYM.SETJMP3).Sregsaved & (ALLREGS | mES));
     cdb.gencs(0xE8,0,FL.func,getRtlsym(RTLSYM.SETJMP3));      // CALL __setjmp3
 
-    cod3_stackadj(cg, cdb, -(cg.stackpush - stackpushsave));
+    cod3_stackadj(cg.AArch64, cdb, -(cg.stackpush - stackpushsave));
     cdb.genadjesp(-(cg.stackpush - stackpushsave));
 
     cg.stackpush = stackpushsave;
@@ -600,7 +600,7 @@ void nteh_unwind(ref CGstate cg, ref CodeBuilder cdb,regm_t saveregs,uint stop_i
     ++nargs;
 
     cdbx.gencs(0xE8,0,FL.func,getRtlsym(local_unwind));  // CALL _local_unwind()
-    cod3_stackadj(cg, cdbx, -nargs * 4);
+    cod3_stackadj(cg.AArch64, cdbx, -nargs * 4);
 
     cdb.append(cdbs);
     cdb.append(cdbx);

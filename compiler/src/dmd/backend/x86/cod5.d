@@ -65,7 +65,7 @@ else
         config.flags & (CFGalwaysframe | CFGtrace) ||
 //      config.fulltypes ||
         (config.wflags & WFwindows && tyfarfunc(tym)) ||
-        need_prolog(cgstate, startblock)
+        need_prolog(cgstate.fregsaved, startblock)
        )
     {   // First block gets the prolog, all return blocks
         // get the epilog.
@@ -177,7 +177,7 @@ void cod5_noprol(block* startblock)
 private void pe_add(ref CGstate cg, block* b)
 {
     if (b.Bflags & BFL.outsideprolog ||
-        need_prolog(cg, b))
+        need_prolog(cg.fregsaved, b))
         return;
 
     b.Bflags |= BFL.outsideprolog;
@@ -190,9 +190,9 @@ private void pe_add(ref CGstate cg, block* b)
  */
 
 @trusted
-private int need_prolog(ref CGstate cg, block* b)
+private int need_prolog(regm_t fregsaved, block* b)
 {
-    if (b.Bregcon.used & cg.fregsaved)
+    if (b.Bregcon.used & fregsaved)
         goto Lneed;
 
     // If block referenced a param in 16 bit code

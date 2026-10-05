@@ -5733,7 +5733,7 @@ if (config.exe & EX_posix)
             e.E2.Voffset = 8 * 8 + 8 * 16; // offset to struct __va_list_tag
         else
             e.E2.Voffset = 6 * 8 + 8 * 16; // offset to struct __va_list_tag defined in sysv_x64.d
-        return el_combine(prolog_genva_start(cgstate, va_argsave, parmn.Vsym), e);
+        return el_combine(prolog_genva_start(cgstate.AArch64, va_argsave, parmn.Vsym), e);
     }
     else
         e.E2 = el_long(TYnptr, 0);

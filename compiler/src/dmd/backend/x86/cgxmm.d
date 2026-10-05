@@ -311,7 +311,7 @@ void xmmeq(ref CGstate cg, ref CodeBuilder cdb, elem* e, opcode_t op, elem* e1, 
         if (e11.Eoper == OPpostdec)
             postinc = -postinc;
         getlvalue(cg,cdb,cs,e11,retregs,RM.store);
-        freenode(cg, e11.E2);
+        freenode(cg.regcon.cse, e11.E2);
     }
     else
     {   postinc = 0;
@@ -372,7 +372,7 @@ void xmmeq(ref CGstate cg, ref CodeBuilder cdb, elem* e, opcode_t op, elem* e1, 
             }
         }
     }
-    freenode(cg, e1);
+    freenode(cg.regcon.cse, e1);
 }
 
 /********************************
@@ -591,7 +591,7 @@ void xmmopass(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     }
 
     fixresult(cg,cdb,e,retregs,pretregs);
-    freenode(cg, e1);
+    freenode(cg.regcon.cse, e1);
 }
 
 /********************************
@@ -679,7 +679,7 @@ void xmmpost(ref CGstate cg,ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     }
 
     fixresult(cg,cdb,e,resultregs,pretregs);
-    freenode(cg, e1);
+    freenode(cg.regcon.cse, e1);
 }
 
 /******************
@@ -1382,7 +1382,7 @@ static if (0)
         assert(0);
     fixresult(cg,cdb,e,retregs,pretregs);
     free(params);
-    freenode(cg, e);
+    freenode(cg.regcon.cse, e);
 }
 
 /***************

@@ -548,7 +548,7 @@ void el_paramArray(ref CGstate cg, elem ***parray, elem* e)
     {
         el_paramArray(cg, parray, e.E1);
         el_paramArray(cg, parray, e.E2);
-        freenode(cg, e);
+        freenode(cg.regcon.cse, e);
     }
     else
     {

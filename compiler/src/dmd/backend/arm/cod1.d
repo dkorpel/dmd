@@ -412,8 +412,8 @@ void logexp(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint jcond, FL fltarg,
                     logexp(cg, cdb, e.E2, jcond, fltarg, targ);
                     cdb.append(cnop);
                 }
-                andregcon(cg, regconsave);
-                freenode(cg, e);
+                andregcon(cg.regcon, regconsave);
+                freenode(cg.regcon.cse, e);
                 cg.stackclean--;
                 return;
             }
@@ -435,8 +435,8 @@ void logexp(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint jcond, FL fltarg,
                     regconsave = cg.regcon;
                     logexp(cg, cdb, e.E2, jcond, fltarg, targ);
                 }
-                andregcon(cg, regconsave);
-                freenode(cg, e);
+                andregcon(cg.regcon, regconsave);
+                freenode(cg.regcon.cse, e);
                 cg.stackclean--;
                 return;
             }
@@ -455,7 +455,7 @@ void logexp(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint jcond, FL fltarg,
             case OPu32_d:
             case OPd_ld:
                 logexp(cg, cdb, e.E1, jcond, fltarg, targ);
-                freenode(cg, e);
+                freenode(cg.regcon.cse, e);
                 cg.stackclean--;
                 return;
 
@@ -473,10 +473,10 @@ void logexp(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint jcond, FL fltarg,
 
                 cdb.append(cnop2);
                 logexp(cg, cdb, e.E2.E2, jcond, fltarg, targ);
-                andregcon(cg, regconold);
-                andregcon(cg, regconsave);
-                freenode(cg, e.E2);
-                freenode(cg, e);
+                andregcon(cg.regcon, regconold);
+                andregcon(cg.regcon, regconsave);
+                freenode(cg.regcon.cse, e.E2);
+                freenode(cg.regcon.cse, e);
                 cdb.append(cnop);
                 cg.stackclean--;
                 return;
@@ -861,8 +861,8 @@ void getlvalue(ref CGstate cg,ref CodeBuilder cdb,ref code pcs,elem* e,regm_t ke
                         if (rbase & 8)
                             pcs.Irex |= REX_B;
                     }
-                    freenode(cg, e11.E2);
-                    freenode(cg, e11);
+                    freenode(cg.regcon.cse, e11.E2);
+                    freenode(cg.regcon.cse, e11);
                 }
                 else
                 {
@@ -914,9 +914,9 @@ void getlvalue(ref CGstate cg,ref CodeBuilder cdb,ref code pcs,elem* e,regm_t ke
                     pcs.IEV1.Vuns = 0;
                     setaddrmode(pcs, regs);
                 }
-                freenode(cg, e12);
+                freenode(cg.regcon.cse, e12);
                 if (e1free)
-                    freenode(cg, e1);
+                    freenode(cg.regcon.cse, e1);
                 return Lptr();
             }
 
@@ -944,8 +944,8 @@ void getlvalue(ref CGstate cg,ref CodeBuilder cdb,ref code pcs,elem* e,regm_t ke
                 int ss;
 
                 pcs.IEV1.Vuns = e12.Vuns;
-                freenode(cg, e12);
-                if (e1free) freenode(cg, e1);
+                freenode(cg.regcon.cse, e12);
+                if (e1free) freenode(cg.regcon.cse, e1);
                 if (e11.Eoper == OPadd && !e11.Ecount &&
                     tysize(e11.Ety) == REGSIZE)
                 {
@@ -1011,8 +1011,8 @@ void getlvalue(ref CGstate cg,ref CodeBuilder cdb,ref code pcs,elem* e,regm_t ke
                     cdisscaledindex(cg, cdb, e11.E1, idxregs2, keepmsk);
                     idxregs = cg.allregs & ~(idxregs2 | keepmsk);
                     scodelem(cg,cdb, e12, idxregs, keepmsk | idxregs2, true);
-                    freenode(cg, e11.E2);
-                    freenode(cg, e11);
+                    freenode(cg.regcon.cse, e11.E2);
+                    freenode(cg.regcon.cse, e11);
                 }
                 else
                 {
@@ -1029,7 +1029,7 @@ void getlvalue(ref CGstate cg,ref CodeBuilder cdb,ref code pcs,elem* e,regm_t ke
                 if (base & 8)
                     pcs.Irex |= REX_B;
                 if (e1free)
-                    freenode(cg, e1);
+                    freenode(cg.regcon.cse, e1);
 
                 return Lptr();
             }
@@ -1195,7 +1195,7 @@ void getlvalue(ref CGstate cg,ref CodeBuilder cdb,ref code pcs,elem* e,regm_t ke
                  */
                 if (tyxmmreg(ty) && !(s.Sregm & XMMREGS) ||
                     !tyxmmreg(ty) && (s.Sregm & XMMREGS))       // TODO AArch64
-                    cgreg_unregister(cg,s.Sregm);
+                    cgreg_unregister(cg.pass,s.Sregm);
 
                 if (
                     s.Sclass == SC.regpar ||
@@ -1500,14 +1500,14 @@ struct ClibInfo
 __gshared int clib_inited = false;          // true if initialized
 
 @trusted private
-Symbol* symboly(ref CGstate cg, string name, regm_t desregs)
+Symbol* symboly(regm_t fregsaved, string name, regm_t desregs)
 {
     Symbol* s = symbol_calloc(name);
     s.Stype = tsclib;
     s.Sclass = SC.extern_;
     s.Sfl = FL.func;
     s.Ssymnum = 0;
-    s.Sregsaved = cg.fregsaved;  // assume C conventions
+    s.Sregsaved = fregsaved;  // assume C conventions
     return s;
 }
 
@@ -1532,13 +1532,13 @@ void getClibFunction(ref CGstate cg, uint clib, ref Symbol* s, ref ClibInfo* cin
 
     void declare(string name)
     {
-        s = symboly(cg, name, mask(32));
+        s = symboly(cg.fregsaved, name, mask(32));
         cinfo.retregs = mask(32);
     }
 
     void declare2(string name)
     {
-        s = symboly(cg, name, r0r1 | r2r3);
+        s = symboly(cg.fregsaved, name, r0r1 | r2r3);
         cinfo.retregs = r0r1;
     }
 
@@ -1547,7 +1547,7 @@ void getClibFunction(ref CGstate cg, uint clib, ref Symbol* s, ref ClibInfo* cin
         case CLIB_A.realToDouble:
         {
             string name = "__trunctfdf2";
-            s = symboly(cg, name, mask(32));
+            s = symboly(cg.fregsaved, name, mask(32));
             cinfo.retregs = mask(32);
             break;
         }
@@ -1555,7 +1555,7 @@ void getClibFunction(ref CGstate cg, uint clib, ref Symbol* s, ref ClibInfo* cin
         case CLIB_A.doubleToReal:
         {
             string name = "__extenddftf2";
-            s = symboly(cg, name, mask(32));
+            s = symboly(cg.fregsaved, name, mask(32));
             cinfo.retregs = mask(32);
             break;
         }
@@ -1563,7 +1563,7 @@ void getClibFunction(ref CGstate cg, uint clib, ref Symbol* s, ref ClibInfo* cin
         case CLIB_A.add:
         {
             string name = "__addtf3";
-            s = symboly(cg, name, mask(32) | mask(33));
+            s = symboly(cg.fregsaved, name, mask(32) | mask(33));
             cinfo.retregs = mask(32);
             break;
         }
@@ -1571,7 +1571,7 @@ void getClibFunction(ref CGstate cg, uint clib, ref Symbol* s, ref ClibInfo* cin
         case CLIB_A.min:
         {
             string name = "__subtf3";
-            s = symboly(cg, name, mask(32) | mask(33));
+            s = symboly(cg.fregsaved, name, mask(32) | mask(33));
             cinfo.retregs = mask(32);
             break;
         }
@@ -1579,7 +1579,7 @@ void getClibFunction(ref CGstate cg, uint clib, ref Symbol* s, ref ClibInfo* cin
         case CLIB_A.mul:
         {
             string name = "__multf3";
-            s = symboly(cg, name, mask(32) | mask(33));
+            s = symboly(cg.fregsaved, name, mask(32) | mask(33));
             cinfo.retregs = mask(32);
             break;
         }
@@ -1587,7 +1587,7 @@ void getClibFunction(ref CGstate cg, uint clib, ref Symbol* s, ref ClibInfo* cin
         case CLIB_A.div:
         {
             string name = "__divtf3";
-            s = symboly(cg, name, mask(32) | mask(33));
+            s = symboly(cg.fregsaved, name, mask(32) | mask(33));
             cinfo.retregs = mask(32);
             break;
         }
@@ -1602,7 +1602,7 @@ void getClibFunction(ref CGstate cg, uint clib, ref Symbol* s, ref ClibInfo* cin
         case CLIB_A.memset:
         {
             string name = "memset";
-            s = symboly(cg, name, mask(0));
+            s = symboly(cg.fregsaved, name, mask(0));
             cinfo.retregs = mask(0);
             break;
         }
@@ -1676,7 +1676,7 @@ void callclib(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint clib, ref regm_
         int npush = npushed * REGSIZE + cg.stackpush;
         if (npush & (STACKALIGN - 1))
         {   nalign = STACKALIGN - (npush & (STACKALIGN - 1));
-            cod3_stackadj(cg, cdb, nalign);
+            cod3_stackadj(cg.AArch64, cdb, nalign);
         }
     }
 
@@ -1685,7 +1685,7 @@ void callclib(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint clib, ref regm_
 
 
     if (nalign)
-        cod3_stackadj(cg, cdb, -nalign);
+        cod3_stackadj(cg.AArch64, cdb, -nalign);
     cg.calledafunc = 1;
 
     cdb.append(cdbpop);
@@ -1914,7 +1914,7 @@ void cdfunc(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t pretregs)
 //printf("STACKALIGN: %d\n", STACKALIGN);
     uint numalign = -numpara & (STACKALIGN - 1);  // number of bytes needed to align the argument stack to STACKALIGN
 //printf("numalign: %d numpara: %d\n", numalign, numpara);
-    cod3_stackadj(cg, cdb, numalign + numpara);
+    cod3_stackadj(cg.AArch64, cdb, numalign + numpara);
     cdb.genadjesp(numalign + numpara);
     cg.stackpush += numalign + numpara;
     stackpushsave += numalign + numpara;
@@ -2068,9 +2068,9 @@ void cdfunc(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t pretregs)
                 else foreach (v; 0 .. 2)
                 {
                     if (v ^ (preg != mreg))
-                        genmovreg(cg, cdb, preg, lreg, ty1);
+                        genmovreg(cg.AArch64, cdb, preg, lreg, ty1);
                     else
-                        genmovreg(cg, cdb, preg2, mreg, ty2);
+                        genmovreg(cg.AArch64, cdb, preg2, mreg, ty2);
                 }
 
                 retregs = (mask(preg) | mask(preg2)) & ~mask(NOREG);
@@ -2090,7 +2090,7 @@ void cdfunc(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t pretregs)
             {
                 retregs = 0;
                 scodelem(cg,cdb, ep.E1, retregs, keepmsk, false);
-                freenode(cg, ep);
+                freenode(cg.regcon.cse, ep);
             }
             else
             {
@@ -2104,7 +2104,7 @@ void cdfunc(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t pretregs)
     {   // Allocate stack space for four entries anyway
         // https://msdn.microsoft.com/en-US/library/ew5tede7%28v=vs.100%29
         {   uint sz = 4 * REGSIZE;
-            cod3_stackadj(cg, cdb, sz);
+            cod3_stackadj(cg.AArch64, cdb, sz);
             cdb.genadjesp(sz);
             cg.stackpush += sz;
         }
@@ -2190,7 +2190,7 @@ private void funccall(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint numpara
 
             regm_t regm = INSTR.ALLREGS & ~DESREGS;
             reg_t r = allocreg(cg, cdbe, regm, TYnptr); // r becomes amount to allocate
-            genmovreg(cg, cdbe,r,R9,TYMAX);             // MOV r,R9  since r is preserved by ___chkstk_darwin
+            genmovreg(cg.AArch64, cdbe,r,R9,TYMAX);             // MOV r,R9  since r is preserved by ___chkstk_darwin
 
             enum reg_t R16 = 16;                    // scratch register
 
@@ -2205,12 +2205,12 @@ private void funccall(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint numpara
             if (!retregs)
                 retregs = INSTR.ALLREGS;
             reg_t r2 = allocreg(cg, cdbe, retregs, TYnptr);
-            genmovreg(cg, cdbe,r2,INSTR.SP,TYMAX);                 // MOV  r2,SP
+            genmovreg(cg.AArch64, cdbe,r2,INSTR.SP,TYMAX);                 // MOV  r2,SP
             cdbe.gen1(INSTR.subs_addsub_shift(1,r,0,0,r2,r2)); // SUBS r2,r2,r
-            genmovreg(cg, cdbe,INSTR.SP,r2,TYMAX);                 // MOV  SP,r2
+            genmovreg(cg.AArch64, cdbe,INSTR.SP,r2,TYMAX);                 // MOV  SP,r2
 
             cdb.append(cdbe);
-            freenode(cg, e1);
+            freenode(cg.regcon.cse, e1);
 
             fixresult(cg,cdb,e,retregs,pretregs);
             return;
@@ -2301,7 +2301,7 @@ private void funccall(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint numpara
         s = null;
     }
     cdb.append(cdbe);
-    freenode(cg, e1);
+    freenode(cg.regcon.cse, e1);
 
     /* See if we will need the frame pointer.
        Calculate it here so we can possibly use BP to fix the stack.
@@ -2411,9 +2411,9 @@ static if (0)
             for (int v = 0; v < 2; v++)
             {
                 if (v ^ (reg2 != lreg))
-                    genmovreg(cg, cdb,lreg,reg1);
+                    genmovreg(cg.AArch64, cdb,lreg,reg1);
                 else
-                    genmovreg(cg, cdb,mreg,reg2);
+                    genmovreg(cg.AArch64, cdb,mreg,reg2);
             }
             retregs = mask(lreg) | mask(mreg);
         }
@@ -2485,7 +2485,7 @@ private void movParams(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint funcar
             assert(sz <= 16);   // a zero-sized struct, but still occupies aligned space on stack
             regm_t retregs0 = 0;
             scodelem(cg,cdb, e.E1, retregs0, 0, false);
-            freenode(cg, e);
+            freenode(cg.regcon.cse, e);
             return;
 
         default:
@@ -2625,7 +2625,7 @@ void loaddata(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t outretreg
         if (sz == 8)
             value = cast(targ_size_t)e.Vullong;
 
-        if (sz == REGSIZE && reghasvalue(cg, forregs, value, reg))
+        if (sz == REGSIZE && reghasvalue(cg.regcon.immed, forregs, value, reg))
             forregs = mask(reg);
 
         regm_t save = cg.regcon.immed.mval;
@@ -2735,7 +2735,7 @@ void loaddata(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t outretreg
                 loadea(cg, cdb, e, cs, opmv, nreg, 0, 0, 0);    // MOV nregL,data
                 if (reg != nreg)
                 {
-                    genmovreg(cg, cdb, reg, nreg);   // MOV reg,nreg
+                    genmovreg(cg.AArch64, cdb, reg, nreg);   // MOV reg,nreg
                     cssave(cg, e, mask(nreg), false);
                 }
             }

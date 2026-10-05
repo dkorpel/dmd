@@ -142,7 +142,7 @@ private void cgsched_pentium(ref CGstate cg, code** pc,regm_t scratch)
         {
             if (config.target_cpu == TARGET_Pentium ||
                 config.target_cpu == TARGET_PentiumMMX)
-                *pc = simpleops(cg, *pc,scratch);
+                *pc = simpleops(cg.fregsaved, *pc,scratch);
             *pc = schedule(cg, *pc,0);
         }
     }
@@ -1285,7 +1285,7 @@ private Cinfo getinfo(ref CGstate cg, code* c)
     if (PRO)
     {
         ci.uops = uops(c);
-        ci.isz = cast(ubyte)calccodsize(cg, c);
+        ci.isz = cast(ubyte)calccodsize(cg.AArch64, c);
     }
     else
         ci.pair = cast(ubyte)pair_class(c);
@@ -3185,13 +3185,13 @@ Lnop:
  */
 
 @trusted
-code* simpleops(ref CGstate cg, code* c,regm_t scratch)
+code* simpleops(regm_t fregsaved, code* c,regm_t scratch)
 {   code* cstart;
     uint reg;
     code* c2;
 
     // Worry about using registers not saved yet by prolog
-    scratch &= ~cg.fregsaved;
+    scratch &= ~fregsaved;
 
     if (!(scratch & (scratch - 1)))     // if 0 or 1 registers
         return c;

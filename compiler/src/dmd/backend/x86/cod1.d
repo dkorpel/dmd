@@ -111,13 +111,13 @@ void cdisscaledindex(ref CGstate cg,ref CodeBuilder cdb,elem* e,ref regm_t pidxr
     {
         regm_t r = 0;
         scodelem(cg,cdb, e.E1, r, keepmsk, true);
-        freenode(cg, e);
+        freenode(cg.regcon.cse, e);
         e = e.E2;
     }
     assert(e.Eoper == OPshl);
     scodelem(cg,cdb, e.E1, pidxregs, keepmsk, true);
-    freenode(cg, e.E2);
-    freenode(cg, e);
+    freenode(cg.regcon.cse, e.E2);
+    freenode(cg.regcon.cse, e);
 }
 
 /***********************************
@@ -321,7 +321,7 @@ void genEEcode(ref CGstate cg)
     cg.regcon.immed.mval = 0;
     regm_t retregs = 0;    //regmask(eecontext.EEelem.Ety);
     assert(cg.EEStack.offset >= REGSIZE);
-    cod3_stackadj(cg, cdb, cast(int)(cg.EEStack.offset - REGSIZE));
+    cod3_stackadj(cg.AArch64, cdb, cast(int)(cg.EEStack.offset - REGSIZE));
     cdb.genpush(SI);                      // PUSH ESI
     cdb.genadjesp(cast(int)cg.EEStack.offset);
     gencodelem(cg, cdb, eecontext.EEelem, retregs, false);
@@ -471,7 +471,7 @@ void genstackclean(ref CGstate cg,ref CodeBuilder cdb,uint numpara,regm_t keepms
                 cdb.genpop(r);           // POP r
             }
             else
-                cod3_stackadj(cg, cdb, -numpara);
+                cod3_stackadj(cg.AArch64, cdb, -numpara);
         }
         cg.stackpush -= numpara;
         cdb.genadjesp(-numpara);
@@ -536,8 +536,8 @@ void logexp(ref CGstate cg, ref CodeBuilder cdb, elem* e, int jcond, FL fltarg, 
                     logexp(cg, cdb, e.E2, jcond, fltarg, targ);
                     cdb.append(cnop);
                 }
-                andregcon(cg, regconsave);
-                freenode(cg, e);
+                andregcon(cg.regcon, regconsave);
+                freenode(cg.regcon.cse, e);
                 cg.stackclean--;
                 return;
             }
@@ -559,8 +559,8 @@ void logexp(ref CGstate cg, ref CodeBuilder cdb, elem* e, int jcond, FL fltarg, 
                     regconsave = cg.regcon;
                     logexp(cg, cdb, e.E2, jcond, fltarg, targ);
                 }
-                andregcon(cg, regconsave);
-                freenode(cg, e);
+                andregcon(cg.regcon, regconsave);
+                freenode(cg.regcon.cse, e);
                 cg.stackclean--;
                 return;
             }
@@ -579,7 +579,7 @@ void logexp(ref CGstate cg, ref CodeBuilder cdb, elem* e, int jcond, FL fltarg, 
             case OPu32_d:
             case OPd_ld:
                 logexp(cg, cdb, e.E1, jcond, fltarg, targ);
-                freenode(cg, e);
+                freenode(cg.regcon.cse, e);
                 cg.stackclean--;
                 return;
 
@@ -597,10 +597,10 @@ void logexp(ref CGstate cg, ref CodeBuilder cdb, elem* e, int jcond, FL fltarg, 
 
                 cdb.append(cnop2);
                 logexp(cg, cdb, e.E2.E2, jcond, fltarg, targ);
-                andregcon(cg, regconold);
-                andregcon(cg, regconsave);
-                freenode(cg, e.E2);
-                freenode(cg, e);
+                andregcon(cg.regcon, regconold);
+                andregcon(cg.regcon, regconsave);
+                freenode(cg.regcon.cse, e.E2);
+                freenode(cg.regcon.cse, e);
                 cdb.append(cnop);
                 cg.stackclean--;
                 return;
@@ -1133,8 +1133,8 @@ void getlvalue(ref CGstate cg,ref CodeBuilder cdb,ref code pcs,elem* e,regm_t ke
                             if (rbase & 8)
                                 pcs.Irex |= REX_B;
                         }
-                        freenode(cg, e11.E2);
-                        freenode(cg, e11);
+                        freenode(cg.regcon.cse, e11.E2);
+                        freenode(cg.regcon.cse, e11);
                     }
                     else
                     {
@@ -1222,9 +1222,9 @@ void getlvalue(ref CGstate cg,ref CodeBuilder cdb,ref code pcs,elem* e,regm_t ke
                     pcs.IEV1.Vuns = 0;
                     setaddrmode(pcs, idxregs);
                 }
-                freenode(cg, e12);
+                freenode(cg.regcon.cse, e12);
                 if (e1free)
-                    freenode(cg, e1);
+                    freenode(cg.regcon.cse, e1);
                 return Lptr();
             }
 
@@ -1287,8 +1287,8 @@ void getlvalue(ref CGstate cg,ref CodeBuilder cdb,ref code pcs,elem* e,regm_t ke
                 int ss;
 
                 pcs.IEV1.Vuns = e12.Vuns;
-                freenode(cg, e12);
-                if (e1free) freenode(cg, e1);
+                freenode(cg.regcon.cse, e12);
+                if (e1free) freenode(cg.regcon.cse, e1);
                 if (!I16 && e11.Eoper == OPadd && !e11.Ecount &&
                     tysize(e11.Ety) == REGSIZE)
                 {
@@ -1354,8 +1354,8 @@ void getlvalue(ref CGstate cg,ref CodeBuilder cdb,ref code pcs,elem* e,regm_t ke
                     cdisscaledindex(cg, cdb, e11.E1, idxregs2, keepmsk);
                     idxregs = cg.allregs & ~(idxregs2 | keepmsk);
                     scodelem(cg,cdb, e12, idxregs, keepmsk | idxregs2, true);
-                    freenode(cg, e11.E2);
-                    freenode(cg, e11);
+                    freenode(cg.regcon.cse, e11.E2);
+                    freenode(cg.regcon.cse, e11);
                 }
                 else
                 {
@@ -1372,7 +1372,7 @@ void getlvalue(ref CGstate cg,ref CodeBuilder cdb,ref code pcs,elem* e,regm_t ke
                 if (base & 8)
                     pcs.Irex |= REX_B;
                 if (e1free)
-                    freenode(cg, e1);
+                    freenode(cg.regcon.cse, e1);
 
                 return Lptr();
             }
@@ -1547,7 +1547,7 @@ void getlvalue(ref CGstate cg,ref CodeBuilder cdb,ref code pcs,elem* e,regm_t ke
                  */
                 if (tyxmmreg(ty) && !(s.Sregm & XMMREGS) ||
                     !tyxmmreg(ty) && (s.Sregm & XMMREGS))
-                    cgreg_unregister(cg,s.Sregm);
+                    cgreg_unregister(cg.pass,s.Sregm);
 
                 if (
                     s.Sclass == SC.regpar ||
@@ -1817,7 +1817,7 @@ void tstresult(ref CGstate cg, ref CodeBuilder cdb, regm_t regm, tym_t tym, bool
                 {
                     scrregm = cg.allregs & ~regm;              // possible scratch regs
                     scrreg = allocreg(cg, cdb, scrregm, TYoffset); // allocate scratch reg
-                    genmovreg(cg, cdb, scrreg, reg);  // MOV scrreg,msreg
+                    genmovreg(cg.AArch64, cdb, scrreg, reg);  // MOV scrreg,msreg
                     reg = scrreg;
                 }
                 getregs(cg, cdb, mask(reg));
@@ -1851,14 +1851,14 @@ void tstresult(ref CGstate cg, ref CodeBuilder cdb, regm_t regm, tym_t tym, bool
                     genregs(cdb, MOVZXw, scrreg, reg); // MOVZX scrreg,msreg
                 else
                 {
-                    genmovreg(cg, cdb, scrreg, reg);      // MOV scrreg,msreg
+                    genmovreg(cg.AArch64, cdb, scrreg, reg);      // MOV scrreg,msreg
                     if (tym == TYdouble || tym == TYdouble_alias)
                         cdb.gen2(0xD1, modregrm(3, 4, scrreg)); // SHL scrreg,1
                 }
             }
             else
             {
-                genmovreg(cg, cdb, scrreg, reg);  // MOV scrreg,msreg
+                genmovreg(cg.AArch64, cdb, scrreg, reg);  // MOV scrreg,msreg
                 if (tym == TYfloat)
                     cdb.gen2(0xD1, modregrm(3, 4, scrreg)); // SHL scrreg,1
             }
@@ -1868,7 +1868,7 @@ void tstresult(ref CGstate cg, ref CodeBuilder cdb, regm_t regm, tym_t tym, bool
         else if (sz == 8)
         {
             // !I32
-            genmovreg(cg, cdb, scrreg, AX);           // MOV scrreg,AX
+            genmovreg(cg.AArch64, cdb, scrreg, AX);           // MOV scrreg,AX
             if (tym == TYdouble || tym == TYdouble_alias)
                 cdb.gen2(0xD1 ,modregrm(3, 4, scrreg));         // SHL scrreg,1
             genorreg(cdb, scrreg, BX);            // OR scrreg,BX
@@ -2012,7 +2012,7 @@ void fixresult(ref CGstate cg, ref CodeBuilder cdb, elem* e, regm_t retregs, ref
             {
                 reg = findreg(retregs & XMMREGS);
                 if (mask(rreg) & XMMREGS)
-                    genmovreg(cg, cdb, rreg, reg, tym);
+                    genmovreg(cg.AArch64, cdb, rreg, reg, tym);
                 else
                 {
                     // MOVSD floatreg, XMM?
@@ -2067,8 +2067,8 @@ void fixresult(ref CGstate cg, ref CodeBuilder cdb, elem* e, regm_t retregs, ref
                 reg_t msrreg = findregmsw(outretregs);
                 reg_t lsrreg = findreglsw(outretregs);
 
-                genmovreg(cg, cdb, msrreg, msreg); // MOV msrreg,msreg
-                genmovreg(cg, cdb, lsrreg, lsreg); // MOV lsrreg,lsreg
+                genmovreg(cg.AArch64, cdb, msrreg, msreg); // MOV msrreg,msreg
+                genmovreg(cg.AArch64, cdb, lsrreg, lsreg); // MOV lsrreg,lsreg
             }
             else
             {
@@ -2078,7 +2078,7 @@ void fixresult(ref CGstate cg, ref CodeBuilder cdb, elem* e, regm_t retregs, ref
                 if (I64 && sz <= 4)
                     genregs(cdb, 0x89, reg, rreg);  // only move 32 bits, and zero the top 32 bits
                 else
-                    genmovreg(cg, cdb, rreg, reg);    // MOV rreg,reg
+                    genmovreg(cg.AArch64, cdb, rreg, reg);    // MOV rreg,reg
             }
         }
         cssave(cg, e,retregs | outretregs,opsflag);
@@ -2904,7 +2904,7 @@ void callclib(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint clib, ref regm_
             int npush = (npushed + pushebx + 4 * pushall) * REGSIZE + cg.stackpush;
             if (npush & (STACKALIGN - 1))
             {   nalign = STACKALIGN - (npush & (STACKALIGN - 1));
-                cod3_stackadj(cg, cdb, nalign);
+                cod3_stackadj(cg.AArch64, cdb, nalign);
             }
         }
         if (pushebx)
@@ -2944,7 +2944,7 @@ void callclib(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint clib, ref regm_
 
         cdb.gencs(LARGECODE ? 0x9A : 0xE8,0,FL.func,s);  // CALL s
         if (nalign)
-            cod3_stackadj(cg, cdb, -nalign);
+            cod3_stackadj(cg.AArch64, cdb, -nalign);
         cg.calledafunc = 1;
     }
     if (I16)
@@ -2976,7 +2976,7 @@ void fillParameters(ref CGstate cg, elem* e, Parameter[] parameters, ref int i)
     {
         fillParameters(cg, e.E1, parameters, i);
         fillParameters(cg, e.E2, parameters, i);
-        freenode(cg, e);
+        freenode(cg.regcon.cse, e);
     }
     else
     {
@@ -3559,7 +3559,7 @@ void cdfunc(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t pretregs)
     if (!usefuncarg && STACKALIGN >= 16 && (numpara + cg.stackpush) & (STACKALIGN - 1))
     {
         numalign = STACKALIGN - ((numpara + cg.stackpush) & (STACKALIGN - 1));
-        cod3_stackadj(cg, cdb, numalign);
+        cod3_stackadj(cg.AArch64, cdb, numalign);
         cdb.genadjesp(numalign);
         cg.stackpush += numalign;
         stackpushsave += numalign;
@@ -3639,7 +3639,7 @@ void cdfunc(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t pretregs)
             }
             else if (numalignx)
             {
-                cod3_stackadj(cg, cdb, numalignx);
+                cod3_stackadj(cg.AArch64, cdb, numalignx);
                 cdb.genadjesp(numalignx);
                 cg.stackpush += numalignx;
             }
@@ -3761,9 +3761,9 @@ void cdfunc(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t pretregs)
                 else foreach (v; 0 .. 2)
                 {
                     if (v ^ (preg != mreg))
-                        genmovreg(cg, cdb, preg, lreg, ty1);
+                        genmovreg(cg.AArch64, cdb, preg, lreg, ty1);
                     else
-                        genmovreg(cg, cdb, preg2, mreg, ty2);
+                        genmovreg(cg.AArch64, cdb, preg2, mreg, ty2);
                 }
 
                 retregs = (mask(preg) | mask(preg2)) & ~mask(NOREG);
@@ -3782,7 +3782,7 @@ void cdfunc(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t pretregs)
             {
                 retregs = 0;
                 scodelem(cg,cdb, ep.E1, retregs, keepmsk, false);
-                freenode(cg, ep);
+                freenode(cg.regcon.cse, ep);
             }
             else
             {
@@ -3803,7 +3803,7 @@ void cdfunc(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t pretregs)
             }
             else
             {
-                cod3_stackadj(cg, cdb, sz);
+                cod3_stackadj(cg.AArch64, cdb, sz);
                 cdb.genadjesp(sz);
                 cg.stackpush += sz;
             }
@@ -4088,12 +4088,12 @@ private void funccall(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint numpara
             cg.stackclean++;
             loadea(cg, cdbe, e11, cs, 0xFF, farfunc ? 3 : 2, 0, keepmsk, desmsk);
             cg.stackclean--;
-            freenode(cg, e11);
+            freenode(cg.regcon.cse, e11);
         }
         s = null;
     }
     cdb.append(cdbe);
-    freenode(cg, e1);
+    freenode(cg.regcon.cse, e1);
 
     /* See if we will need the frame pointer.
        Calculate it here so we can possibly use BP to fix the stack.
@@ -4240,9 +4240,9 @@ static if (0)
             for (int v = 0; v < 2; v++)
             {
                 if (v ^ (reg2 != lreg))
-                    genmovreg(cg, cdb,lreg,reg1);
+                    genmovreg(cg.AArch64, cdb,lreg,reg1);
                 else
-                    genmovreg(cg, cdb,mreg,reg2);
+                    genmovreg(cg.AArch64, cdb,mreg,reg2);
             }
             retregs = mask(lreg) | mask(mreg);
         }
@@ -4401,7 +4401,7 @@ private void movParams(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint stacka
                 {   int regsize = REGSIZE;
                     regm_t retregs = (sz == 1) ? BYTEREGS : cg.allregs;
                     reg_t reg;
-                    if (reghasvalue(cg, retregs,*p,reg))
+                    if (reghasvalue(cg.regcon.immed, retregs,*p,reg))
                     {
                         cs.Iop = (cs.Iop & 1) | 0x88;
                         cs.Irm |= modregrm(0, reg & 7, 0); // MOV EA,reg
@@ -4558,12 +4558,12 @@ void pushParams(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint stackalign, t
                 cg.stackclean = stackcleansave;
                 genstackclean(cg,cdb,cg.stackpush - stackpushsave,0);
 
-                freenode(cg, e);
+                freenode(cg.regcon.cse, e);
                 return;
             }
             if ((sz & 3) == 0 && (sz / REGSIZE) <= 4 && e1.Eoper == OPvar)
             {
-                freenode(cg, e);
+                freenode(cg.regcon.cse, e);
                 e = e1;
                 goto L1;
             }
@@ -4620,7 +4620,7 @@ void pushParams(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint stackalign, t
                         }
                     }
                     codelem(cg,cdb, e1.E1, retregs, false);
-                    freenode(cg, e1);
+                    freenode(cg.regcon.cse, e1);
                     break;
 
                 case OPvar:
@@ -4662,7 +4662,7 @@ void pushParams(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint stackalign, t
                     // Reverse the effect of the previous add
                     if (doneoff)
                         e1.Voffset -= sz - pushsize;
-                    freenode(cg, e1);
+                    freenode(cg.regcon.cse, e1);
                     break;
 
                 case OPstreq:
@@ -4678,7 +4678,7 @@ void pushParams(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint stackalign, t
                 case OPpair:
                 case OPrpair:
                     pushParams(cg, cdb, e1, stackalign, tyf);
-                    freenode(cg, e);
+                    freenode(cg.regcon.cse, e);
                     return;
 
                 default:
@@ -4732,7 +4732,7 @@ void pushParams(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint stackalign, t
                 cdb.genadjesp(cast(int)sz);
             }
             cg.stackpush += sz;
-            freenode(cg, e);
+            freenode(cg.regcon.cse, e);
             return;
         }
 
@@ -4781,7 +4781,7 @@ void pushParams(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint stackalign, t
                             cg.stackpush += REGSIZE;
                             sz -= REGSIZE;
                         }
-                        freenode(cg, e);
+                        freenode(cg.regcon.cse, e);
                         return;
                     }
                 }
@@ -4804,7 +4804,7 @@ void pushParams(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint stackalign, t
                 getlvalue_lsw(cs);
                 cdb.gen(&cs);                            // PUSH EA
                 cdb.genadjesp(REGSIZE);
-                freenode(cg, e);
+                freenode(cg.regcon.cse, e);
                 return;
             }
             break;
@@ -4830,7 +4830,7 @@ void pushParams(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint stackalign, t
                 cdb.genadjesp(stackalign);
                 cg.stackpush += stackalign;
                 pushParams(cg, cdb, e1, stackalign, tyf);
-                freenode(cg, e);
+                freenode(cg.regcon.cse, e);
                 return;
             }
             break;
@@ -4862,7 +4862,7 @@ void pushParams(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint stackalign, t
                     if (config.target_cpu >= TARGET_80286 && !e.Ecount)
                     {
                         getoffset(cg, cdb, e, STACK);
-                        freenode(cg, e);
+                        freenode(cg.regcon.cse, e);
                         return;
                     }
                     else
@@ -4886,7 +4886,7 @@ void pushParams(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint stackalign, t
                         cdb.genadjesp(REGSIZE);
                     }
                     getoffset(cg, cdb, e, STACK);
-                    freenode(cg, e);
+                    freenode(cg.regcon.cse, e);
                     return;
                 }
             }
@@ -4927,7 +4927,7 @@ void pushParams(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint stackalign, t
                     code_orflag(cdb.last(), flag);
                     cdb.genadjesp(REGSIZE);
                 }
-                freenode(cg, e);
+                freenode(cg.regcon.cse, e);
                 return;
             }
 
@@ -4953,13 +4953,13 @@ void pushParams(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint stackalign, t
                 for (int i = 0; i < 3; ++i)
                 {
                     reg_t reg;
-                    if (reghasvalue(cg, cg.allregs, value, reg))
+                    if (reghasvalue(cg.regcon.immed, cg.allregs, value, reg))
                         cdb.genpush(reg);               // PUSH reg
                     else
                         cdb.genc2(0x68,0,value);        // PUSH value
                     value = e.Vulong4[i ^ 1];       // treat Vreal as 2 element array of 32 bit uint
                 }
-                freenode(cg, e);
+                freenode(cg.regcon.cse, e);
                 return;
             }
 
@@ -5027,7 +5027,7 @@ void pushParams(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint stackalign, t
                         reg = regwithvalue(cg, cdb,cg.allregs,value,64);
                         goto Preg;          // cannot push imm64 unless it is sign extended 32 bit value
                     }
-                    if (regsize == REGSIZE && reghasvalue(cg, cg.allregs,value,reg))
+                    if (regsize == REGSIZE && reghasvalue(cg.regcon.immed, cg.allregs,value,reg))
                         goto Preg;
                     cdb.genc2((szb == 1) ? 0x6A : 0x68, 0, value); // PUSH value
                 }
@@ -5039,7 +5039,7 @@ void pushParams(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint stackalign, t
                 }
                 code_orflag(cdb.last(), flag);              // operand size
             } while (i);
-            freenode(cg, e);
+            freenode(cg.regcon.cse, e);
             return;
         }
 
@@ -5054,7 +5054,7 @@ void pushParams(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint stackalign, t
             {
                 pushParams(cg, cdb, e.E2, stackalign, tyf);
                 pushParams(cg, cdb, e.E1, stackalign, tyf);
-                freenode(cg, e);
+                freenode(cg.regcon.cse, e);
             }
             else if (tyfloating(e.E1.Ety) ||
                      tyfloating(e.E2.Ety))
@@ -5085,7 +5085,7 @@ void pushParams(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint stackalign, t
             {
                 pushParams(cg, cdb, e.E1, stackalign, tyf);
                 pushParams(cg, cdb, e.E2, stackalign, tyf);
-                freenode(cg, e);
+                freenode(cg.regcon.cse, e);
             }
             else if (tyfloating(e.E1.Ety) ||
                      tyfloating(e.E2.Ety))
@@ -5116,7 +5116,7 @@ void pushParams(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint stackalign, t
         codelem(cg,cdb, e, retxmm, false);
         cg.stackpush += sz;
         cdb.genadjesp(cast(int)sz);
-        cod3_stackadj(cg, cdb, cast(int)sz);
+        cod3_stackadj(cg.AArch64, cdb, cast(int)sz);
         const op = xmmstore(tym);
         const r = findreg(retxmm);
         cdb.gen2sib(op, modregxrm(0, r - XMM0,4 ), modregrm(0, 4, SP));   // MOV [ESP],r
@@ -5131,7 +5131,7 @@ void pushParams(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint stackalign, t
             codelem(cg,cdb, e, retregs, false);
             cg.stackpush += sz;
             cdb.genadjesp(cast(int)sz);
-            cod3_stackadj(cg, cdb, cast(int)sz);
+            cod3_stackadj(cg.AArch64, cdb, cast(int)sz);
             opcode_t op;
             uint r;
             switch (tym)
@@ -5237,7 +5237,7 @@ void offsetinreg(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t pretre
     getoffset(cg, cdb,e,reg);
 L3:
     cssave(cg, e, pretregs,false);
-    freenode(cg, e);
+    freenode(cg.regcon.cse, e);
 }
 
 /******************************
@@ -5430,7 +5430,7 @@ void loaddata(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t outretreg
         if (sz == 8)
             value = cast(targ_size_t)e.Vullong;
 
-        if (sz == REGSIZE && reghasvalue(cg, forregs, value, reg))
+        if (sz == REGSIZE && reghasvalue(cg.regcon.immed, forregs, value, reg))
             forregs = mask(reg);
 
         regm_t save = cg.regcon.immed.mval;
@@ -5599,7 +5599,7 @@ void loaddata(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t outretreg
                 loadea(cg, cdb, e, cs, opmv, nreg, 0, 0, 0);    // MOV nregL,data
                 if (reg != nreg)
                 {
-                    genmovreg(cg, cdb, reg, nreg);   // MOV reg,nreg
+                    genmovreg(cg.AArch64, cdb, reg, nreg);   // MOV reg,nreg
                     cssave(cg, e, mask(nreg), false);
                 }
             }

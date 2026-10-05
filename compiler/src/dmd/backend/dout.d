@@ -1021,7 +1021,7 @@ void writefunc2(ref CGstate cg, Symbol* sfunc, ref GlobalOptimizer go, ref Block
             objmod.codeseg(&funcsym_p.Sident[0], 1);
                                         // generate new code segment
         }
-        cod3_align(cg, cseg);               // align start of function
+        cod3_align(cg.AArch64, cseg);               // align start of function
         objmod.func_start(sfunc);
     }
 
