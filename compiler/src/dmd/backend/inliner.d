@@ -47,7 +47,6 @@ import dmd.backend.type;
 import dmd.backend.barray;
 import dmd.backend.x86.cgcod : cgstate;
 import dmd.backend.code : CGstate;
-import dmd.backend.code : CGstate;
 
 nothrow:
 @safe:
