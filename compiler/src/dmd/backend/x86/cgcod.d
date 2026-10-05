@@ -400,7 +400,7 @@ void codgenx(ref CGstate cg, Symbol* sfunc)
     if (cg.usednteh & NTEH_try)
     {
         // Do this before code is emitted because we patch some instructions
-        nteh_filltables();
+        nteh_filltables(cg);
     }
 
     // Compute starting offset for switch tables
@@ -1546,14 +1546,13 @@ reg_t findreg(regm_t regm, int line, const(char)* file)
  */
 
 @trusted
-void freenode(elem* e)
+void freenode(ref CGstate cg, elem* e)
 {
     elem_debug(e);
     //printf("freenode(%p) : Ecount = %d, Ecomsub = %d\n",e,e.Ecount,e.Ecomsub);
     if (e.Ecomsub--) return;             /* usage count                  */
     if (e.Ecount)                        /* if it was a CSE              */
     {
-        CGstate* cg = &cgstate;
         for (size_t i = 0; i < cg.regcon.cse.value.length; i++)
         {
             if (cg.regcon.cse.value[i] == e)       /* if a register is holding it  */
@@ -2003,12 +2002,11 @@ void getregs(ref CodeBuilder cdb, regm_t r)
  * Same as getregs(), but assert if code is needed to be generated.
  */
 @trusted
-void getregsNoSave(regm_t r)
+void getregsNoSave(ref CGstate cg, regm_t r)
 {
     //printf("getregsNoSave(x%x) %s\n", r, regm_str(r));
-    CGstate* cg = &cgstate;
     assert(!(r & cg.regcon.cse.mops));            // mask of common subs we must save
-    useregs(cgstate, r);
+    useregs(cg, r);
     cg.regcon.cse.mval &= ~r;
     cg.msavereg &= ~r;                     // regs that are destroyed
     cg.regcon.immed.mval &= ~r;
@@ -2957,7 +2955,7 @@ void codelem(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs,uin
     cssave(cg, e,pretregs,!OTleaf(op));
 L1:
     if (!(constflag & 2))
-        freenode(e);
+        freenode(cg, e);
 
     debug if (debugw)
     {
@@ -3013,7 +3011,7 @@ void scodelem(ref CGstate cg, ref CodeBuilder cdb, elem* e,ref regm_t pretregs,r
             }
             fixresult(cgstate,cdb,e,regm,pretregs);
             cssave(cg, e,regm,0);
-            freenode(e);
+            freenode(cg, e);
 
             debug if (debugw)
                 printf("-scodelem(e=%p pretregs=%s keepmsk=%s constflag=%d\n",
@@ -3284,7 +3282,7 @@ void docommas(ref CodeBuilder cdb, ref elem* pe)
         codelem(*cg,cdb,e.E1,retregs,true);
         elem* eold = e;
         e = e.E2;
-        freenode(eold);
+        freenode(cgstate, eold);
     }
     pe = e;
     assert(cg.stackclean == 0);

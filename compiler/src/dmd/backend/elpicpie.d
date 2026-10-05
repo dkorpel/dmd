@@ -214,12 +214,12 @@ elem* el_var(Symbol* s)
         if (false && config.wflags & WFexe) // disabled to work with betterC/importC
         {
             // e => *(&s + *(FS:_tls_array))
-            e2 = el_var(getRtlsym(RTLSYM.TLS_ARRAY));
+            e2 = el_var(getRtlsym(cgstate, RTLSYM.TLS_ARRAY));
         }
         else
         {
-            e2 = el_bin(OPmul,TYint,el_var(getRtlsym(RTLSYM.TLS_INDEX)),el_long(TYint,REGSIZE));
-            ea = el_var(getRtlsym(RTLSYM.TLS_ARRAY));
+            e2 = el_bin(OPmul,TYint,el_var(getRtlsym(cgstate, RTLSYM.TLS_INDEX)),el_long(TYint,REGSIZE));
+            ea = el_var(getRtlsym(cgstate, RTLSYM.TLS_ARRAY));
             e2 = el_bin(OPadd,ea.Ety,ea,e2);
         }
         e2 = el_una(OPind,TYsize_t,e2);

@@ -328,9 +328,9 @@ void toTraceGC(ref IRState irs, elem* e, Loc loc)
     auto s = e1.Vsym;
     foreach (ref m; map)
     {
-        if (s == getRtlsym(m[0]))
+        if (s == getRtlsym(cgstate, m[0]))
         {
-            e1.Vsym = getRtlsym(m[1]);
+            e1.Vsym = getRtlsym(cgstate, m[1]);
             e.E2 = el_param(e.E2, filelinefunction(irs, loc));
             return;
         }
@@ -1720,7 +1720,7 @@ elem* toElem(Expression e, ref IRState irs)
             !t1.isTypeClass().sym.isCPPclass())
         {
             ts = symbol_genauto(Type_toCtype(t1));
-            einv = el_bin(OPcall, TYvoid, el_var(getRtlsym(RTLSYM.DINVARIANT)), el_var(ts));
+            einv = el_bin(OPcall, TYvoid, el_var(getRtlsym(cgstate, RTLSYM.DINVARIANT)), el_var(ts));
         }
         else if (irs.params.useInvariants == CHECKENABLE.on &&
             t1.ty == Tpointer &&
@@ -1769,18 +1769,18 @@ elem* toElem(Expression e, ref IRState irs)
                 if (irs.target.os == Target.OS.Windows && irs.target.isX86_64)
                     emsg = addressElem(emsg, Type.tvoid.arrayOf(), false);
 
-                ea = el_var(getRtlsym(ud ? RTLSYM.DUNITTEST_MSG : RTLSYM.DASSERT_MSG));
+                ea = el_var(getRtlsym(cgstate, ud ? RTLSYM.DUNITTEST_MSG : RTLSYM.DASSERT_MSG));
                 ea = el_bin(OPcall, TYnoreturn, ea, el_params(el_long(TYint, ae.loc.linnum), efilename, emsg, null));
             }
             else
             {
-                ea = el_var(getRtlsym(ud ? RTLSYM.DUNITTEST : RTLSYM.DASSERT));
+                ea = el_var(getRtlsym(cgstate, ud ? RTLSYM.DUNITTEST : RTLSYM.DASSERT));
                 ea = el_bin(OPcall, TYnoreturn, ea, el_param(el_long(TYint, ae.loc.linnum), efilename));
             }
         }
         else
         {
-            auto eassert = el_var(getRtlsym(ud ? RTLSYM.DUNITTESTP : RTLSYM.DASSERTP));
+            auto eassert = el_var(getRtlsym(cgstate, ud ? RTLSYM.DUNITTESTP : RTLSYM.DASSERTP));
             auto efile = toEfilenamePtr(m);
             auto eline = el_long(TYint, ae.loc.linnum);
             ea = el_bin(OPcall, TYnoreturn, eassert, el_param(eline, efile));
@@ -1804,7 +1804,7 @@ elem* toElem(Expression e, ref IRState irs)
 
         elem* e = toElemDtor(te.e1, irs);
         const rtlthrow = config.ehmethod == EHmethod.EH_DWARF ? RTLSYM.THROWDWARF : RTLSYM.THROWC;
-        elem* sym = el_var(getRtlsym(rtlthrow));
+        elem* sym = el_var(getRtlsym(cgstate, rtlthrow));
         return el_bin(OPcall, TYnoreturn, sym, e);
     }
 
@@ -1928,7 +1928,7 @@ elem* toElem(Expression e, ref IRState irs)
                 default: rtlsym = RTLSYM.FMODL; break;  // real
             }
 
-            e = el_bin(OPcall,tym,el_var(getRtlsym(rtlsym)),el_param(el, er));
+            e = el_bin(OPcall,tym,el_var(getRtlsym(cgstate, rtlsym)),el_param(el, er));
         }
         else
         {
@@ -2044,7 +2044,7 @@ elem* toElem(Expression e, ref IRState irs)
             }
 
             tym_t tym = totym(e.type);
-            elem* eresult = el_bin(OPcall,tym,el_var(getRtlsym(rtlsym)),el_param(el, er));
+            elem* eresult = el_bin(OPcall,tym,el_var(getRtlsym(cgstate, rtlsym)),el_param(el, er));
             elem_setLoc(eresult, e.loc);
             return eresult;
         }
@@ -2296,7 +2296,7 @@ elem* toElem(Expression e, ref IRState irs)
                 {
                     // Use library function as it is heavily optimized:
                     // int memcmp(const void* eptr1, const void* eptr2, size_t esize);
-                    e = el_bin(OPcall,TYint,el_var(getRtlsym(RTLSYM.MEMCMP)),el_params(esize, eptr2, eptr1, null));
+                    e = el_bin(OPcall,TYint,el_var(getRtlsym(cgstate, RTLSYM.MEMCMP)),el_params(esize, eptr2, eptr1, null));
                 }
                 else
                 {
@@ -2390,7 +2390,7 @@ elem* toElem(Expression e, ref IRState irs)
             {
                 // Use library function as it is heavily optimized:
                 // int memcmp(const void* eptr1, const void* eptr2, size_t esize);
-                e = el_bin(OPcall,TYint,el_var(getRtlsym(RTLSYM.MEMCMP)),el_params(ecount, es2, es1, null));
+                e = el_bin(OPcall,TYint,el_var(getRtlsym(cgstate, RTLSYM.MEMCMP)),el_params(ecount, es2, es1, null));
             }
             else
             {
@@ -2693,7 +2693,7 @@ elem* toElem(Expression e, ref IRState irs)
                         efrom = addressElem(efrom, Type.tvoid.arrayOf());
                     }
                     elem* ep = el_params(eto, efrom, esize, null);
-                    elem* e = el_bin(OPcall, totym(ae.type), el_var(getRtlsym(RTLSYM.ARRAYCOPY)), ep);
+                    elem* e = el_bin(OPcall, totym(ae.type), el_var(getRtlsym(cgstate, RTLSYM.ARRAYCOPY)), ep);
                     return setResult(e);
                 }
             }
@@ -3088,7 +3088,7 @@ elem* toElem(Expression e, ref IRState irs)
                 const rtl = (tb1.nextOf().ty == Tchar)
                         ? RTLSYM.ARRAYAPPENDCD
                         : RTLSYM.ARRAYAPPENDWD;
-                e = el_bin(OPcall, TYdarray, el_var(getRtlsym(rtl)), ep);
+                e = el_bin(OPcall, TYdarray, el_var(getRtlsym(cgstate, rtl)), ep);
                 toTraceGC(irs, e, ce.loc);
 
                 /* Generate: (re1, e, *ev)
@@ -3696,7 +3696,7 @@ elem* toElem(Expression e, ref IRState irs)
             default:
                 assert(0);
         }
-        e = el_bin(OPcall, TYvoid, el_var(getRtlsym(rtl)), e);
+        e = el_bin(OPcall, TYvoid, el_var(getRtlsym(cgstate, rtl)), e);
         toTraceGC(irs, e, de.loc);
         elem_setLoc(e, de.loc);
         return e;
@@ -6669,7 +6669,7 @@ Lagain:
                 evalue = addressElem(evalue, tb);
                 elem* esz = el_long(TYsize_t, sz);
                 elem* e = el_params(esz, edim, evalue, eptr, null);
-                e = el_bin(OPcall,TYnptr,el_var(getRtlsym(r)),e);
+                e = el_bin(OPcall,TYnptr,el_var(getRtlsym(cgstate, r)),e);
                 return e;
             }
             break;
@@ -6733,7 +6733,7 @@ Lagain:
     else
     {
         elem* e = el_params(edim, evalue, eptr, null);
-        return el_bin(OPcall,TYnptr,el_var(getRtlsym(r)),e);
+        return el_bin(OPcall,TYnptr,el_var(getRtlsym(cgstate, r)),e);
     }
 }
 
@@ -7467,7 +7467,7 @@ elem* buildRangeError(ref IRState irs, Loc loc)
     case CHECKACTION.context:
     case CHECKACTION.D:
         const efile = irs.locToFileElem(loc);
-        return el_bin(OPcall, TYvoid, el_var(getRtlsym(RTLSYM.DARRAYP)), el_params(el_long(TYint, loc.linnum), efile, null));
+        return el_bin(OPcall, TYvoid, el_var(getRtlsym(cgstate, RTLSYM.DARRAYP)), el_params(el_long(TYint, loc.linnum), efile, null));
     }
 }
 
@@ -7490,7 +7490,7 @@ elem* buildNullDerefError(ref IRState irs, const ref Loc loc)
         case CHECKACTION.context:
         case CHECKACTION.D:
             const efile = irs.locToFileElem(loc);
-            return el_bin(OPcall, TYvoid, el_var(getRtlsym(RTLSYM.DNULLP)), el_params(el_long(TYint, loc.linnum), efile, null));
+            return el_bin(OPcall, TYvoid, el_var(getRtlsym(cgstate, RTLSYM.DNULLP)), el_params(el_long(TYint, loc.linnum), efile, null));
     }
 }
 
@@ -7519,7 +7519,7 @@ elem* buildArraySliceError(ref IRState irs, Loc loc, elem* lower, elem* upper, e
         assert(lower);
         assert(length);
         const efile = irs.locToFileElem(loc);
-        return el_bin(OPcall, TYvoid, el_var(getRtlsym(RTLSYM.DARRAY_SLICEP)), el_params(length, upper, lower, el_long(TYint, loc.linnum), efile, null));
+        return el_bin(OPcall, TYvoid, el_var(getRtlsym(cgstate, RTLSYM.DARRAY_SLICEP)), el_params(length, upper, lower, el_long(TYint, loc.linnum), efile, null));
     }
 }
 
@@ -7545,7 +7545,7 @@ elem* buildArrayIndexError(ref IRState irs, Loc loc, elem* index, elem* length)
     case CHECKACTION.D:
         assert(length);
         const efile = irs.locToFileElem(loc);
-        return el_bin(OPcall, TYvoid, el_var(getRtlsym(RTLSYM.DARRAY_INDEXP)), el_params(length, index, el_long(TYint, loc.linnum), efile, null));
+        return el_bin(OPcall, TYvoid, el_var(getRtlsym(cgstate, RTLSYM.DARRAY_INDEXP)), el_params(length, index, el_long(TYint, loc.linnum), efile, null));
     }
 }
 
@@ -7643,7 +7643,7 @@ elem* callCAssert(ref IRState irs, Loc loc, Expression exp, Expression emsg, con
     {
         // __assert_rtn(func, file, line, msg);
         elem* efunc = getFuncName();
-        auto eassert = el_var(getRtlsym(RTLSYM.C__ASSERT_RTN));
+        auto eassert = el_var(getRtlsym(cgstate, RTLSYM.C__ASSERT_RTN));
         ea = el_bin(OPcall, TYvoid, eassert, el_params(elmsg, eline, efilename, efunc, null));
         return ea;
     }
@@ -7655,14 +7655,14 @@ elem* callCAssert(ref IRState irs, Loc loc, Expression exp, Expression emsg, con
         case Musl:
         case Glibc:
             // __assert_fail(exp, file, line, func);
-            assertSym = getRtlsym(RTLSYM.C__ASSERT_FAIL);
+            assertSym = getRtlsym(cgstate, RTLSYM.C__ASSERT_FAIL);
             elem* efunc = getFuncName();
             params = el_params(efunc, eline, efilename, elmsg, null);
             break;
         default:
             // [_]_assert(msg, file, line);
             const rtlsym = (irs.target.os == Target.OS.Windows) ? RTLSYM.C_ASSERT : RTLSYM.C__ASSERT;
-            assertSym = getRtlsym(rtlsym);
+            assertSym = getRtlsym(cgstate, rtlsym);
             params = el_params(eline, efilename, elmsg, null);
             break;
     }

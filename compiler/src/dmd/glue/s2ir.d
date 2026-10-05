@@ -785,7 +785,7 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
         incUsage(irs, s.loc);
         elem* e = toElemDtor(s.exp, irs);
         const rtlthrow = config.ehmethod == EHmethod.EH_DWARF ? RTLSYM.THROWDWARF : RTLSYM.THROWC;
-        e = el_bin(OPcall, TYvoid, el_var(getRtlsym(rtlthrow)),e);
+        e = el_bin(OPcall, TYvoid, el_var(getRtlsym(cgstate, rtlthrow)),e);
         block_appendexp(blx.curblock, e);
         block_next(blx, BC.exit, null);          // throw never returns
     }
@@ -897,7 +897,7 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
             else
             {
                 //  jcatchvar = __dmd_catch_begin(__exception_object);
-                elem* ebegin = el_var(getRtlsym(RTLSYM.BEGIN_CATCH));
+                elem* ebegin = el_var(getRtlsym(cgstate, RTLSYM.BEGIN_CATCH));
                 elem* e = el_bin(OPcall, TYnptr, ebegin, el_var(seo));
                 elem* e3 = el_bin(OPeq, TYvoid, el_var(tryblock.jcatchvar), e);
             }
@@ -944,7 +944,7 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
                     if (i == 0)
                     {
                         // rewrite ebegin to use __cxa_begin_catch
-                        Symbol* s2 = getRtlsym(RTLSYM.CXA_BEGIN_CATCH);
+                        Symbol* s2 = getRtlsym(cgstate, RTLSYM.CXA_BEGIN_CATCH);
                         ebegin.Vsym = s2;
                     }
                 }
@@ -1184,7 +1184,7 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
             /* Add code to BC.finRet block:
              *  (!_flag && _Unwind_Resume(exception_object));
              */
-            elem* eu = el_bin(OPcall, TYvoid, el_var(getRtlsym(RTLSYM.UNWIND_RESUME)), el_var(seo));
+            elem* eu = el_bin(OPcall, TYvoid, el_var(getRtlsym(cgstate, RTLSYM.UNWIND_RESUME)), el_var(seo));
             eu = el_bin(OPandand, TYvoid, el_una(OPnot, TYbool, el_var(sflag)), eu);
             assert(!retblock.Belem);
             retblock.Belem = eu;

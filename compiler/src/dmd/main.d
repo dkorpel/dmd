@@ -73,6 +73,7 @@ import dmd.target;
 import dmd.timetrace;
 import dmd.utils;
 import dmd.vsoptions;
+import dmd.backend.x86.cgcod : cgstate;
 
 /**
  * DMD's entry point, C main.
@@ -629,7 +630,7 @@ private int tryMain(const(char)[][] argv, out Param params)
     if (global.errors)
         removeHdrFilesAndFail(params.dihdr.doOutput, modules);
 
-    backend_init(params, driverParams, target);
+    backend_init(cgstate, params, driverParams, target);
 
     // Do semantic analysis
     foreach (m; modules)

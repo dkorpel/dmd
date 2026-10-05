@@ -126,7 +126,7 @@ private __gshared Symbol*[RTLSYM.max + 1] rtlsym;
  * Returns:
  *      Personality function
  */
-Symbol* getRtlsymPersonality() { return getRtlsym(RTLSYM.PERSONALITY); }
+Symbol* getRtlsymPersonality() { return getRtlsym(cgstate, RTLSYM.PERSONALITY); }
 
 
 /******************************************
@@ -136,7 +136,7 @@ Symbol* getRtlsymPersonality() { return getRtlsym(RTLSYM.PERSONALITY); }
  * Returns:
  *      runtime library Symbol
  */
-Symbol* getRtlsym(RTLSYM i) @trusted
+Symbol* getRtlsym(ref CGstate cg, RTLSYM i) @trusted
 {
      Symbol** ps = &rtlsym[i];
      if (*ps)
@@ -157,7 +157,7 @@ Symbol* getRtlsym(RTLSYM i) @trusted
         tv.Tcount++;
     }
 
-    auto FREGSAVED = cgstate.fregsaved; // varies depending on C ABI
+    auto FREGSAVED = cg.fregsaved; // varies depending on C ABI
 
     // Lazilly initialize only what we use
     switch (i)

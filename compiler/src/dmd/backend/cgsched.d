@@ -143,7 +143,7 @@ private void cgsched_pentium(code** pc,regm_t scratch)
             if (config.target_cpu == TARGET_Pentium ||
                 config.target_cpu == TARGET_PentiumMMX)
                 *pc = simpleops(*pc,scratch);
-            *pc = schedule(*pc,0);
+            *pc = schedule(cgstate, *pc,0);
         }
     }
 }
@@ -2797,7 +2797,7 @@ private code* csnip(code* c)
  */
 
 @trusted
-private code* schedule(code* c,regm_t scratch)
+private code* schedule(ref CGstate cg, code* c,regm_t scratch)
 {
     code* cresult = null;
     code** pctail = &cresult;
@@ -2826,13 +2826,13 @@ private code* schedule(code* c,regm_t scratch)
         while (c)
         {
             //printf("insert %p\n",c);
-            if (!sch.stage(cgstate, c))          // store c in scheduling table
+            if (!sch.stage(cg, c))          // store c in scheduling table
                 break;
             c = csnip(c);
         }
 
         //printf("assem %d\n",sch.tblmax);
-        pctail = sch.assemble(cgstate, pctail);  // reassemble instruction stream
+        pctail = sch.assemble(cg, pctail);  // reassemble instruction stream
     }
     sch.dtor();
 

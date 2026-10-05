@@ -413,7 +413,7 @@ void logexp(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint jcond, FL fltarg,
                     cdb.append(cnop);
                 }
                 andregcon(cg, regconsave);
-                freenode(e);
+                freenode(cg, e);
                 cg.stackclean--;
                 return;
             }
@@ -436,7 +436,7 @@ void logexp(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint jcond, FL fltarg,
                     logexp(cg, cdb, e.E2, jcond, fltarg, targ);
                 }
                 andregcon(cg, regconsave);
-                freenode(e);
+                freenode(cg, e);
                 cg.stackclean--;
                 return;
             }
@@ -455,7 +455,7 @@ void logexp(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint jcond, FL fltarg,
             case OPu32_d:
             case OPd_ld:
                 logexp(cg, cdb, e.E1, jcond, fltarg, targ);
-                freenode(e);
+                freenode(cg, e);
                 cg.stackclean--;
                 return;
 
@@ -475,8 +475,8 @@ void logexp(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint jcond, FL fltarg,
                 logexp(cg, cdb, e.E2.E2, jcond, fltarg, targ);
                 andregcon(cg, regconold);
                 andregcon(cg, regconsave);
-                freenode(e.E2);
-                freenode(e);
+                freenode(cg, e.E2);
+                freenode(cg, e);
                 cdb.append(cnop);
                 cg.stackclean--;
                 return;
@@ -861,8 +861,8 @@ void getlvalue(ref CGstate cg,ref CodeBuilder cdb,ref code pcs,elem* e,regm_t ke
                         if (rbase & 8)
                             pcs.Irex |= REX_B;
                     }
-                    freenode(e11.E2);
-                    freenode(e11);
+                    freenode(cg, e11.E2);
+                    freenode(cg, e11);
                 }
                 else
                 {
@@ -914,9 +914,9 @@ void getlvalue(ref CGstate cg,ref CodeBuilder cdb,ref code pcs,elem* e,regm_t ke
                     pcs.IEV1.Vuns = 0;
                     setaddrmode(pcs, regs);
                 }
-                freenode(e12);
+                freenode(cg, e12);
                 if (e1free)
-                    freenode(e1);
+                    freenode(cg, e1);
                 return Lptr();
             }
 
@@ -944,8 +944,8 @@ void getlvalue(ref CGstate cg,ref CodeBuilder cdb,ref code pcs,elem* e,regm_t ke
                 int ss;
 
                 pcs.IEV1.Vuns = e12.Vuns;
-                freenode(e12);
-                if (e1free) freenode(e1);
+                freenode(cg, e12);
+                if (e1free) freenode(cg, e1);
                 if (e11.Eoper == OPadd && !e11.Ecount &&
                     tysize(e11.Ety) == REGSIZE)
                 {
@@ -1011,8 +1011,8 @@ void getlvalue(ref CGstate cg,ref CodeBuilder cdb,ref code pcs,elem* e,regm_t ke
                     cdisscaledindex(cg, cdb, e11.E1, idxregs2, keepmsk);
                     idxregs = cg.allregs & ~(idxregs2 | keepmsk);
                     scodelem(cg,cdb, e12, idxregs, keepmsk | idxregs2, true);
-                    freenode(e11.E2);
-                    freenode(e11);
+                    freenode(cg, e11.E2);
+                    freenode(cg, e11);
                 }
                 else
                 {
@@ -1029,7 +1029,7 @@ void getlvalue(ref CGstate cg,ref CodeBuilder cdb,ref code pcs,elem* e,regm_t ke
                 if (base & 8)
                     pcs.Irex |= REX_B;
                 if (e1free)
-                    freenode(e1);
+                    freenode(cg, e1);
 
                 return Lptr();
             }
@@ -2090,7 +2090,7 @@ void cdfunc(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t pretregs)
             {
                 retregs = 0;
                 scodelem(cg,cdb, ep.E1, retregs, keepmsk, false);
-                freenode(ep);
+                freenode(cg, ep);
             }
             else
             {
@@ -2210,7 +2210,7 @@ private void funccall(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint numpara
             genmovreg(cdbe,INSTR.SP,r2,TYMAX);                 // MOV  SP,r2
 
             cdb.append(cdbe);
-            freenode(e1);
+            freenode(cg, e1);
 
             fixresult(cg,cdb,e,retregs,pretregs);
             return;
@@ -2301,7 +2301,7 @@ private void funccall(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint numpara
         s = null;
     }
     cdb.append(cdbe);
-    freenode(e1);
+    freenode(cg, e1);
 
     /* See if we will need the frame pointer.
        Calculate it here so we can possibly use BP to fix the stack.
@@ -2485,7 +2485,7 @@ private void movParams(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint funcar
             assert(sz <= 16);   // a zero-sized struct, but still occupies aligned space on stack
             regm_t retregs0 = 0;
             scodelem(cg,cdb, e.E1, retregs0, 0, false);
-            freenode(e);
+            freenode(cg, e);
             return;
 
         default:

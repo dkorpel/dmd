@@ -35,6 +35,7 @@ import dmd.backend.type;
 
 import dmd.file_manager : FileManager;
 import dmd.backend.x86.cgcod : cgstate;
+import dmd.backend.code : CGstate;
 
 /// Callback for the backend to fetch cached source-file contents from the
 /// front-end FileManager (Module.src), so hashing source files for debug info
@@ -59,7 +60,7 @@ extern(C++) const(ubyte)* getFileContentsBackend(const(char)* filename, ref size
  *      target = target machine info
  */
 
-void backend_init(const ref Param params, const ref DMDparams driverParams, const ref Target target)
+void backend_init(ref CGstate cg, const ref Param params, const ref DMDparams driverParams, const ref Target target)
 {
     //printf("backend_init()\n");
     exefmt_t exfmt;
@@ -90,7 +91,7 @@ void backend_init(const ref Param params, const ref DMDparams driverParams, cons
              FileName.equals(FileName.ext(params.exefile), "exe"))
         exe = true;         // if writing out EXE file
 
-    out_config_init(cgstate, 
+    out_config_init(cg, 
         target.isAArch64,
         is64 ? 64 : 32,
         exe,

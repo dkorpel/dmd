@@ -1220,7 +1220,7 @@ void outblkexitcode(ref CGstate cg, ref CodeBuilder cdb, block* bl, ref int anys
             if (ehmethod(funcsym_p) == EHmethod.EH_DWARF)
             {
                 // Mark scratch registers as destroyed.
-                getregsNoSave(lpadregs(cg));
+                getregsNoSave(cg, lpadregs(cg));
 
                 regm_t retregsx = 0;
                 gencodelem(cdb,bl.Belem,retregsx,true);
@@ -1237,7 +1237,7 @@ void outblkexitcode(ref CGstate cg, ref CodeBuilder cdb, block* bl, ref int anys
                 {
                     // Mark all registers as destroyed. This will prevent
                     // register assignments to variables used in finally blocks.
-                    getregsNoSave(lpadregs(cg));
+                    getregsNoSave(cg, lpadregs(cg));
                 }
 
                 assert(!e);
@@ -1255,7 +1255,7 @@ void outblkexitcode(ref CGstate cg, ref CodeBuilder cdb, block* bl, ref int anys
             assert(ehmethod(funcsym_p) == EHmethod.EH_DWARF);
             // Mark all registers as destroyed. This will prevent
             // register assignments to variables used in finally blocks.
-            getregsNoSave(lpadregs(cg));
+            getregsNoSave(cg, lpadregs(cg));
 
             regm_t retregsx = 0;
             gencodelem(cdb,bl.Belem,retregsx,true);
@@ -1284,7 +1284,7 @@ static if (NTEXCEPTIONS)
             assert(!e);
             cg.usednteh |= NTEH_except;
             nteh_setsp(cg, cdb,0x8B);
-            getregsNoSave(cg.allregs);
+            getregsNoSave(cg, cg.allregs);
             nextb = bl.Bsucc[0];
             goto L5;
         }
@@ -1293,7 +1293,7 @@ static if (NTEXCEPTIONS)
             nteh_filter(cg, cdb, bl);
             // Mark all registers as destroyed. This will prevent
             // register assignments to variables used in filter blocks.
-            getregsNoSave(cg.allregs);
+            getregsNoSave(cg, cg.allregs);
             regm_t retregsx = regmask(cg, e.Ety, TYnfunc);
             gencodelem(cdb,e,retregsx,true);
             cdb.gen1(0xC3);   // RET
@@ -1876,7 +1876,7 @@ private void cmpval(ref CGstate cg, ref CodeBuilder cdb, ulong val, uint sz, reg
             regm_t retregs = cg.allregs & ~mask(reg);
             sreg = allocreg(cdb,retregs,TYint);
             movregconst(cg,cdb,sreg,val,sz == 8  ? 64 : 0);
-            getregsNoSave(retregs);
+            getregsNoSave(cg, retregs);
             assert(reg2 == NOREG);
             cdb.gen1(INSTR.cmp_subs_addsub_shift(sz == 8, reg, 0, 0, sreg));    // CMP sreg,reg
         }
@@ -1895,7 +1895,7 @@ private void cmpval(ref CGstate cg, ref CodeBuilder cdb, ulong val, uint sz, reg
             movregconst(cg,cdb,sreg,cast(targ_size_t)val,64);  // MOV sreg,val64
             genregs(cdb,0x3B,reg,sreg);    // CMP reg,sreg
             code_orrex(cdb.last(), REX_W);
-            getregsNoSave(mask(sreg));                  // don't remember we loaded this constant
+            getregsNoSave(cg, mask(sreg));                  // don't remember we loaded this constant
         }
     }
     else if (reg2 == NOREG)
@@ -2853,12 +2853,12 @@ void cod3_ptrchk(ref CGstate cg, ref CodeBuilder cdb,ref code pcs,regm_t keepmsk
 
     // Call the validation function
     {
-        makeitextern(getRtlsym(RTLSYM.PTRCHK));
+        makeitextern(getRtlsym(cg, RTLSYM.PTRCHK));
 
         used &= ~(keepmsk | idxregs);           // regs destroyed by this exercise
         getregs(cdb,used);
                                                 // CALL __ptrchk
-        cdb.gencs((LARGECODE) ? 0x9A : CALL,0,FL.func,getRtlsym(RTLSYM.PTRCHK));
+        cdb.gencs((LARGECODE) ? 0x9A : CALL,0,FL.func,getRtlsym(cg, RTLSYM.PTRCHK));
     }
 
     cdb.append(cs2);
@@ -3733,7 +3733,7 @@ void prolog_16bit_windows_farfunc(ref CodeBuilder cdb, tym_t* tyf, bool* pushds)
         wflags &= ~(WFdgroup | WFds | WFss);
     }
 
-    getregsNoSave(mAX);                     // should not have any value in AX
+    getregsNoSave(cgstate, mAX);                     // should not have any value in AX
 
     int segreg;
     switch (wflags & (WFdgroup | WFds | WFss))
@@ -3937,10 +3937,10 @@ void prolog_frameadj(ref CGstate cg, ref CodeBuilder cdb, tym_t tyf, uint xlocal
         {
             // BUG: Won't work if parameter is passed in AX
             movregconst(cg,cdb,AX,xlocalsize,false); // MOV AX,localsize
-            makeitextern(getRtlsym(RTLSYM.CHKSTK));
+            makeitextern(getRtlsym(cg, RTLSYM.CHKSTK));
                                                     // CALL _chkstk
-            cdb.gencs((LARGECODE) ? 0x9A : CALL,0,FL.func,getRtlsym(RTLSYM.CHKSTK));
-            useregs(cg, (ALLREGS | mBP | mES) & ~getRtlsym(RTLSYM.CHKSTK).Sregsaved);
+            cdb.gencs((LARGECODE) ? 0x9A : CALL,0,FL.func,getRtlsym(cg, RTLSYM.CHKSTK));
+            useregs(cg, (ALLREGS | mBP | mES) & ~getRtlsym(cg, RTLSYM.CHKSTK).Sregsaved);
         }
         else
         {
@@ -4927,7 +4927,7 @@ void epilog(ref CGstate cg, block* b)
         )
        )
     {
-        Symbol* s = getRtlsym(farfunc ? RTLSYM.TRACE_EPI_F : RTLSYM.TRACE_EPI_N);
+        Symbol* s = getRtlsym(cg, farfunc ? RTLSYM.TRACE_EPI_F : RTLSYM.TRACE_EPI_N);
         makeitextern(s);
         cdbx.gencs(I16 ? 0x9A : CALL,0,FL.func,s);      // CALLF _trace
         if (!I16)

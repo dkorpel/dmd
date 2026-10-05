@@ -696,7 +696,7 @@ void cdcond(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
 
         cse_flush(cdb,1);                // flush CSEs to memory
         genBranch(cdb,jop,FL.code,cast(block*)cnop1);
-        freenode(e21);
+        freenode(cg, e21);
 
         const regconsave = cg.regcon;
         const stackpushsave = cg.stackpush;
@@ -710,7 +710,7 @@ void cdcond(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         assert(stackpushsave == cg.stackpush);
 
         pretregs = retregs;
-        freenode(e2);
+        freenode(cg, e2);
         cdb.append(cnop1);
         cg.stackclean--;
         return;
@@ -819,9 +819,9 @@ void cdcond(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
                 }
             }
 
-            freenode(e21);
-            freenode(e22);
-            freenode(e2);
+            freenode(cg, e21);
+            freenode(cg, e22);
+            freenode(cg, e2);
 
             fixresult(cg,cdb,e,retregs,pretregs);
             cg.stackclean--;
@@ -860,7 +860,7 @@ void cdcond(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
 
         cse_flush(cdb,1);                // flush CSE's to memory
         genBranch(cdb,jop,FL.code,cast(block*)cnop1);
-        freenode(e21);
+        freenode(cg, e21);
 
         const regconsave = cg.regcon;
         const stackpushsave = cg.stackpush;
@@ -870,7 +870,7 @@ void cdcond(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         andregcon(cg, regconsave);
         assert(stackpushsave == cg.stackpush);
 
-        freenode(e2);
+        freenode(cg, e2);
         cdb.append(cnop1);
         fixresult(cg,cdb,e,retregs,pretregs);
         cg.stackclean--;
@@ -922,7 +922,7 @@ void cdcond(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     andregcon(cg, regconold);
     andregcon(cg, regconsave);
     assert(cg.stackpush == stackpushsave);
-    freenode(e2);
+    freenode(cg, e2);
     genBranch(cdb,COND.al,FL.code,cast(block*) cnop2);
     cdb.append(cnop1);
     cdb.append(cdb2);
@@ -1446,7 +1446,7 @@ void cdmemcpy(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         retregs3 = INSTR.ALLREGS & ~(retregs2);
     scodelem(cg,cdb,e2.E2,retregs3,retregs2,false);
     reg_t Xn = findreg(retregs3);
-    freenode(e2);
+    freenode(cg, e2);
 
     // Get d into Xd (d will be the return value)
     regm_t retregs1 = INSTR.ALLREGS & pretregs & ~(retregs2 | retregs3);
@@ -1550,9 +1550,9 @@ void cdmemset(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
             valuereg = findreg(valueregs);
             cg.regimmed_set(valuereg, value);
         }
-        freenode(evalue);
+        freenode(cg, evalue);
 
-        freenode(e2);
+        freenode(cg, e2);
 
         // Get destination into dstreg
         regm_t dstregs = cg.allregs & ~(nbytesregs | valueregs);
@@ -1571,7 +1571,7 @@ void cdmemset(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         }
 
         const uint numbytes = cast(uint)el_tolong(enumbytes);
-        freenode(enumbytes);
+        freenode(cg, enumbytes);
         if (const n = numbytes & ~(REGSIZE - 1))
         {
             regm_t limits = cg.allregs & ~(nbytesregs | valueregs | dstregs | retregs);
@@ -1613,7 +1613,7 @@ void cdmemset(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     regm_t valueregs = mask(1);
     scodelem(cg,cdb,evalue,valueregs,nbytesregs,false);
 
-    freenode(e2);
+    freenode(cg, e2);
 
     // Get destination into x0
     regm_t dstregs = mask(0);
@@ -1684,7 +1684,7 @@ private void cdmemsetn(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pr
         Rvhi = findreg(vregs & INSTR.MSW);
     }
 
-    freenode(e2);
+    freenode(cg, e2);
 
     // Set Rd to destination
     regm_t dregs = cg.allregs & ~(cregs | vregs);
@@ -1787,12 +1787,12 @@ void cdstreq(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     if (e2.Eoper == OPind)             // if (.. = *p)
     {
         codelem(cg,cdb,e2.E1,srcregs,false);
-        freenode(e2);
+        freenode(cg, e2);
     }
     else if (e2.Eoper == OPvar)
     {
         cdrelconst(cg,cdb,e2,srcregs);
-        freenode(e2);
+        freenode(cg, e2);
     }
     else
     {
@@ -1809,7 +1809,7 @@ void cdstreq(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     }
     else
         cdrelconst(cg,cdb,e1,dstregs);
-    freenode(e1);
+    freenode(cg, e1);
 
     regm_t regm = cg.allregs & ~(srcregs | dstregs);
     allocreg(cdb, regm, TYint);
@@ -2576,7 +2576,7 @@ void cdpost(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     regm_t possregs = cg.allregs;
     code cs;
     getlvalue(cg,cdb,cs,e.E1,0);
-    freenode(e.E1);
+    freenode(cg, e.E1);
     if (cs.reg != NOREG && pretregs == mPSW)
     {
         gentstreg(cdb,cs.reg,sz == 8);          // CMP cs.reg,#0
@@ -2588,7 +2588,7 @@ void cdpost(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         uint opx = e.Eoper == OPpostinc ? 0 : 1;
         uint ins = INSTR.addsub_imm(sz == 8,opx,0,0,n,cs.reg,cs.reg); // ADD/SUB cs.reg,cs.reg,n);
         cdb.gen1(ins);
-        freenode(e2);
+        freenode(cg, e2);
         return;
     }
     else if (sz <= REGSIZE)
@@ -2624,7 +2624,7 @@ void cdpost(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         opx ^= 1;
         cdb.gen1(INSTR.addsub_imm(sz == 8,opx,0,0,n,reg,reg)); // SUB/ADD cs.reg,cs.reg,n);
 
-        freenode(e2);
+        freenode(cg, e2);
         fixresult(cg,cdb,e,retregs,pretregs);
         return;
     }
@@ -2749,7 +2749,7 @@ void floatPost(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
                 assert(0);
         }
 
-        freenode(e2);
+        freenode(cg, e2);
         return;
     }
 
@@ -2796,7 +2796,7 @@ void floatPost(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     }
 
     fixresult(cg,cdb,e,resultregs,pretregs);
-    freenode(e1);
+    freenode(cg, e1);
 }
 
 /******************************
@@ -2883,7 +2883,7 @@ void complexPost(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs
                 assert(0);
         }
 
-        freenode(e2);
+        freenode(cg, e2);
         return;
     }
 
@@ -2935,7 +2935,7 @@ void complexPost(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs
     }
 
     fixresult(cg,cdb,e,resultregs,pretregs);
-    freenode(e1);
+    freenode(cg, e1);
 }
 
 // cddctor
