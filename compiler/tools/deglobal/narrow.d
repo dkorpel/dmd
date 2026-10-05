@@ -18,6 +18,8 @@ import dmd.dsymbol;
 import dmd.dsymbolsem : search;
 import dmd.expression;
 import dmd.func;
+import dmd.dtemplate : isType;
+import dmd.identifier;
 import dmd.funcsem : isVirtual;
 import dmd.location;
 import dmd.mtype;
@@ -598,7 +600,7 @@ void paramsReport(string type)
         auto n = normalized(*u);
         string what = !n.length ? "unused" : n.canFind("") ? "whole, " ~ wholeWhy(*u) : n.map!(p => fieldUse(*u, p)).join(" ");
         auto why = n.canFind("") ? "" : narrowProblem(i);
-        auto cp = commonPrefix(n);
+        auto cp = trimPath(u.sd, commonPrefix(n));
         if (cp.length && !writtenUnder(*u, cp))
             if (auto ap = aliasProblem(*u, cp))
                 why ~= " (by ref: " ~ ap ~ ")";
@@ -768,48 +770,83 @@ bool cheapType(Type t)
 string typeText(VarDeclaration v, string file, bool apply, out string problem)
 {
     Type t = v.originalType ? v.originalType : v.type;
-    for (Type x = t; x;)
+    auto ad = v.toParent().isStructDeclaration();
+    void need(Identifier id)
     {
-        if (auto ti = x.isTypeIdentifier())
-        {
-            if (ti.idents.length)
-            {
-                problem = "qualified field type";
-                return null;
-            }
-            auto ad = v.toParent().isStructDeclaration();
-            Dsymbol s = ad ? search(ad, Loc.initial, ti.ident) : null;
-            if (!s && v.getModule())
-                s = search(v.getModule(), Loc.initial, ti.ident);
-            if (!s)
-            {
-                problem = "can't resolve " ~ ti.ident.toString.idup;
-                return null;
-            }
-            if (s.toParent() is ad)
-            {
-                problem = "field type nested in struct";
-                return null;
-            }
-            if (apply)
-                ensureVisible(file, s);
-            break;
-        }
-        if (x.isTypeInstance() || x.isTypeTypeof() || x.isTypeReturn())
-        {
-            problem = "complex field type";
-            return null;
-        }
-        if (auto tp = x.isTypePointer())
-            x = tp.next;
-        else if (auto ts = x.isTypeSArray())
-            x = ts.next;
-        else if (auto td = x.isTypeDArray())
-            x = td.next;
-        else
-            break;
+        Dsymbol s = ad ? search(ad, Loc.initial, id) : null;
+        if (!s && v.getModule())
+            s = search(v.getModule(), Loc.initial, id);
+        if (!s)
+            problem = "can't resolve " ~ id.toString.idup;
+        else if (s.toParent() is ad)
+            problem = "field type nested in struct";
+        else if (apply)
+            ensureVisible(file, s);
     }
-    return t.toString.idup;
+    void walk(Type x)
+    {
+        while (x && !problem.length)
+        {
+            if (auto ti = x.isTypeIdentifier())
+            {
+                if (ti.idents.length)
+                    problem = "qualified field type";
+                else
+                    need(ti.ident);
+                return;
+            }
+            if (auto tin = x.isTypeInstance())
+            {
+                if (tin.idents.length)
+                {
+                    problem = "qualified field type";
+                    return;
+                }
+                need(tin.tempinst.name);
+                if (tin.tempinst.tiargs)
+                    foreach (o; *tin.tempinst.tiargs)
+                    {
+                        if (auto at = isType(o))
+                            walk(at);
+                        else
+                            problem = "template value argument";
+                    }
+                return;
+            }
+            if (x.isTypeTypeof() || x.isTypeReturn())
+            {
+                problem = "complex field type";
+                return;
+            }
+            if (auto tp = x.isTypePointer())
+                x = tp.next;
+            else if (auto ts = x.isTypeSArray())
+                x = ts.next;
+            else if (auto td = x.isTypeDArray())
+                x = td.next;
+            else
+                return;
+        }
+    }
+    walk(t);
+    return problem.length ? null : t.toString.idup;
+}
+
+string trimPath(StructDeclaration sd, string path)
+{
+    string[] keep;
+    foreach (part; path.split("."))
+    {
+        if (!sd || sd.parent && sd.parent.isTemplateInstance())
+            break;
+        keep ~= part;
+        auto v = fieldAt(sd, part);
+        bool ptr;
+        sd = v ? structOf(v.type, ptr) : null;
+        if (ptr)
+            sd = null;
+    }
+    return keep.join(".");
 }
 
 __gshared bool[size_t] narrowing;
@@ -848,7 +885,7 @@ string narrowPlan(size_t i, bool apply)
     auto n = normalized(*u);
     if (n.canFind(""))
         return "uses whole struct";
-    const path = commonPrefix(n);
+    const path = trimPath(u.sd, commonPrefix(n));
     const remove = n.length == 0;
     if (!remove && !path.length)
         return "uses " ~ topFields(n).length.to!string ~ " fields";
@@ -1071,7 +1108,7 @@ bool groupForward(ref PUse u, uint off, string path)
 
 size_t[] buildGroup(size_t i)
 {
-    const path = commonPrefix(normalized(puses[i]));
+    const path = trimPath(puses[i].sd, commonPrefix(normalized(puses[i])));
     if (!path.length)
         return null;
     size_t[] order = [i];
@@ -1086,7 +1123,7 @@ size_t[] buildGroup(size_t i)
                 return null;
             if (*q in set)
                 continue;
-            if (puses[*q].sd !is puses[i].sd || commonPrefix(normalized(puses[*q])) != path || order.length >= 10)
+            if (puses[*q].sd !is puses[i].sd || trimPath(puses[*q].sd, commonPrefix(normalized(puses[*q]))) != path || order.length >= 10)
                 return null;
             set[*q] = true;
             order ~= *q;
@@ -1274,7 +1311,7 @@ int narrowStep(string type, size_t max, string[] skip, string[] only, bool dry)
         if (grp.any!(g => g in groupPath || puses[g].func in narrowing || skip.canFind(funcs[puses[g].func].name) ||
             chosen.any!(c => funcs[puses[c].func].calls.canFind(puses[g].func) || funcs[puses[g].func].calls.canFind(puses[c].func))))
             continue;
-        const gpath = commonPrefix(normalized(puses[i]));
+        const gpath = trimPath(puses[i].sd, commonPrefix(normalized(puses[i])));
         foreach (g; grp)
         {
             groupPath[g] = gpath;
@@ -1303,7 +1340,7 @@ int narrowStep(string type, size_t max, string[] skip, string[] only, bool dry)
             fprintf(stderr, "narrow: %s: %s\n", funcs[u.func].name.toStringz, bad.toStringz);
             return 1;
         }
-        printf("%s %s %s\n", funcs[u.func].name.toStringz, rel(funcs[u.func].file).toStringz, (n.length ? commonPrefix(n) : "-").toStringz);
+        printf("%s %s %s\n", funcs[u.func].name.toStringz, rel(funcs[u.func].file).toStringz, (n.length ? trimPath(u.sd, commonPrefix(n)) : "-").toStringz);
     }
     if (!dry)
         applyEdits();
