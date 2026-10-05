@@ -63,6 +63,7 @@ import dmd.backend.oper;
 import dmd.backend.cgcv;
 import dmd.backend.symbol;
 import dmd.backend.ty;
+import dmd.backend.x86.cgcod : cgstate;
 
 /*************************************
  * Create a backend symbol from a D symbol.
@@ -726,7 +727,7 @@ Symbol* toThunkSymbol(FuncDeclaration fd, int offset)
     auto sthunk = symbol_name(name[0 .. len],SC.static_,(cast(Symbol*)(fd.csym)).Stype);
     sthunk.Sflags |= SFLnodebug | SFLartifical;
     sthunk.Sflags |= SFLimplem;
-    outthunk(sthunk, cast(Symbol*)fd.csym, 0, TYnptr, -offset, -1, 0);
+    outthunk(cgstate, sthunk, cast(Symbol*)fd.csym, 0, TYnptr, -offset, -1, 0);
     return sthunk;
 }
 

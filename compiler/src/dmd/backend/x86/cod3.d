@@ -1185,7 +1185,7 @@ void outblkexitcode(ref CGstate cg, ref CodeBuilder cdb, block* bl, ref int anys
                         vec_testbit(cg.dfoidx,s.Srange))
                     {
                         s.Sfl = sflsave[i];    // undo block register assignments
-                        cgreg_spillreg_epilog(bl,s,cdbstore,cdbload);
+                        cgreg_spillreg_epilog(cg, bl,s,cdbstore,cdbload);
                     }
                 }
                 cdb.append(cdbstore);
@@ -1874,7 +1874,7 @@ private void cmpval(ref CGstate cg, ref CodeBuilder cdb, ulong val, uint sz, reg
         else
         {
             regm_t retregs = cg.allregs & ~mask(reg);
-            sreg = allocreg(cdb,retregs,TYint);
+            sreg = allocreg(cg, cdb,retregs,TYint);
             movregconst(cg,cdb,sreg,val,sz == 8  ? 64 : 0);
             getregsNoSave(cg, retregs);
             assert(reg2 == NOREG);
@@ -2086,7 +2086,7 @@ void doswitch(ref CGstate cg, ref CodeBuilder cdb, block* b)
             // See if we need a scratch register
             if (!cg.AArch64 && sreg == NOREG && I64 && sz == 8 && val != cast(int)val)
             {   regm_t regm = cg.allregs & ~mask(reg);
-                sreg = allocreg(cdb,regm, TYint);
+                sreg = allocreg(cg, cdb,regm, TYint);
             }
         }
 
@@ -2170,9 +2170,9 @@ void doswitch(ref CGstate cg, ref CodeBuilder cdb, block* b)
                  * JMP    R1                    FF E0
                  */
                 regm_t scratchm = ALLREGS & ~mask(reg);
-                const r1 = allocreg(cdb,scratchm,TYint);
+                const r1 = allocreg(cg, cdb,scratchm,TYint);
                 scratchm = ALLREGS & ~(mask(reg) | mask(r1));
-                const r2 = allocreg(cdb,scratchm,TYint);
+                const r2 = allocreg(cg, cdb,scratchm,TYint);
 
                 CodeBuilder cdbe; cdbe.ctor();
                 cdbe.genc1(LEA,(REX_W << 16) | modregxrm(0,r1,5),FL.switch_,0);        // LEA R1,disp[RIP]
@@ -2227,7 +2227,7 @@ static if (JMPJMPTABLE)
 
             // Allocate scratch register jreg
             regm_t scratchm = ALLREGS & ~mask(reg);
-            const jreg = allocreg(cdb,scratchm,TYint);
+            const jreg = allocreg(cg, cdb,scratchm,TYint);
 
             // LEA jreg, offset ctable[reg][reg*4]
             cdb.genc1(LEA,modregrm(2,jreg,4),FL.code,6);
@@ -2249,7 +2249,7 @@ else
              */
             // Allocate scratch register r1
             regm_t scratchm = ALLREGS & ~mask(reg);
-            const r1 = allocreg(cdb,scratchm,TYint);
+            const r1 = allocreg(cg, cdb,scratchm,TYint);
 
             cdb.genc2(CALL,0,0);                           //     CALL L1
             cdb.genpop(r1);                                // L1: POP R1
@@ -2272,7 +2272,7 @@ else
 
                 // Allocate scratch register r1
                 regm_t scratchm = ALLREGS & ~(mask(reg) | mBX);
-                const r1 = allocreg(cdb,scratchm,TYint);
+                const r1 = allocreg(cg, cdb,scratchm,TYint);
 
                 genmovreg(cg, cdb,r1,BX);              // MOV R1,EBX
                 cdb.genc1(0x2B,modregxrm(2,r1,4),FL.switch_,0);   // SUB R1,disp[reg*4][EBX]
@@ -2775,7 +2775,7 @@ void cod3_ptrchk(ref CGstate cg, ref CodeBuilder cdb,ref code pcs,regm_t keepmsk
         // Load the offset into a register, so we can push the address
         regm_t idxregs2 = (I16 ? IDXREGS : ALLREGS) & ~keepmsk; // only these can be index regs
         assert(idxregs2);
-        reg = allocreg(cdb,idxregs2,TYoffset);
+        reg = allocreg(cg, cdb,idxregs2,TYoffset);
 
         const opsave = pcs.Iop;
         flagsave = pcs.Iflags;
@@ -3068,7 +3068,7 @@ void cdframeptr(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t pretreg
     regm_t retregs = pretregs & cg.allregs;
     if  (!retregs)
         retregs = cg.allregs;
-    const reg = allocreg(cdb,retregs, TYint);
+    const reg = allocreg(cg, cdb,retregs, TYint);
 
     code cs;
     cs.Iop = PSOP.frameptr;
@@ -3092,7 +3092,7 @@ void cdgot(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t pretregs)
         regm_t retregs = pretregs & cg.allregs;
         if  (!retregs)
             retregs = cg.allregs;
-        const reg = allocreg(cdb,retregs, TYnptr);
+        const reg = allocreg(cg, cdb,retregs, TYnptr);
 
         cdb.genc(CALL,0,FL.unde,0,FL.got,0);     //     CALL L1
         cdb.genpop(reg);                  // L1: POP reg
@@ -3104,7 +3104,7 @@ void cdgot(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t pretregs)
         regm_t retregs = pretregs & cg.allregs;
         if  (!retregs)
             retregs = cg.allregs;
-        const reg = allocreg(cdb,retregs, TYnptr);
+        const reg = allocreg(cg, cdb,retregs, TYnptr);
 
         cdb.genc2(CALL,0,0);        //     CALL L1
         cdb.genpop(reg);            // L1: POP reg
@@ -5164,13 +5164,12 @@ targ_size_t cod3_spoff(ref CGstate cg)
 }
 
 @trusted
-void gen_spill_reg(ref CodeBuilder cdb, Symbol* s, bool toreg)
+void gen_spill_reg(ref CGstate cg, ref CodeBuilder cdb, Symbol* s, bool toreg)
 {
-    CGstate* cg = &cgstate;
     if (cg.AArch64)
     {
         import dmd.backend.arm.cod3 : gen_spill_reg;
-        return gen_spill_reg(cgstate, cdb, s, toreg);
+        return gen_spill_reg(cg, cdb, s, toreg);
     }
 
     code cs;
@@ -5185,7 +5184,7 @@ void gen_spill_reg(ref CodeBuilder cdb, Symbol* s, bool toreg)
             cs.Iop = xmmload(s.Stype.Tty);        // MOVSS/D xreg,mem
         else
             cs.Iop = xmmstore(s.Stype.Tty);       // MOVSS/D mem,xreg
-        getlvalue(*cg,cdb,cs,e,keepmsk,rm);
+        getlvalue(cg,cdb,cs,e,keepmsk,rm);
         cs.orReg(s.Sreglsw - XMM0);
         cdb.gen(&cs);
     }
@@ -5194,7 +5193,7 @@ void gen_spill_reg(ref CodeBuilder cdb, Symbol* s, bool toreg)
         const int sz = cast(int)type_size(s.Stype);
         cs.Iop = toreg ? 0x8B : 0x89; // MOV reg,mem[ESP] : MOV mem[ESP],reg
         cs.Iop ^= (sz == 1);
-        getlvalue(*cg,cdb,cs,e,keepmsk,rm);
+        getlvalue(cg,cdb,cs,e,keepmsk,rm);
         cs.orReg(s.Sreglsw);
         if (I64 && sz == 1 && s.Sreglsw >= 4)
             cs.Irex |= REX;

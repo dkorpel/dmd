@@ -528,7 +528,7 @@ Lcant:
  *      cdbstore = append store code to this
  *      cdbload = append load code to this
  */
-void cgreg_spillreg_prolog(block* b,Symbol* s,ref CodeBuilder cdbstore,ref CodeBuilder cdbload)
+void cgreg_spillreg_prolog(ref CGstate cg, block* b,Symbol* s,ref CodeBuilder cdbstore,ref CodeBuilder cdbload)
 {
     const int bi = b.Bdfoidx;
 
@@ -543,7 +543,7 @@ void cgreg_spillreg_prolog(block* b,Symbol* s,ref CodeBuilder cdbstore,ref CodeB
                     bi, s.Sident.ptr, regstring[s.Sregmsw],
                     type_size(s.Stype) > REGSIZE ? regstring[s.Sreglsw] : "");
         }
-        gen_spill_reg(cdbload, s, true);
+        gen_spill_reg(cg, cdbload, s, true);
     }
 
     // Store register to s
@@ -553,7 +553,7 @@ void cgreg_spillreg_prolog(block* b,Symbol* s,ref CodeBuilder cdbstore,ref CodeB
         {
             printf("B%d: prolog moving %s into '%s'\n",bi,regstring[s.Sreglsw],s.Sident.ptr);
         }
-        gen_spill_reg(cdbstore, s, false);
+        gen_spill_reg(cg, cdbstore, s, false);
     }
 
     const live = vec_testbit(bi,s.Slvreg) != 0;   // if s is in a register in block b
@@ -602,7 +602,7 @@ void cgreg_spillreg_prolog(block* b,Symbol* s,ref CodeBuilder cdbstore,ref CodeB
  *      cdbstore = append store code to this
  *      cdbload = append load code to this
  */
-void cgreg_spillreg_epilog(block* b,Symbol* s,ref CodeBuilder cdbstore, ref CodeBuilder cdbload)
+void cgreg_spillreg_epilog(ref CGstate cg, block* b,Symbol* s,ref CodeBuilder cdbstore, ref CodeBuilder cdbload)
 {
     const bi = b.Bdfoidx;
     //printf("cgreg_spillreg_epilog(block %d, s = '%s')\n",bi,s.Sident.ptr);
@@ -624,7 +624,7 @@ void cgreg_spillreg_epilog(block* b,Symbol* s,ref CodeBuilder cdbstore, ref Code
             {
                 debug if (debugr)
                     printf("B%d: epilog moving '%s' into %s\n",bi,s.Sident.ptr,regstring[s.Sreglsw]);
-                gen_spill_reg(cdbload, s, true);
+                gen_spill_reg(cg, cdbload, s, true);
                 return;
             }
         }
@@ -634,7 +634,7 @@ void cgreg_spillreg_epilog(block* b,Symbol* s,ref CodeBuilder cdbstore, ref Code
             {
                 debug if (debugr)
                     printf("B%d: epilog moving %s into '%s'\n",bi,regstring[s.Sreglsw],s.Sident.ptr);
-                gen_spill_reg(cdbstore, s, false);
+                gen_spill_reg(cg, cdbstore, s, false);
                 return;
             }
         }

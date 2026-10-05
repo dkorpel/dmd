@@ -1507,7 +1507,7 @@ void loadFloatRegConst(ref CGstate cg, ref CodeBuilder cdb, reg_t vreg, double v
         float f = value;
         uint i = *cast(uint*)&f;
         regm_t retregs = INSTR.ALLREGS;
-        reg_t reg = allocreg(cdb, retregs, TYint);
+        reg_t reg = allocreg(cg, cdb, retregs, TYint);
         movregconst(cg, cdb,reg,i,0);                         // MOV reg,i
         cdb.gen1(INSTR.fmov_float_gen(0,0,0,7,reg,vreg)); // FMOV Sd,Wn
     }
@@ -1515,7 +1515,7 @@ void loadFloatRegConst(ref CGstate cg, ref CodeBuilder cdb, reg_t vreg, double v
     {
         ulong i = *cast(ulong*)&value;
         regm_t retregs = INSTR.ALLREGS;
-        reg_t reg = allocreg(cdb, retregs, TYllong);
+        reg_t reg = allocreg(cg, cdb, retregs, TYllong);
         movregconst(cg, cdb,reg,i,64);                        // MOV reg,i
         cdb.gen1(INSTR.fmov_float_gen(1,1,0,7,reg,vreg)); // FMOV Dd,Xn
     }

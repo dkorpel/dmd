@@ -59,11 +59,11 @@ bool symbol_iscomdat2(Symbol* s)
  * Output function thunk.
  */
 @trusted public
-void outthunk(Symbol* sthunk, Symbol* sfunc, uint p, tym_t thisty,
+void outthunk(ref CGstate cg, Symbol* sthunk, Symbol* sfunc, uint p, tym_t thisty,
         targ_size_t d, int i, targ_size_t d2)
 {
     sthunk.Sseg = cseg;
-    cod3_thunk(cgstate, sthunk,sfunc,p,thisty,cast(uint)d,i,cast(uint)d2);
+    cod3_thunk(cg, sthunk,sfunc,p,thisty,cast(uint)d,i,cast(uint)d2);
     sthunk.Sfunc.Fflags &= ~Fpending;
     sthunk.Sfunc.Fflags |= Foutput;   /* mark it as having been output */
 }

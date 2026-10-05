@@ -870,7 +870,7 @@ void fixresult87(ref CGstate cg,ref CodeBuilder cdb,elem* e,regm_t retregs, ref 
         pop87();
         cdb.genfltreg(cg, ESC(mf,1),3,0);
         genfwait(cdb);
-        const reg = allocreg(cdb,outretregs,(sz == FLOATSIZE) ? TYfloat : TYdouble);
+        const reg = allocreg(cg, cdb,outretregs,(sz == FLOATSIZE) ? TYfloat : TYdouble);
         if (sz == FLOATSIZE)
         {
             if (!I16)
@@ -941,7 +941,7 @@ if (0 && sz > DOUBLESIZE)
             cdb.genfltreg(cg, ESC(mf,1),3,0);
             genfwait(cdb);
             // MOVD XMM?,floatreg
-            const reg = allocreg(cdb,outretregs,(sz == FLOATSIZE) ? TYfloat : TYdouble);
+            const reg = allocreg(cg, cdb,outretregs,(sz == FLOATSIZE) ? TYfloat : TYdouble);
             cdb.genxmmreg(cg, xmmload(tym),reg,0,tym);
         }
         else
@@ -2998,7 +2998,7 @@ private void cdd_u64_I32(ref CGstate cg,ref CodeBuilder cdb, elem* e, ref regm_t
     retregs = pretregs & (ALLREGS | mBP);
     if (!retregs)
         retregs = ALLREGS;
-    allocreg(cdb,retregs,tym);
+    allocreg(cg, cdb,retregs,tym);
     const reg  = findreglsw(retregs);
     reg_t reg2 = findregmsw(retregs);
     movregconst(cg,cdb,reg2,0x80000000,0);
@@ -3082,9 +3082,9 @@ private void cdd_u64_I64(ref CGstate cg,ref CodeBuilder cdb, elem* e, ref regm_t
     retregs = pretregs & (ALLREGS | mBP);
     if (!retregs)
         retregs = ALLREGS;
-    const reg = allocreg(cdb,retregs,tym);
+    const reg = allocreg(cg, cdb,retregs,tym);
     regm_t regm2 = ALLREGS & ~retregs & ~mAX;
-    const reg2 = allocreg(cdb,regm2,tym);
+    const reg2 = allocreg(cg, cdb,regm2,tym);
     movregconst(cg,cdb,reg2,0x80000000,0);
     getregs(cg, cdb,mask(reg2) | mAX);
 
@@ -3154,7 +3154,7 @@ void cdd_u32(ref CGstate cg,ref CodeBuilder cdb, elem* e, ref regm_t pretregs)
     retregs = pretregs & (ALLREGS | mBP);
     if (!retregs)
         retregs = ALLREGS;
-    const reg = allocreg(cdb,retregs,tym);
+    const reg = allocreg(cg, cdb,retregs,tym);
 
     cdb.genfltreg(cg, 0xC7,0,8);
     code* cf3 = cdb.last();
@@ -3280,7 +3280,7 @@ void cnvt87(ref CGstate cg,ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         retregs = pretregs & (ALLREGS | mBP);
         if (!retregs)
                 retregs = ALLREGS;
-        reg = allocreg(cdb,retregs,tym);
+        reg = allocreg(cg, cdb,retregs,tym);
 
         genfwait(cdb);                                           // FWAIT
         cdb.genc1(0xD9,modregrm(2,5,4) + 256*modregrm(0,4,SP),FL.const_,szoff); // FLDCW szoff[ESP]
@@ -3312,7 +3312,7 @@ void cnvt87(ref CGstate cg,ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         retregs = pretregs & (ALLREGS | mBP);
         if (!retregs)
                 retregs = ALLREGS;
-        reg = allocreg(cdb,retregs,tym);
+        reg = allocreg(cg, cdb,retregs,tym);
 
         genfwait(cdb);
 
@@ -3369,7 +3369,7 @@ void cdrndtol(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     retregs = pretregs & (ALLREGS | mBP);
     if (!retregs)
         retregs = ALLREGS;
-    const reg = allocreg(cdb,retregs,tym);
+    const reg = allocreg(cg, cdb,retregs,tym);
     genfwait(cdb);                      // FWAIT
     if (tysize(tym) > REGSIZE)
     {

@@ -242,7 +242,7 @@ reg_t regwithvalue(ref CGstate cg, ref CodeBuilder cdb,regm_t regm,targ_size_t v
         return found; // already have a register with the right value in it
 
     regm_t save = cg.regcon.immed.mval;
-    const reg = allocreg(cdb,regm,TYint);  // allocate register
+    const reg = allocreg(cg, cdb,regm,TYint);  // allocate register
     cg.regcon.immed.mval = save;
     movregconst(cg,cdb,reg,value,flags);   // store value into reg
     return reg;

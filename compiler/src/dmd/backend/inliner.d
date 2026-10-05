@@ -47,6 +47,7 @@ import dmd.backend.type;
 import dmd.backend.barray;
 import dmd.backend.x86.cgcod : cgstate;
 import dmd.backend.code : CGstate;
+import dmd.backend.code : CGstate;
 
 nothrow:
 @safe:
@@ -307,7 +308,7 @@ private elem* tryInliningCall(elem* e)
         /* Check to see if we inline expand the function, or queue  */
         /* it to be output.                                         */
         if ((f.Fflags & (Finline | Finlinenest)) == Finline)
-            e = inlineCall(e,sfunc);
+            e = inlineCall(cgstate, e,sfunc);
         else
             {   } //queue_func(sfunc);
     }
@@ -324,7 +325,7 @@ private elem* tryInliningCall(elem* e)
  *      the expression replacing the function call
  */
 @trusted
-private elem* inlineCall(elem* e,Symbol* sfunc)
+private elem* inlineCall(ref CGstate cg, elem* e,Symbol* sfunc)
 {
     if (debugc)
         printf("inline %s\n", prettyident(sfunc));
@@ -421,7 +422,7 @@ private elem* inlineCall(elem* e,Symbol* sfunc)
      */
     if (e.Eoper == OPcall)
     {
-        elem* eargs = initializeParamsWithArgs(cgstate, e.E2, sistart, globsym.length);
+        elem* eargs = initializeParamsWithArgs(cg, e.E2, sistart, globsym.length);
         ec = el_combine(eargs,ec);
     }
 

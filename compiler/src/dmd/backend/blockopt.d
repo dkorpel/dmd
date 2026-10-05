@@ -485,7 +485,7 @@ void blockopt(ref GlobalOptimizer go, ref BlockOpt bo, ref uint changes)
             debug if (debugb)
             {
                 printf("before doptelem():\n");
-                WRblock(b);
+                WRblock(cgstate, b);
             }
 
             if (b.Belem)
@@ -498,7 +498,7 @@ void blockopt(ref GlobalOptimizer go, ref BlockOpt bo, ref uint changes)
             debug if (debugb)
             {
                 printf("after optelem():\n");
-                WRblock(b);
+                WRblock(cgstate, b);
             }
         }
         if (localgot)
@@ -1507,7 +1507,7 @@ unittest
     static if (0)
     {
         for (block* b = bl[0]; b; b = b.Bnext)
-            WRblock(b);
+            WRblock(cgstate, b);
     }
 
     uint changes;
@@ -1518,7 +1518,7 @@ unittest
     {
         printf("----------\n");
         for (block* b = bl[0]; b; b = b.Bnext)
-            WRblock(b);
+            WRblock(cgstate, b);
     }
 
     assert(bl[0].bc == BC.iftrue);

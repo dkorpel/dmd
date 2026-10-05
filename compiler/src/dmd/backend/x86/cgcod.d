@@ -1434,7 +1434,7 @@ private void blcodgen(ref CGstate cg, block* bl)
                 if (vec_testbit(cg.dfoidx,s.Srange))
                 {
                     anyspill = cast(int)(i + 1);
-                    cgreg_spillreg_prolog(bl,s,cdbstore,cdbload);
+                    cgreg_spillreg_prolog(cg, bl,s,cdbstore,cdbload);
                     if (vec_testbit(cg.dfoidx,s.Slvreg))
                     {
                         s.Sfl = FL.reg;
@@ -1677,14 +1677,13 @@ static if (0)
  * Returns:
  *      Register number of first allocated register
  */
-reg_t allocreg(ref CodeBuilder cdb,ref regm_t outretregs,tym_t tym){
-    return allocreg(cdb, outretregs, tym, __LINE__, __FILE__);
+reg_t allocreg(ref CGstate cg, ref CodeBuilder cdb,ref regm_t outretregs,tym_t tym){
+    return allocreg(cg, cdb, outretregs, tym, __LINE__, __FILE__);
 }
 
 @trusted
-reg_t allocreg(ref CodeBuilder cdb,ref regm_t outretregs,tym_t tym ,int line,const(char)* file)
+reg_t allocreg(ref CGstate cg, ref CodeBuilder cdb,ref regm_t outretregs,tym_t tym ,int line,const(char)* file)
 {
-        CGstate* cg = &cgstate;
 
 static if (0)
 {
@@ -1723,7 +1722,7 @@ static if (0)
                 outreg = findreg(retregs);
                 assert(retregs == mask(outreg)); /* no more bits are set */
             }
-            getregs(cgstate, cdb,retregs);
+            getregs(cg, cdb,retregs);
             return outreg;
         }
         int count = 0;
@@ -1924,7 +1923,7 @@ L3:
             lastRetregs[i - 1] = lastRetregs[i - 2];
         }
         lastRetregs[0] = retregs; // and set new beginning of array
-        getregs(cgstate, cdb, retregs);
+        getregs(cg, cdb, retregs);
         return reg;
 }
 
@@ -1937,9 +1936,9 @@ L3:
  * Returns:
  *      selected register
  */
-reg_t allocScratchReg(ref CodeBuilder cdb, regm_t regm)
+reg_t allocScratchReg(ref CGstate cg, ref CodeBuilder cdb, regm_t regm)
 {
-    return allocreg(cdb, regm, TYoffset);
+    return allocreg(cg, cdb, regm, TYoffset);
 }
 
 
@@ -2256,9 +2255,8 @@ regm_t getscratch(ref CGstate cg)
  */
 
 @trusted
-private void comsub(ref CodeBuilder cdb,elem* e, ref regm_t pretregs)
+private void comsub(ref CGstate cg, ref CodeBuilder cdb,elem* e, ref regm_t pretregs)
 {
-    CGstate* cg = &cgstate;
     const AArch64 = cg.AArch64;
 
     //printf("comsub(e = %p, pretregs = %s)\n",e,regm_str(pretregs));
@@ -2298,14 +2296,14 @@ private void comsub(ref CodeBuilder cdb,elem* e, ref regm_t pretregs)
         if (pretregs & (mST0 | mST01))
         {
             regm_t retregs = pretregs & mST0 ? XMMREGS : mXMM0 | mXMM1;
-            comsub(cdb, e, retregs);
-            fixresult(*cg,cdb,e,retregs,pretregs);
+            comsub(cg, cdb, e, retregs);
+            fixresult(cg,cdb,e,retregs,pretregs);
             return;
         }
     }
     else if (tyfloating(e.Ety) && config.inline8087)
     {
-        comsub87(*cg,cdb,e,pretregs);
+        comsub87(cg,cdb,e,pretregs);
         return;
     }
 
@@ -2342,7 +2340,7 @@ private void comsub(ref CodeBuilder cdb,elem* e, ref regm_t pretregs)
             if (!OTleaf(e.Eoper) || !(regm & cg.regcon.mvar) || (pretregs & cg.regcon.mvar) == pretregs)
             {
                 regm = mask(findreg(regm));
-                fixresult(*cg,cdb,e,regm,pretregs);
+                fixresult(cg,cdb,e,regm,pretregs);
                 return;
             }
         }
@@ -2362,7 +2360,7 @@ private void comsub(ref CodeBuilder cdb,elem* e, ref regm_t pretregs)
                     retregs = pretregs;
                     if (!(retregs & cg.allregs | INSTR.FLOATREGS))
                         retregs = cg.allregs | INSTR.FLOATREGS;
-                    reg = allocreg(cdb,retregs,tym);
+                    reg = allocreg(cg, cdb,retregs,tym);
                     code* cr = &cse.csimple;
                     cr.reg = reg;
                     cdb.gen(cr);
@@ -2373,7 +2371,7 @@ private void comsub(ref CodeBuilder cdb,elem* e, ref regm_t pretregs)
                     retregs = BYTEREGS;
                 else if (!(retregs & cg.allregs))
                     retregs = cg.allregs;
-                reg = allocreg(cdb,retregs,tym);
+                reg = allocreg(cg, cdb,retregs,tym);
                 code* cr = &cse.csimple;
                 cr.setReg(reg);
                 if (I64 && reg >= 4 && tysize(cse.e.Ety) == 1)
@@ -2390,11 +2388,11 @@ private void comsub(ref CodeBuilder cdb,elem* e, ref regm_t pretregs)
                     if (config.fpxmmregs && (tyxmmreg(cse.e.Ety) || tyvector(cse.e.Ety)))
                     {
                         retregs = XMMREGS;
-                        reg = allocreg(cdb,retregs,tym);
-                        gen_loadcse(cgstate, cdb, cse.e.Ety, reg, cse.slot);
+                        reg = allocreg(cg, cdb,retregs,tym);
+                        gen_loadcse(cg, cdb, cse.e.Ety, reg, cse.slot);
                         cg.regcon.cse.mval |= mask(reg); // cs is in a reg
                         cg.regcon.cse.value[reg] = e;
-                        fixresult(*cg,cdb,e,retregs,pretregs);
+                        fixresult(cg,cdb,e,retregs,pretregs);
                     }
                     else
                     {
@@ -2414,12 +2412,12 @@ private void comsub(ref CodeBuilder cdb,elem* e, ref regm_t pretregs)
                     }
                     else if (byte_ && !(retregs & BYTEREGS))
                         retregs = BYTEREGS;
-                    reg = allocreg(cdb,retregs,tym);
-                    gen_loadcse(cgstate, cdb, cse.e.Ety, reg, cse.slot);
+                    reg = allocreg(cg, cdb,retregs,tym);
+                    gen_loadcse(cg, cdb, cse.e.Ety, reg, cse.slot);
                 L10:
                     cg.regcon.cse.mval |= mask(reg); // cs is in a reg
                     cg.regcon.cse.value[reg] = e;
-                    fixresult(*cg,cdb,e,retregs,pretregs);
+                    fixresult(cg,cdb,e,retregs,pretregs);
                 }
             }
             return;
@@ -2473,8 +2471,8 @@ private void comsub(ref CodeBuilder cdb,elem* e, ref regm_t pretregs)
         {
             if (!regm)
                 regm = xMSW & xALLREGS;
-            msreg = allocreg(cdb,regm,TYint);
-            loadcse(cgstate, cdb,e,msreg,xMSW);
+            msreg = allocreg(cg, cdb,regm,TYint);
+            loadcse(cg, cdb,e,msreg,xMSW);
         }
 
         regm = pretregs & xLSW;
@@ -2486,12 +2484,12 @@ private void comsub(ref CodeBuilder cdb,elem* e, ref regm_t pretregs)
         {
             if (!regm)
                 regm = xLSW;
-            lsreg = allocreg(cdb,regm,TYint);
-            loadcse(cgstate, cdb,e,lsreg,xLSW);
+            lsreg = allocreg(cg, cdb,regm,TYint);
+            loadcse(cg, cdb,e,lsreg,xLSW);
         }
 
         regm = mask(msreg) | mask(lsreg);       /* mask of result       */
-        fixresult(*cg,cdb,e,regm,pretregs);
+        fixresult(cg,cdb,e,regm,pretregs);
         return;
     }
     else if (tym == TYdouble || tym == TYdouble_alias)    // double
@@ -2504,10 +2502,10 @@ private void comsub(ref CodeBuilder cdb,elem* e, ref regm_t pretregs)
             {
                 assert(cast(int) reg >= 0 && reg <= 7);
                 if (mask(reg) & csemask)
-                    loadcse(cgstate, cdb,e,reg,mask(reg));
+                    loadcse(cg, cdb,e,reg,mask(reg));
             }
             regm_t regm = DOUBLEREGS_16;
-            fixresult(*cg,cdb,e,regm,pretregs);
+            fixresult(cg,cdb,e,regm,pretregs);
             return;
         }
         if (OTleaf(e.Eoper)) goto reload;
@@ -2529,13 +2527,13 @@ reload:                                 /* reload result from memory    */
     switch (e.Eoper)
     {
         case OPrelconst:
-            cdrelconst(*cg, cdb,e,pretregs);
+            cdrelconst(cg, cdb,e,pretregs);
             break;
 
         case OPgot:
             if (config.exe & EX_posix)
             {
-                cdgot(*cg, cdb,e,pretregs);
+                cdgot(cg, cdb,e,pretregs);
                 break;
             }
             goto default;
@@ -2546,14 +2544,14 @@ reload:                                 /* reload result from memory    */
                 (tyxmmreg(tym) || tysimd(tym)))
             {
                 regm_t retregs = XMMREGS | mPSW;
-                loaddata(*cg,cdb,e,retregs);
-                cssave(cgstate, e,retregs,false);
+                loaddata(cg,cdb,e,retregs);
+                cssave(cg, e,retregs,false);
                 return;
             }
-            loaddata(*cg,cdb,e,pretregs);
+            loaddata(cg,cdb,e,pretregs);
             break;
     }
-    cssave(cgstate, e,pretregs,false);
+    cssave(cg, e,pretregs,false);
 }
 
 
@@ -2828,7 +2826,7 @@ void codelem(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs,uin
     uint op = e.Eoper;
     if (e.Ecount && e.Ecount != e.Ecomsub)     // if common subexp
     {
-        comsub(cdb,e, pretregs);
+        comsub(cg, cdb,e, pretregs);
         goto L1;
     }
 

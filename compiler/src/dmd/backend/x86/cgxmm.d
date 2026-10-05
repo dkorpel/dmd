@@ -118,7 +118,7 @@ void movxmmconst(ref CGstate cg, ref CodeBuilder cdb, reg_t xreg, tym_t ty, Vcon
     if (I32 && sz == 8)
     {
         regm_t rm = ALLREGS;
-        const r = allocreg(cdb,rm,TYint);         // allocate scratch register
+        const r = allocreg(cg, cdb,rm,TYint);         // allocate scratch register
         static union U { targ_size_t s; targ_long[2] l; }
         U u;
         u.l[1] = 0;
@@ -187,7 +187,7 @@ void orthxmm(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t pretregs)
         if (e.Eoper == OPmin)
         {
             regm_t nretregs = XMMREGS & ~retregs;
-            const sreg = allocreg(cdb,nretregs,e2.Ety); // hold sign bit
+            const sreg = allocreg(cg, cdb,nretregs,e2.Ety); // hold sign bit
             const uint sz = tysize(e1.Ety);
             Vconst signbit;
             signbit.Vint = 0x80000000;
@@ -508,7 +508,7 @@ void xmmcnvt(ref CGstate cg,ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
             retregs = ALLREGS;
     }
 
-    reg_t rreg = allocreg(cdb,retregs,ty);
+    reg_t rreg = allocreg(cg, cdb,retregs,ty);
     if (isXMMreg(rreg))
         rreg -= XMM0;
 
@@ -563,7 +563,7 @@ void xmmopass(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         retregs = pretregs & XMMREGS & ~rretregs;
         if (!retregs)
             retregs = XMMREGS & ~rretregs;
-        reg = allocreg(cdb,retregs,ty1);
+        reg = allocreg(cg, cdb,retregs,ty1);
         cs.Iop = xmmload(ty1, true);            // MOVSD xmm,xmm_m64
         code_newreg(&cs,reg - XMM0);
         cdb.gen(&cs);
@@ -636,7 +636,7 @@ void xmmpost(ref CGstate cg,ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         retregs = XMMREGS & ~pretregs;
         if (!retregs)
             retregs = XMMREGS;
-        reg = allocreg(cdb,retregs,ty1);
+        reg = allocreg(cg, cdb,retregs,ty1);
         cs.Iop = xmmload(ty1, true);            // MOVSD xmm,xmm_m64
         code_newreg(&cs,reg - XMM0);
         cdb.gen(&cs);
@@ -647,7 +647,7 @@ void xmmpost(ref CGstate cg,ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     regm_t resultregs = XMMREGS & pretregs & ~retregs;
     if (!resultregs)
         resultregs = XMMREGS & ~retregs;
-    const resultreg = allocreg(cdb,resultregs, ty1);
+    const resultreg = allocreg(cg, cdb,resultregs, ty1);
 
     cdb.gen2(xmmload(ty1,true),modregxrmx(3,resultreg-XMM0,reg-XMM0));   // MOVSS/D resultreg,reg
     checkSetVex(cdb.last(), ty1);
@@ -708,7 +708,7 @@ void xmmneg(ref CGstate cg,ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     getregs(cg, cdb,retregs);
     const reg = findreg(retregs);
     regm_t rretregs = XMMREGS & ~retregs;
-    const rreg = allocreg(cdb,rretregs,tyml);
+    const rreg = allocreg(cg, cdb,rretregs,tyml);
 
     Vconst signbit;
     signbit.Vint = 0x80000000;
@@ -749,7 +749,7 @@ void xmmabs(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     getregs(cg, cdb,retregs);
     const reg = findreg(retregs);
     regm_t rretregs = XMMREGS & ~retregs;
-    const rreg = allocreg(cdb,rretregs,tyml);
+    const rreg = allocreg(cg, cdb,rretregs,tyml);
 
     Vconst mask;
     mask.Vint = 0x7FFF_FFFF;
@@ -1295,7 +1295,7 @@ static if (0)
         retregs = pretregs & XMMREGS;
         if (!retregs)
             retregs = XMMREGS;
-        const reg = allocreg(cdb,retregs, e.Ety);
+        const reg = allocreg(cg, cdb,retregs, e.Ety);
         code_newreg(&cs, reg - XMM0);
         cs.Iop = op;
         cdb.gen(&cs);
@@ -1481,7 +1481,7 @@ static if (0)
                 // VBROADCASTSS X/YMM,MEM
                 getlvalue(cg, cdb, cs, e1, 0, RM.rw);         // get addressing mode
                 assert((cs.Irm & 0xC0) != 0xC0);   // AVX1 doesn't have register source operands
-                const reg = allocreg(cdb,retregs,ty);
+                const reg = allocreg(cg, cdb,retregs,ty);
                 cs.Iop = VBROADCASTSS;
                 cs.Irex &= ~REX_W;
                 code_newreg(&cs,reg - XMM0);
@@ -1521,7 +1521,7 @@ static if (0)
                 // VBROADCASTSD YMM,MEM
                 getlvalue(cg, cdb, cs, e1, 0, RM.rw);         // get addressing mode
                 assert((cs.Irm & 0xC0) != 0xC0);   // AVX1 doesn't have register source operands
-                const reg = allocreg(cdb,retregs,ty);
+                const reg = allocreg(cg, cdb,retregs,ty);
                 cs.Iop = VBROADCASTSD;
                 cs.Irex &= ~REX_W;
                 code_newreg(&cs,reg - XMM0);
@@ -1563,7 +1563,7 @@ static if (0)
                 // VPBROADCASTB X/YMM,MEM
                 getlvalue(cg, cdb, cs, e1, 0, RM.rw);         // get addressing mode
                 assert((cs.Irm & 0xC0) != 0xC0);   // AVX1 doesn't have register source operands
-                reg_t reg = allocreg(cdb,retregs,ty);
+                reg_t reg = allocreg(cg, cdb,retregs,ty);
                 cs.Iop = VPBROADCASTB;
                 cs.Irex &= ~REX_W;
                 code_newreg(&cs,reg - XMM0);
@@ -1576,7 +1576,7 @@ static if (0)
                 codelem(cg,cdb,e1,regm,true); // eval left leaf
                 const r = findreg(regm);
 
-                reg_t reg = allocreg(cdb,retregs, e.Ety);
+                reg_t reg = allocreg(cg, cdb,retregs, e.Ety);
                 reg -= XMM0;
                 // (V)MOVD reg,r
                 cdb.gen2(LODD,modregxrmx(3,reg,r));
@@ -1593,7 +1593,7 @@ static if (0)
                     {
                         regm = XMMREGS & ~retregs;
                         // VPXOR XMM1,XMM1,XMM1
-                        reg_t zeroreg = allocreg(cdb,regm, ty);
+                        reg_t zeroreg = allocreg(cg, cdb,regm, ty);
                         zeroreg -= XMM0;
                         cdb.gen2(PXOR, modregxrmx(3,zeroreg,zeroreg));
                         checkSetVex(cdb.last(), TYuchar16); // AVX-128
@@ -1629,7 +1629,7 @@ static if (0)
                 // VPBROADCASTW X/YMM,MEM
                 getlvalue(cg, cdb, cs, e1, 0, RM.rw);         // get addressing mode
                 assert((cs.Irm & 0xC0) != 0xC0);   // AVX1 doesn't have register source operands
-                reg_t reg = allocreg(cdb,retregs,ty);
+                reg_t reg = allocreg(cg, cdb,retregs,ty);
                 cs.Iop = VPBROADCASTW;
                 cs.Irex &= ~REX_W;
                 cs.Iflags &= ~CF.opsize;
@@ -1643,7 +1643,7 @@ static if (0)
                 codelem(cg,cdb,e1,regm,true); // eval left leaf
                 reg_t r = findreg(regm);
 
-                reg_t reg = allocreg(cdb,retregs, e.Ety);
+                reg_t reg = allocreg(cg, cdb,retregs, e.Ety);
                 reg -= XMM0;
                 // (V)MOVD reg,r
                 cdb.gen2(LODD,modregxrmx(3,reg,r));
@@ -1681,7 +1681,7 @@ static if (0)
                 // VPBROADCASTD/VBROADCASTSS X/YMM,MEM
                 getlvalue(cg, cdb, cs, e1, 0, RM.rw);         // get addressing mode
                 assert((cs.Irm & 0xC0) != 0xC0);   // AVX1 doesn't have register source operands
-                reg_t reg = allocreg(cdb,retregs,ty);
+                reg_t reg = allocreg(cg, cdb,retregs,ty);
                 cs.Iop = config.avx >= 2 ? VPBROADCASTD : VBROADCASTSS;
                 cs.Irex &= ~REX_W;
                 code_newreg(&cs,reg - XMM0);
@@ -1723,7 +1723,7 @@ static if (0)
                 // VPBROADCASTQ/VBROADCASTSD/(V)PUNPCKLQDQ X/YMM,MEM
                 getlvalue(cg, cdb, cs, e1, 0, RM.rw);         // get addressing mode
                 assert((cs.Irm & 0xC0) != 0xC0);   // AVX1 doesn't have register source operands
-                reg_t reg = allocreg(cdb,retregs,ty);
+                reg_t reg = allocreg(cg, cdb,retregs,ty);
                 cs.Iop = config.avx >= 2 ? VPBROADCASTQ : tysize(ty) == 32 ? VBROADCASTSD : PUNPCKLQDQ;
                 cs.Irex &= ~REX_W;
                 code_newreg(&cs,reg - XMM0);
@@ -1931,12 +1931,12 @@ void cloadxmm(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t pretregs)
         opcode_t opmv = xmmload(tym, xmmIsAligned(e));
 
         regm_t retregs0 = mXMM0;
-        reg_t reg0 = allocreg(cdb, retregs0, ty);
+        reg_t reg0 = allocreg(cg, cdb, retregs0, ty);
         loadea(cg, cdb, e, cs, opmv, reg0, 0, 0, 0, RM.load);  // MOVSS/MOVSD XMM0,data
         checkSetVex(cdb.last(), ty);
 
         regm_t retregs1 = mXMM1;
-        reg_t reg1 = allocreg(cdb, retregs1, ty);
+        reg_t reg1 = allocreg(cg, cdb, retregs1, ty);
         loadea(cg, cdb, e, cs, opmv, reg1, tysize(ty), 0, mXMM0, RM.load); // MOVSS/MOVSD XMM1,data+offset
         checkSetVex(cdb.last(), ty);
 

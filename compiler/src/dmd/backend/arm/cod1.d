@@ -817,7 +817,7 @@ void getlvalue(ref CGstate cg,ref CodeBuilder cdb,ref code pcs,elem* e,regm_t ke
                         int rbase;
 
                         scratchm = INSTR.ALLREGS & ~keepmsk;
-                        const r = allocreg(cdb, scratchm, TYint);
+                        const r = allocreg(cg, cdb, scratchm, TYint);
 
                         if (ssflags & SSFLnobase1)
                         {
@@ -896,7 +896,7 @@ void getlvalue(ref CGstate cg,ref CodeBuilder cdb,ref code pcs,elem* e,regm_t ke
                 if (e1.Ecount)
                 {
                     regm_t regs = IDXREGS & ~keepmsk;
-                    reg = allocreg(cdb, regs, TYoffset);
+                    reg = allocreg(cg, cdb, regs, TYoffset);
 
                     opsave = pcs.Iop;
                     const flagsave = pcs.Iflags;
@@ -1311,7 +1311,7 @@ void tstresult(ref CGstate cg, ref CodeBuilder cdb, regm_t regm, tym_t tym, bool
     if (regm & XMMREGS)
     {
         regm_t xregs = XMMREGS & ~regm;
-        const xreg = allocreg(cdb,xregs,TYdouble);
+        const xreg = allocreg(cg, cdb,xregs,TYdouble);
         opcode_t op = 0;
         if (tym == TYdouble || tym == TYidouble || tym == TYcdouble)
             op = 0x660000;
@@ -1414,7 +1414,7 @@ void fixresult(ref CGstate cg, ref CodeBuilder cdb, elem* e, regm_t retregs, ref
             reg_t msreg = findreg(retregs & INSTR.MSW);
             reg_t lsreg = findreg(retregs & INSTR.LSW);
 
-            allocreg(cdb, outretregs, tym);  // allocate return regs
+            allocreg(cg, cdb, outretregs, tym);  // allocate return regs
             reg_t msrreg = findreg(outretregs & INSTR.MSW);
             reg_t lsrreg = findreg(outretregs & INSTR.LSW);
 
@@ -1437,7 +1437,7 @@ void fixresult(ref CGstate cg, ref CodeBuilder cdb, elem* e, regm_t retregs, ref
         {
             assert(outretregs & INSTR.FLOATREGS);
             reg_t Vn = findreg(retregs);
-            reg_t Vd = allocreg(cdb, outretregs, tym);  // allocate return regs
+            reg_t Vd = allocreg(cg, cdb, outretregs, tym);  // allocate return regs
             //printf("Vn: %d Vd: %d\n", Vn, Vd);
             uint ftype = INSTR.szToFtype(sz);
             if (Vn < 32) // move integer to float
@@ -1452,7 +1452,7 @@ void fixresult(ref CGstate cg, ref CodeBuilder cdb, elem* e, regm_t retregs, ref
         else
         {
             reg_t reg = findreg(retregs & INSTR.ALLREGS);
-            reg_t rreg = allocreg(cdb, outretregs, tym);     // allocate return regs
+            reg_t rreg = allocreg(cg, cdb, outretregs, tym);     // allocate return regs
             cdb.gen1(INSTR.mov_register(sz == 8,reg,rreg));  // MOV rreg,reg
         }
         cssave(cg, e,retregs | outretregs,false);
@@ -2189,7 +2189,7 @@ private void funccall(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint numpara
             getregs(cg, cdbe, DESREGS);
 
             regm_t regm = INSTR.ALLREGS & ~DESREGS;
-            reg_t r = allocreg(cdbe, regm, TYnptr); // r becomes amount to allocate
+            reg_t r = allocreg(cg, cdbe, regm, TYnptr); // r becomes amount to allocate
             genmovreg(cg, cdbe,r,R9,TYMAX);             // MOV r,R9  since r is preserved by ___chkstk_darwin
 
             enum reg_t R16 = 16;                    // scratch register
@@ -2204,7 +2204,7 @@ private void funccall(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint numpara
             retregs = INSTR.ALLREGS & pretregs;
             if (!retregs)
                 retregs = INSTR.ALLREGS;
-            reg_t r2 = allocreg(cdbe, retregs, TYnptr);
+            reg_t r2 = allocreg(cg, cdbe, retregs, TYnptr);
             genmovreg(cg, cdbe,r2,INSTR.SP,TYMAX);                 // MOV  r2,SP
             cdbe.gen1(INSTR.subs_addsub_shift(1,r,0,0,r2,r2)); // SUBS r2,r2,r
             genmovreg(cg, cdbe,INSTR.SP,r2,TYMAX);                 // MOV  SP,r2
@@ -2582,7 +2582,7 @@ void loaddata(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t outretreg
         if (0 && tyvector(tym) && forregs & XMMREGS)    // TODO AArch64
         {
             assert(!flags);
-            const xreg = allocreg(cdb, forregs, tym);     // allocate registers
+            const xreg = allocreg(cg, cdb, forregs, tym);     // allocate registers
             movxmmconst(cg, cdb, xreg, tym, &e.EV, flags);
             fixresult(cg, cdb, e, forregs, outretregs);
             return;
@@ -2593,7 +2593,7 @@ void loaddata(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t outretreg
             forregs = outretregs & INSTR.FLOATREGS;
             if (isPair)
             {
-                const vreg_im = allocreg(cdb, forregs, tym);     // allocate floating point register
+                const vreg_im = allocreg(cg, cdb, forregs, tym);     // allocate floating point register
                 const vreg_re = findreg(forregs & INSTR.LSW);
                 double value_re = e.Vcfloat.re;
                 double value_im = e.Vcfloat.im;
@@ -2609,7 +2609,7 @@ void loaddata(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t outretreg
                 fixresult(cg, cdb, e, forregs, outretregs);
                 return;
             }
-            const vreg = allocreg(cdb, forregs, tym);     // allocate floating point register
+            const vreg = allocreg(cg, cdb, forregs, tym);     // allocate floating point register
             double value = e.Vfloat;
             if (sz == 8)
                 value = e.Vdouble;
@@ -2629,7 +2629,7 @@ void loaddata(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t outretreg
             forregs = mask(reg);
 
         regm_t save = cg.regcon.immed.mval;
-        reg = allocreg(cdb, forregs, tym);        // allocate registers
+        reg = allocreg(cg, cdb, forregs, tym);        // allocate registers
         cg.regcon.immed.mval = save;               // allocreg could unnecessarily clear .mval
         if (sz <= REGSIZE)
         {
@@ -2695,7 +2695,7 @@ void loaddata(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t outretreg
             }
         }
 
-        reg = allocreg(cdb, forregs, tym);            // allocate registers
+        reg = allocreg(cg, cdb, forregs, tym);            // allocate registers
 
         if (0 && sz == 1)
         {   regm_t nregm;
@@ -2731,7 +2731,7 @@ void loaddata(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t outretreg
                 if (outretregs & nregm)
                     nreg = reg;                             // already allocated
                 else
-                    nreg = allocreg(cdb, nregm, tym);
+                    nreg = allocreg(cg, cdb, nregm, tym);
                 loadea(cg, cdb, e, cs, opmv, nreg, 0, 0, 0);    // MOV nregL,data
                 if (reg != nreg)
                 {
