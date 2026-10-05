@@ -157,7 +157,7 @@ bool canInlineFunction(Symbol* sfunc)
  */
 
 @trusted
-void scanForInlines(ref CGstate cg, Symbol* sfunc)
+void scanForInlines(ref cse_t cse, Symbol* sfunc)
 {
     if (log) debug printf("scanForInlines(%s)\n",prettyident(sfunc));
     //symbol_debug(sfunc);
@@ -171,12 +171,12 @@ void scanForInlines(ref CGstate cg, Symbol* sfunc)
             if (b.Belem)
             {
                 //elem_print(b.Belem);
-                b.Belem = scanExpressionForInlines(cg.regcon.cse, b.Belem);
+                b.Belem = scanExpressionForInlines(cse, b.Belem);
             }
         if (eecontext.EEelem)
         {
             const marksi = globsym.length;
-            eecontext.EEelem = scanExpressionForInlines(cg.regcon.cse, eecontext.EEelem);
+            eecontext.EEelem = scanExpressionForInlines(cse, eecontext.EEelem);
             eecontext_convs(marksi);
         }
         f.Fflags &= ~Finlinenest;

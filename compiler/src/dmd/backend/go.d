@@ -375,7 +375,7 @@ void optfunc(ref CGstate cg, ref GlobalOptimizer go, ref BlockOpt bo)
          * https://issues.dlang.org/show_bug.cgi?id=23857
          */
         if (iter == 1)
-            scanForInlines(cg, funcsym_p);
+            scanForInlines(cg.regcon.cse, funcsym_p);
 
         if (go.mfoptim & MFdc)
             blockopt(cg.AArch64, go, bo, go.changes); // do block optimization

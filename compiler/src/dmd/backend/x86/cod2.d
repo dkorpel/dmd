@@ -2101,7 +2101,7 @@ void cdnot(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     else if (config.target_cpu >= TARGET_80486 &&
         tysize(e.Ety) == 1)
     {
-        int jop = jmpopcode(cg, e.E1);
+        int jop = jmpopcode(cg.AArch64, e.E1);
         retregs = mPSW;
         codelem(cg,cdb,e.E1,retregs,false);
         retregs = pretregs & BYTEREGS;
@@ -2313,10 +2313,10 @@ void cdcond(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     regm_t psw = pretregs & mPSW;               /* save PSW bit                 */
     const op1 = e1.Eoper;
     uint sz1 = tysize(e1.Ety);
-    uint jop = jmpopcode(cg, e1);
+    uint jop = jmpopcode(cg.AArch64, e1);
 
-    uint jop1 = jmpopcode(cg, e21);
-    uint jop2 = jmpopcode(cg, e22);
+    uint jop1 = jmpopcode(cg.AArch64, e21);
+    uint jop2 = jmpopcode(cg.AArch64, e22);
 
     docommas(cg, cdb,e1);
     cg.stackclean++;
@@ -2464,7 +2464,7 @@ void cdcond(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
 
         code* cnop1 = gennop(null);
         regm_t retregs = mPSW;
-        jop = jmpopcode(cg, e1);            // get jmp condition
+        jop = jmpopcode(cg.AArch64, e1);            // get jmp condition
         codelem(cg,cdb,e1,retregs,false);
 
         // Set the register with e21 without affecting the flags

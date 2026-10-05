@@ -530,7 +530,7 @@ static if (0)
             if (cg.usednteh & NTEH_try)
             {
                 // Do this before code is emitted because we patch some instructions
-                nteh_gentables(cg, sfunc);
+                nteh_gentables(cg.AArch64, sfunc);
             }
             if (cg.usednteh & (EHtry | EHcleanup) &&   // saw BC.try_ or BC._try or OPddtor
                 config.ehmethod == EHmethod.EH_DM)

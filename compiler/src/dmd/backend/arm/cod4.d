@@ -369,8 +369,8 @@ void cdaddass(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     }
     else if (0 && (op == OPaddass || op == OPminass) &&
         !e2.Ecount &&
-        ((jop = jmpopcode(cg, e2)) == JC || jop == JNC ||
-         (OTconv(e2.Eoper) && !e2.E1.Ecount && ((jop = jmpopcode(cg, e2.E1)) == JC || jop == JNC)))
+        ((jop = jmpopcode(cg.AArch64, e2)) == JC || jop == JNC ||
+         (OTconv(e2.Eoper) && !e2.E1.Ecount && ((jop = jmpopcode(cg.AArch64, e2.E1)) == JC || jop == JNC)))
        )
     {
         /* e1 += (x < y)    ADC EA,0

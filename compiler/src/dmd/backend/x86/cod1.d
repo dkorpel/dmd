@@ -626,7 +626,7 @@ void logexp(ref CGstate cg, ref CodeBuilder cdb, elem* e, int jcond, FL fltarg, 
     }
 
     regm_t retregs = mPSW;                // return result in flags
-    opcode_t op = jmpopcode(cg, e);           // get jump opcode
+    opcode_t op = jmpopcode(cg.AArch64, e);           // get jump opcode
     if (!(jcond & 1))
         op ^= 0x101;                      // toggle jump condition(s)
     codelem(cg,cdb, e, retregs, true);         // evaluate elem

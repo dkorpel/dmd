@@ -2567,7 +2567,7 @@ void outswitab(block* b)
  */
 
 @trusted
-int jmpopcode(ref CGstate cg, elem* e)
+int jmpopcode(bool AArch64, elem* e)
 {
     //printf("jmpopcode()\n"); elem_print(e);
     tym_t tym;
@@ -2613,7 +2613,7 @@ int jmpopcode(ref CGstate cg, elem* e)
          tymx == TYcdouble || tymx == TYcfloat ||
          (tyxmmreg(tymx) && config.fpxmmregs && e.Ecount != e.Ecomsub) ||
          op == OPind ||
-         (OTcall(op) && (regmask(cg.AArch64, tymx, tybasic(e.E1.Eoper)) & (mST0 | XMMREGS))));
+         (OTcall(op) && (regmask(AArch64, tymx, tybasic(e.E1.Eoper)) & (mST0 | XMMREGS))));
 
     if (!needsNanCheck)
     {
