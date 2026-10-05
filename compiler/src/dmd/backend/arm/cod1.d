@@ -1794,7 +1794,7 @@ void cdfunc(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t pretregs)
             p.isVariadic = numExplicitParams && np - i + 1 > numExplicitParams;
             if (p.isVariadic)      // osx_aapcs64 does not pass variadic args in registers
                 continue;
-            if (FuncParamRegs_alloc(cg, fpr, ep.ET, ep.Ety, p.reg, p.reg2))
+            if (FuncParamRegs_alloc(cg.AArch64, fpr, ep.ET, ep.Ety, p.reg, p.reg2))
                 continue;        // argument is passed in register
             /* The rightmost stack allocated argument, excluding variadics and enregisterd ones,
              * is used to initialize the variadic argument pointer
@@ -2342,7 +2342,7 @@ static if (0)
 }
 
     reg_t reg1, reg2;
-    retregs = allocretregs(cg, e.Ety, e.ET, tym1, reg1, reg2);
+    retregs = allocretregs(cg.AArch64, e.Ety, e.ET, tym1, reg1, reg2);
     //printf("retregs: %s e.Ety: %s tym1: %s\n", regm_str(retregs), tym_str(e.Ety), tym_str(tym1));
 
     assert(retregs || !pretregs);

@@ -327,7 +327,7 @@ void genEEcode(ref CGstate cg)
     gencodelem(cg, cdb, eecontext.EEelem, retregs, false);
     code* c = cdb.finish();
     assignaddrc(cg,c);
-    pinholeopt(cg, c,null);
+    pinholeopt(cg.AArch64, c,null);
     jmpaddr(cg.AArch64, c);
     eecontext.EEcode = gen1(c, 0xCC);        // INT 3
     eecontext.EEin--;
@@ -3057,7 +3057,7 @@ FuncParamRegs FuncParamRegs_create(tym_t tyf)
 /*****************************************
  * Allocate parameter of type t and ty to registers* preg1 and* preg2.
  * Params:
- *      cg = code generator state
+ *      AArch64 = true if AArch64 code generator
  *      fpr = context
  *      t = type, valid only if ty is TYstruct or TYarray
  *      ty = type
@@ -3068,7 +3068,7 @@ FuncParamRegs FuncParamRegs_create(tym_t tyf)
  *      true  = for preg1, preg2 set to allocated register pair
  */
 @trusted
-bool FuncParamRegs_alloc(ref CGstate cg, ref FuncParamRegs fpr, type* t, tym_t ty, out reg_t preg1, out reg_t preg2)
+bool FuncParamRegs_alloc(bool AArch64, ref FuncParamRegs fpr, type* t, tym_t ty, out reg_t preg1, out reg_t preg2)
 {
     //printf("FuncParamRegs::alloc(ty: %s t: %p)\n", tym_str(ty), t);
     //if (t) type_print(t);
@@ -3154,7 +3154,6 @@ bool FuncParamRegs_alloc(ref CGstate cg, ref FuncParamRegs fpr, type* t, tym_t t
     reg_t* preg = &preg1;
     int regcntsave = fpr.regcnt;
     int xmmcntsave = fpr.xmmcnt;
-    bool AArch64 = cg.AArch64;
 
     if (config.exe == EX_WIN64)
     {
@@ -3453,7 +3452,7 @@ void cdfunc(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t pretregs)
             psize = REGSIZE;
         }
         //printf("[%d] size = %u, numpara = %d %s\n", i, psize, numpara, tym_str(ep.Ety));
-        if (FuncParamRegs_alloc(cg, fpr, ep.ET, ep.Ety, parameters[i].reg, parameters[i].reg2))
+        if (FuncParamRegs_alloc(cg.AArch64, fpr, ep.ET, ep.Ety, parameters[i].reg, parameters[i].reg2))
         {
             if (config.exe == EX_WIN64)
                 numpara += REGSIZE;             // allocate stack space for it anyway
@@ -4134,7 +4133,7 @@ static if (0)
 }
 
     reg_t reg1, reg2;
-    retregs = allocretregs(cg, e.Ety, e.ET, tym1, reg1, reg2);
+    retregs = allocretregs(cg.AArch64, e.Ety, e.ET, tym1, reg1, reg2);
     //printf("retregs: %s e.Ety: %s tym1: %s\n", regm_str(retregs), tym_str(e.Ety), tym_str(tym1));
 
     assert(retregs || !pretregs);

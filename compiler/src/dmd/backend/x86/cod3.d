@@ -701,11 +701,10 @@ void cod3_buildmodulector(OutBuffer* buf, int codeOffset, int refOffset)
  */
 
 @trusted
-regm_t regmask(ref CGstate cg, tym_t tym, tym_t tyf)
+regm_t regmask(bool AArch64, tym_t tym, tym_t tyf)
 {
-    bool AArch64 = cg.AArch64;
     if (AArch64)
-        return dmd.backend.arm.cod3.regmask(cg.AArch64, tym, tyf);
+        return dmd.backend.arm.cod3.regmask(AArch64, tym, tyf);
 
     switch (tybasic(tym))
     {
@@ -1294,7 +1293,7 @@ static if (NTEXCEPTIONS)
             // Mark all registers as destroyed. This will prevent
             // register assignments to variables used in filter blocks.
             getregsNoSave(cg, cg.allregs);
-            regm_t retregsx = regmask(cg, e.Ety, TYnfunc);
+            regm_t retregsx = regmask(cg.AArch64, e.Ety, TYnfunc);
             gencodelem(cg, cdb,e,retregsx,true);
             cdb.gen1(0xC3);   // RET
             break;
@@ -1303,7 +1302,7 @@ static if (NTEXCEPTIONS)
 
         case BC.retexp:
             reg_t reg1, reg2;
-            retregs = allocretregs(cg, e.Ety, e.ET, funcsym_p.ty(), reg1, reg2);
+            retregs = allocretregs(cg.AArch64, e.Ety, e.ET, funcsym_p.ty(), reg1, reg2);
             //printf("reg1: %d, reg2: %d\n", reg1, reg2);
             //printf("allocretregs e.Ety: %s returns %llx %s, reg1: %d reg2: %d\n", tym_str(e.Ety), retregs, regm_str(retregs), reg1, reg2);
 
@@ -1614,7 +1613,7 @@ static if (NTEXCEPTIONS)
  * Allocate registers for function return values.
  *
  * Params:
- *    cg    = code generator state
+ *    AArch64 = true if AArch64 code generator
  *    ty    = return type
  *    t     = return type extended info
  *    tyf   = function type
@@ -1626,14 +1625,13 @@ static if (NTEXCEPTIONS)
  *    0 if function returns on the stack or returns void.
  */
 @trusted
-regm_t allocretregs(ref CGstate cg, const tym_t ty, type* t, const tym_t tyf, out reg_t reg1, out reg_t reg2)
+regm_t allocretregs(bool AArch64, const tym_t ty, type* t, const tym_t tyf, out reg_t reg1, out reg_t reg2)
 {
     //printf("allocretregs() ty: %s\n", tym_str(ty));
     reg1 = reg2 = NOREG;
-    auto AArch64 = cg.AArch64;
 
     if (!(config.exe & EX_posix))
-        return regmask(cg, ty, tyf);    // for non-Posix ABI
+        return regmask(AArch64, ty, tyf);    // for non-Posix ABI
 
     /* The rest is for the Itanium ABI
      */
@@ -2183,7 +2181,7 @@ void doswitch(ref CGstate cg, ref CodeBuilder cdb, block* b)
 
                 b.Btablesize = cast(int) (vmax - vmin + 1) * 4;
                 code* ce = cdbe.finish();
-                pinholeopt(cg, ce, null);
+                pinholeopt(cg.AArch64, ce, null);
 
                 cdb.append(cdbe);
             }
@@ -2615,7 +2613,7 @@ int jmpopcode(ref CGstate cg, elem* e)
          tymx == TYcdouble || tymx == TYcfloat ||
          (tyxmmreg(tymx) && config.fpxmmregs && e.Ecount != e.Ecomsub) ||
          op == OPind ||
-         (OTcall(op) && (regmask(cg, tymx, tybasic(e.E1.Eoper)) & (mST0 | XMMREGS))));
+         (OTcall(op) && (regmask(cg.AArch64, tymx, tybasic(e.E1.Eoper)) & (mST0 | XMMREGS))));
 
     if (!needsNanCheck)
     {
@@ -4141,7 +4139,7 @@ void prolog_saveregs(ref CGstate cg, ref CodeBuilder cdb, regm_t topush, int cfa
                     config.ehmethod == EHmethod.EH_DWARF)
                 {   // Emit debug_frame data giving location of saved register
                     code* c = cdb.finish();
-                    pinholeopt(cg, c, null);
+                    pinholeopt(cg.AArch64, c, null);
                     dwarf_CFA_set_loc(calcblksize(cg.AArch64, c));  // address after save
                     dwarf_CFA_offset(reg, cast(int)(gpoffset - cfa_offset));
                     cdb.reset();
@@ -4176,7 +4174,7 @@ void prolog_saveregs(ref CGstate cg, ref CodeBuilder cdb, regm_t topush, int cfa
                 {   // Emit debug_frame data giving location of saved register
                     // relative to 0[EBP]
                     code* c = cdb.finish();
-                    pinholeopt(cg, c, null);
+                    pinholeopt(cg.AArch64, c, null);
                     dwarf_CFA_set_loc(calcblksize(cg.AArch64, c));  // address after PUSH reg
                     dwarf_CFA_offset(reg, -cg.EBPtoESP - cfa_offset);
                     cdb.reset();
@@ -4379,7 +4377,7 @@ void prolog_genvarargs(ref CGstate cg, ref CodeBuilder cdb, Symbol* sv)
     // MOV 9+16[RAX],R11
     cdb.genc1(0x89,(REX_W << 16) | modregxrm(2,R11,AX),FL.const_,9 + 16);   // into stack_args_save
 
-    pinholeopt(cg, cdb.peek(), null);
+    pinholeopt(cg.AArch64, cdb.peek(), null);
     useregs(cg, mAX|mR11);
 }
 
@@ -4958,7 +4956,7 @@ void epilog(ref CGstate cg, block* b)
     {
         regm_t retregs = 0;
         if (b.bc == BC.retexp)
-            retregs = regmask(cg, b.Belem.Ety, tym);
+            retregs = regmask(cg.AArch64, b.Belem.Ety, tym);
         nteh_monitor_epilog(cg,cdbx,retregs);
         xlocalsize += 8;
     }
@@ -5146,7 +5144,7 @@ static if (0)
         }
     }
 
-    pinholeopt(cg, c, null);
+    pinholeopt(cg.AArch64, c, null);
     cg.retsize += calcblksize(cg.AArch64, c);          // compute size of function epilog
     cdb.append(cdbx);
     b.Bcode = cdb.finish();
@@ -5403,7 +5401,7 @@ void cod3_thunk(ref CGstate cg, Symbol* sthunk,Symbol* sfunc,uint p,tym_t thisty
 
     thunkoffset = Offset(seg);
     code* c = cdb.finish();
-    pinholeopt(cg, c,null);
+    pinholeopt(cg.AArch64, c,null);
     targ_size_t framehandleroffset;
     codout(cg.AArch64, seg,c,null,framehandleroffset);
     code_free(c);
@@ -6130,9 +6128,9 @@ targ_size_t cod3_bpoffset(ref CGstate cg, Symbol* s)
  */
 
 @trusted
-void pinholeopt(ref CGstate cg, code* c,block* b)
+void pinholeopt(bool AArch64, code* c,block* b)
 {
-    if (cg.AArch64)
+    if (AArch64)
         return;
 
     targ_size_t a;
@@ -6145,7 +6143,7 @@ void pinholeopt(ref CGstate cg, code* c,block* b)
 
     debug
     {
-        __gshared int tested; if (!tested) { tested++; pinholeopt_unittest(cg); }
+        __gshared int tested; if (!tested) { tested++; pinholeopt_unittest(AArch64); }
     }
 
     debug
@@ -6708,7 +6706,7 @@ void pinholeopt(ref CGstate cg, code* c,block* b)
     {
         printf("-pinholeopt(%p)\n",cstart);
         for (c = cstart; c; c = code_next(c))
-            code_print(cg.AArch64, c);
+            code_print(AArch64, c);
     }
 }
 
@@ -6716,7 +6714,7 @@ void pinholeopt(ref CGstate cg, code* c,block* b)
 debug
 {
 @trusted
-private void pinholeopt_unittest(ref CGstate cg)
+private void pinholeopt_unittest(bool AArch64)
 {
     //printf("pinholeopt_unittest()\n");
     static struct CS
@@ -6791,7 +6789,7 @@ private void pinholeopt_unittest(ref CGstate cg)
         cs.IEV1.Vsize_t = pin.ev1;
         cs.IEV2.Vsize_t = pin.ev2;
         cs.Iflags = cast(CF)pin.flags;
-        pinholeopt(cg, &cs, null);
+        pinholeopt(AArch64, &cs, null);
         if (cs.Iop != pout.op)
         {   printf("[%d] Iop = x%02x, pout = x%02x\n", i, cs.Iop, pout.op);
             assert(0);

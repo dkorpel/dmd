@@ -776,7 +776,7 @@ void FuncDeclaration_toObjFile(ref CGstate cg, FuncDeclaration fd, bool multiobj
 
         foreach (sp; params[0 .. pi])
         {
-            if (fpr.alloc(cg, sp.Stype, sp.Stype.Tty, sp.Spreg, sp.Spreg2))
+            if (fpr.alloc(cg.AArch64, sp.Stype, sp.Stype.Tty, sp.Spreg, sp.Spreg2))
             {
                 // successful allocation
                 //printf("ident %s reg %d reg2 %d\n", sp.Sident.ptr, sp.Spreg, sp.Spreg2);

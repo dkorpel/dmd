@@ -3485,7 +3485,7 @@ void cdcnvt(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t pretregs)
                 /* forth between 8088 registers and 8087 registers      */
                 if (OTcall(e.E1.Eoper) && !(pretregs & cg.allregs))
                 {
-                    retregs = regmask(cg, e.E1.Ety, e.E1.E1.Ety);
+                    retregs = regmask(cg.AArch64, e.E1.Ety, e.E1.E1.Ety);
                     if (retregs & (mXMM1 | mXMM0 |mST01 | mST0))       // if return in ST0
                     {
                         codelem(cg,cdb,e.E1,pretregs,false);
@@ -3617,7 +3617,7 @@ void cdcnvt(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t pretregs)
                 break;
         }
     }
-    retregs = regmask(cg, e.E1.Ety, TYnfunc);
+    retregs = regmask(cg.AArch64, e.E1.Ety, TYnfunc);
 L1:
     codelem(cg,cdb,e.E1,retregs,false);
     for (int i = 0; 1; i++)

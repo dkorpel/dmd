@@ -309,7 +309,7 @@ void codgenx(ref CGstate cg, Symbol* sfunc)
     prolog(cg, cdbprolog);           // gen function start code
     code* cprolog = cdbprolog.finish();
     if (cprolog)
-        pinholeopt(cg, cprolog,null);       // optimize
+        pinholeopt(cg.AArch64, cprolog,null);       // optimize
 
     cg.funcoffset = Offset(sfunc.Sseg);
     targ_size_t coffset = Offset(sfunc.Sseg);
@@ -342,7 +342,7 @@ void codgenx(ref CGstate cg, Symbol* sfunc)
                 break;
         }
         assignaddr(cg,b);          // assign addresses
-        pinholeopt(cg, b.Bcode,b);         // do pinhole optimization
+        pinholeopt(cg.AArch64, b.Bcode,b);         // do pinhole optimization
         if (b.Bflags & BFL.prolog)      // do function prolog
         {
             cg.startoffset = coffset + calcblksize(cg.AArch64, cprolog) - cg.funcoffset;
@@ -1000,7 +1000,7 @@ else
     if (config.exe == EX_WIN64)
     {
         code* c = cdbx.peek();
-        pinholeopt(cg, c, null);
+        pinholeopt(cg.AArch64, c, null);
         cg.prolog_allocoffset = calcblksize(cg.AArch64, c);
     }
 

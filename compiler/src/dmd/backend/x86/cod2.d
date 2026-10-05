@@ -3289,7 +3289,7 @@ void cdind(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     if (pretregs == 0)
     {
         if (e.Ety & mTYvolatile)               // do the load anyway
-            pretregs = regmask(cg, e.Ety, 0);     // load into registers
+            pretregs = regmask(cg.AArch64, e.Ety, 0);     // load into registers
         else
             return;
     }

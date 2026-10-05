@@ -132,7 +132,7 @@ void nteh_gentables(ref CGstate cg, Symbol* sfunc)
     //except_fillInEHTable(s);
 
     outdata(s);                 // output the scope table
-    nteh_framehandler(cg, sfunc, s);
+    nteh_framehandler(cg.AArch64, sfunc, s);
     s_table = null;
 }
 
@@ -425,7 +425,7 @@ void nteh_filter(ref CGstate cg, ref CodeBuilder cdb, block* b)
  * Generate C++ or D frame handler.
  */
 
-void nteh_framehandler(ref CGstate cg, Symbol* sfunc, Symbol* scopetable)
+void nteh_framehandler(bool AArch64, Symbol* sfunc, Symbol* scopetable)
 {
     // Generate:
     //  MOV     EAX,&scope_table
@@ -441,9 +441,9 @@ void nteh_framehandler(ref CGstate cg, Symbol* sfunc, Symbol* scopetable)
         cdb.gencs(0xE9,0,FL.func,getRtlsym(RTLSYM.D_HANDLER));      // JMP _d_framehandler
 
         code* c = cdb.finish();
-        pinholeopt(cg, c,null);
+        pinholeopt(AArch64, c,null);
         targ_size_t framehandleroffset;
-        codout(cg.AArch64, sfunc.Sseg,c,null,framehandleroffset);
+        codout(AArch64, sfunc.Sseg,c,null,framehandleroffset);
         code_free(c);
     }
 }
@@ -548,7 +548,7 @@ void cdsetjmp(ref CGstate cg, ref CodeBuilder cdb, elem* e,ref regm_t pretregs)
     cdb.genadjesp(-(cg.stackpush - stackpushsave));
 
     cg.stackpush = stackpushsave;
-    retregs = regmask(cg, e.Ety, TYnfunc);
+    retregs = regmask(cg.AArch64, e.Ety, TYnfunc);
     fixresult(cg,cdb,e,retregs,pretregs);
 }
 

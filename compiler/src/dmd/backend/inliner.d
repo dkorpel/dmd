@@ -171,12 +171,12 @@ void scanForInlines(ref CGstate cg, Symbol* sfunc)
             if (b.Belem)
             {
                 //elem_print(b.Belem);
-                b.Belem = scanExpressionForInlines(cg, b.Belem);
+                b.Belem = scanExpressionForInlines(cg.regcon.cse, b.Belem);
             }
         if (eecontext.EEelem)
         {
             const marksi = globsym.length;
-            eecontext.EEelem = scanExpressionForInlines(cg, eecontext.EEelem);
+            eecontext.EEelem = scanExpressionForInlines(cg.regcon.cse, eecontext.EEelem);
             eecontext_convs(marksi);
         }
         f.Fflags &= ~Finlinenest;
@@ -242,24 +242,24 @@ bool canInlineExpression(elem* e)
  *      replacement tree
  */
 @trusted
-elem* scanExpressionForInlines(ref CGstate cg, elem* e)
+elem* scanExpressionForInlines(ref cse_t cse, elem* e)
 {
     //printf("scanExpressionForInlines(%p)\n",e);
     const op = e.Eoper;
     if (OTbinary(op))
     {
-        e.E1 = scanExpressionForInlines(cg, e.E1);
-        e.E2 = scanExpressionForInlines(cg, e.E2);
+        e.E1 = scanExpressionForInlines(cse, e.E1);
+        e.E2 = scanExpressionForInlines(cse, e.E2);
         if (op == OPcall)
-            e = tryInliningCall(cg, e);
+            e = tryInliningCall(cse, e);
     }
     else if (OTunary(op))
     {
         assert(op != OPstrctor);  // never happens in MARS
-        e.E1 = scanExpressionForInlines(cg, e.E1);
+        e.E1 = scanExpressionForInlines(cse, e.E1);
         if (op == OPucall)
         {
-            e = tryInliningCall(cg, e);
+            e = tryInliningCall(cse, e);
         }
     }
     else /* leaf */
@@ -277,7 +277,7 @@ elem* scanExpressionForInlines(ref CGstate cg, elem* e)
  */
 
 @trusted
-private elem* tryInliningCall(ref CGstate cg, elem* e)
+private elem* tryInliningCall(ref cse_t cse, elem* e)
 {
     //elem_debug(e);
     assert(e && (e.Eoper == OPcall || e.Eoper == OPucall));
@@ -307,7 +307,7 @@ private elem* tryInliningCall(ref CGstate cg, elem* e)
         /* Check to see if we inline expand the function, or queue  */
         /* it to be output.                                         */
         if ((f.Fflags & (Finline | Finlinenest)) == Finline)
-            e = inlineCall(cg, e,sfunc);
+            e = inlineCall(cse, e,sfunc);
         else
             {   } //queue_func(sfunc);
     }
@@ -324,7 +324,7 @@ private elem* tryInliningCall(ref CGstate cg, elem* e)
  *      the expression replacing the function call
  */
 @trusted
-private elem* inlineCall(ref CGstate cg, elem* e,Symbol* sfunc)
+private elem* inlineCall(ref cse_t cse, elem* e,Symbol* sfunc)
 {
     if (debugc)
         printf("inline %s\n", prettyident(sfunc));
@@ -421,7 +421,7 @@ private elem* inlineCall(ref CGstate cg, elem* e,Symbol* sfunc)
      */
     if (e.Eoper == OPcall)
     {
-        elem* eargs = initializeParamsWithArgs(cg.regcon.cse, e.E2, sistart, globsym.length);
+        elem* eargs = initializeParamsWithArgs(cse, e.E2, sistart, globsym.length);
         ec = el_combine(eargs,ec);
     }
 
@@ -429,7 +429,7 @@ private elem* inlineCall(ref CGstate cg, elem* e,Symbol* sfunc)
     {
         ec.Esrcpos = e.Esrcpos;         // save line information
         f.Fflags |= Finlinenest;        // prevent recursive inlining
-        ec = scanExpressionForInlines(cg, ec); // look for more cases
+        ec = scanExpressionForInlines(cse, ec); // look for more cases
         f.Fflags &= ~Finlinenest;
     }
     else
