@@ -164,3 +164,31 @@ callee writes the field (through any instance, including the global). Indirect c
 functions of the same signature, and virtual calls reach methods of the same name. Reachability stops at
 functions outside `backend/`/`glue/`. This assumes the frontend does not call back into code generation while
 the backend runs, for example from `errorBackend`.
+
+The rewrite also handles two common blockers. A local copy (`auto AArch64 = cg.AArch64;`) is deleted when the new
+parameter is by value and the local is never written. Functions that pass the bare parameter to each other (recursion
+cycles, or a chain like `alloc` → `FuncParamRegs_alloc`) are narrowed together when they all narrow to the same path.
+
+### Results (2026-10-05)
+
+| Struct | Parameters before | after | Narrowed | Single-field left |
+|---|---|---|---|---|
+| `CGstate` (53 fields) | 357 | 292 | 65 | 6 |
+| `GlobalOptimizer` (14 fields) | 57 | 34 | 23 | 1 |
+| `BlockOpt` (4 fields) | 58 | 30 | 28 | 7 |
+
+Every generated commit builds in release, debug and unittest mode, and the oracle reports byte-identical objects.
+The 188 `CGstate` parameters that need the whole struct are mostly callers of `codelem`, which dispatches through
+the `cdxxx` table. Narrowing those needs a design change, not a rewrite.
+
+Remaining single-field cases, by reason:
+
+- Address-taken table handlers (`cderr`, `cdctor`, `cddtor`, `cdmark`, `cddctor`, `cdhalt`): the table fixes the signature.
+- `movregconst` writes through `CGstate.regimmed_set`, a method; moving it to `con_t` would unblock it.
+- `pdata.d` `unwind_info_slice` uses another field inside `static if (0)` code.
+- `findloops`, `flowrd`, `flowlv`, `comsubs2`: a parameter or local with the field's name already exists.
+- `compdom` is overloaded; `markInvariants` passes `go` on in a form the rewrite doesn't match.
+
+`deglobal params --type=CGstate` lists which fields are used most and which field sets occur together. That is
+the input for splitting `CGstate` into smaller structs (frame layout: `Auto`/`Para`/`Fast`/`BPoff`/`EBPtoESP`/`hasframe`;
+register state: `regcon`/`mfuncreg`/`msavereg`/`allregs`), which would let more of the 2-3 field functions narrow.
