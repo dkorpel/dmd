@@ -46,6 +46,8 @@ for ((i = 0; i < steps; i++)); do
         exit 1
     fi
     names=$(echo "$chosen" | awk '{print $1 "()"}' | paste -sd, | sed 's/,/, /g')
-    git commit -q -am "backend: pass $global as parameter to $names" -m "Generated with compiler/tools/deglobal" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+    n=$(echo "$chosen" | wc -l)
+    if [ "$n" = 1 ]; then subject="backend: pass $global as parameter to $names"; else subject="backend: pass $global as parameter to $n functions"; fi
+    git commit -q -am "$subject" -m "$names" -m "Generated with compiler/tools/deglobal" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
     echo "committed: $names" | tee -a "$log"
 done
