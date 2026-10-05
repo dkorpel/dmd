@@ -1026,7 +1026,7 @@ private code* callFinallyBlock(ref CGstate cg, block* bf, regm_t retregs)
         }
     }
     cdbs.genc(0xE8,0,FL.unde,0,FL.block,cast(targ_size_t)bf);
-    cgstate.regcon.immed.mval = 0;
+    cg.regcon.immed.mval = 0;
     if (nalign)
         cod3_stackadj(cg, cdbs, -nalign);
     cdbs.append(cdbr);
