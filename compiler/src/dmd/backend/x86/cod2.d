@@ -4345,7 +4345,7 @@ private void cdmemsetn(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pr
      * variables, and next pass fails because it can't use those registers, and so cannot
      * allocate registers for retregs3. See ice11596.d
      */
-    useregs(retregs3);
+    useregs(cg, retregs3);
 
     reg_t valreg = findreg(retregs3);
     reg_t valreghi;

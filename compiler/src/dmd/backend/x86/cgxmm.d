@@ -338,7 +338,7 @@ void xmmeq(ref CGstate cg, ref CodeBuilder cdb, elem* e, opcode_t op, elem* e1, 
         getregs_imm(cdb,retregs);        // necessary if both lvalue and
                                         //  rvalue are CSEs (since a reg
                                         //  can hold only one e at a time)
-        cssave(e1,retregs,!OTleaf(e1.Eoper));     // if lvalue is a CSE
+        cssave(cg, e1,retregs,!OTleaf(e1.Eoper));     // if lvalue is a CSE
     }
 
     fixresult(cg,cdb,e,retregs,pretregs);
@@ -587,7 +587,7 @@ void xmmopass(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         getregs_imm(cdb,retregs);        // necessary if both lvalue and
                                         //  rvalue are CSEs (since a reg
                                         //  can hold only one e at a time)
-        cssave(e1,retregs,!OTleaf(e1.Eoper));     // if lvalue is a CSE
+        cssave(cg, e1,retregs,!OTleaf(e1.Eoper));     // if lvalue is a CSE
     }
 
     fixresult(cg,cdb,e,retregs,pretregs);
@@ -675,7 +675,7 @@ void xmmpost(ref CGstate cg,ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         getregs_imm(cdb,retregs); // necessary if both lvalue and
                                         //  rvalue are CSEs (since a reg
                                         //  can hold only one e at a time)
-        cssave(e1,retregs,!OTleaf(e1.Eoper));     // if lvalue is a CSE
+        cssave(cg, e1,retregs,!OTleaf(e1.Eoper));     // if lvalue is a CSE
     }
 
     fixresult(cg,cdb,e,resultregs,pretregs);

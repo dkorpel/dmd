@@ -371,7 +371,7 @@ void codgenx(ref CGstate cg, Symbol* sfunc)
         {
             if (b.Bflags & BFL.jmpoptdone)      /* if no more jmp opts for this blk */
                 continue;
-            int i = branch(b,0);            // see if jmp => jmp short
+            int i = branch(cg, b,0);            // see if jmp => jmp short
             if (i)                          // if any bytes saved
             {
                 b.Bsize -= i;
@@ -438,7 +438,7 @@ void codgenx(ref CGstate cg, Symbol* sfunc)
                 b.Btableoffset = swoffset;     /* offset of sw tab */
                 swoffset += b.Btablesize;
             }
-            jmpaddr(b.Bcode);          /* assign jump addresses        */
+            jmpaddr(cg, b.Bcode);          /* assign jump addresses        */
 
             debug
             if (debugc)
@@ -1966,10 +1966,9 @@ regm_t lpadregs(ref CGstate cg)
  */
 
 @trusted
-void useregs(regm_t regm)
+void useregs(ref CGstate cg, regm_t regm)
 {
     //printf("useregs(x%llx) %s\n", regm, regm_str(regm));
-    CGstate* cg = &cgstate;
     assert(REGMAX < 64);
     regm &= (1UL << REGMAX) - 1;
     assert(!(regm & mPSW));
@@ -1991,7 +1990,7 @@ void getregs(ref CodeBuilder cdb, regm_t r)
     //printf("getregs() %s\n", regm_str(r));
     CGstate* cg = &cgstate;
     regm_t ms = r & cg.regcon.cse.mops;           // mask of common subs we must save
-    useregs(r);
+    useregs(cgstate, r);
     cg.regcon.cse.mval &= ~r;
     cg.msavereg &= ~r;                     // regs that are destroyed
     cg.regcon.immed.mval &= ~r;
@@ -2009,7 +2008,7 @@ void getregsNoSave(regm_t r)
     //printf("getregsNoSave(x%x) %s\n", r, regm_str(r));
     CGstate* cg = &cgstate;
     assert(!(r & cg.regcon.cse.mops));            // mask of common subs we must save
-    useregs(r);
+    useregs(cgstate, r);
     cg.regcon.cse.mval &= ~r;
     cg.msavereg &= ~r;                     // regs that are destroyed
     cg.regcon.immed.mval &= ~r;
@@ -2071,7 +2070,7 @@ private void cse_save(ref CodeBuilder cdb, regm_t ms)
         ms &= ~mask(reg);           /* turn off reg bit in ms       */
 
         // If we can simply reload the CSE, we don't need to save it
-        if (cse_simple(&cse.csimple, cse.e))
+        if (cse_simple(cgstate, &cse.csimple, cse.e))
             cse.flags |= CSEsimple;
         else
         {
@@ -2122,7 +2121,7 @@ void cse_flush(ref CodeBuilder cdb, int do87)
  */
 
 @trusted
-bool cssave(elem* e, regm_t regm, bool opsflag)
+bool cssave(ref CGstate cg, elem* e, regm_t regm, bool opsflag)
 {
     //printf("cssave() e: %p regm: %s opsflag: %d\n", e, regm_str(regm), opsflag);
     bool result = false;
@@ -2130,7 +2129,6 @@ bool cssave(elem* e, regm_t regm, bool opsflag)
     /*if (e.Ecount && e.Ecount == e.Ecomsub)*/
     if (e.Ecount && e.Ecomsub)
     {
-        CGstate* cg = &cgstate;
         if (!opsflag && cg.pass != BackendPass.final_ && (I32 || I64))
             return false;
 
@@ -2554,13 +2552,13 @@ reload:                                 /* reload result from memory    */
             {
                 regm_t retregs = XMMREGS | mPSW;
                 loaddata(*cg,cdb,e,retregs);
-                cssave(e,retregs,false);
+                cssave(cgstate, e,retregs,false);
                 return;
             }
             loaddata(*cg,cdb,e,pretregs);
             break;
     }
-    cssave(e,pretregs,false);
+    cssave(cgstate, e,pretregs,false);
 }
 
 
@@ -2865,7 +2863,7 @@ void codelem(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs,uin
 
                         regm_t retregs = pretregs & mST0 ? mXMM0 : mXMM0|mXMM1;
                         (*cdxxx[op])(cg,cdb,e,retregs);
-                        cssave(e,retregs,!OTleaf(op));
+                        cssave(cg, e,retregs,!OTleaf(op));
                         fixresult(cgstate,cdb, e, retregs, pretregs);
                         goto L1;
                     }
@@ -2956,7 +2954,7 @@ void codelem(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs,uin
             loaddata(cgstate,cdb,e,pretregs);
             break;
     }
-    cssave(e,pretregs,!OTleaf(op));
+    cssave(cg, e,pretregs,!OTleaf(op));
 L1:
     if (!(constflag & 2))
         freenode(e);
@@ -3014,7 +3012,7 @@ void scodelem(ref CGstate cg, ref CodeBuilder cdb, elem* e,ref regm_t pretregs,r
                     regm &= mLSW | XMMREGS;
             }
             fixresult(cgstate,cdb,e,regm,pretregs);
-            cssave(e,regm,0);
+            cssave(cg, e,regm,0);
             freenode(e);
 
             debug if (debugw)

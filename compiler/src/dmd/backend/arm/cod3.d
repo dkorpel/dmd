@@ -695,7 +695,7 @@ void prolog_genvarargs(ref CGstate cg, ref CodeBuilder cdb, Symbol* sv)
     storeToEA(cs,reg,8);                        // STR reg,[sp,#va_argsave_t + 8*8+8*16+8*4]
     cdbx.gen(&cs);
 
-    useregs(mask(reg));
+    useregs(cg, mask(reg));
 
     code* cx = cdbx.finish();
     if (cx)
@@ -750,7 +750,7 @@ void prolog_genvarargs_osx(ref CGstate cg, ref CodeBuilder cdb, Symbol* sv)
     cs.IEV1.Voffset = 0;
     storeToEA(cs,reg,8);            // STR reg,[sp,#__va_argsave + 0]
     cdbx.gen(&cs);
-    useregs(mask(reg));
+    useregs(cg, mask(reg));
 
     code* cx = cdbx.finish();
     if (cx)
@@ -960,7 +960,7 @@ void epilog(ref CGstate cg, block* b)
         makeitextern(s);
         cdbx.gencs(I16 ? 0x9A : CALL,0,FL.func,s);      // CALLF _trace
         code_orflag(cdbx.last(),CF.off | CF.selfrel26);
-        useregs((ALLREGS | mBP | mES) & ~s.Sregsaved);
+        useregs(cg, (ALLREGS | mBP | mES) & ~s.Sregsaved);
         assert(0);      // TODO AArch64
     }
 

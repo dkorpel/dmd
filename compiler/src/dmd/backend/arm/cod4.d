@@ -252,7 +252,7 @@ void cdeq(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         getregs_imm(cdb,retregs);       // necessary if both lvalue and
                                         //  rvalue are CSEs (since a reg
                                         //  can hold only one e at a time)
-        cssave(e1,retregs,!OTleaf(e1.Eoper));     // if lvalue is a CSE
+        cssave(cg, e1,retregs,!OTleaf(e1.Eoper));     // if lvalue is a CSE
     }
 
     fixresult(cg,cdb,e,retregs,pretregs);
@@ -470,7 +470,7 @@ void cdaddass(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     if (wantres)
     {
         if (e1.Ecount)                 // if we gen a CSE
-            cssave(e1,retregs,!OTleaf(e1.Eoper));
+            cssave(cg, e1,retregs,!OTleaf(e1.Eoper));
     }
     freenode(e1);
     fixresult(cg,cdb,e,retregs,pretregs);
@@ -586,7 +586,7 @@ void floatOpAss(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
             getregs_imm(cdb,retregs);        // necessary if both lvalue and
                                              //  rvalue are CSEs (since a reg
                                              //  can hold only one e at a time)
-            cssave(e1,retregs,!OTleaf(e1.Eoper)); // if lvalue is a CSE
+            cssave(cg, e1,retregs,!OTleaf(e1.Eoper)); // if lvalue is a CSE
         }
 
         fixresult(cg,cdb,e,retregs,pretregs);
@@ -756,7 +756,7 @@ void floatOpAss(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         getregs_imm(cdb,retregs);        // necessary if both lvalue and
                                          //  rvalue are CSEs (since a reg
                                          //  can hold only one e at a time)
-        cssave(e1,retregs,!OTleaf(e1.Eoper)); // if lvalue is a CSE
+        cssave(cg, e1,retregs,!OTleaf(e1.Eoper)); // if lvalue is a CSE
     }
 
     fixresult(cg,cdb,e,retregs,pretregs);
@@ -827,7 +827,7 @@ void cdmulass(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     cdb.gen(&cs);
 
     if (e1.Ecount)                 // if we gen a CSE
-        cssave(e1,retregs,!OTleaf(e1.Eoper));
+        cssave(cg, e1,retregs,!OTleaf(e1.Eoper));
     freenode(e1);
 
     fixresult(cg,cdb,e,retregs,pretregs);
@@ -920,7 +920,7 @@ void cddivass(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
 
     retregs = mask(reg);
     if (e1.Ecount)                 // if we gen a CSE
-        cssave(e1,retregs,!OTleaf(e1.Eoper));
+        cssave(cg, e1,retregs,!OTleaf(e1.Eoper));
     freenode(e1);
 
     fixresult(cg,cdb,e,retregs,pretregs);
@@ -1007,7 +1007,7 @@ void cdshass(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
 
     retregs = mask(reg);
     if (e1.Ecount)                 // if we gen a CSE
-        cssave(e1,retregs,!OTleaf(e1.Eoper));
+        cssave(cg, e1,retregs,!OTleaf(e1.Eoper));
     freenode(e1);
 
     fixresult(cg,cdb,e,retregs,pretregs);
@@ -2113,7 +2113,7 @@ void cdlngsht(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     if (e.Ecount)
         getregs(cdb,retregs);
     else
-        useregs(retregs);
+        useregs(cg, retregs);
 
     debug
     if (!(!pretregs || retregs))
@@ -2148,7 +2148,7 @@ void cdmsw(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     if (e.Ecount)
         getregs(cdb,retregs);
     else
-        useregs(retregs);
+        useregs(cg, retregs);
 
     debug
     if (!(!pretregs || retregs))

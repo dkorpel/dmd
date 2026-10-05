@@ -1844,7 +1844,7 @@ void MsCoffObj_func_term(Symbol* sfunc)
 //          sfunc.Sident.ptr, sfunc.Soffset,Offset(cseg),sfunc.Sxtrnnum);
 
     if (config.fulltypes)
-        cv8_func_term(sfunc);
+        cv8_func_term(cgstate, sfunc);
 }
 
 /********************************

@@ -64,7 +64,7 @@ nothrow:
  */
 public
 @trusted
-void out_config_init(
+void out_config_init(ref CGstate cg, 
         bool arm,       // true for generating AArch64 code
         int model,
         bool exe,
@@ -390,25 +390,25 @@ static if (0)
     cfg.useTypeInfo = useTypeInfo;
     cfg.useExceptions = useExceptions;
 
-    cod3_setdefault(cgstate);
+    cod3_setdefault(cg);
     if (arm)
     {
         cfg.fpxmmregs = false; // add SIMD support later
         util_setAArch64(cfg.exe);
         type_init();
-        cod3_setAArch64(cgstate);
+        cod3_setAArch64(cg);
     }
     else if (model == 64)
     {
         util_set64(cfg.exe);
         type_init();
-        cod3_set64(cgstate);
+        cod3_set64(cg);
     }
     else
     {
         util_set32(cfg.exe);
         type_init();
-        cod3_set32(cgstate);
+        cod3_set32(cg);
     }
 
     if (cfg.objfmt == OBJ_MACH)

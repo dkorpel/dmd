@@ -60,7 +60,7 @@ Symbol* except_gentables()
         symbol_keep(s);
         //symbol_debug(s);
 
-        except_fillInEHTable(s);
+        except_fillInEHTable(cgstate, s);
 
         outdata(s);                 // output the scope table
 
@@ -88,7 +88,7 @@ Symbol* except_gentables()
  * }
  */
 @trusted
-void except_fillInEHTable(Symbol* s)
+void except_fillInEHTable(ref CGstate cg, Symbol* s)
 {
     uint fsize = NPTRSIZE;             // target size of function pointer
     auto dtb = DtBuilder(0);
@@ -131,12 +131,12 @@ void except_fillInEHTable(Symbol* s)
     //printf("ehtables: func = %s, offset = x%x, startblock.Boffset = x%x\n", funcsym_p.Sident, funcsym_p.Soffset, startblock.Boffset);
 
     // Get offset of ESP from EBP
-    long spoff = cod3_spoff(cgstate);
+    long spoff = cod3_spoff(cg);
     dtb.dword(cast(int)spoff);
     sz += 4;
 
     // Offset from start of function to return code
-    dtb.dword(cast(int)cgstate.retoffset);
+    dtb.dword(cast(int)cg.retoffset);
     sz += 4;
 
     // First, calculate starting catch offset
@@ -148,7 +148,7 @@ void except_fillInEHTable(Symbol* s)
             guarddim = b.Bscope_index + 1;
 //      printf("b.bc = %2d, Bscope_index = %2d, last_index = %2d, offset = x%x\n",
 //              b.bc, b.Bscope_index, b.Blast_index, b.Boffset);
-        if (cgstate.usednteh & EHcleanup)
+        if (cg.usednteh & EHcleanup)
             for (code* c = b.Bcode; c; c = code_next(c))
             {
                 if (c.Iop == PSOP.ddtor)
@@ -237,7 +237,7 @@ void except_fillInEHTable(Symbol* s)
      * within a single expression. These are marked by the special instruction pairs
      * PSOP.dctor and PSOP.ddtor.
      */
-    if (cgstate.usednteh & EHcleanup)
+    if (cg.usednteh & EHcleanup)
     {
         Barray!int stack;
 
@@ -280,14 +280,14 @@ void except_fillInEHTable(Symbol* s)
                             if (config.ehmethod == EHmethod.EH_WIN32)
                             {
                                 nteh_patchindex(cf, stack[stack.length - 1]);
-                                foffset += calccodsize(cgstate, cf);
+                                foffset += calccodsize(cg, cf);
                                 cf = code_next(cf);
                             }
-                            foffset += calccodsize(cgstate, cf);
+                            foffset += calccodsize(cg, cf);
                             while (!cf.isJumpOP())
                             {
                                 cf = code_next(cf);
-                                foffset += calccodsize(cgstate, cf);
+                                foffset += calccodsize(cg, cf);
                             }
                             // https://issues.dlang.org/show_bug.cgi?id=9438
                             //cf = code_next(cf);
@@ -302,7 +302,7 @@ void except_fillInEHTable(Symbol* s)
                         n++;
                     }
                     else
-                        eoffset += calccodsize(cgstate, c2);
+                        eoffset += calccodsize(cg, c2);
                 }
                 //printf("boffset = %x, eoffset = %x, foffset = %x\n", boffset, eoffset, foffset);
                 dtb.dword(stack[stack.length - 1]);   // parent index
@@ -324,7 +324,7 @@ void except_fillInEHTable(Symbol* s)
                 assert(stack.length != 0);
             }
         Lnodtor:
-            boffset += calccodsize(cgstate, c);
+            boffset += calccodsize(cg, c);
         }
     }
         stack.dtor();
@@ -345,7 +345,7 @@ void except_fillInEHTable(Symbol* s)
 
                 dtb.xoff(bcatch.Bcatchtype,0,TYnptr);
 
-                dtb.size(cod3_bpoffset(cgstate, b.jcatchvar));     // EBP offset
+                dtb.size(cod3_bpoffset(cg, b.jcatchvar));     // EBP offset
 
                 // catch handler address
                 if (config.ehmethod == EHmethod.EH_DM)

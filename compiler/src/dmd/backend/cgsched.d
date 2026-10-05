@@ -2673,13 +2673,13 @@ Linsert:
  */
 
 @trusted
-bool stage(code* c)
+bool stage(ref CGstate cg, code* c)
 {
     //printf("stage: "); c.print();
     if (cinfomax == TBLMAX)             // if out of space
         return false;
     auto ci = &cinfo[cinfomax++];
-    *ci = getinfo(cgstate, c);
+    *ci = getinfo(cg, c);
 
     if (c.Iflags & (CF.targ | CF.targ2 | CF.volatile | CF.vex))
     {
@@ -2826,7 +2826,7 @@ private code* schedule(code* c,regm_t scratch)
         while (c)
         {
             //printf("insert %p\n",c);
-            if (!sch.stage(c))          // store c in scheduling table
+            if (!sch.stage(cgstate, c))          // store c in scheduling table
                 break;
             c = csnip(c);
         }

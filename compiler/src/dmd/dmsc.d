@@ -34,6 +34,7 @@ import dmd.backend.ty;
 import dmd.backend.type;
 
 import dmd.file_manager : FileManager;
+import dmd.backend.x86.cgcod : cgstate;
 
 /// Callback for the backend to fetch cached source-file contents from the
 /// front-end FileManager (Module.src), so hashing source files for debug info
@@ -89,7 +90,7 @@ void backend_init(const ref Param params, const ref DMDparams driverParams, cons
              FileName.equals(FileName.ext(params.exefile), "exe"))
         exe = true;         // if writing out EXE file
 
-    out_config_init(
+    out_config_init(cgstate, 
         target.isAArch64,
         is64 ? 64 : 32,
         exe,

@@ -906,7 +906,7 @@ void getlvalue(ref CGstate cg,ref CodeBuilder cdb,ref code pcs,elem* e,regm_t ke
                     pcs.Iflags &= ~CF.opsize;
                     pcs.Irex |= REX_W;
                     cdb.gen(&pcs);                 // LEA reg,EA
-                    cssave(e1,regs,true);
+                    cssave(cg, e1,regs,true);
                     pcs.Iflags = flagsave;
                     pcs.Irex = rexsave;
                     pcs.Iop = opsave;
@@ -1455,7 +1455,7 @@ void fixresult(ref CGstate cg, ref CodeBuilder cdb, elem* e, regm_t retregs, ref
             reg_t rreg = allocreg(cdb, outretregs, tym);     // allocate return regs
             cdb.gen1(INSTR.mov_register(sz == 8,reg,rreg));  // MOV rreg,reg
         }
-        cssave(e,retregs | outretregs,false);
+        cssave(cg, e,retregs | outretregs,false);
         // Commented out due to Bugzilla 8840
         //forregs = 0;    // don't care about result in reg cuz real result is in rreg
         retregs = outretregs & ~mPSW;
@@ -2736,7 +2736,7 @@ void loaddata(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t outretreg
                 if (reg != nreg)
                 {
                     genmovreg(cdb, reg, nreg);   // MOV reg,nreg
-                    cssave(e, mask(nreg), false);
+                    cssave(cg, e, mask(nreg), false);
                 }
             }
         }

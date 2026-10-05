@@ -328,7 +328,7 @@ void genEEcode(ref CGstate cg)
     code* c = cdb.finish();
     assignaddrc(cg,c);
     pinholeopt(c,null);
-    jmpaddr(c);
+    jmpaddr(cg, c);
     eecontext.EEcode = gen1(c, 0xCC);        // INT 3
     eecontext.EEin--;
 }
@@ -1209,7 +1209,7 @@ void getlvalue(ref CGstate cg,ref CodeBuilder cdb,ref code pcs,elem* e,regm_t ke
                     if (I64)
                         pcs.Irex |= REX_W;
                     cdb.gen(&pcs);                 // LEA idxreg,EA
-                    cssave(e1,idxregs,true);
+                    cssave(cg, e1,idxregs,true);
                     if (!I16)
                     {
                         pcs.Iflags = flagsave;
@@ -2081,7 +2081,7 @@ void fixresult(ref CGstate cg, ref CodeBuilder cdb, elem* e, regm_t retregs, ref
                     genmovreg(cdb, rreg, reg);    // MOV rreg,reg
             }
         }
-        cssave(e,retregs | outretregs,opsflag);
+        cssave(cg, e,retregs | outretregs,opsflag);
         // Commented out due to Bugzilla 8840
         //forregs = 0;    // don't care about result in reg cuz real result is in rreg
         retregs = outretregs & ~mPSW;
@@ -5236,7 +5236,7 @@ void offsetinreg(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t pretre
     reg = allocreg(cdb, pretregs, TYoffset);
     getoffset(cg, cdb,e,reg);
 L3:
-    cssave(e, pretregs,false);
+    cssave(cg, e, pretregs,false);
     freenode(e);
 }
 
@@ -5600,7 +5600,7 @@ void loaddata(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t outretreg
                 if (reg != nreg)
                 {
                     genmovreg(cdb, reg, nreg);   // MOV reg,nreg
-                    cssave(e, mask(nreg), false);
+                    cssave(cg, e, mask(nreg), false);
                 }
             }
         }

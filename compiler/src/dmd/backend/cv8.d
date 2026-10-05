@@ -400,7 +400,7 @@ void cv8_func_start(Symbol* sfunc)
 }
 
 @trusted
-void cv8_func_term(Symbol* sfunc)
+void cv8_func_term(ref CGstate cg, Symbol* sfunc)
 {
     //printf("cv8_func_term(%s)\n", sfunc.Sident);
 
@@ -471,8 +471,8 @@ void cv8_func_term(Symbol* sfunc)
     buf.write32(0);            // pend
     buf.write32(0);            // pnext
     buf.write32(cast(uint)currentfuncdata.section_length); // size of function
-    buf.write32(cast(uint)cgstate.startoffset);                    // size of prolog
-    buf.write32(cast(uint)cgstate.retoffset);                      // offset to epilog
+    buf.write32(cast(uint)cg.startoffset);                    // size of prolog
+    buf.write32(cast(uint)cg.retoffset);                      // offset to epilog
     buf.write32(funcid);           // LF_FUNC_ID (ID stream), resolved to the function type
 
     F1_Fixups f1f;
@@ -492,11 +492,11 @@ void cv8_func_term(Symbol* sfunc)
         // Locals and parameters are addressed relative to the frame pointer
         // (RBP/EBP), matching the S_REGREL32 records emitted for them.
         uint frameflags = CV_FRAME_LOCALBP_RBP | CV_FRAME_PARAMBP_RBP;
-        if (cgstate.Alloca.size)
+        if (cg.Alloca.size)
             frameflags |= CV_FRAME_HASALLOCA;
-        if (cgstate.anyiasm)
+        if (cg.anyiasm)
             frameflags |= CV_FRAME_HASINLASM;
-        if (cgstate.usednteh)
+        if (cg.usednteh)
             frameflags |= CV_FRAME_HASEH;
         if (config.flags2 & CFG2stomp)
             frameflags |= CV_FRAME_SECURITY;
@@ -558,7 +558,7 @@ void cv8_func_term(Symbol* sfunc)
             buf.write16(S_END);
         }
     }
-    varStats_writeSymbolTable(cgstate, sfunc, globsym, &cv8_outsym, &cv8.endArgs, &cv8.beginBlock, &cv8.endBlock);
+    varStats_writeSymbolTable(cg, sfunc, globsym, &cv8_outsym, &cv8.endArgs, &cv8.beginBlock, &cv8.endBlock);
 
     /* Put out function return record S_RETURN
      * (VC doesn't, so we won't bother, either.)

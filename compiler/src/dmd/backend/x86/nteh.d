@@ -116,7 +116,7 @@ void nteh_filltables()
 {
     Symbol* s = s_table;
     symbol_debug(s);
-    except_fillInEHTable(s);
+    except_fillInEHTable(cgstate, s);
 }
 
 /****************************
@@ -304,7 +304,7 @@ void nteh_prolog(ref CGstate cg, ref CodeBuilder cdb)
     }
     else
     {
-        useregs(mDX);
+        useregs(cg, mDX);
         cs.Iop = 0x8B;
         cs.Irm = modregrm(0,DX,BPRM);
         cs.Iflags = CF.fs;
@@ -340,7 +340,7 @@ void nteh_epilog(ref CGstate cg, ref CodeBuilder cdb)
         mov     FS:__except_list,ECX
      */
     reg_t reg = CX;
-    useregs(1UL << reg);
+    useregs(cg, 1UL << reg);
 
     code cs;
     cs.Iop = 0x8B;
@@ -634,7 +634,7 @@ void nteh_monitor_prolog(ref CGstate cg, ref CodeBuilder cdb, Symbol* shandle)
     else
     {
         // PUSH shandle
-        useregs(mCX);
+        useregs(cg, mCX);
         cdbx.genc1(0x8B,modregrm(2,CX,4),FL.const_,4 * (1 + cg.needframe) + shandle.Soffset + localsize);
         cdbx.last().Isib = modregrm(0,4,SP);
         cdbx.gen1(0x50 + CX);                      // PUSH ECX
@@ -645,7 +645,7 @@ void nteh_monitor_prolog(ref CGstate cg, ref CodeBuilder cdb, Symbol* shandle)
     makeitextern(smh);
 
     code cs;
-    useregs(mDX);
+    useregs(cg, mDX);
     cs.Iop = 0x8B;
     cs.Irm = modregrm(0,DX,BPRM);
     cs.Iflags = CF.fs;

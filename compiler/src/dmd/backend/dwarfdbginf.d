@@ -3365,7 +3365,7 @@ static if (1)
             sfunc.Sfunc.LSDAsym = s;
         }
         import dmd.backend.dwarfeh : dwehtable;
-        genDwarfEh(sfunc, seg, buf, (cgstate.usednteh & EHcleanup) != 0, startoffset, retoffset, dwehtable);
+        genDwarfEh(cgstate, sfunc, seg, buf, (cgstate.usednteh & EHcleanup) != 0, startoffset, retoffset, dwehtable);
     }
 
 }

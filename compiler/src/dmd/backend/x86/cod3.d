@@ -2930,9 +2930,9 @@ Lcant:
  */
 
 @trusted
-bool cse_simple(code* c, elem* e)
+bool cse_simple(ref CGstate cg, code* c, elem* e)
 {
-    if (cgstate.AArch64)
+    if (cg.AArch64)
         return false;           // TODO AArch64
 
     regm_t regm;
@@ -2944,7 +2944,7 @@ bool cse_simple(code* c, elem* e)
         sz == REGSIZE &&
         e.E2.Eoper == OPconst &&
         e.E1.Eoper == OPvar &&
-        isregvar(cgstate, e.E1,regm,reg) &&
+        isregvar(cg, e.E1,regm,reg) &&
         !(e.E1.Vsym.Sflags & SFLspill)
        )
     {
@@ -2963,7 +2963,7 @@ bool cse_simple(code* c, elem* e)
     else if (e.Eoper == OPind &&
         sz <= REGSIZE &&
         e.E1.Eoper == OPvar &&
-        isregvar(cgstate, e.E1,regm,reg) &&
+        isregvar(cg, e.E1,regm,reg) &&
         (I32 || I64 || regm & IDXREGS) &&
         !(e.E1.Vsym.Sflags & SFLspill)
        )
@@ -3717,7 +3717,7 @@ void prolog_ifunc2(ref CodeBuilder cdb, tym_t tyf, tym_t tym, bool pushds)
         c.IEV2.Vseg = DATA;
         c.Iflags ^= CF.seg | CF.off;            // turn off CF.off, on CF.seg
         cdb.gen2(0x8E,modregrm(3,3,AX));       // MOV  DS,AX
-        useregs(mAX);
+        useregs(cgstate, mAX);
     }
 
     if (tym == TYifunc)
@@ -3940,7 +3940,7 @@ void prolog_frameadj(ref CGstate cg, ref CodeBuilder cdb, tym_t tyf, uint xlocal
             makeitextern(getRtlsym(RTLSYM.CHKSTK));
                                                     // CALL _chkstk
             cdb.gencs((LARGECODE) ? 0x9A : CALL,0,FL.func,getRtlsym(RTLSYM.CHKSTK));
-            useregs((ALLREGS | mBP | mES) & ~getRtlsym(RTLSYM.CHKSTK).Sregsaved);
+            useregs(cg, (ALLREGS | mBP | mES) & ~getRtlsym(RTLSYM.CHKSTK).Sregsaved);
         }
         else
         {
@@ -3969,7 +3969,7 @@ void prolog_frameadj(ref CGstate cg, ref CodeBuilder cdb, tym_t tyf, uint xlocal
             }
             cg.regimmed_set(reg,0);             // reg is now 0
             cod3_stackadj(cdb, xlocalsize & 0xFFF);
-            useregs(mask(reg));
+            useregs(cg, mask(reg));
         }
     }
     else if (cg.AArch64)
@@ -4380,7 +4380,7 @@ void prolog_genvarargs(ref CGstate cg, ref CodeBuilder cdb, Symbol* sv)
     cdb.genc1(0x89,(REX_W << 16) | modregxrm(2,R11,AX),FL.const_,9 + 16);   // into stack_args_save
 
     pinholeopt(cdb.peek(), null);
-    useregs(mAX|mR11);
+    useregs(cg, mAX|mR11);
 }
 
 /********************************
@@ -4932,7 +4932,7 @@ void epilog(ref CGstate cg, block* b)
         cdbx.gencs(I16 ? 0x9A : CALL,0,FL.func,s);      // CALLF _trace
         if (!I16)
             code_orflag(cdbx.last(),CF.off | CF.selfrel);
-        useregs((ALLREGS | mBP | mES) & ~s.Sregsaved);
+        useregs(cg, (ALLREGS | mBP | mES) & ~s.Sregsaved);
     }
 
     if (cg.usednteh & (NTEH_try | NTEH_except | NTEHcpp | EHcleanup | EHtry | NTEHpassthru) && (config.exe == EX_WIN32 || MARS))
@@ -5448,9 +5448,9 @@ void makeitextern(Symbol* s)
  */
 
 @trusted
-int branch(block* bl,int flag)
+int branch(ref CGstate cg, block* bl,int flag)
 {
-    if (cgstate.AArch64)
+    if (cg.AArch64)
     {
         import dmd.backend.arm.cod3 : branch;
         return branch(bl, flag);
@@ -5472,7 +5472,7 @@ int branch(block* bl,int flag)
     {
         ubyte op;
 
-        csize = calccodsize(cgstate, c);
+        csize = calccodsize(cg, c);
         cn = code_next(c);
         op = cast(ubyte)c.Iop;
         if ((op & ~0x0F) == 0x70 && c.Iflags & CF.jmp16 ||
@@ -5522,7 +5522,7 @@ int branch(block* bl,int flag)
                     {
                         if (cr == ct)
                             break;
-                        disp += calccodsize(cgstate, cr);
+                        disp += calccodsize(cg, cr);
                     }
 
                     if (!cr)
@@ -5535,7 +5535,7 @@ int branch(block* bl,int flag)
                             if (cr == ct)
                                 s = 1;
                             if (s)
-                                disp += calccodsize(cgstate, cr);
+                                disp += calccodsize(cg, cr);
                         }
                     }
 
@@ -5601,7 +5601,7 @@ int branch(block* bl,int flag)
                     c.Iflags &= ~CF.jmp16;      // a branch is ok
                     bytesaved += I16 ? 3 : 4;
                 }
-                csize = calccodsize(cgstate, c);
+                csize = calccodsize(cg, c);
             }
             else
                 bl.Bflags = cast(BFL)(bl.Bflags & ~cast(uint)BFL.jmpoptdone); // some JMPs left
@@ -6836,9 +6836,9 @@ void simplify_code(code* c)
  */
 
 @trusted
-void jmpaddr(code* c)
+void jmpaddr(ref CGstate cg, code* c)
 {
-    if (cgstate.AArch64)
+    if (cg.AArch64)
     {
         import dmd.backend.arm.cod3 : jmpaddr;
         return jmpaddr(c);
@@ -6862,7 +6862,7 @@ void jmpaddr(code* c)
             ad = 0;                 /* IP displacement              */
             while (ci && ci != ctarg)
             {
-                ad += calccodsize(cgstate, ci);
+                ad += calccodsize(cg, ci);
                 ci = code_next(ci);
             }
             if (!ci)
@@ -6900,7 +6900,7 @@ void jmpaddr(code* c)
             while (ci != c)
             {
                 assert(ci);
-                ad += calccodsize(cgstate, ci);
+                ad += calccodsize(cg, ci);
                 ci = code_next(ci);
             }
             c.IEV2.Vpointer = (-ad) & 0xFF;
