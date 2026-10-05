@@ -853,6 +853,7 @@ string narrowPlan(size_t i, bool apply)
     if (!remove && !path.length)
         return "uses " ~ topFields(n).length.to!string ~ " fields";
     string newName, decl;
+    bool byValue;
     if (!remove)
     {
         auto v = fieldAt(u.sd, path);
@@ -863,7 +864,7 @@ string narrowPlan(size_t i, bool apply)
         const typ = typeText(v, fn.file, apply, tp);
         if (tp.length)
             return tp;
-        bool byValue = !u.byRef && !u.byPtr;
+        byValue = !u.byRef && !u.byPtr;
         if (!byValue && !writtenUnder(*u, path) && cheapType(v.type))
             byValue = aliasProblem(*u, path) is null;
         decl = (byValue ? "" : "ref ") ~ typ ~ " " ~ newName;
@@ -880,8 +881,23 @@ string narrowPlan(size_t i, bool apply)
         return "odd parameter declaration";
     if (fn.localNames.count(u.name) > 1)
         return "parameter name shadowed";
-    if (newName.length && (fn.localNames.canFind(newName) || newName == fn.name))
+    if (newName.length && newName == fn.name)
         return "name clash: " ~ newName;
+    uint[2][] copies;
+    if (newName.length && fn.localNames.canFind(newName))
+    {
+        copies = localCopies(u.func, u.name, newName, path);
+        if (copies.length != fn.localNames.count(newName))
+            return "name clash: " ~ newName;
+        if (!byValue)
+            return "local copy of ref field " ~ newName;
+        if (auto w = writtenLocal(u.func, newName, copies))
+            return "local " ~ newName ~ " written at " ~ w;
+    }
+    bool inCopy(uint off)
+    {
+        return copies.any!(c => off >= c[0] && off < c[1]);
+    }
 
     Edit[][string] mine;
     uint[] selfOffs;
@@ -921,6 +937,9 @@ string narrowPlan(size_t i, bool apply)
             selfOffs ~= spans[ai][0];
             return;
         }
+        if (auto gn = caller in groupFuncName)
+            if (a == *gn)
+                return;
         narrowArg(file, spans[ai][0], spans[ai][1], path);
     }
 
@@ -946,7 +965,7 @@ string narrowPlan(size_t i, bool apply)
         const id = callIdent(c);
         if (id == uint.max)
             return fail = "odd call site " ~ lineOf(c.file, c.off);
-        if (c.caller in narrowing && c.caller != u.func)
+        if (c.caller in narrowing && c.caller != u.func && c.caller !in groupFuncName)
             return fail = "caller " ~ funcs[c.caller].name ~ " narrowed in this step";
         uint recv;
         const q = qualifier(c.file, id, fd, recv);
@@ -964,7 +983,8 @@ string narrowPlan(size_t i, bool apply)
                     continue;
                 const inside = file == fn.file && o > fn.nameOff && o < fn.endOff;
                 foreach (ref o2; funcs)
-                    if (o2.file == file && o2.nameOff < o && o < o2.endOff && &o2 != fn && (cast(size_t)(&o2 - funcs.ptr)) in narrowing)
+                    if (o2.file == file && o2.nameOff < o && o < o2.endOff && &o2 != fn && (cast(size_t)(&o2 - funcs.ptr)) in narrowing &&
+                        (cast(size_t)(&o2 - funcs.ptr)) !in groupFuncName)
                         fail = "dead caller narrowed in this step";
                 callSite(file, o, inside ? u.func : size_t.max, false);
             }
@@ -980,6 +1000,11 @@ string narrowPlan(size_t i, bool apply)
             continue;
         if (k > 0 && tks[k - 1].value == TOK.dot)
             continue;
+        if (inCopy(tk.off))
+        {
+            matched[tk.off] = true;
+            continue;
+        }
         if (remove)
             return fail = "use of unused parameter " ~ lineOf(fn.file, tk.off);
         size_t j = k + 1;
@@ -999,7 +1024,7 @@ string narrowPlan(size_t i, bool apply)
             const end = tks[j - 1].off + cast(uint) parts[$ - 1].length;
             edits[fn.file] ~= Edit(tk.off, end - tk.off, newName);
         }
-        else if (selfOffs.canFind(tk.off))
+        else if (selfOffs.canFind(tk.off) || groupForward(*u, tk.off, path))
             edits[fn.file] ~= Edit(tk.off, cast(uint) u.name.length, newName);
         else
         {
@@ -1016,14 +1041,121 @@ string narrowPlan(size_t i, bool apply)
     if (newName.length)
         foreach (k, tk; tks)
             if (tk.value == TOK.identifier && tk.ident == newName && tk.off > fn.nameOff && tk.off < fn.endOff &&
-                !(k > 0 && tks[k - 1].value == TOK.dot))
+                !(k > 0 && tks[k - 1].value == TOK.dot) && !inCopy(tk.off) &&
+                !(copies.length && k + 1 < tks.length && tks[k + 1].value != TOK.leftParenthesis))
                 return fail = "name clash: " ~ newName ~ " " ~ lineOf(fn.file, tk.off);
+    foreach (c; copies)
+        edits[fn.file] ~= Edit(c[0], c[1] - c[0], "");
     if (remove)
         removeArg(fn.file, pspans, u.index);
     else
         edits[fn.file] ~= Edit(ps[0], ps[1] - ps[0], decl);
     if (auto bad = fixDoc(u.func, u.name, newName, remove ? null : fieldAt(u.sd, path)))
         return fail = bad;
+    return null;
+}
+
+__gshared string[size_t] groupPath;
+__gshared string[size_t] groupFuncName;
+
+bool groupForward(ref PUse u, uint off, string path)
+{
+    foreach (ref fw; u.fwds)
+        if (fw.rootOff == off && !fw.prefix.length)
+            if (auto q = pkey(fw.callee, fw.index) in puseOfKey)
+                if (auto gp = *q in groupPath)
+                    if (*gp == path)
+                        return true;
+    return false;
+}
+
+size_t[] buildGroup(size_t i)
+{
+    const path = commonPrefix(normalized(puses[i]));
+    if (!path.length)
+        return null;
+    size_t[] order = [i];
+    bool[size_t] set = [i: true];
+    for (size_t k = 0; k < order.length; k++)
+        foreach (ref fw; puses[order[k]].fwds)
+        {
+            if (fw.prefix.length)
+                continue;
+            auto q = pkey(fw.callee, fw.index) in puseOfKey;
+            if (!q)
+                return null;
+            if (*q in set)
+                continue;
+            if (puses[*q].sd !is puses[i].sd || commonPrefix(normalized(puses[*q])) != path || order.length >= 10)
+                return null;
+            set[*q] = true;
+            order ~= *q;
+        }
+    return order.length > 1 ? order : null;
+}
+
+bool isTypeStart(TOK v)
+{
+    with (TOK) return v == identifier || v == auto_ || v == const_ || v == immutable_ || (v >= void_ && v <= bool_);
+}
+
+uint[2][] localCopies(size_t f, string pname, string newName, string path)
+{
+    auto fn = &funcs[f];
+    auto t = text(fn.file);
+    auto tks = allTokens(fn.file);
+    auto parts = path.split(".");
+    uint[2][] r;
+    foreach (k, tk; tks)
+    {
+        if (tk.off <= fn.nameOff || tk.off >= fn.endOff || tk.value != TOK.identifier || tk.ident != newName || k < 2)
+            continue;
+        if (!isTypeStart(tks[k - 1].value))
+            continue;
+        const prev = tks[k - 2].value;
+        if (prev != TOK.semicolon && prev != TOK.leftCurly && prev != TOK.rightCurly)
+            continue;
+        size_t j = k + 1;
+        if (j + 1 >= tks.length || tks[j].value != TOK.assign || tks[j + 1].value != TOK.identifier || tks[j + 1].ident != pname)
+            continue;
+        j += 2;
+        bool ok = true;
+        foreach (part; parts)
+        {
+            if (j + 1 < tks.length && tks[j].value == TOK.dot && tks[j + 1].value == TOK.identifier && tks[j + 1].ident == part)
+                j += 2;
+            else
+                ok = false;
+        }
+        if (!ok || j >= tks.length || tks[j].value != TOK.semicolon)
+            continue;
+        const ls = lineStart(t, tks[k - 1].off);
+        const le = lineEnd(t, tks[j].off);
+        if (t[ls .. le].strip != t[tks[k - 1].off .. tks[j].off + 1])
+            continue;
+        r ~= [ls, cast(uint) min(le + 1, t.length)];
+    }
+    return r;
+}
+
+string writtenLocal(size_t f, string name, uint[2][] copies)
+{
+    auto fn = &funcs[f];
+    auto tks = allTokens(fn.file);
+    foreach (k, tk; tks)
+    {
+        if (tk.off <= fn.nameOff || tk.off >= fn.endOff || tk.value != TOK.identifier || tk.ident != name)
+            continue;
+        if (copies.any!(c => tk.off >= c[0] && tk.off < c[1]) || k > 0 && tks[k - 1].value == TOK.dot)
+            continue;
+        const next = k + 1 < tks.length ? tks[k + 1].value : TOK.reserved;
+        const prev = k > 0 ? tks[k - 1].value : TOK.reserved;
+        with (TOK) if (next == assign || next == addAssign || next == minAssign || next == mulAssign || next == divAssign ||
+            next == modAssign || next == andAssign || next == orAssign || next == xorAssign || next == leftShiftAssign ||
+            next == rightShiftAssign || next == unsignedRightShiftAssign || next == concatenateAssign || next == plusPlus ||
+            next == minusMinus || prev == plusPlus || prev == minusMinus || prev == and && k > 1 && unaryContext(tks[k - 2].value))
+            return lineOf(fn.file, tk.off);
+    }
     return null;
 }
 
@@ -1127,10 +1259,39 @@ int narrowStep(string type, size_t max, string[] skip, string[] only, bool dry)
             continue;
         if (chosen.any!(c => funcs[puses[c].func].calls.canFind(f) || funcs[f].calls.canFind(puses[c].func)))
             continue;
-        if (narrowPlan(i, false).length)
+        auto why = narrowPlan(i, false);
+        if (!why.length)
+        {
+            narrowing[f] = true;
+            chosen ~= i;
             continue;
-        narrowing[f] = true;
-        chosen ~= i;
+        }
+        if (!why.startsWith("waits on"))
+            continue;
+        auto grp = buildGroup(i);
+        if (!grp.length || chosen.length + grp.length > max)
+            continue;
+        if (grp.any!(g => g in groupPath || puses[g].func in narrowing || skip.canFind(funcs[puses[g].func].name) ||
+            chosen.any!(c => funcs[puses[c].func].calls.canFind(puses[g].func) || funcs[puses[g].func].calls.canFind(puses[c].func))))
+            continue;
+        const gpath = commonPrefix(normalized(puses[i]));
+        foreach (g; grp)
+        {
+            groupPath[g] = gpath;
+            groupFuncName[puses[g].func] = puses[g].name;
+            narrowing[puses[g].func] = true;
+        }
+        if (grp.all!(g => narrowPlan(g, false).length == 0))
+        {
+            chosen ~= grp;
+            continue;
+        }
+        foreach (g; grp)
+        {
+            groupPath.remove(g);
+            groupFuncName.remove(puses[g].func);
+            narrowing.remove(puses[g].func);
+        }
     }
     foreach (i; chosen)
     {
