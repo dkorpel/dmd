@@ -38,6 +38,8 @@ import dmd.statement;
 import dmd.tokens;
 import dmd.visitor;
 
+import narrow;
+
 struct Call
 {
     size_t callee;
@@ -194,6 +196,7 @@ extern (C++) final class Collector : SemanticTimeTransitiveVisitor
 
     override void visit(CallExp e)
     {
+        onCall(e, cur);
         FuncDeclaration f = e.f;
         if (f)
         {
@@ -219,6 +222,7 @@ extern (C++) final class Collector : SemanticTimeTransitiveVisitor
     {
         if (auto vd = e.var.isVarDeclaration())
         {
+            onRoot(e, vd);
             useGlobal(vd, e.loc);
             if (cur != size_t.max)
                 varUses[funcs[cur].file ~ ":" ~ e.loc.off.to!string] = true;
@@ -230,6 +234,7 @@ extern (C++) final class Collector : SemanticTimeTransitiveVisitor
 
     override void visit(SymOffExp e)
     {
+        onSymOff(e, cur);
         if (auto vd = e.var.isVarDeclaration())
             useGlobal(vd, e.loc);
         else if (auto fd = e.var.isFuncDeclaration())
@@ -238,9 +243,51 @@ extern (C++) final class Collector : SemanticTimeTransitiveVisitor
 
     override void visit(DotVarExp e)
     {
+        onDotVar(e);
         if (auto fd = e.var.isFuncDeclaration())
             if (consumed !is e)
                 funcRef(fd);
+        super.visit(e);
+    }
+
+    override void visit(ThisExp e)
+    {
+        onRoot(e, e.var);
+    }
+
+    override void visit(AssignExp e)
+    {
+        onAssign(e, cur);
+        super.visit(e);
+    }
+
+    override void visit(BinAssignExp e)
+    {
+        onWrite(e.e1, cur, false);
+        super.visit(e);
+    }
+
+    override void visit(PreExp e)
+    {
+        onWrite(e.e1, cur, false);
+        super.visit(e);
+    }
+
+    override void visit(PostExp e)
+    {
+        onWrite(e.e1, cur, false);
+        super.visit(e);
+    }
+
+    override void visit(AddrExp e)
+    {
+        onAddr(e, cur);
+        super.visit(e);
+    }
+
+    override void visit(SliceExp e)
+    {
+        onSlice(e, cur);
         super.visit(e);
     }
 
@@ -261,6 +308,7 @@ extern (C++) final class Collector : SemanticTimeTransitiveVisitor
     {
         if (cur != size_t.max && fd.ident)
             funcs[cur].localNames ~= fd.ident.toString.idup;
+        registerParams(fd);
         if (fd.fbody)
             fd.fbody.accept(this);
     }
@@ -271,6 +319,7 @@ void walkFunction(FuncDeclaration fd, Collector c)
     if (!fd.fbody || fd.semanticRun < PASS.semantic3done)
         return;
     const i = addFunc(fd);
+    registerParams(fd);
     auto saved = c.cur;
     c.cur = i;
     if (fd.parameters)
@@ -802,6 +851,8 @@ bool inImport(string file, uint off)
 
 string lineOf(string file, uint off)
 {
+    if (!file.exists)
+        return file;
     auto t = text(file);
     return rel(file) ~ ":" ~ (t[0 .. min(off, t.length)].count('\n') + 1).to!string;
 }
@@ -1256,14 +1307,14 @@ void applyEdits()
 
 int main(string[] args)
 {
-    string gname, pname, skipList, onlyList;
+    string gname, pname, skipList, onlyList, typeName;
     size_t max = 10;
     bool dry;
-    getopt(args, "global", &gname, "param", &pname, "max", &max, "skip", &skipList, "only", &onlyList, "dry", &dry);
+    getopt(args, "global", &gname, "param", &pname, "max", &max, "skip", &skipList, "only", &onlyList, "dry", &dry, "type", &typeName);
     srcRoot = buildNormalizedPath(absolutePath(dirName(__FILE_FULL_PATH__) ~ "/../../src"));
     if (args.length < 2)
     {
-        fprintf(stderr, "usage: deglobal report|step [--global=NAME] [--param=NAME] [--max=N] [--skip=a,b] [--dry]\n");
+        fprintf(stderr, "usage: deglobal report|step|params|narrow [--global=NAME] [--type=STRUCT] [--param=NAME] [--max=N] [--skip=a,b] [--only=a,b] [--dry]\n");
         return 1;
     }
     analyze();
@@ -1271,6 +1322,21 @@ int main(string[] args)
     {
         report(gname);
         return 0;
+    }
+    if (args[1] == "params" || args[1] == "narrow")
+    {
+        summarize();
+        if (args[1] == "params")
+        {
+            paramsReport(typeName);
+            return 0;
+        }
+        if (!typeName.length)
+        {
+            fprintf(stderr, "narrow needs --type\n");
+            return 1;
+        }
+        return narrowStep(typeName, max, skipList.split(","), onlyList.split(","), dry);
     }
     if (args[1] != "step" || !gname.length)
     {
