@@ -458,7 +458,7 @@ private elem* initializeParamsWithArgs(ref CGstate cg, elem* eargs, SYMIDX sista
     assert(nargs < size_t.max / (2 * (elem*).sizeof));   // conservative overflow check
     elem*[] args = (cast(elem**)malloc(nargs * (elem*).sizeof))[0 .. nargs];
     elem** tmp = args.ptr;
-    el_paramArray(cg, &tmp, eargs);
+    el_paramArray(cg.regcon.cse, &tmp, eargs);
 
     elem* ecopy;
 

@@ -389,7 +389,7 @@ void WRblock(ref CGstate cg, block* b)
             }
         }
         if (b.Bcode)
-            b.Bcode.print(cg);
+            b.Bcode.print(cg.AArch64);
         ferr("\n");
     }
     else

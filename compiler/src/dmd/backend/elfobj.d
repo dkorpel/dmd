@@ -1309,7 +1309,7 @@ void ElfObj_linnum(Srcpos srcpos, int seg, targ_size_t offset)
 static if (0)
 {
     printf("ElfObj_linnum(seg=%d, offset=0x%lx) ", seg, offset);
-    srcpos.print(cgstate, "");
+    srcpos.print(cgstate.AArch64, "");
 }
 
     if (!srcpos.Sfilename)

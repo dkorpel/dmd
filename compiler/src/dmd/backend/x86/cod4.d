@@ -1639,12 +1639,12 @@ void cdmulass(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
 
             if (msw)
             {
-                genmulimm(cg, cdb,DX,DX,lsw);          // IMUL EDX,EDX,lsw
-                genmulimm(cg, cdb,reg,AX,msw);         // IMUL reg,EAX,msw
+                genmulimm(cg.AArch64, cdb,DX,DX,lsw);          // IMUL EDX,EDX,lsw
+                genmulimm(cg.AArch64, cdb,reg,AX,msw);         // IMUL reg,EAX,msw
                 cdb.gen2(0x03,modregrm(3,reg,DX)); // ADD reg,EAX
             }
             else
-                genmulimm(cg, cdb,reg,DX,lsw);         // IMUL reg,EDX,lsw
+                genmulimm(cg.AArch64, cdb,reg,DX,lsw);         // IMUL reg,EDX,lsw
 
             movregconst(cg,cdb,DX,lsw,0);             // MOV EDX,lsw
             getregs(cg, cdb,mDX);

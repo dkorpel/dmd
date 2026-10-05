@@ -328,7 +328,7 @@ void genEEcode(ref CGstate cg)
     code* c = cdb.finish();
     assignaddrc(cg,c);
     pinholeopt(cg, c,null);
-    jmpaddr(cg, c);
+    jmpaddr(cg.AArch64, c);
     eecontext.EEcode = gen1(c, 0xCC);        // INT 3
     eecontext.EEin--;
 }
@@ -2970,13 +2970,13 @@ package(dmd.backend) struct Parameter
 }
 
 @trusted
-void fillParameters(ref CGstate cg, elem* e, Parameter[] parameters, ref int i)
+void fillParameters(ref cse_t cse, elem* e, Parameter[] parameters, ref int i)
 {
     if (e.Eoper == OPparam)
     {
-        fillParameters(cg, e.E1, parameters, i);
-        fillParameters(cg, e.E2, parameters, i);
-        freenode(cg.regcon.cse, e);
+        fillParameters(cse, e.E1, parameters, i);
+        fillParameters(cse, e.E2, parameters, i);
+        freenode(cse, e);
     }
     else
     {
@@ -3409,7 +3409,7 @@ void cdfunc(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t pretregs)
     if (np)
     {
         int n = 0;
-        fillParameters(cg, e.E2, parameters[0 .. np], n);
+        fillParameters(cg.regcon.cse, e.E2, parameters[0 .. np], n);
         assert(n == np);
     }
 

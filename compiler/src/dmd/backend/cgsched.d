@@ -1275,7 +1275,7 @@ private int pair_class(code* c)
  * Returns:
  *     CInfo struct containing info about c
  */
-private Cinfo getinfo(ref CGstate cg, code* c)
+private Cinfo getinfo(bool AArch64, code* c)
 {
     if (!c)
         return Cinfo.init;
@@ -1285,7 +1285,7 @@ private Cinfo getinfo(ref CGstate cg, code* c)
     if (PRO)
     {
         ci.uops = uops(c);
-        ci.isz = cast(ubyte)calccodsize(cg.AArch64, c);
+        ci.isz = cast(ubyte)calccodsize(AArch64, c);
     }
     else
         ci.pair = cast(ubyte)pair_class(c);
@@ -1969,7 +1969,7 @@ private int conflict(Cinfo* ci1,Cinfo* ci2,int fpsched)
 static if (0)
 {
     if (c1.Iop == 0xFF && c2.Iop == 0x8B)
-    {   c1.print(cgstate); c2.print(cgstate); i = 1;
+    {   c1.print(cgstate.AArch64); c2.print(cgstate.AArch64); i = 1;
         printf("r1=%lx, w1=%lx, a1=%lx, sz1=%d, r2=%lx, w2=%lx, a2=%lx, sz2=%d\n",r1,w1,a1,sz1,r2,w2,a2,sz2);
     }
 }
@@ -2286,7 +2286,7 @@ code** assemble(ref CGstate cg, code** pc)  // reassemble scheduled instructions
                 printf((i & 1) ? " V " : "U  ");
             }
             if (ci)
-                ci.c.print(cg);
+                ci.c.print(cg.AArch64);
             else
                 printf("\n");
         }
@@ -2346,7 +2346,7 @@ code** assemble(ref CGstate cg, code** pc)  // reassemble scheduled instructions
             continue;
 
         debug
-        if (debugs) { printf("appending: "); ci.c.print(cg); }
+        if (debugs) { printf("appending: "); ci.c.print(cg.AArch64); }
 
         *pc = ci.c;
         do
@@ -2679,7 +2679,7 @@ bool stage(ref CGstate cg, code* c)
     if (cinfomax == TBLMAX)             // if out of space
         return false;
     auto ci = &cinfo[cinfomax++];
-    *ci = getinfo(cg, c);
+    *ci = getinfo(cg.AArch64, c);
 
     if (c.Iflags & (CF.targ | CF.targ2 | CF.volatile | CF.vex))
     {

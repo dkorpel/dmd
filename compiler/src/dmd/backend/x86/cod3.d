@@ -3295,13 +3295,13 @@ void genmovreg(bool AArch64, ref CodeBuilder cdb, reg_t to, reg_t from, tym_t ty
  */
 
 @trusted
-void genmulimm(ref CGstate cg, ref CodeBuilder cdb,reg_t r1,reg_t r2,targ_int imm)
+void genmulimm(bool AArch64, ref CodeBuilder cdb,reg_t r1,reg_t r2,targ_int imm)
 {
     // These optimizations should probably be put into pinholeopt()
     switch (imm)
     {
         case 1:
-            genmovreg(cg.AArch64, cdb,r1,r2);
+            genmovreg(AArch64, cdb,r1,r2);
             break;
 
         case 5:
@@ -3684,7 +3684,7 @@ void genjmp(ref CodeBuilder cdb, opcode_t op, FL fltarg, block* targ)
  * Generate first part of prolog for interrupt function.
  */
 @trusted
-void prolog_ifunc(ref CGstate cg, ref CodeBuilder cdb, tym_t* tyf)
+void prolog_ifunc(bool AArch64, ref CodeBuilder cdb, tym_t* tyf)
 {
     static immutable ubyte[4] ops2 = [ 0x60,0x1E,0x06,0 ];
     static immutable ubyte[11] ops0 = [ 0x50,0x51,0x52,0x53,
@@ -3698,7 +3698,7 @@ void prolog_ifunc(ref CGstate cg, ref CodeBuilder cdb, tym_t* tyf)
 
     genregs(cdb,0x8B,BP,SP);     // MOV BP,SP
     if (localsize)
-        cod3_stackadj(cg.AArch64, cdb, cast(int)localsize);
+        cod3_stackadj(AArch64, cdb, cast(int)localsize);
 
     *tyf |= mTYloadds;
 }
@@ -4034,15 +4034,15 @@ static if (0)
     }
 }
 
-void prolog_frameadj2(ref CGstate cg, ref CodeBuilder cdb, tym_t tyf, uint xlocalsize, bool* pushalloc)
+void prolog_frameadj2(bool AArch64, ref CodeBuilder cdb, tym_t tyf, uint xlocalsize, bool* pushalloc)
 {
     enum log = false;
     if (log) debug printf("prolog_frameadj2() xlocalsize: x%x\n", xlocalsize);
-    if (cg.AArch64)
+    if (AArch64)
     {
         /* sub sp,sp,#xlocalsize
          */
-        cod3_stackadj(cg.AArch64, cdb, xlocalsize);
+        cod3_stackadj(AArch64, cdb, xlocalsize);
         return;
     }
 
@@ -4059,7 +4059,7 @@ void prolog_frameadj2(ref CGstate cg, ref CodeBuilder cdb, tym_t tyf, uint xloca
         *pushalloc = true;
     }
     else
-        cod3_stackadj(cg.AArch64, cdb, xlocalsize);
+        cod3_stackadj(AArch64, cdb, xlocalsize);
 }
 
 @trusted
@@ -4142,7 +4142,7 @@ void prolog_saveregs(ref CGstate cg, ref CodeBuilder cdb, regm_t topush, int cfa
                 {   // Emit debug_frame data giving location of saved register
                     code* c = cdb.finish();
                     pinholeopt(cg, c, null);
-                    dwarf_CFA_set_loc(calcblksize(cg, c));  // address after save
+                    dwarf_CFA_set_loc(calcblksize(cg.AArch64, c));  // address after save
                     dwarf_CFA_offset(reg, cast(int)(gpoffset - cfa_offset));
                     cdb.reset();
                     cdb.append(c);
@@ -4177,7 +4177,7 @@ void prolog_saveregs(ref CGstate cg, ref CodeBuilder cdb, regm_t topush, int cfa
                     // relative to 0[EBP]
                     code* c = cdb.finish();
                     pinholeopt(cg, c, null);
-                    dwarf_CFA_set_loc(calcblksize(cg, c));  // address after PUSH reg
+                    dwarf_CFA_set_loc(calcblksize(cg.AArch64, c));  // address after PUSH reg
                     dwarf_CFA_offset(reg, -cg.EBPtoESP - cfa_offset);
                     cdb.reset();
                     cdb.append(c);
@@ -5147,7 +5147,7 @@ static if (0)
     }
 
     pinholeopt(cg, c, null);
-    cg.retsize += calcblksize(cg, c);          // compute size of function epilog
+    cg.retsize += calcblksize(cg.AArch64, c);          // compute size of function epilog
     cdb.append(cdbx);
     b.Bcode = cdb.finish();
 }
@@ -5405,7 +5405,7 @@ void cod3_thunk(ref CGstate cg, Symbol* sthunk,Symbol* sfunc,uint p,tym_t thisty
     code* c = cdb.finish();
     pinholeopt(cg, c,null);
     targ_size_t framehandleroffset;
-    codout(cg, seg,c,null,framehandleroffset);
+    codout(cg.AArch64, seg,c,null,framehandleroffset);
     code_free(c);
 
     sthunk.Soffset = thunkoffset;
@@ -5447,9 +5447,9 @@ void makeitextern(Symbol* s)
  */
 
 @trusted
-int branch(ref CGstate cg, block* bl,int flag)
+int branch(bool AArch64, block* bl,int flag)
 {
-    if (cg.AArch64)
+    if (AArch64)
     {
         import dmd.backend.arm.cod3 : branch;
         return branch(bl, flag);
@@ -5471,7 +5471,7 @@ int branch(ref CGstate cg, block* bl,int flag)
     {
         ubyte op;
 
-        csize = calccodsize(cg.AArch64, c);
+        csize = calccodsize(AArch64, c);
         cn = code_next(c);
         op = cast(ubyte)c.Iop;
         if ((op & ~0x0F) == 0x70 && c.Iflags & CF.jmp16 ||
@@ -5521,7 +5521,7 @@ int branch(ref CGstate cg, block* bl,int flag)
                     {
                         if (cr == ct)
                             break;
-                        disp += calccodsize(cg.AArch64, cr);
+                        disp += calccodsize(AArch64, cr);
                     }
 
                     if (!cr)
@@ -5534,7 +5534,7 @@ int branch(ref CGstate cg, block* bl,int flag)
                             if (cr == ct)
                                 s = 1;
                             if (s)
-                                disp += calccodsize(cg.AArch64, cr);
+                                disp += calccodsize(AArch64, cr);
                         }
                     }
 
@@ -5600,7 +5600,7 @@ int branch(ref CGstate cg, block* bl,int flag)
                     c.Iflags &= ~CF.jmp16;      // a branch is ok
                     bytesaved += I16 ? 3 : 4;
                 }
-                csize = calccodsize(cg.AArch64, c);
+                csize = calccodsize(AArch64, c);
             }
             else
                 bl.Bflags = cast(BFL)(bl.Bflags & ~cast(uint)BFL.jmpoptdone); // some JMPs left
@@ -6835,9 +6835,9 @@ void simplify_code(code* c)
  */
 
 @trusted
-void jmpaddr(ref CGstate cg, code* c)
+void jmpaddr(bool AArch64, code* c)
 {
-    if (cg.AArch64)
+    if (AArch64)
     {
         import dmd.backend.arm.cod3 : jmpaddr;
         return jmpaddr(c);
@@ -6861,7 +6861,7 @@ void jmpaddr(ref CGstate cg, code* c)
             ad = 0;                 /* IP displacement              */
             while (ci && ci != ctarg)
             {
-                ad += calccodsize(cg.AArch64, ci);
+                ad += calccodsize(AArch64, ci);
                 ci = code_next(ci);
             }
             if (!ci)
@@ -6899,7 +6899,7 @@ void jmpaddr(ref CGstate cg, code* c)
             while (ci != c)
             {
                 assert(ci);
-                ad += calccodsize(cg.AArch64, ci);
+                ad += calccodsize(AArch64, ci);
                 ci = code_next(ci);
             }
             c.IEV2.Vpointer = (-ad) & 0xFF;
@@ -6913,12 +6913,12 @@ void jmpaddr(ref CGstate cg, code* c)
  * Calculate bl.Bsize.
  */
 
-uint calcblksize(ref CGstate cg, code* c)
+uint calcblksize(bool AArch64, code* c)
 {
     uint size;
     for (size = 0; c; c = code_next(c))
     {
-        uint sz = calccodsize(cg.AArch64, c);
+        uint sz = calccodsize(AArch64, c);
         //printf("off=%02x, sz = %d, code %p: op=%02x\n", size, sz, c, c.Iop);
         size += sz;
     }
@@ -7352,9 +7352,9 @@ nothrow:
  */
 
 @trusted
-uint codout(ref CGstate cg, int seg, code* c, Barray!ubyte* disasmBuf, ref targ_size_t framehandleroffset)
+uint codout(bool AArch64, int seg, code* c, Barray!ubyte* disasmBuf, ref targ_size_t framehandleroffset)
 {
-    if (cg.AArch64)
+    if (AArch64)
         return dmd.backend.arm.cod3.codout(seg, c, disasmBuf, framehandleroffset);
 
     ubyte rm,mod;
@@ -7377,7 +7377,7 @@ uint codout(ref CGstate cg, int seg, code* c, Barray!ubyte* disasmBuf, ref targ_
     {
         debug
         {
-        if (debugc) { printf("off=%02x, sz=%d, ",cast(int)ggen.getOffset(),cast(int)calccodsize(cg.AArch64, c)); code_print(cg.AArch64, c); }
+        if (debugc) { printf("off=%02x, sz=%d, ",cast(int)ggen.getOffset(),cast(int)calccodsize(AArch64, c)); code_print(AArch64, c); }
         uint startOffset = ggen.getOffset();
         }
 
@@ -7405,7 +7405,7 @@ uint codout(ref CGstate cg, int seg, code* c, Barray!ubyte* disasmBuf, ref targ_
                 if (op != NOP)
                     break;
                 debug
-                assert(calccodsize(cg.AArch64, c) == 0);
+                assert(calccodsize(AArch64, c) == 0);
 
                 continue;
 
@@ -7422,7 +7422,7 @@ uint codout(ref CGstate cg, int seg, code* c, Barray!ubyte* disasmBuf, ref targ_
                     ggen.offset += objmod.bytes(seg,ggen.offset,c.IEV1.data);
                 }
                 debug
-                assert(calccodsize(cg.AArch64, c) == c.IEV1.data.length);
+                assert(calccodsize(AArch64, c) == c.IEV1.data.length);
 
                 continue;
 
@@ -7797,10 +7797,10 @@ uint codout(ref CGstate cg, int seg, code* c, Barray!ubyte* disasmBuf, ref targ_
         }
 
         debug
-        if (ggen.getOffset() - startOffset != calccodsize(cg.AArch64, c))
+        if (ggen.getOffset() - startOffset != calccodsize(AArch64, c))
         {
-            printf("actual: %d, calc: %d\n", cast(int)(ggen.getOffset() - startOffset), cast(int)calccodsize(cg.AArch64, c));
-            code_print(cg.AArch64, c);
+            printf("actual: %d, calc: %d\n", cast(int)(ggen.getOffset() - startOffset), cast(int)calccodsize(AArch64, c));
+            code_print(AArch64, c);
             assert(0);
         }
     }
@@ -8230,10 +8230,10 @@ private void do8bit(ref MiniCodeBuf pbuf, FL fl, ref evc uev)
  * Debug code to dump code structure.
  */
 
-void codeListPrint(ref CGstate cg, code* c)
+void codeListPrint(bool AArch64, code* c)
 {
     for (; c; c = code_next(c))
-        code_print(cg.AArch64, c);
+        code_print(AArch64, c);
 }
 
 @trusted

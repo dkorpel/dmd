@@ -58,9 +58,9 @@ private
 // member stable is not used for MARS or C++
 
 int nteh_EBPoffset_sindex()                   { return -4; }
-int nteh_EBPoffset_prev(ref CGstate cg)       { return -nteh_contextsym_size(cg.usednteh) + 8; }
-int nteh_EBPoffset_info(ref CGstate cg)       { return -nteh_contextsym_size(cg.usednteh) + 4; }
-int nteh_EBPoffset_esp(ref CGstate cg)        { return -nteh_contextsym_size(cg.usednteh) + 0; }
+int nteh_EBPoffset_prev(uint usednteh)       { return -nteh_contextsym_size(usednteh) + 8; }
+int nteh_EBPoffset_info(uint usednteh)       { return -nteh_contextsym_size(usednteh) + 4; }
+int nteh_EBPoffset_esp(uint usednteh)        { return -nteh_contextsym_size(usednteh) + 0; }
 
 int nteh_offset_sindex()        { return 16; }
 int nteh_offset_sindex_seh()    { return 20; }
@@ -349,7 +349,7 @@ void nteh_epilog(ref CGstate cg, ref CodeBuilder cdb)
     cs.Irex = 0;
     cs.IFL1 = FL.const_;
     // EBP offset of __context.prev
-    cs.IEV1.Vint = nteh_EBPoffset_prev(cg);
+    cs.IEV1.Vint = nteh_EBPoffset_prev(cg.usednteh);
     cdb.gen(&cs);
 
     cs.Iop = 0x89;
@@ -375,7 +375,7 @@ void nteh_setsp(ref CGstate cg, ref CodeBuilder cdb, opcode_t op)
     cs.Irex = 0;
     cs.IFL1 = FL.const_;
     // EBP offset of __context.esp
-    cs.IEV1.Vint = nteh_EBPoffset_esp(cg);
+    cs.IEV1.Vint = nteh_EBPoffset_esp(cg.usednteh);
     cdb.gen(&cs);               // MOV ESP,__context[EBP].esp
 }
 
@@ -405,7 +405,7 @@ void nteh_filter(ref CGstate cg, ref CodeBuilder cdb, block* b)
         cs.Irex = 0;
         cs.IFL1 = FL.const_;
         // EBP offset of __context.info
-        cs.IEV1.Vint = nteh_EBPoffset_info(cg);
+        cs.IEV1.Vint = nteh_EBPoffset_info(cg.usednteh);
         cdb.gen(&cs);                 // MOV EAX,__context[EBP].info
 
         cs.Irm = modregrm(0,AX,0);
@@ -443,7 +443,7 @@ void nteh_framehandler(ref CGstate cg, Symbol* sfunc, Symbol* scopetable)
         code* c = cdb.finish();
         pinholeopt(cg, c,null);
         targ_size_t framehandleroffset;
-        codout(cg, sfunc.Sseg,c,null,framehandleroffset);
+        codout(cg.AArch64, sfunc.Sseg,c,null,framehandleroffset);
         code_free(c);
     }
 }
@@ -588,7 +588,7 @@ void nteh_unwind(ref CGstate cg, ref CodeBuilder cdb,regm_t saveregs,uint stop_i
     cs.Irex = 0;
     cs.IFL1 = FL.const_;
     // EBP offset of __context.prev
-    cs.IEV1.Vint = nteh_EBPoffset_prev(cg);
+    cs.IEV1.Vint = nteh_EBPoffset_prev(cg.usednteh);
     cdbx.gen(&cs);                             // LEA  ECX,contextsym
 
     int nargs = 0;

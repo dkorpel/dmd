@@ -1525,20 +1525,20 @@ void initClibInfo(ref Symbol*[CLIB_A.max + 1] clibsyms, ref ClibInfo[CLIB_A.max 
 }
 
 private
-void getClibFunction(ref CGstate cg, uint clib, ref Symbol* s, ref ClibInfo* cinfo, objfmt_t objfmt, exefmt_t exe)
+void getClibFunction(regm_t fregsaved, uint clib, ref Symbol* s, ref ClibInfo* cinfo, objfmt_t objfmt, exefmt_t exe)
 {
     enum r0r1 = mask(32) | mask(33);
     enum r2r3 = r0r1 >> 2;
 
     void declare(string name)
     {
-        s = symboly(cg.fregsaved, name, mask(32));
+        s = symboly(fregsaved, name, mask(32));
         cinfo.retregs = mask(32);
     }
 
     void declare2(string name)
     {
-        s = symboly(cg.fregsaved, name, r0r1 | r2r3);
+        s = symboly(fregsaved, name, r0r1 | r2r3);
         cinfo.retregs = r0r1;
     }
 
@@ -1547,7 +1547,7 @@ void getClibFunction(ref CGstate cg, uint clib, ref Symbol* s, ref ClibInfo* cin
         case CLIB_A.realToDouble:
         {
             string name = "__trunctfdf2";
-            s = symboly(cg.fregsaved, name, mask(32));
+            s = symboly(fregsaved, name, mask(32));
             cinfo.retregs = mask(32);
             break;
         }
@@ -1555,7 +1555,7 @@ void getClibFunction(ref CGstate cg, uint clib, ref Symbol* s, ref ClibInfo* cin
         case CLIB_A.doubleToReal:
         {
             string name = "__extenddftf2";
-            s = symboly(cg.fregsaved, name, mask(32));
+            s = symboly(fregsaved, name, mask(32));
             cinfo.retregs = mask(32);
             break;
         }
@@ -1563,7 +1563,7 @@ void getClibFunction(ref CGstate cg, uint clib, ref Symbol* s, ref ClibInfo* cin
         case CLIB_A.add:
         {
             string name = "__addtf3";
-            s = symboly(cg.fregsaved, name, mask(32) | mask(33));
+            s = symboly(fregsaved, name, mask(32) | mask(33));
             cinfo.retregs = mask(32);
             break;
         }
@@ -1571,7 +1571,7 @@ void getClibFunction(ref CGstate cg, uint clib, ref Symbol* s, ref ClibInfo* cin
         case CLIB_A.min:
         {
             string name = "__subtf3";
-            s = symboly(cg.fregsaved, name, mask(32) | mask(33));
+            s = symboly(fregsaved, name, mask(32) | mask(33));
             cinfo.retregs = mask(32);
             break;
         }
@@ -1579,7 +1579,7 @@ void getClibFunction(ref CGstate cg, uint clib, ref Symbol* s, ref ClibInfo* cin
         case CLIB_A.mul:
         {
             string name = "__multf3";
-            s = symboly(cg.fregsaved, name, mask(32) | mask(33));
+            s = symboly(fregsaved, name, mask(32) | mask(33));
             cinfo.retregs = mask(32);
             break;
         }
@@ -1587,7 +1587,7 @@ void getClibFunction(ref CGstate cg, uint clib, ref Symbol* s, ref ClibInfo* cin
         case CLIB_A.div:
         {
             string name = "__divtf3";
-            s = symboly(cg.fregsaved, name, mask(32) | mask(33));
+            s = symboly(fregsaved, name, mask(32) | mask(33));
             cinfo.retregs = mask(32);
             break;
         }
@@ -1602,7 +1602,7 @@ void getClibFunction(ref CGstate cg, uint clib, ref Symbol* s, ref ClibInfo* cin
         case CLIB_A.memset:
         {
             string name = "memset";
-            s = symboly(cg.fregsaved, name, mask(0));
+            s = symboly(fregsaved, name, mask(0));
             cinfo.retregs = mask(0);
             break;
         }
@@ -1633,7 +1633,7 @@ void getClibInfo(ref CGstate cg, uint clib, Symbol** ps, ClibInfo** pinfo, objfm
     Symbol* s = clibsyms[clib];
     if (!s)
     {
-        getClibFunction(cg, clib, s, cinfo, objfmt, exe);
+        getClibFunction(cg.fregsaved, clib, s, cinfo, objfmt, exe);
         clibsyms[clib] = s;
     }
 
@@ -1748,7 +1748,7 @@ void cdfunc(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t pretregs)
     if (np)
     {
         int n = 0;
-        fillParameters(cg, e.E2, parameters[0 .. np], n);
+        fillParameters(cg.regcon.cse, e.E2, parameters[0 .. np], n);
         assert(n == np);
     }
 

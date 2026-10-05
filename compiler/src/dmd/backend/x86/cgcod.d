@@ -345,11 +345,11 @@ void codgenx(ref CGstate cg, Symbol* sfunc)
         pinholeopt(cg, b.Bcode,b);         // do pinhole optimization
         if (b.Bflags & BFL.prolog)      // do function prolog
         {
-            cg.startoffset = coffset + calcblksize(cg, cprolog) - cg.funcoffset;
+            cg.startoffset = coffset + calcblksize(cg.AArch64, cprolog) - cg.funcoffset;
             b.Bcode = cat(cprolog,b.Bcode);
         }
         cgsched_block(cg, b);
-        b.Bsize = calcblksize(cg, b.Bcode);       // calculate block size
+        b.Bsize = calcblksize(cg.AArch64, b.Bcode);       // calculate block size
         if (b.Balign)
         {
             targ_size_t u = b.Balign - 1;
@@ -371,7 +371,7 @@ void codgenx(ref CGstate cg, Symbol* sfunc)
         {
             if (b.Bflags & BFL.jmpoptdone)      /* if no more jmp opts for this blk */
                 continue;
-            int i = branch(cg, b,0);            // see if jmp => jmp short
+            int i = branch(cg.AArch64, b,0);            // see if jmp => jmp short
             if (i)                          // if any bytes saved
             {
                 b.Bsize -= i;
@@ -417,7 +417,7 @@ void codgenx(ref CGstate cg, Symbol* sfunc)
     // Emit the generated code
     if (eecontext.EEcompile == 1)
     {
-        codout(cg, sfunc.Sseg,eecontext.EEcode,null,framehandleroffset);
+        codout(cg.AArch64, sfunc.Sseg,eecontext.EEcode,null,framehandleroffset);
         code_free(eecontext.EEcode);
     }
     else
@@ -438,7 +438,7 @@ void codgenx(ref CGstate cg, Symbol* sfunc)
                 b.Btableoffset = swoffset;     /* offset of sw tab */
                 swoffset += b.Btablesize;
             }
-            jmpaddr(cg, b.Bcode);          /* assign jump addresses        */
+            jmpaddr(cg.AArch64, b.Bcode);          /* assign jump addresses        */
 
             debug
             if (debugc)
@@ -457,7 +457,7 @@ void codgenx(ref CGstate cg, Symbol* sfunc)
             }
             assert(b.Boffset == Offset(sfunc.Sseg));
 
-            codout(cg, sfunc.Sseg,b.Bcode,(config.vasm ? &disasmBuf : null), framehandleroffset);   // output code
+            codout(cg.AArch64, sfunc.Sseg,b.Bcode,(config.vasm ? &disasmBuf : null), framehandleroffset);   // output code
         }
 static if (0)
         if (coffset != Offset(sfunc.Sseg))
@@ -899,7 +899,7 @@ else
 
     if (tym == TYifunc)
     {
-        prolog_ifunc(cg, cdbx,&tyf);
+        prolog_ifunc(cg.AArch64, cdbx,&tyf);
         cg.hasframe = true;
         cdb.append(cdbx);
         goto Lcont;
@@ -985,7 +985,7 @@ else
     else if (xlocalsize)
     {
         assert(I32 || I64);
-        prolog_frameadj2(cg, cdbx, tyf, xlocalsize, &pushalloc);
+        prolog_frameadj2(cg.AArch64, cdbx, tyf, xlocalsize, &pushalloc);
         version (FRAMEPTR) { } else
             cg.BPoff += REGSIZE;
     }
@@ -1001,7 +1001,7 @@ else
     {
         code* c = cdbx.peek();
         pinholeopt(cg, c, null);
-        cg.prolog_allocoffset = calcblksize(cg, c);
+        cg.prolog_allocoffset = calcblksize(cg.AArch64, c);
     }
 
     if (cg.usednteh & NTEHjmonitor)

@@ -79,7 +79,7 @@ else
     for (b = startblock; b; b = b.Bnext)
         b.Bflags &= ~BFL.outsideprolog;                 // start with them all off
 
-    pe_add(cgstate, startblock);
+    pe_add(cgstate.fregsaved, startblock);
 
     // Look for only one block (bp) that will hold the prolog
     bp = null;
@@ -174,15 +174,15 @@ void cod5_noprol(block* startblock)
  * the function prolog.
  */
 
-private void pe_add(ref CGstate cg, block* b)
+private void pe_add(regm_t fregsaved, block* b)
 {
     if (b.Bflags & BFL.outsideprolog ||
-        need_prolog(cg.fregsaved, b))
+        need_prolog(fregsaved, b))
         return;
 
     b.Bflags |= BFL.outsideprolog;
     foreach (bl; b.Bsucc[])
-        pe_add(cg, bl);
+        pe_add(fregsaved, bl);
 }
 
 /**********************************************
