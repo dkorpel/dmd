@@ -1046,7 +1046,7 @@ void FuncDeclaration_toObjFile(FuncDeclaration fd, bool multiobj)
             funcState.Fstartblock = block_calloc(bo);
             block* startBlk = funcState.Fstartblock;
             //Make that block run __cxa_atexit(&func);
-            auto atexitSym = getRtlsym(cgstate, RTLSYM.CXA_ATEXIT);
+            auto atexitSym = getRtlsym(RTLSYM.CXA_ATEXIT);
             Symbol* dso_handle = symbol_calloc("__dso_handle");
             dso_handle.Stype = type_fake(TYint);
             //Try to get MacOS _ prefix-ism right.
@@ -1493,7 +1493,7 @@ private void genObjFile(Module m, bool multiobj, bool doppelganger)
                       ebcov,
                       efilename,
                       null);
-        e = el_bin(OPcall, TYvoid, el_var(getRtlsym(cgstate, RTLSYM.DCOVER2)), e);
+        e = el_bin(OPcall, TYvoid, el_var(getRtlsym(RTLSYM.DCOVER2)), e);
         glue.eictor = el_combine(e, glue.eictor);
         glue.ictorlocalgot = localgot;
     }

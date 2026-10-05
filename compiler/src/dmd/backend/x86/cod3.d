@@ -2853,12 +2853,12 @@ void cod3_ptrchk(ref CGstate cg, ref CodeBuilder cdb,ref code pcs,regm_t keepmsk
 
     // Call the validation function
     {
-        makeitextern(getRtlsym(cg, RTLSYM.PTRCHK));
+        makeitextern(getRtlsym(RTLSYM.PTRCHK));
 
         used &= ~(keepmsk | idxregs);           // regs destroyed by this exercise
         getregs(cg, cdb,used);
                                                 // CALL __ptrchk
-        cdb.gencs((LARGECODE) ? 0x9A : CALL,0,FL.func,getRtlsym(cg, RTLSYM.PTRCHK));
+        cdb.gencs((LARGECODE) ? 0x9A : CALL,0,FL.func,getRtlsym(RTLSYM.PTRCHK));
     }
 
     cdb.append(cs2);
@@ -3937,10 +3937,10 @@ void prolog_frameadj(ref CGstate cg, ref CodeBuilder cdb, tym_t tyf, uint xlocal
         {
             // BUG: Won't work if parameter is passed in AX
             movregconst(cg,cdb,AX,xlocalsize,false); // MOV AX,localsize
-            makeitextern(getRtlsym(cg, RTLSYM.CHKSTK));
+            makeitextern(getRtlsym(RTLSYM.CHKSTK));
                                                     // CALL _chkstk
-            cdb.gencs((LARGECODE) ? 0x9A : CALL,0,FL.func,getRtlsym(cg, RTLSYM.CHKSTK));
-            useregs(cg, (ALLREGS | mBP | mES) & ~getRtlsym(cg, RTLSYM.CHKSTK).Sregsaved);
+            cdb.gencs((LARGECODE) ? 0x9A : CALL,0,FL.func,getRtlsym(RTLSYM.CHKSTK));
+            useregs(cg, (ALLREGS | mBP | mES) & ~getRtlsym(RTLSYM.CHKSTK).Sregsaved);
         }
         else
         {
@@ -4927,7 +4927,7 @@ void epilog(ref CGstate cg, block* b)
         )
        )
     {
-        Symbol* s = getRtlsym(cg, farfunc ? RTLSYM.TRACE_EPI_F : RTLSYM.TRACE_EPI_N);
+        Symbol* s = getRtlsym(farfunc ? RTLSYM.TRACE_EPI_F : RTLSYM.TRACE_EPI_N);
         makeitextern(s);
         cdbx.gencs(I16 ? 0x9A : CALL,0,FL.func,s);      // CALLF _trace
         if (!I16)

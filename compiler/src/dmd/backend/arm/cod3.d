@@ -956,7 +956,7 @@ void epilog(ref CGstate cg, block* b)
         )
        )
     {
-        Symbol* s = getRtlsym(cg, farfunc ? RTLSYM.TRACE_EPI_F : RTLSYM.TRACE_EPI_N);
+        Symbol* s = getRtlsym(farfunc ? RTLSYM.TRACE_EPI_F : RTLSYM.TRACE_EPI_N);
         makeitextern(s);
         cdbx.gencs(I16 ? 0x9A : CALL,0,FL.func,s);      // CALLF _trace
         code_orflag(cdbx.last(),CF.off | CF.selfrel26);

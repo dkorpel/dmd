@@ -3947,7 +3947,7 @@ private void funccall(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint numpara
             getregs(cg, cdbe,~s.Sregsaved & (mBP | ALLREGS | mES | XMMREGS));
         if (strcmp(s.Sident.ptr, "alloca") == 0)
         {
-            s = getRtlsym(cg, RTLSYM.ALLOCA);
+            s = getRtlsym(RTLSYM.ALLOCA);
             makeitextern(s);
             int areg = CX;
             if (config.exe == EX_WIN64)

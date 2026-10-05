@@ -62,7 +62,6 @@ import dmd.mtype;
 import dmd.semantic3 : checkClosure;
 import dmd.typesem;
 import dmd.target;
-import dmd.backend.x86.cgcod : cgstate;
 
 package(dmd.glue):
 
@@ -918,7 +917,7 @@ void buildClosure(FuncDeclaration fd, ref IRState irs)
 
         // Allocate memory for the closure
         elem* e = el_long(TYsize_t, structsize);
-        e = el_bin(OPcall, TYnptr, el_var(getRtlsym(cgstate, RTLSYM.ALLOCMEMORY)), e);
+        e = el_bin(OPcall, TYnptr, el_var(getRtlsym(RTLSYM.ALLOCMEMORY)), e);
         toTraceGC(irs, e, fd.loc);
 
         // Align it
