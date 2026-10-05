@@ -280,14 +280,14 @@ void except_fillInEHTable(Symbol* s)
                             if (config.ehmethod == EHmethod.EH_WIN32)
                             {
                                 nteh_patchindex(cf, stack[stack.length - 1]);
-                                foffset += calccodsize(cf);
+                                foffset += calccodsize(cgstate, cf);
                                 cf = code_next(cf);
                             }
-                            foffset += calccodsize(cf);
+                            foffset += calccodsize(cgstate, cf);
                             while (!cf.isJumpOP())
                             {
                                 cf = code_next(cf);
-                                foffset += calccodsize(cf);
+                                foffset += calccodsize(cgstate, cf);
                             }
                             // https://issues.dlang.org/show_bug.cgi?id=9438
                             //cf = code_next(cf);
@@ -302,7 +302,7 @@ void except_fillInEHTable(Symbol* s)
                         n++;
                     }
                     else
-                        eoffset += calccodsize(c2);
+                        eoffset += calccodsize(cgstate, c2);
                 }
                 //printf("boffset = %x, eoffset = %x, foffset = %x\n", boffset, eoffset, foffset);
                 dtb.dword(stack[stack.length - 1]);   // parent index
@@ -324,7 +324,7 @@ void except_fillInEHTable(Symbol* s)
                 assert(stack.length != 0);
             }
         Lnodtor:
-            boffset += calccodsize(c);
+            boffset += calccodsize(cgstate, c);
         }
     }
         stack.dtor();

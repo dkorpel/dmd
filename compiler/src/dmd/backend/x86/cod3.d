@@ -701,11 +701,11 @@ void cod3_buildmodulector(OutBuffer* buf, int codeOffset, int refOffset)
  */
 
 @trusted
-regm_t regmask(tym_t tym, tym_t tyf)
+regm_t regmask(ref CGstate cg, tym_t tym, tym_t tyf)
 {
-    bool AArch64 = cgstate.AArch64;
+    bool AArch64 = cg.AArch64;
     if (AArch64)
-        return dmd.backend.arm.cod3.regmask(cgstate, tym, tyf);
+        return dmd.backend.arm.cod3.regmask(cg, tym, tyf);
 
     switch (tybasic(tym))
     {
@@ -1294,7 +1294,7 @@ static if (NTEXCEPTIONS)
             // Mark all registers as destroyed. This will prevent
             // register assignments to variables used in filter blocks.
             getregsNoSave(cg.allregs);
-            regm_t retregsx = regmask(e.Ety, TYnfunc);
+            regm_t retregsx = regmask(cg, e.Ety, TYnfunc);
             gencodelem(cdb,e,retregsx,true);
             cdb.gen1(0xC3);   // RET
             break;
@@ -1633,7 +1633,7 @@ regm_t allocretregs(ref CGstate cg, const tym_t ty, type* t, const tym_t tyf, ou
     auto AArch64 = cg.AArch64;
 
     if (!(config.exe & EX_posix))
-        return regmask(ty, tyf);    // for non-Posix ABI
+        return regmask(cg, ty, tyf);    // for non-Posix ABI
 
     /* The rest is for the Itanium ABI
      */
@@ -2615,7 +2615,7 @@ int jmpopcode(elem* e)
          tymx == TYcdouble || tymx == TYcfloat ||
          (tyxmmreg(tymx) && config.fpxmmregs && e.Ecount != e.Ecomsub) ||
          op == OPind ||
-         (OTcall(op) && (regmask(tymx, tybasic(e.E1.Eoper)) & (mST0 | XMMREGS))));
+         (OTcall(op) && (regmask(cgstate, tymx, tybasic(e.E1.Eoper)) & (mST0 | XMMREGS))));
 
     if (!needsNanCheck)
     {
@@ -2944,7 +2944,7 @@ bool cse_simple(code* c, elem* e)
         sz == REGSIZE &&
         e.E2.Eoper == OPconst &&
         e.E1.Eoper == OPvar &&
-        isregvar(e.E1,regm,reg) &&
+        isregvar(cgstate, e.E1,regm,reg) &&
         !(e.E1.Vsym.Sflags & SFLspill)
        )
     {
@@ -2963,7 +2963,7 @@ bool cse_simple(code* c, elem* e)
     else if (e.Eoper == OPind &&
         sz <= REGSIZE &&
         e.E1.Eoper == OPvar &&
-        isregvar(e.E1,regm,reg) &&
+        isregvar(cgstate, e.E1,regm,reg) &&
         (I32 || I64 || regm & IDXREGS) &&
         !(e.E1.Vsym.Sflags & SFLspill)
        )
@@ -3353,7 +3353,7 @@ void genshift(ref CodeBuilder cdb)
 void movregconst(ref CGstate cg,ref CodeBuilder cdb,reg_t reg,targ_size_t value,regm_t flags)
 {
     if (cg.AArch64)
-        return dmd.backend.arm.cod3.movregconst(cdb, reg, value, flags);
+        return dmd.backend.arm.cod3.movregconst(cg, cdb, reg, value, flags);
 
     reg_t r;
     regm_t mreg;
@@ -4142,7 +4142,7 @@ void prolog_saveregs(ref CGstate cg, ref CodeBuilder cdb, regm_t topush, int cfa
                 {   // Emit debug_frame data giving location of saved register
                     code* c = cdb.finish();
                     pinholeopt(c, null);
-                    dwarf_CFA_set_loc(calcblksize(c));  // address after save
+                    dwarf_CFA_set_loc(calcblksize(cg, c));  // address after save
                     dwarf_CFA_offset(reg, cast(int)(gpoffset - cfa_offset));
                     cdb.reset();
                     cdb.append(c);
@@ -4177,7 +4177,7 @@ void prolog_saveregs(ref CGstate cg, ref CodeBuilder cdb, regm_t topush, int cfa
                     // relative to 0[EBP]
                     code* c = cdb.finish();
                     pinholeopt(c, null);
-                    dwarf_CFA_set_loc(calcblksize(c));  // address after PUSH reg
+                    dwarf_CFA_set_loc(calcblksize(cg, c));  // address after PUSH reg
                     dwarf_CFA_offset(reg, -cg.EBPtoESP - cfa_offset);
                     cdb.reset();
                     cdb.append(c);
@@ -4958,7 +4958,7 @@ void epilog(ref CGstate cg, block* b)
     {
         regm_t retregs = 0;
         if (b.bc == BC.retexp)
-            retregs = regmask(b.Belem.Ety, tym);
+            retregs = regmask(cg, b.Belem.Ety, tym);
         nteh_monitor_epilog(cg,cdbx,retregs);
         xlocalsize += 8;
     }
@@ -5147,7 +5147,7 @@ static if (0)
     }
 
     pinholeopt(c, null);
-    cg.retsize += calcblksize(c);          // compute size of function epilog
+    cg.retsize += calcblksize(cg, c);          // compute size of function epilog
     cdb.append(cdbx);
     b.Bcode = cdb.finish();
 }
@@ -5472,7 +5472,7 @@ int branch(block* bl,int flag)
     {
         ubyte op;
 
-        csize = calccodsize(c);
+        csize = calccodsize(cgstate, c);
         cn = code_next(c);
         op = cast(ubyte)c.Iop;
         if ((op & ~0x0F) == 0x70 && c.Iflags & CF.jmp16 ||
@@ -5522,7 +5522,7 @@ int branch(block* bl,int flag)
                     {
                         if (cr == ct)
                             break;
-                        disp += calccodsize(cr);
+                        disp += calccodsize(cgstate, cr);
                     }
 
                     if (!cr)
@@ -5535,7 +5535,7 @@ int branch(block* bl,int flag)
                             if (cr == ct)
                                 s = 1;
                             if (s)
-                                disp += calccodsize(cr);
+                                disp += calccodsize(cgstate, cr);
                         }
                     }
 
@@ -5601,7 +5601,7 @@ int branch(block* bl,int flag)
                     c.Iflags &= ~CF.jmp16;      // a branch is ok
                     bytesaved += I16 ? 3 : 4;
                 }
-                csize = calccodsize(c);
+                csize = calccodsize(cgstate, c);
             }
             else
                 bl.Bflags = cast(BFL)(bl.Bflags & ~cast(uint)BFL.jmpoptdone); // some JMPs left
@@ -6812,7 +6812,7 @@ void simplify_code(code* c)
     if (config.flags4 & CFG4optimized &&
         (c.Iop == 0x81 || c.Iop == 0x80) &&
         c.IFL2 == FL.const_ &&
-        reghasvalue((c.Iop == 0x80) ? BYTEREGS : ALLREGS,I64 ? c.IEV2.Vsize_t : c.IEV2.Vlong,reg) &&
+        reghasvalue(cgstate, (c.Iop == 0x80) ? BYTEREGS : ALLREGS,I64 ? c.IEV2.Vsize_t : c.IEV2.Vlong,reg) &&
         !(I16 && c.Iflags & CF.opsize)
        )
     {
@@ -6862,7 +6862,7 @@ void jmpaddr(code* c)
             ad = 0;                 /* IP displacement              */
             while (ci && ci != ctarg)
             {
-                ad += calccodsize(ci);
+                ad += calccodsize(cgstate, ci);
                 ci = code_next(ci);
             }
             if (!ci)
@@ -6900,7 +6900,7 @@ void jmpaddr(code* c)
             while (ci != c)
             {
                 assert(ci);
-                ad += calccodsize(ci);
+                ad += calccodsize(cgstate, ci);
                 ci = code_next(ci);
             }
             c.IEV2.Vpointer = (-ad) & 0xFF;
@@ -6914,12 +6914,12 @@ void jmpaddr(code* c)
  * Calculate bl.Bsize.
  */
 
-uint calcblksize(code* c)
+uint calcblksize(ref CGstate cg, code* c)
 {
     uint size;
     for (size = 0; c; c = code_next(c))
     {
-        uint sz = calccodsize(c);
+        uint sz = calccodsize(cg, c);
         //printf("off=%02x, sz = %d, code %p: op=%02x\n", size, sz, c, c.Iop);
         size += sz;
     }
@@ -6935,9 +6935,9 @@ uint calcblksize(code* c)
  */
 
 @trusted
-uint calccodsize(code* c)
+uint calccodsize(ref CGstate cg, code* c)
 {
-    if (cgstate.AArch64)
+    if (cg.AArch64)
     {
         import dmd.backend.arm.cod3 : calccodsize;
         return calccodsize(c);
@@ -7378,7 +7378,7 @@ uint codout(int seg, code* c, Barray!ubyte* disasmBuf, ref targ_size_t framehand
     {
         debug
         {
-        if (debugc) { printf("off=%02x, sz=%d, ",cast(int)ggen.getOffset(),cast(int)calccodsize(c)); code_print(cgstate, c); }
+        if (debugc) { printf("off=%02x, sz=%d, ",cast(int)ggen.getOffset(),cast(int)calccodsize(cgstate, c)); code_print(cgstate, c); }
         uint startOffset = ggen.getOffset();
         }
 
@@ -7406,7 +7406,7 @@ uint codout(int seg, code* c, Barray!ubyte* disasmBuf, ref targ_size_t framehand
                 if (op != NOP)
                     break;
                 debug
-                assert(calccodsize(c) == 0);
+                assert(calccodsize(cgstate, c) == 0);
 
                 continue;
 
@@ -7423,7 +7423,7 @@ uint codout(int seg, code* c, Barray!ubyte* disasmBuf, ref targ_size_t framehand
                     ggen.offset += objmod.bytes(seg,ggen.offset,c.IEV1.data);
                 }
                 debug
-                assert(calccodsize(c) == c.IEV1.data.length);
+                assert(calccodsize(cgstate, c) == c.IEV1.data.length);
 
                 continue;
 
@@ -7798,9 +7798,9 @@ uint codout(int seg, code* c, Barray!ubyte* disasmBuf, ref targ_size_t framehand
         }
 
         debug
-        if (ggen.getOffset() - startOffset != calccodsize(c))
+        if (ggen.getOffset() - startOffset != calccodsize(cgstate, c))
         {
-            printf("actual: %d, calc: %d\n", cast(int)(ggen.getOffset() - startOffset), cast(int)calccodsize(c));
+            printf("actual: %d, calc: %d\n", cast(int)(ggen.getOffset() - startOffset), cast(int)calccodsize(cgstate, c));
             code_print(cgstate, c);
             assert(0);
         }

@@ -283,7 +283,7 @@ void xmmeq(ref CGstate cg, ref CodeBuilder cdb, elem* e, opcode_t op, elem* e1, 
         // Be careful of cases like (x = x+x+x). We cannot evaluate in
         // x if x is in a register.
         reg_t varreg;
-        if (isregvar(e1, varregm, varreg) &&    // if lvalue is register variable
+        if (isregvar(cg, e1, varregm, varreg) &&    // if lvalue is register variable
             doinreg(e1.Vsym,e2) &&           // and we can compute directly into it
             varregm & XMMREGS
            )
@@ -547,7 +547,7 @@ void xmmopass(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         // x if x is in a register.
         reg_t varreg;
         regm_t varregm;
-        if (isregvar(e1,varregm,varreg) &&    // if lvalue is register variable
+        if (isregvar(cg, e1,varregm,varreg) &&    // if lvalue is register variable
             doinreg(e1.Vsym,e2)          // and we can compute directly into it
            )
         {   regvar = true;
@@ -616,7 +616,7 @@ void xmmpost(ref CGstate cg,ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         // x if x is in a register.
         reg_t varreg;
         regm_t varregm;
-        if (isregvar(e1,varregm,varreg) &&    // if lvalue is register variable
+        if (isregvar(cg, e1,varregm,varreg) &&    // if lvalue is register variable
             doinreg(e1.Vsym,e2)          // and we can compute directly into it
            )
         {

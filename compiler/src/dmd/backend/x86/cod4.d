@@ -434,7 +434,7 @@ void cdeq(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
               fl==FL.udata || fl == FL.extern_)
               && !(e2.Vsym.ty() & mTYcs)
             ) &&
-            !(evalinregister(e2) && plenty) &&
+            !(evalinregister(cg, e2) && plenty) &&
             !e1.Ecount)        // and no CSE headaches
         {
             // Look for special case of (*p++ = ...), where p is a register variable
@@ -607,7 +607,7 @@ void cdeq(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
                         {
                             regm_t retregsx = (sz == 1) ? BYTEREGS : cg.allregs;
                             reg_t regx;
-                            if (reghasvalue(retregsx,*p,regx))
+                            if (reghasvalue(cg, retregsx,*p,regx))
                             {
                                 cs.Iop = (cs.Iop & 1) | 0x88;
                                 cs.Irm |= modregrm(0,regx & 7,0); // MOV EA,regx
@@ -672,7 +672,7 @@ void cdeq(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     {
         // Be careful of cases like (x = x+x+x). We cannot evaluate in
         // x if x is in a register.
-        if (isregvar(e1,varregm,varreg) &&    // if lvalue is register variable
+        if (isregvar(cg, e1,varregm,varreg) &&    // if lvalue is register variable
             doinreg(e1.Vsym,e2) &&       // and we can compute directly into it
             !(sz == 1 && e1.Voffset == 1)
            )
@@ -998,7 +998,7 @@ void cdaddass(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
                (op == OPaddass || op == OPminass) &&
                (el_allbits(e2, 1) || el_allbits(e2, -1))
               ) ||
-              (!evalinregister(e2)
+              (!evalinregister(cg, e2)
                && tyml != TYhptr
               )
              )
@@ -1015,7 +1015,7 @@ void cdaddass(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
             // Handle shortcuts. Watch out for if result has
             // to be in flags.
 
-            if (reghasvalue(isbyte ? BYTEREGS : ALLREGS,i,reg) && i != 1 && i != -1 &&
+            if (reghasvalue(cg, isbyte ? BYTEREGS : ALLREGS,i,reg) && i != 1 && i != -1 &&
                 !opsize)
             {
                 cs.Iop = op1;
@@ -1179,9 +1179,9 @@ void cdaddass(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
             assert(0);
         freenode(e.E2);        // don't need it anymore
     }
-    else if (isregvar(e1,varregm,varreg) &&
+    else if (isregvar(cg, e1,varregm,varreg) &&
              (e2.Eoper == OPvar || e2.Eoper == OPind) &&
-            !evalinregister(e2) &&
+            !evalinregister(cg, e2) &&
              sz <= REGSIZE)               // deal with later
     {
         getlvalue(cg,cdb,cs,e2,0);
@@ -2311,7 +2311,7 @@ void cdshass(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     // if our lvalue is a cse, make sure we evaluate for result in register
     regm_t retregs;
     reg_t reg;
-    if (e1.Ecount && !(pretregs & (ALLREGS | mBP)) && !isregvar(e1,retregs,reg))
+    if (e1.Ecount && !(pretregs & (ALLREGS | mBP)) && !isregvar(cg, e1,retregs,reg))
         pretregs |= ALLREGS;
 
     // Select opcodes. op2 is used for msw for long shifts.
@@ -2703,7 +2703,7 @@ void cdcmp(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     }
 
     /* See if we should swap operands     */
-    if (e1.Eoper == OPvar && e2.Eoper == OPvar && evalinregister(e2))
+    if (e1.Eoper == OPvar && e2.Eoper == OPvar && evalinregister(cg, e2))
     {
         e1 = e.E2;
         e2 = e.E1;
@@ -2803,7 +2803,7 @@ void cdcmp(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
             // If compare against 0
             {
                 if (sz <= REGSIZE && pretregs == mPSW && !boolres(e2) &&
-                    isregvar(e1,retregs,reg)
+                    isregvar(cg, e1,retregs,reg)
                    )
                 {   // Just do a TEST instruction
                     genregs(cdb,0x85 ^ isbyte,reg,reg);      // TEST reg2,reg2
@@ -2858,7 +2858,7 @@ void cdcmp(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
                              */
                             genregs(cdb,0xD1,0,reg);   // ROL reg,1
                             reg_t regi;
-                            if (reghasvalue(cg.allregs,1,regi))
+                            if (reghasvalue(cg, cg.allregs,1,regi))
                                 genregs(cdb,0x23,reg,regi);  // AND reg,regi
                             else
                                 cdb.genc2(0x81,modregrm(3,4,reg),1); // AND reg,1
@@ -2907,11 +2907,11 @@ void cdcmp(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
 
             if ((e1.Eoper == OPvar && datafl[el_fl(e1)] ||
                  e1.Eoper == OPind) &&
-                !evalinregister(e1))
+                !evalinregister(cg, e1))
             {
                 getlvalue(cg,cdb,cs,e1,0,RM.load);
                 freenode(e1);
-                if (evalinregister(e2))
+                if (evalinregister(cg, e2))
                 {
                     retregs = idxregm(&cs);
                     if ((cs.Iflags & CF.SEG) == CF.es)
@@ -2979,8 +2979,8 @@ void cdcmp(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
 
             regm_t regmx;
             reg_t regx;
-            if (evalinregister(e2) && !OTassign(e1.Eoper) &&
-                !isregvar(e1,regmx,regx))
+            if (evalinregister(cg, e2) && !OTassign(e1.Eoper) &&
+                !isregvar(cg, e1,regmx,regx))
             {
                 regm_t m;
 
@@ -2991,7 +2991,7 @@ void cdcmp(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
                     goto L2;
             }
             if ((e1.Eoper == OPstrcmp || (OTassign(e1.Eoper) && sz <= REGSIZE)) &&
-                !boolres(e2) && !evalinregister(e1))
+                !boolres(e2) && !evalinregister(cg, e1))
             {
                 retregs = mPSW;
                 scodelem(cg,cdb,e1,retregs,0,false);
@@ -3023,7 +3023,7 @@ void cdcmp(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
             {   // CMP reg,const
                 reg = findreg(retregs & cg.allregs);   // get reg that e1 is in
                 rretregs = cg.allregs & ~retregs;
-                if (cs.IFL2 == FL.const_ && reghasvalue(rretregs,cs.IEV2.Vint,rreg))
+                if (cs.IFL2 == FL.const_ && reghasvalue(cg, rretregs,cs.IEV2.Vint,rreg))
                 {
                     genregs(cdb,0x3B,reg,rreg);
                     code_orrex(cdb.last(), rex);
@@ -3075,12 +3075,12 @@ void cdcmp(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
                     goto L2;
             }
             if ((e1.Eoper == OPvar &&
-                 isregvar(e2,rretregs,reg) &&
+                 isregvar(cg, e2,rretregs,reg) &&
                  sz <= REGSIZE
                 ) ||
                 (e1.Eoper == OPind &&
-                 isregvar(e2,rretregs,reg) &&
-                 !evalinregister(e1) &&
+                 isregvar(cg, e2,rretregs,reg) &&
+                 !evalinregister(cg, e1) &&
                  sz <= REGSIZE
                 )
                )
@@ -3237,7 +3237,7 @@ void longcmp(ref CGstate cg,ref CodeBuilder cdb, elem* e, bool jcond, FL fltarg,
     OPER op = e.Eoper;
 
     // See if we should swap operands
-    if (e1.Eoper == OPvar && e2.Eoper == OPvar && evalinregister(e2))
+    if (e1.Eoper == OPvar && e2.Eoper == OPvar && evalinregister(cg, e2))
     {
         e1 = e.E2;
         e2 = e.E1;
@@ -3290,11 +3290,11 @@ void longcmp(ref CGstate cg,ref CodeBuilder cdb, elem* e, bool jcond, FL fltarg,
 
             if ((e1.Eoper == OPvar && datafl[el_fl(e1)] ||
                  e1.Eoper == OPind) &&
-                !evalinregister(e1))
+                !evalinregister(cg, e1))
             {
                 getlvalue(cg,cdb,cs,e1,0);
                 freenode(e1);
-                if (evalinregister(e2))
+                if (evalinregister(cg, e2))
                 {
                     retregs = idxregm(&cs);
                     if ((cs.Iflags & CF.SEG) == CF.es)
@@ -3325,7 +3325,7 @@ void longcmp(ref CGstate cg,ref CodeBuilder cdb, elem* e, bool jcond, FL fltarg,
                 cdb.gen(&cs);                   // CMP EA,rreg/const
                 break;
             }
-            if (evalinregister(e2))
+            if (evalinregister(cg, e2))
                 goto L2;
 
             scodelem(cg,cdb,e1,retregs,0,true);    // compute left leaf
@@ -3485,7 +3485,7 @@ void cdcnvt(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t pretregs)
                 /* forth between 8088 registers and 8087 registers      */
                 if (OTcall(e.E1.Eoper) && !(pretregs & cg.allregs))
                 {
-                    retregs = regmask(e.E1.Ety, e.E1.E1.Ety);
+                    retregs = regmask(cg, e.E1.Ety, e.E1.E1.Ety);
                     if (retregs & (mXMM1 | mXMM0 |mST01 | mST0))       // if return in ST0
                     {
                         codelem(cg,cdb,e.E1,pretregs,false);
@@ -3617,7 +3617,7 @@ void cdcnvt(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t pretregs)
                 break;
         }
     }
-    retregs = regmask(e.E1.Ety, TYnfunc);
+    retregs = regmask(cg, e.E1.Ety, TYnfunc);
 L1:
     codelem(cg,cdb,e.E1,retregs,false);
     for (int i = 0; 1; i++)
@@ -4154,7 +4154,7 @@ void cdport(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     // See if we can use immediate mode of IN/OUT opcodes
     ubyte port;
     if (e1.Eoper == OPconst && e1.Vuns <= 255 &&
-        (!evalinregister(e1) || cg.regcon.mvar & mDX))
+        (!evalinregister(cg, e1) || cg.regcon.mvar & mDX))
     {
         port = cast(ubyte)e1.Vuns;
         freenode(e1);
@@ -4374,7 +4374,7 @@ void cdbtst(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t pretregs)
         {
             regm_t rregm;
             reg_t rreg;
-            if (isregvar(e2, rregm, rreg))
+            if (isregvar(cg, e2, rregm, rreg))
                 retregs &= ~rregm;
         }
 

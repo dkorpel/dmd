@@ -548,7 +548,7 @@ void cdsetjmp(ref CGstate cg, ref CodeBuilder cdb, elem* e,ref regm_t pretregs)
     cdb.genadjesp(-(cg.stackpush - stackpushsave));
 
     cg.stackpush = stackpushsave;
-    retregs = regmask(e.Ety, TYnfunc);
+    retregs = regmask(cg, e.Ety, TYnfunc);
     fixresult(cg,cdb,e,retregs,pretregs);
 }
 

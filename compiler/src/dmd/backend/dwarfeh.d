@@ -170,7 +170,7 @@ static if (0)
                     d.lpad = coffset;
                     index = d.prev;
                 }
-                coffset += calccodsize(c);
+                coffset += calccodsize(cgstate, c);
             }
             assert(n == 0);
         }

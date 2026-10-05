@@ -32,11 +32,11 @@ version (all) // free function version
 {
     import dmd.backend.dvarstats;
 
-    void varStats_writeSymbolTable(Symbol* sfn, ref symtab_t symtab,
+    void varStats_writeSymbolTable(ref CGstate cg, Symbol* sfn, ref symtab_t symtab,
             void function(Symbol*) nothrow fnWriteVar, void function() nothrow fnEndArgs,
             void function(int off,int len) nothrow fnBeginBlock, void function() nothrow fnEndBlock)
     {
-        varStats.writeSymbolTable(cgstate, sfn, symtab, fnWriteVar, fnEndArgs, fnBeginBlock, fnEndBlock);
+        varStats.writeSymbolTable(cg, sfn, symtab, fnWriteVar, fnEndArgs, fnBeginBlock, fnEndBlock);
     }
 
     void varStats_startFunction()

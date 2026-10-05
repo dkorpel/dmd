@@ -536,7 +536,7 @@ void logexp(ref CGstate cg, ref CodeBuilder cdb, elem* e, int jcond, FL fltarg, 
                     logexp(cg, cdb, e.E2, jcond, fltarg, targ);
                     cdb.append(cnop);
                 }
-                andregcon(regconsave);
+                andregcon(cg, regconsave);
                 freenode(e);
                 cg.stackclean--;
                 return;
@@ -559,7 +559,7 @@ void logexp(ref CGstate cg, ref CodeBuilder cdb, elem* e, int jcond, FL fltarg, 
                     regconsave = cg.regcon;
                     logexp(cg, cdb, e.E2, jcond, fltarg, targ);
                 }
-                andregcon(regconsave);
+                andregcon(cg, regconsave);
                 freenode(e);
                 cg.stackclean--;
                 return;
@@ -597,8 +597,8 @@ void logexp(ref CGstate cg, ref CodeBuilder cdb, elem* e, int jcond, FL fltarg, 
 
                 cdb.append(cnop2);
                 logexp(cg, cdb, e.E2.E2, jcond, fltarg, targ);
-                andregcon(regconold);
-                andregcon(regconsave);
+                andregcon(cg, regconold);
+                andregcon(cg, regconsave);
                 freenode(e.E2);
                 freenode(e);
                 cdb.append(cnop);
@@ -4343,7 +4343,7 @@ private void movParams(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint stacka
         case OPrelconst:
         {
             FL fl;
-            if (!evalinregister(e) &&
+            if (!evalinregister(cg, e) &&
                 !(I64 && (config.flags3 & CFG3pic || config.exe == EX_WIN64)) &&
                 ((fl = el_fl(e)) == FL.data || fl == FL.udata || fl == FL.extern_)
                )
@@ -4366,7 +4366,7 @@ private void movParams(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint stacka
         }
 
         case OPconst:
-            if (!evalinregister(e))
+            if (!evalinregister(cg, e))
             {
                 cs.Iop = (sz == 1) ? 0xC6 : 0xC7;
                 cs.Irm = modregrm(2,0,BPRM);
@@ -4401,7 +4401,7 @@ private void movParams(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint stacka
                 {   int regsize = REGSIZE;
                     regm_t retregs = (sz == 1) ? BYTEREGS : cg.allregs;
                     reg_t reg;
-                    if (reghasvalue(retregs,*p,reg))
+                    if (reghasvalue(cg, retregs,*p,reg))
                     {
                         cs.Iop = (cs.Iop & 1) | 0x88;
                         cs.Irm |= modregrm(0, reg & 7, 0); // MOV EA,reg
@@ -4953,7 +4953,7 @@ void pushParams(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint stackalign, t
                 for (int i = 0; i < 3; ++i)
                 {
                     reg_t reg;
-                    if (reghasvalue(cg.allregs, value, reg))
+                    if (reghasvalue(cg, cg.allregs, value, reg))
                         cdb.genpush(reg);               // PUSH reg
                     else
                         cdb.genc2(0x68,0,value);        // PUSH value
@@ -5027,7 +5027,7 @@ void pushParams(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint stackalign, t
                         reg = regwithvalue(cdb,cg.allregs,value,64);
                         goto Preg;          // cannot push imm64 unless it is sign extended 32 bit value
                     }
-                    if (regsize == REGSIZE && reghasvalue(cg.allregs,value,reg))
+                    if (regsize == REGSIZE && reghasvalue(cg, cg.allregs,value,reg))
                         goto Preg;
                     cdb.genc2((szb == 1) ? 0x6A : 0x68, 0, value); // PUSH value
                 }
@@ -5430,7 +5430,7 @@ void loaddata(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t outretreg
         if (sz == 8)
             value = cast(targ_size_t)e.Vullong;
 
-        if (sz == REGSIZE && reghasvalue(forregs, value, reg))
+        if (sz == REGSIZE && reghasvalue(cg, forregs, value, reg))
             forregs = mask(reg);
 
         regm_t save = cg.regcon.immed.mval;

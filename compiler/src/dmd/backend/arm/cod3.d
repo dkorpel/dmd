@@ -1508,7 +1508,7 @@ void loadFloatRegConst(ref CodeBuilder cdb, reg_t vreg, double value, uint sz)
         uint i = *cast(uint*)&f;
         regm_t retregs = INSTR.ALLREGS;
         reg_t reg = allocreg(cdb, retregs, TYint);
-        movregconst(cdb,reg,i,0);                         // MOV reg,i
+        movregconst(cgstate, cdb,reg,i,0);                         // MOV reg,i
         cdb.gen1(INSTR.fmov_float_gen(0,0,0,7,reg,vreg)); // FMOV Sd,Wn
     }
     else if (sz == 8)
@@ -1516,7 +1516,7 @@ void loadFloatRegConst(ref CodeBuilder cdb, reg_t vreg, double value, uint sz)
         ulong i = *cast(ulong*)&value;
         regm_t retregs = INSTR.ALLREGS;
         reg_t reg = allocreg(cdb, retregs, TYllong);
-        movregconst(cdb,reg,i,64);                        // MOV reg,i
+        movregconst(cgstate, cdb,reg,i,64);                        // MOV reg,i
         cdb.gen1(INSTR.fmov_float_gen(1,1,0,7,reg,vreg)); // FMOV Dd,Xn
     }
     else
@@ -1546,9 +1546,8 @@ void loadFloatRegConst(ref CodeBuilder cdb, reg_t vreg, double value, uint sz)
  */
 
 @trusted
-void movregconst(ref CodeBuilder cdb,reg_t reg,targ_size_t value,regm_t flags)
+void movregconst(ref CGstate cg, ref CodeBuilder cdb,reg_t reg,targ_size_t value,regm_t flags)
 {
-    auto cg = &cgstate;
 
     if (!(flags & 64))
         value &= 0xFFFF_FFFF;

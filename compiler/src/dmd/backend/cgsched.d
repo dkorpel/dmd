@@ -1275,7 +1275,7 @@ private int pair_class(code* c)
  * Returns:
  *     CInfo struct containing info about c
  */
-private Cinfo getinfo(code* c)
+private Cinfo getinfo(ref CGstate cg, code* c)
 {
     if (!c)
         return Cinfo.init;
@@ -1285,7 +1285,7 @@ private Cinfo getinfo(code* c)
     if (PRO)
     {
         ci.uops = uops(c);
-        ci.isz = cast(ubyte)calccodsize(c);
+        ci.isz = cast(ubyte)calccodsize(cg, c);
     }
     else
         ci.pair = cast(ubyte)pair_class(c);
@@ -2679,7 +2679,7 @@ bool stage(code* c)
     if (cinfomax == TBLMAX)             // if out of space
         return false;
     auto ci = &cinfo[cinfomax++];
-    *ci = getinfo(c);
+    *ci = getinfo(cgstate, c);
 
     if (c.Iflags & (CF.targ | CF.targ2 | CF.volatile | CF.vex))
     {

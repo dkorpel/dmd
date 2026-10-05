@@ -706,7 +706,7 @@ void cdcond(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
             cg.regimmed_set(findreg(retregs),0);
         codelem(cg,cdb,e22,retregs,false);
 
-        andregcon(regconsave);
+        andregcon(cg, regconsave);
         assert(stackpushsave == cg.stackpush);
 
         pretregs = retregs;
@@ -867,7 +867,7 @@ void cdcond(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
 
         codelem(cg,cdb,e22,retregs,false);
 
-        andregcon(regconsave);
+        andregcon(cg, regconsave);
         assert(stackpushsave == cg.stackpush);
 
         freenode(e2);
@@ -919,8 +919,8 @@ void cdcond(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     else
         codelem(cg,cdb2,e22,retregs,false);   // use same regs as E1
     pretregs = retregs | psw;
-    andregcon(regconold);
-    andregcon(regconsave);
+    andregcon(cg, regconold);
+    andregcon(cg, regconsave);
     assert(cg.stackpush == stackpushsave);
     freenode(e2);
     genBranch(cdb,COND.al,FL.code,cast(block*) cnop2);
@@ -986,7 +986,7 @@ void cdloglog(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
             cg.regcon = regconsave;
         }
         else
-            andregcon(regconsave);
+            andregcon(cg, regconsave);
         assert(cg.stackpush == stackpushsave);
         cdb.append(cnop3);
         cdb.append(cdb1);        // eval code, throw away result
@@ -1007,7 +1007,7 @@ void cdloglog(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
             retregs = cg.allregs;                                     // if mPSW only
 
         const reg = allocreg(cdb1,retregs,TYint);                     // allocate reg for result
-        movregconst(cdb1,reg,e.Eoper == OPoror,pretregs & mPSW);
+        movregconst(cg, cdb1,reg,e.Eoper == OPoror,pretregs & mPSW);
         cg.regcon.immed.mval &= ~mask(reg);                      // mark reg as unavail
         pretregs = retregs;
 
@@ -1026,7 +1026,7 @@ void cdloglog(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     {
         codelem(cg,cdb,e2,pretregs,false);
 
-        andregcon(regconsave);
+        andregcon(cg, regconsave);
 
         // stack depth should not change when evaluating E2
         assert(cg.stackpush == stackpushsave);
@@ -1034,7 +1034,7 @@ void cdloglog(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         assert(sz <= 4);                                       // result better be int
         regm_t retregs = pretregs & cg.allregs;
         const reg = allocreg(cdb1,retregs,TYint);              // allocate reg for result
-        movregconst(cdb1,reg,e.Eoper == OPoror,0);             // reg = 1
+        movregconst(cg, cdb1,reg,e.Eoper == OPoror,0);             // reg = 1
         cg.regcon.immed.mval &= ~mask(reg);               // mark reg as unavail
         pretregs = retregs;
         if (e.Eoper == OPoror)
@@ -1056,7 +1056,7 @@ void cdloglog(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     }
 
     logexp(cg,cdb,e2,1,FL.code,cnop1);
-    andregcon(regconsave);
+    andregcon(cg, regconsave);
 
     // stack depth should not change when evaluating E2
     assert(cg.stackpush == stackpushsave);
@@ -1073,10 +1073,10 @@ void cdloglog(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         cdb1.gen(c1);                                        // duplicate it
     CodeBuilder cdbcg2;
     cdbcg2.ctor();
-    movregconst(cdbcg2,reg,0,pretregs & mPSW);               // MOV reg,0
+    movregconst(cg, cdbcg2,reg,0,pretregs & mPSW);               // MOV reg,0
     cg.regcon.immed.mval &= ~mask(reg);                 // mark reg as unavail
     genBranch(cdbcg2,COND.al,FL.code,cast(block*) cnop2);    // JMP cnop2
-    movregconst(cdb1,reg,1,pretregs & mPSW);                 // reg = 1
+    movregconst(cg, cdb1,reg,1,pretregs & mPSW);                 // reg = 1
     cg.regcon.immed.mval &= ~mask(reg);                 // mark reg as unavail
     pretregs = retregs;
     cdb.append(cnop3);
@@ -1357,7 +1357,7 @@ void cdmemcmp(ref CGstate cg,ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
 
     //printf("s1: %d s2: n: %d Rr: %d Ri: %d Rv1: %d Rv2: %d\n", s1,s2,Rn,Rr,Ri,Rv1,Rv2);
 
-    movregconst(cdb,Rr,0,pretregs & mPSW);      // MOV Rr,0 setting flags in case Rn is zero
+    movregconst(cg, cdb,Rr,0,pretregs & mPSW);      // MOV Rr,0 setting flags in case Rn is zero
 
     code* cnop1 = gen1(null, INSTR.nop);        // branch target L1
     code* cnop2 = gen1(null, INSTR.nop);        // branch target L2
@@ -1366,7 +1366,7 @@ void cdmemcmp(ref CGstate cg,ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
 
     genCompBranch(cdb,1,Rn,false,FL.code,cast(block*) cnop2);   // CBZ Rn,L2
 
-    movregconst(cdb,Ri,0,0);                    // MOV Ri,0
+    movregconst(cg, cdb,Ri,0,0);                    // MOV Ri,0
 
     cdb.append(cnop1);                          // L1:
 
@@ -1468,7 +1468,7 @@ void cdmemcpy(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     if (zeroCheck)
         genCompBranch(cdb,1,Xn,0,FL.code,cast(block*)cnop2); // CBZ Xn,L2
 
-    movregconst(cdb,R5,0,0);                            // MOV  x5,#0
+    movregconst(cg, cdb,R5,0,0);                            // MOV  x5,#0
     cg.regcon.immed.mval &= ~mask(R5);             // mark x5 as not available
 
     code cs;
@@ -1904,8 +1904,8 @@ void cdstreq(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         cdst.reg = NOREG;
         cdst.Sextend = 3;                               // LSL
 
-        movregconst(cdb,Rc,numbytes * 8,0);             // mov   Rc,#count * 8
-        movregconst(cdb,Ri,0,0);                        // mov   Ri,0
+        movregconst(cg, cdb,Rc,numbytes * 8,0);             // mov   Rc,#count * 8
+        movregconst(cg, cdb,Ri,0,0);                        // mov   Ri,0
 
         loadFromEA(csrc,Rv,8,8);                        // L2:   ldr Rv,[Rs,Ri]
         cdb.genc1(csrc.Iop,0,FL.unde,0);
@@ -2700,7 +2700,7 @@ void floatPost(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         // x if x is in a register.
         reg_t varreg;
         regm_t varregm;
-        if (isregvar(e1,varregm,varreg) &&    // if lvalue is register variable
+        if (isregvar(cg, e1,varregm,varreg) &&    // if lvalue is register variable
             doinreg(e1.Vsym,e2)         // and we can compute directly into it
            )
         {
@@ -2828,7 +2828,7 @@ void complexPost(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs
         // x if x is in a register.
         reg_t varreg;
         regm_t varregm;
-        if (isregvar(e1,varregm,varreg) &&    // if lvalue is register variable
+        if (isregvar(cg, e1,varregm,varreg) &&    // if lvalue is register variable
             doinreg(e1.Vsym,e2)         // and we can compute directly into it
            )
         {

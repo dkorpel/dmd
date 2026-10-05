@@ -345,11 +345,11 @@ void codgenx(ref CGstate cg, Symbol* sfunc)
         pinholeopt(b.Bcode,b);         // do pinhole optimization
         if (b.Bflags & BFL.prolog)      // do function prolog
         {
-            cg.startoffset = coffset + calcblksize(cprolog) - cg.funcoffset;
+            cg.startoffset = coffset + calcblksize(cg, cprolog) - cg.funcoffset;
             b.Bcode = cat(cprolog,b.Bcode);
         }
         cgsched_block(b);
-        b.Bsize = calcblksize(b.Bcode);       // calculate block size
+        b.Bsize = calcblksize(cg, b.Bcode);       // calculate block size
         if (b.Balign)
         {
             targ_size_t u = b.Balign - 1;
@@ -1001,7 +1001,7 @@ else
     {
         code* c = cdbx.peek();
         pinholeopt(c, null);
-        cg.prolog_allocoffset = calcblksize(c);
+        cg.prolog_allocoffset = calcblksize(cg, c);
     }
 
     if (cg.usednteh & NTEHjmonitor)
@@ -1600,7 +1600,7 @@ private void resetEcomsub(elem* e)
  */
 
 @trusted
-bool isregvar(elem* e, ref regm_t pregm, ref reg_t preg)
+bool isregvar(ref CGstate cg, elem* e, ref regm_t pregm, ref reg_t preg)
 {
     regm_t regm;
     reg_t reg;
@@ -1608,7 +1608,6 @@ bool isregvar(elem* e, ref regm_t pregm, ref reg_t preg)
     elem_debug(e);
     if (e.Eoper == OPvar || e.Eoper == OPrelconst)
     {
-        CGstate* cg = &cgstate;
         Symbol* s = e.Vsym;
         switch (s.Sfl)
         {
@@ -2177,7 +2176,7 @@ bool cssave(elem* e, regm_t regm, bool opsflag)
  */
 
 @trusted
-bool evalinregister(elem* e)
+bool evalinregister(ref CGstate cg, elem* e)
 {
     //printf("evalinregister()\n");
     if (config.exe == EX_WIN64 && e.Eoper == OPrelconst)
@@ -2191,7 +2190,6 @@ bool evalinregister(elem* e)
         return true;
 
     // Need to rethink this code if float or double can be CSE'd
-    CGstate* cg = &cgstate;
     bool AArch64 = cg.AArch64;
     uint sz = tysize(e.Ety);
     if (e.Ecount == e.Ecomsub)    /* elem is a CSE that needs     */
@@ -3001,7 +2999,7 @@ void scodelem(ref CGstate cg, ref CodeBuilder cdb, elem* e,ref regm_t pretregs,r
         regm_t regm;
         reg_t reg;
 
-        if (isregvar(e, regm, reg) &&           // if e is a register variable
+        if (isregvar(cg, e, regm, reg) &&           // if e is a register variable
             (regm & pretregs) == regm &&        // in one of the right regs
             e.Voffset == 0
            )
@@ -3303,9 +3301,8 @@ void docommas(ref CodeBuilder cdb, ref elem* pe)
  */
 
 @trusted
-void andregcon(const ref con_t pregconsave)
+void andregcon(ref CGstate cg, const ref con_t pregconsave)
 {
-    CGstate* cg = &cgstate;
     regm_t m = ~1UL;
     foreach (i; 0 ..REGMAX)
     {

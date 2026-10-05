@@ -412,7 +412,7 @@ void logexp(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint jcond, FL fltarg,
                     logexp(cg, cdb, e.E2, jcond, fltarg, targ);
                     cdb.append(cnop);
                 }
-                andregcon(regconsave);
+                andregcon(cg, regconsave);
                 freenode(e);
                 cg.stackclean--;
                 return;
@@ -435,7 +435,7 @@ void logexp(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint jcond, FL fltarg,
                     regconsave = cg.regcon;
                     logexp(cg, cdb, e.E2, jcond, fltarg, targ);
                 }
-                andregcon(regconsave);
+                andregcon(cg, regconsave);
                 freenode(e);
                 cg.stackclean--;
                 return;
@@ -473,8 +473,8 @@ void logexp(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint jcond, FL fltarg,
 
                 cdb.append(cnop2);
                 logexp(cg, cdb, e.E2.E2, jcond, fltarg, targ);
-                andregcon(regconold);
-                andregcon(regconsave);
+                andregcon(cg, regconold);
+                andregcon(cg, regconsave);
                 freenode(e.E2);
                 freenode(e);
                 cdb.append(cnop);
@@ -2625,7 +2625,7 @@ void loaddata(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t outretreg
         if (sz == 8)
             value = cast(targ_size_t)e.Vullong;
 
-        if (sz == REGSIZE && reghasvalue(forregs, value, reg))
+        if (sz == REGSIZE && reghasvalue(cg, forregs, value, reg))
             forregs = mask(reg);
 
         regm_t save = cg.regcon.immed.mval;

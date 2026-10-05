@@ -106,7 +106,7 @@ void cdeq(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         }
 
         if (e2oper == OPconst &&       // if rvalue is a constant
-            !(evalinregister(e2) && plenty) &&
+            !(evalinregister(cg, e2) && plenty) &&
             !isPair &&
             !e1.Ecount)        // and no CSE headaches
         {
@@ -170,7 +170,7 @@ void cdeq(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     {
         // Be careful of cases like (x = x+x+x). We cannot evaluate in
         // x if x is in a register.
-        if (isregvar(e1,varregm,varreg) &&    // if lvalue is register variable
+        if (isregvar(cg, e1,varregm,varreg) &&    // if lvalue is register variable
             doinreg(e1.Vsym,e2) &&       // and we can compute directly into it
             !(sz == 1 && e1.Voffset == 1)
            )
@@ -611,7 +611,7 @@ void floatOpAss(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         // x if x is in a register.
         reg_t varreg;
         regm_t varregm;
-        if (isregvar(e1,varregm,varreg) && // if lvalue is register variable
+        if (isregvar(cg, e1,varregm,varreg) && // if lvalue is register variable
             doinreg(e1.Vsym,e2)            // and we can compute directly into it
            )
         {
@@ -1075,7 +1075,7 @@ void cdcmp(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     }
 
     /* See if we should swap operands     */
-    if (e1.Eoper == OPvar && e2.Eoper == OPvar && evalinregister(e2))
+    if (e1.Eoper == OPvar && e2.Eoper == OPvar && evalinregister(cg, e2))
     {
         e1 = e.E2;
         e2 = e.E1;
@@ -1177,7 +1177,7 @@ static if (0) // TODO AArch64
 printf("OPconst:\n");
             // If compare against 0
             if (sz <= REGSIZE && pretregs == mPSW && !boolres(e2) &&
-                isregvar(e1,retregs,reg)
+                isregvar(cg, e1,retregs,reg)
                )
             {
                 gentstreg(cdb, reg, sz == 8);           // CMP reg,#0
@@ -1227,7 +1227,7 @@ printf("OPconst:\n");
                              */
                             genregs(cdb,0xD1,0,reg);   // ROL reg,1
                             reg_t regi;
-                            if (reghasvalue(cg.allregs,1,regi))
+                            if (reghasvalue(cg, cg.allregs,1,regi))
                                 genregs(cdb,0x23,reg,regi);  // AND reg,regi
                             else
                                 cdb.genc2(0x81,modregrm(3,4,reg),1); // AND reg,1
@@ -1275,11 +1275,11 @@ printf("OPconst:\n");
 
             if ((e1.Eoper == OPvar && datafl[el_fl(e1)] ||
                  e1.Eoper == OPind) &&
-                !evalinregister(e1))
+                !evalinregister(cg, e1))
             {
                 getlvalue(cg,cdb,cs,e1,0,RM.load);
                 freenode(e1);
-                if (evalinregister(e2))
+                if (evalinregister(cg, e2))
                 {
                     retregs = idxregm(&cs);
                     rretregs = cg.allregs & ~retregs;
@@ -1339,8 +1339,8 @@ printf("OPconst:\n");
 
             regm_t regmx;
             reg_t regx;
-            if (evalinregister(e2) && !OTassign(e1.Eoper) &&
-                !isregvar(e1,regmx,regx))
+            if (evalinregister(cg, e2) && !OTassign(e1.Eoper) &&
+                !isregvar(cg, e1,regmx,regx))
             {
                 regm_t m;
 
@@ -1351,7 +1351,7 @@ printf("OPconst:\n");
                     goto default;
             }
             if ((e1.Eoper == OPstrcmp || (OTassign(e1.Eoper) && sz <= REGSIZE)) &&
-                !boolres(e2) && !evalinregister(e1))
+                !boolres(e2) && !evalinregister(cg, e1))
             {
                 retregs = mPSW;
                 scodelem(cg,cdb,e1,retregs,0,false);
@@ -1370,7 +1370,7 @@ printf("OPconst:\n");
             {   // CMP reg,const
                 reg = findreg(retregs & cg.allregs);   // get reg that e1 is in
                 rretregs = cg.allregs & ~retregs;
-                if (cs.IFL2 == FL.const_ && reghasvalue(rretregs,cs.IEV2.Vint,rreg))
+                if (cs.IFL2 == FL.const_ && reghasvalue(cg, rretregs,cs.IEV2.Vint,rreg))
                 {
                     genregs(cdb,0x3B,reg,rreg);
                     code_orrex(cdb.last(), rex);
@@ -1401,12 +1401,12 @@ printf("OPconst:\n");
                     goto default;
             }
             if ((e1.Eoper == OPvar &&
-                 isregvar(e2,rretregs,reg) &&
+                 isregvar(cg, e2,rretregs,reg) &&
                  sz <= REGSIZE
                 ) ||
                 (e1.Eoper == OPind &&
-                 isregvar(e2,rretregs,reg) &&
-                 !evalinregister(e1) &&
+                 isregvar(cg, e2,rretregs,reg) &&
+                 !evalinregister(cg, e1) &&
                  sz <= REGSIZE
                 )
                )
@@ -1504,21 +1504,21 @@ L3:
             else if (I64 && sz == 8)
             {
                 assert(!flag);
-                movregconst(cg,cdb,reg,1,64|8);   // MOV reg,1
+                movregconst(cg, cg,cdb,reg,1,64|8);   // MOV reg,1
                 nop = gennop(nop);
                 genjmp(cdb,jop,FL.code,cast(block*) nop);  // Jtrue nop
                                                             // MOV reg,0
-                movregconst(cg,cdb,reg,0,(pretregs & mPSW) ? 64|8 : 64);
+                movregconst(cg, cg,cdb,reg,0,(pretregs & mPSW) ? 64|8 : 64);
                 cg.regcon.immed.mval &= ~mask(reg);
             }
             else
             {
                 assert(!flag);
-                movregconst(cg,cdb,reg,1,8);      // MOV reg,1
+                movregconst(cg, cg,cdb,reg,1,8);      // MOV reg,1
                 nop = gennop(nop);
                 genjmp(cdb,jop,FL.code,cast(block*) nop);  // Jtrue nop
                                                             // MOV reg,0
-                movregconst(cg,cdb,reg,0,(pretregs & mPSW) ? 8 : 0);
+                movregconst(cg, cg,cdb,reg,0,(pretregs & mPSW) ? 8 : 0);
                 cg.regcon.immed.mval &= ~mask(reg);
             }
             pretregs = retregs;

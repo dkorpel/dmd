@@ -313,7 +313,7 @@ void cdorth(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
             else if (sz == 4)
                 value &= 0xFFFFFFFF;
             reg_t reg;
-            if (reghasvalue(isbyte ? BYTEREGS : ALLREGS,value,reg))
+            if (reghasvalue(cg, isbyte ? BYTEREGS : ALLREGS,value,reg))
             {
                 code_newreg(&cs, reg);
                 if (I64 && isbyte && reg >= 4)
@@ -340,7 +340,7 @@ void cdorth(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         // Handle (exp & reg)
         reg_t reg;
         regm_t retregs;
-        if (isregvar(e2,retregs,reg))
+        if (isregvar(cg, e2,retregs,reg))
         {
             code cs;
             cs.Iflags = CF.zero;
@@ -468,7 +468,7 @@ void cdorth(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
 
             reg_t reg11;
             regm_t regm;
-            if (e11.Eoper == OPvar && isregvar(e11,regm,reg11))
+            if (e11.Eoper == OPvar && isregvar(cg, e11,regm,reg11))
             {
                 if (tysize(e11.Ety) <= REGSIZE)
                     retregs = mask(reg11); // only want the LSW
@@ -646,7 +646,7 @@ void cdorth(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         else if (e2oper == OPvar &&
                  e1.Eoper == OPvar &&
                  e.Eoper != OPmin &&
-                 isregvar(e1,regm,regx) &&
+                 isregvar(cg, e1,regm,regx) &&
                  regm != retregs &&
                  _tysize[ty1] == _tysize[ty2])
         {
@@ -723,7 +723,7 @@ void cdorth(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
                 goto L2;
             if (segfl[el_fl(e2)] != 3)              /* if not in data segment */
                 goto L2;
-            if (evalinregister(e2))
+            if (evalinregister(cg, e2))
                 goto L2;
             cs.IEV2.Voffset = e2.Voffset;
             cs.IEV2.Vsym = e2.Vsym;
@@ -750,7 +750,7 @@ void cdorth(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
                         i &= 0xFFFF;
                     }
                 }
-                rval = reghasvalue(isbyte ? BYTEREGS : ALLREGS,i,rreg);
+                rval = reghasvalue(cg, isbyte ? BYTEREGS : ALLREGS,i,rreg);
                 cs.IEV2.Vsize_t = i;
             L3:
                 if (!test)
@@ -2048,7 +2048,7 @@ void cdnot(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         if (config.target_cpu >= TARGET_80486 &&
             tysize(e.Ety) == 1)
         {
-            if (reghasvalue((sz == 1) ? BYTEREGS : ALLREGS,0,reg))
+            if (reghasvalue(cg, (sz == 1) ? BYTEREGS : ALLREGS,0,reg))
             {
                 cs.Iop = 0x39;
                 if (I64 && (sz == 1) && reg >= 4)
@@ -2080,7 +2080,7 @@ void cdnot(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
             goto L4;
         }
 
-        if (reghasvalue((sz == 1) ? BYTEREGS : ALLREGS,1,reg))
+        if (reghasvalue(cg, (sz == 1) ? BYTEREGS : ALLREGS,1,reg))
             cs.Iop = 0x39;
         else
         {   cs.Iop = 0x81;
@@ -2341,7 +2341,7 @@ void cdcond(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
             cg.regimmed_set(findreg(retregs),0);
         codelem(cg,cdb,e22,retregs,false);
 
-        andregcon(regconsave);
+        andregcon(cg, regconsave);
         assert(stackpushsave == cg.stackpush);
 
         pretregs = retregs;
@@ -2485,7 +2485,7 @@ void cdcond(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
 
         codelem(cg,cdb,e22,retregs,false);
 
-        andregcon(regconsave);
+        andregcon(cg, regconsave);
         assert(stackpushsave == cg.stackpush);
 
         freenode(e2);
@@ -2545,8 +2545,8 @@ void cdcond(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     else
         codelem(cg,cdb2,e22,retregs,false);   // use same regs as E1
     pretregs = retregs | psw;
-    andregcon(regconold);
-    andregcon(regconsave);
+    andregcon(cg, regconold);
+    andregcon(cg, regconsave);
     assert(global87.stackused == stackusedsave);
     assert(cg.stackpush == stackpushsave);
     memcpy(global87.stack.ptr,_8087save.ptr,global87.stack.sizeof);
@@ -2630,7 +2630,7 @@ void cdloglog(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
             cg.regcon = regconsave;
         }
         else
-            andregcon(regconsave);
+            andregcon(cg, regconsave);
         assert(cg.stackpush == stackpushsave);
         cdb.append(cnop3);
         cdb.append(cdb1);        // eval code, throw away result
@@ -2670,7 +2670,7 @@ void cdloglog(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     {
         codelem(cg,cdb,e2,pretregs,false);
 
-        andregcon(regconsave);
+        andregcon(cg, regconsave);
 
         // stack depth should not change when evaluating E2
         assert(cg.stackpush == stackpushsave);
@@ -2700,7 +2700,7 @@ void cdloglog(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     }
 
     logexp(cg, cdb,e2,1,FL.code,cnop1);
-    andregcon(regconsave);
+    andregcon(cg, regconsave);
 
     // stack depth should not change when evaluating E2
     assert(cg.stackpush == stackpushsave);
@@ -2857,7 +2857,7 @@ void cdshift(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
                     reg_t reg;
                     regm_t regm;
 
-                    if (isregvar(e1,regm,reg) && !(regm & retregs))
+                    if (isregvar(cg, e1,regm,reg) && !(regm & retregs))
                     {   code cs;
                         resreg = allocreg(cdb,retregs,e.Ety);
                         buildEA(&cs,-1,reg,1 << shiftcnt,0);
@@ -3289,7 +3289,7 @@ void cdind(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     if (pretregs == 0)
     {
         if (e.Ety & mTYvolatile)               // do the load anyway
-            pretregs = regmask(e.Ety, 0);     // load into registers
+            pretregs = regmask(cg, e.Ety, 0);     // load into registers
         else
             return;
     }
