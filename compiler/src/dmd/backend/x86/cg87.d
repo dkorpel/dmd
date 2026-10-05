@@ -559,18 +559,18 @@ private void cg87_87topsw(ref CGstate cg, ref CodeBuilder cdb)
  */
 
 @trusted
-private void genjmpifC2(ref CodeBuilder cdb, code* ctarget)
+private void genjmpifC2(ref CGstate cg, ref CodeBuilder cdb, code* ctarget)
 {
     if (NOSAHF)
     {
-        getregs(cgstate, cdb,mAX);
+        getregs(cg, cdb,mAX);
         cdb.genf2(0xDF,0xE0);                                    // FSTSW AX
         cdb.genc2(0xF6,modregrm(3,0,4),4);                       // TEST AH,4
         genjmp(cdb, JNE, FL.code, cast(block*)ctarget); // JNE ctarget
     }
     else
     {
-        cg87_87topsw(cgstate, cdb);
+        cg87_87topsw(cg, cdb);
         genjmp(cdb, JP, FL.code, cast(block*)ctarget);  // JP ctarget
     }
 }
@@ -1480,13 +1480,13 @@ void orth87(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
 
             cdb.gen2(0xD9, 0xF8);                  // FPREM
             code* cfm1 = cdb.last();
-            genjmpifC2(cdb, cfm1);                 // JC2 FM1
+            genjmpifC2(cg, cdb, cfm1);                 // JC2 FM1
             cdb.genf2(0xD9, 0xC8 + 2);             // FXCH ST(2)
 
             cdb.gen2(0xD9, 0xF8);                  // FPREM
             code* cfm2 = cdb.last();
 
-            genjmpifC2(cdb, cfm2);                 // JC2 FM2
+            genjmpifC2(cg, cdb, cfm2);                 // JC2 FM2
             cdb.genf2(0xDD,0xD8 + 1);              // FSTP ST(1)
             cdb.genf2(0xD9, 0xC8 + 1);             // FXCH ST(1)
 
@@ -1572,7 +1572,7 @@ void orth87(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
 
         cdb.gen2(0xD9, 0xF8);                   // FM1: FPREM
         code* cfm1 = cdb.last();
-        genjmpifC2(cdb, cfm1);                  // JC2 FM1
+        genjmpifC2(cg, cdb, cfm1);                  // JC2 FM1
         cdb.genf2(0xDD,0xD8 + 1);               // FSTP ST(1)
 
         pop87();
@@ -2363,7 +2363,7 @@ public void opass87(ref CGstate cg,ref CodeBuilder cdb,elem* e,ref regm_t pretre
 
         cdb.gen2(0xD9, 0xF8);               // FPREM
         code* cfm1 = cdb.last();
-        genjmpifC2(cdb, cfm1);              // JC2 FM1
+        genjmpifC2(cg, cdb, cfm1);              // JC2 FM1
         cdb.genf2(0xDD,0xD8 + 1);           // FSTP ST(1)
 
         pop87();
@@ -2458,7 +2458,7 @@ private void opmod_complex87(ref CGstate cg,ref CodeBuilder cdb, elem* e,ref reg
 
     cdb.gen2(0xD9, 0xF8);                       // FPREM
     code* cfm1 = cdb.last();
-    genjmpifC2(cdb, cfm1);                      // JC2 FM1
+    genjmpifC2(cg, cdb, cfm1);                      // JC2 FM1
     cdb.genf2(0xD9, 0xC8 + 1);                  // FXCH ST(1)
 
     push87(cdb);
@@ -2467,7 +2467,7 @@ private void opmod_complex87(ref CGstate cg,ref CodeBuilder cdb, elem* e,ref reg
 
     cdb.gen2(0xD9, 0xF8);                       // FPREM
     code* cfm2 = cdb.last();
-    genjmpifC2(cdb, cfm2);                      // JC2 FM2
+    genjmpifC2(cg, cdb, cfm2);                      // JC2 FM2
     cdb.genf2(0xDD,0xD8 + 1);                   // FSTP ST(1)
 
     pop87();
@@ -3569,7 +3569,7 @@ private void genSetRoundingMode(ref CGstate cg, ref CodeBuilder cdb, CW cw)
  */
 
 @trusted
-private void genctst(ref CodeBuilder cdb,elem* e,int pop)
+private void genctst(ref CGstate cg, ref CodeBuilder cdb,elem* e,int pop)
 {
     assert(pop == 0 || pop == 1);
 
@@ -3637,23 +3637,23 @@ private void genctst(ref CodeBuilder cdb,elem* e,int pop)
         cdb.gen2(0xDA,0xE9);                   // FUCOMPP
         pop87();
         pop87();
-        cg87_87topsw(cgstate, cdb);                     // put 8087 flags in CPU flags
+        cg87_87topsw(cg, cdb);                     // put 8087 flags in CPU flags
         cdb.gen2(0xD9,0xEE);                   // FLDZ
         cdb.gen2(0xDA,0xE9);                   // FUCOMPP
         pop87();
         genjmp(cdb,JNE,FL.code,cast(block*) cnop); // JNE     L1
         genjmp(cdb,JP, FL.code,cast(block*) cnop); // JP      L1
-        cg87_87topsw(cgstate, cdb);                     // put 8087 flags in CPU flags
+        cg87_87topsw(cg, cdb);                     // put 8087 flags in CPU flags
     }
     else
     {
         cdb.gen2(0xDD,0xE1);                   // FUCOM
-        cg87_87topsw(cgstate, cdb);                     // put 8087 flags in CPU flags
+        cg87_87topsw(cg, cdb);                     // put 8087 flags in CPU flags
         cdb.gen2(0xDD,0xEA);                   // FUCOMP ST(2)
         pop87();
         genjmp(cdb,JNE,FL.code,cast(block*) cnop); // JNE     L1
         genjmp(cdb,JP, FL.code,cast(block*) cnop); // JP      L1
-        cg87_87topsw(cgstate, cdb);                     // put 8087 flags in CPU flags
+        cg87_87topsw(cg, cdb);                     // put 8087 flags in CPU flags
     }
     cdb.append(cdbnop);
 }
@@ -3711,7 +3711,7 @@ void fixresult_complex87(ref CGstate cg,ref CodeBuilder cdb,elem* e,regm_t retre
     else if (tym == TYcfloat && outretregs & (mAX|mDX) && retregs & mST01)
     {
         if (outretregs & mPSW && !(retregs & mPSW))
-            genctst(cdb,e,0);                   // FTST
+            genctst(cg, cdb,e,0);                   // FTST
         pop87();
         cdb.genfltreg(cg, ESC(MFfloat,1),3,0);      // FSTP floatreg
         genfwait(cdb);
@@ -3734,7 +3734,7 @@ void fixresult_complex87(ref CGstate cg,ref CodeBuilder cdb,elem* e,regm_t retre
         cdb.genfltreg(cg, 0xD9, 0, 0);              // FLD float ptr floatreg
 
         if (outretregs & mPSW)
-            genctst(cdb,e,0);                   // FTST
+            genctst(cg, cdb,e,0);                   // FTST
     }
     else if ((tym == TYcfloat || tym == TYcdouble) &&
              outretregs & (mXMM0|mXMM1) && retregs & mST01)
@@ -3743,7 +3743,7 @@ void fixresult_complex87(ref CGstate cg,ref CodeBuilder cdb,elem* e,regm_t retre
         uint xop = xmmload(tyf);
         uint mf = tyf == TYfloat ? MFfloat : MFdouble;
         if (outretregs & mPSW && !(retregs & mPSW))
-            genctst(cdb,e,0);                   // FTST
+            genctst(cg, cdb,e,0);                   // FTST
         pop87();
         cdb.genfltreg(cg, ESC(mf,1),3,0);           // FSTP floatreg
         genfwait(cdb);
@@ -3771,13 +3771,13 @@ void fixresult_complex87(ref CGstate cg,ref CodeBuilder cdb,elem* e,regm_t retre
         cdb.genfltreg(cg, fop, 0, 0);               // FLD double ptr floatreg
 
         if (outretregs & mPSW)
-            genctst(cdb,e,0);                   // FTST
+            genctst(cg, cdb,e,0);                   // FTST
     }
     else
     {   if (outretregs & mPSW)
         {   if (!(retregs & mPSW))
             {   assert(retregs & mST01);
-                genctst(cdb,e,!(outretregs & mST01));        // FTST
+                genctst(cg, cdb,e,!(outretregs & mST01));        // FTST
             }
         }
         assert(!(outretregs & mST01) || (retregs & mST01));
