@@ -1,2 +1,5 @@
 getRtlsym
 getRtlsymPersonality
+regm_str
+disassemble
+simplify_code

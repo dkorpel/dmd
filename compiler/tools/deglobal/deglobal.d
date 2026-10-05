@@ -973,7 +973,16 @@ string candidateProblem(size_t g, size_t f, string pname, bool[size_t] group = n
     if (fn.addressTaken)
         return "address taken";
     if (fn.overloaded)
-        return "overloaded";
+    {
+        if (!promote)
+            return "overloaded";
+        foreach (i, ref o; funcs)
+            if (i != f && o.name == fn.name && o.fd.parent is fd.parent && o.fd.fbody && i !in group)
+            {
+                *promote = i;
+                return "overload " ~ lineOf(o.file, o.nameOff) ~ " not in group";
+            }
+    }
     if (fd.isVirtual())
         return "virtual";
     if (fd._linkage != LINK.d && fd._linkage != LINK.default_)
@@ -1072,6 +1081,17 @@ size_t[] group(size_t g, size_t f, string pname, size_t limit, out string proble
     return order;
 }
 
+bool unaryContext(TOK v)
+{
+    switch (v)
+    {
+        case TOK.leftParenthesis, TOK.comma, TOK.assign, TOK.return_, TOK.leftBracket, TOK.semicolon, TOK.leftCurly:
+            return true;
+        default:
+            return false;
+    }
+}
+
 void planEdits(size_t g, size_t f, string pname)
 {
     auto fn = &funcs[f];
@@ -1092,6 +1112,14 @@ void planEdits(size_t g, size_t f, string pname)
             deleted = patternLines(f, g, pn);
         foreach (d; deleted)
             edits[fn.file] ~= Edit(d[0], d[1] - d[0], "");
+        if (deleted.length)
+        {
+            auto tks = allTokens(fn.file);
+            foreach (i, tk; tks)
+                if (i >= 2 && tk.value == TOK.identifier && tk.ident == pn && tk.off > fn.nameOff && tk.off < fn.endOff &&
+                    tks[i - 1].value == TOK.mul && unaryContext(tks[i - 2].value))
+                    edits[fn.file] ~= Edit(tks[i - 1].off, 1, "");
+        }
     }
     if (pn != globals[g].name)
         foreach (off; globalRefOffsets(f, g))
@@ -1252,6 +1280,6 @@ int main(string[] args)
     foreach (u; chosen)
         printf("%s %s\n", funcs[u].name.toStringz, rel(funcs[u].file).toStringz);
     if (!dry)
-        applyEdits();
+                applyEdits();
     return 0;
 }
