@@ -1869,7 +1869,7 @@ static if (1)
                 OutBuffer* buf = SegData[dfseg].SDbuf;
                 buf.reserve(32 * 10);    // 32 bytes per instance of struct compact_unwind_entry
 
-                writeCompactUnwindEntry(*buf, dfseg, sfunc, getRtlsymPersonality(), ehunwind);
+                writeCompactUnwindEntry(*buf, dfseg, sfunc, getRtlsymPersonality(cgstate), ehunwind);
             }
             else
             {
@@ -1882,7 +1882,7 @@ static if (1)
 
                 uint* poffset = ehunwind ? &CIE_offset_unwind : &CIE_offset_no_unwind;
                 if (*poffset == ~0)
-                    *poffset = writeEhFrameHeader(dfseg, buf, getRtlsymPersonality(), ehunwind);
+                    *poffset = writeEhFrameHeader(dfseg, buf, getRtlsymPersonality(cgstate), ehunwind);
 
                 writeEhFrameFDE(dfseg, sfunc, ehunwind, *poffset);
             }

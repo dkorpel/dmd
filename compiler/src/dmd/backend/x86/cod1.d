@@ -2970,13 +2970,13 @@ package(dmd.backend) struct Parameter
 }
 
 @trusted
-void fillParameters(elem* e, Parameter[] parameters, ref int i)
+void fillParameters(ref CGstate cg, elem* e, Parameter[] parameters, ref int i)
 {
     if (e.Eoper == OPparam)
     {
-        fillParameters(e.E1, parameters, i);
-        fillParameters(e.E2, parameters, i);
-        freenode(cgstate, e);
+        fillParameters(cg, e.E1, parameters, i);
+        fillParameters(cg, e.E2, parameters, i);
+        freenode(cg, e);
     }
     else
     {
@@ -3409,7 +3409,7 @@ void cdfunc(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t pretregs)
     if (np)
     {
         int n = 0;
-        fillParameters(e.E2, parameters[0 .. np], n);
+        fillParameters(cg, e.E2, parameters[0 .. np], n);
         assert(n == np);
     }
 

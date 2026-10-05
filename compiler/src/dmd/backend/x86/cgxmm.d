@@ -1202,7 +1202,7 @@ void cdvector(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t pretregs)
     elem** params = cast(elem**)malloc(n * (elem*).sizeof);
     assert(params);
     elem** tmp = params;
-    el_paramArray(&tmp, e.E1);
+    el_paramArray(cg, &tmp, e.E1);
 
 static if (0)
 {

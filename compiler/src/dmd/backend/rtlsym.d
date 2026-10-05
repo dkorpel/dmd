@@ -126,7 +126,7 @@ private __gshared Symbol*[RTLSYM.max + 1] rtlsym;
  * Returns:
  *      Personality function
  */
-Symbol* getRtlsymPersonality() { return getRtlsym(cgstate, RTLSYM.PERSONALITY); }
+Symbol* getRtlsymPersonality(ref CGstate cg) { return getRtlsym(cg, RTLSYM.PERSONALITY); }
 
 
 /******************************************

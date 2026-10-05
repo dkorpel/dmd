@@ -542,13 +542,13 @@ int el_nparams(const elem* e)
  */
 
 @trusted
-void el_paramArray(elem ***parray, elem* e)
+void el_paramArray(ref CGstate cg, elem ***parray, elem* e)
 {
     if (e.Eoper == OPparam)
     {
-        el_paramArray(parray, e.E1);
-        el_paramArray(parray, e.E2);
-        freenode(cgstate, e);
+        el_paramArray(cg, parray, e.E1);
+        el_paramArray(cg, parray, e.E2);
+        freenode(cg, e);
     }
     else
     {

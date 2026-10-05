@@ -45,6 +45,7 @@ import dmd.backend.ty;
 import dmd.backend.type;
 
 import dmd.backend.barray;
+import dmd.backend.x86.cgcod : cgstate;
 
 nothrow:
 @safe:
@@ -456,7 +457,7 @@ private elem* initializeParamsWithArgs(elem* eargs, SYMIDX sistart, SYMIDX siend
     assert(nargs < size_t.max / (2 * (elem*).sizeof));   // conservative overflow check
     elem*[] args = (cast(elem**)malloc(nargs * (elem*).sizeof))[0 .. nargs];
     elem** tmp = args.ptr;
-    el_paramArray(&tmp, eargs);
+    el_paramArray(cgstate, &tmp, eargs);
 
     elem* ecopy;
 
