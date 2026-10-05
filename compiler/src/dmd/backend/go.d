@@ -385,7 +385,7 @@ void optfunc(ref CGstate cg, ref GlobalOptimizer go, ref BlockOpt bo)
         if (go.mfoptim & MFcnp)
             constprop(go, bo, go.changes);  /* make relationals unsigned     */
         if (go.mfoptim & (MFli | MFliv))
-            loopopt(cg, go, bo);                /* remove loop invariants and    */
+            loopopt(cg.AArch64, go, bo);                /* remove loop invariants and    */
                                         /* induction vars                */
                                         /* do loop rotation              */
         else

@@ -681,7 +681,7 @@ private __gshared
  */
 
 @trusted
-void loopopt(ref CGstate cg, ref GlobalOptimizer go, ref BlockOpt bo)
+void loopopt(bool AArch64, ref GlobalOptimizer go, ref BlockOpt bo)
 {
     __gshared Loops startloop_cache;
 
@@ -806,7 +806,7 @@ restart:
         {
             foreach (ref l; startloop)
             {
-                if (loopunroll(cg.AArch64, go, bo, l))
+                if (loopunroll(AArch64, go, bo, l))
                 {
                     compdfo(bo.dfo, bo.startblock);  // compute depth-first order
                     blockinit(bo);
