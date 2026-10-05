@@ -541,7 +541,7 @@ private void cg87_87topsw(ref CodeBuilder cdb)
      * and will cause a seg fault
      */
     assert(!NOSAHF);
-    getregs(cdb,mAX);
+    getregs(cgstate, cdb,mAX);
     if (config.target_cpu >= TARGET_80286)
         cdb.genf2(0xDF,0xE0);             // FSTSW AX
     else
@@ -563,7 +563,7 @@ private void genjmpifC2(ref CodeBuilder cdb, code* ctarget)
 {
     if (NOSAHF)
     {
-        getregs(cdb,mAX);
+        getregs(cgstate, cdb,mAX);
         cdb.genf2(0xDF,0xE0);                                    // FSTSW AX
         cdb.genc2(0xF6,modregrm(3,0,4),4);                       // TEST AH,4
         genjmp(cdb, JNE, FL.code, cast(block*)ctarget); // JNE ctarget
@@ -2261,7 +2261,7 @@ private void cnvteq87(ref CGstate cg,ref CodeBuilder cdb,elem* e,ref regm_t pret
     freenode(cg, e.E2);
 
     genfwait(cdb);
-    genSetRoundingMode(cdb, CW.roundto0);   // FLDCW roundto0
+    genSetRoundingMode(cg, cdb, CW.roundto0);   // FLDCW roundto0
 
     pop87();
     cs.Iflags = ADDFWAIT() ? CF.wait : CF.zero;
@@ -2270,7 +2270,7 @@ private void cnvteq87(ref CGstate cg,ref CodeBuilder cdb,elem* e,ref regm_t pret
     loadea(cg,cdb,e.E1,cs,op1,op2,0,0,0);
 
     genfwait(cdb);
-    genSetRoundingMode(cdb, CW.roundtonearest);   // FLDCW roundtonearest
+    genSetRoundingMode(cg, cdb, CW.roundtonearest);   // FLDCW roundtonearest
 
     freenode(cg, e.E1);
 }
@@ -2816,7 +2816,7 @@ void cdnegass87(ref CGstate cg,ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     if (e1.Eoper == OPvar)
         e1.Vsym.Sflags &= ~GTregcand;
 
-    modEA(cdb,&cs);
+    modEA(cg, cdb,&cs);
     cs.Irm |= modregrm(0,6,0);
     cs.Iop = 0x80;
     if (tysize(TYreal) > 10)
@@ -3002,7 +3002,7 @@ private void cdd_u64_I32(ref CGstate cg,ref CodeBuilder cdb, elem* e, ref regm_t
     const reg  = findreglsw(retregs);
     reg_t reg2 = findregmsw(retregs);
     movregconst(cg,cdb,reg2,0x80000000,0);
-    getregs(cdb,mask(reg2) | mAX);
+    getregs(cg, cdb,mask(reg2) | mAX);
 
     cdb.genfltreg(cg, 0xC7,0,0);
     code* cf1 = cdb.last();
@@ -3086,7 +3086,7 @@ private void cdd_u64_I64(ref CGstate cg,ref CodeBuilder cdb, elem* e, ref regm_t
     regm_t regm2 = ALLREGS & ~retregs & ~mAX;
     const reg2 = allocreg(cdb,regm2,tym);
     movregconst(cg,cdb,reg2,0x80000000,0);
-    getregs(cdb,mask(reg2) | mAX);
+    getregs(cg, cdb,mask(reg2) | mAX);
 
     cdb.genfltreg(cg, 0xC7,0,0);
     code* cf1 = cdb.last();
@@ -3270,7 +3270,7 @@ void cnvt87(ref CGstate cg,ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
             cdb.genc1(0xD9,modregrm(2,5,4) + 256*modregrm(0,4,SP),FL.const_,szoff+2); // FLDCW szoff+2[ESP]
         }
         else
-            genSetRoundingMode(cdb, CW.roundto0);   // FLDCW roundto0
+            genSetRoundingMode(cg, cdb, CW.roundto0);   // FLDCW roundto0
 
         pop87();
 
@@ -3305,7 +3305,7 @@ void cnvt87(ref CGstate cg,ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         codelem(cg,cdb,e.E1,retregs,false);
 
         genfwait(cdb);
-        genSetRoundingMode(cdb, CW.roundto0);      // FLDCW roundto0
+        genSetRoundingMode(cg, cdb, CW.roundto0);      // FLDCW roundto0
 
         pop87();
         cdb.genfltreg(cg, mf,rf,0);                    // FISTP floatreg
@@ -3324,7 +3324,7 @@ void cnvt87(ref CGstate cg,ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         }
         else
             cdb.genfltreg(cg, LOD,reg,0);                // MOV reg,floatreg
-        genSetRoundingMode(cdb, CW.roundtonearest);  // FLDCW roundtonearest
+        genSetRoundingMode(cg, cdb, CW.roundtonearest);  // FLDCW roundtonearest
         fixresult(cg,cdb,e,retregs,pretregs);
     }
 }
@@ -3524,16 +3524,16 @@ void cg87_reset()
  */
 
 @trusted
-private void genSetRoundingMode(ref CodeBuilder cdb, CW cw)
+private void genSetRoundingMode(ref CGstate cg, ref CodeBuilder cdb, CW cw)
 {
     if (config.flags3 & CFG3pic)
     {
-        cdb.genfltreg(cgstate, 0xC7, 0, 0);       // MOV floatreg, cw
+        cdb.genfltreg(cg, 0xC7, 0, 0);       // MOV floatreg, cw
         code* c1 = cdb.last();
         c1.IFL2 = FL.const_;
         c1.IEV2.Vuns = cw;
 
-        cdb.genfltreg(cgstate, 0xD9, 5, 0);         // FLDCW floatreg
+        cdb.genfltreg(cg, 0xD9, 5, 0);         // FLDCW floatreg
     }
     else
     {
@@ -3704,7 +3704,7 @@ void fixresult_complex87(ref CGstate cg,ref CodeBuilder cdb,elem* e,regm_t retre
         cdb.genfltreg(cg, ESC(MFfloat,1),BX,0);     // FSTP floatreg+4
         genfwait(cdb);
         const reg = findreg(outretregs);
-        getregs(cdb,reg);
+        getregs(cg, cdb,reg);
         cdb.genfltreg(cg, LOD, reg, 0);             // MOV ECX,floatreg
         code_orrex(cdb.last(), REX_W);          // extend to RCX
     }
@@ -3715,7 +3715,7 @@ void fixresult_complex87(ref CGstate cg,ref CodeBuilder cdb,elem* e,regm_t retre
         pop87();
         cdb.genfltreg(cg, ESC(MFfloat,1),3,0);      // FSTP floatreg
         genfwait(cdb);
-        getregs(cdb,mDX|mAX);
+        getregs(cg, cdb,mDX|mAX);
         cdb.genfltreg(cg, LOD, DX, 0);              // MOV EDX,floatreg
 
         pop87();
@@ -3747,7 +3747,7 @@ void fixresult_complex87(ref CGstate cg,ref CodeBuilder cdb,elem* e,regm_t retre
         pop87();
         cdb.genfltreg(cg, ESC(mf,1),3,0);           // FSTP floatreg
         genfwait(cdb);
-        getregs(cdb,mXMM0|mXMM1);
+        getregs(cg, cdb,mXMM0|mXMM1);
         cdb.genxmmreg(cg, xop,XMM1,0,tyf);
 
         pop87();

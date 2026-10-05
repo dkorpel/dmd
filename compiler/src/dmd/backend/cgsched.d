@@ -152,17 +152,17 @@ private void cgsched_pentium(ref CGstate cg, code** pc,regm_t scratch)
  * Entry point
  */
 @trusted
-public void cgsched_block(block* b)
+public void cgsched_block(ref CGstate cg, block* b)
 {
     if (config.flags4 & CFG4speed &&
         config.target_cpu >= TARGET_Pentium &&
         b.bc != BC.asm_)
     {
-        regm_t scratch = cgstate.allregs;
+        regm_t scratch = cg.allregs;
 
-        scratch &= ~(b.Bregcon.used | b.Bregcon.params | cgstate.mfuncreg);
+        scratch &= ~(b.Bregcon.used | b.Bregcon.params | cg.mfuncreg);
         scratch &= ~(b.Bregcon.immed.mval | b.Bregcon.cse.mval);
-        cgsched_pentium(cgstate, &b.Bcode,scratch);
+        cgsched_pentium(cg, &b.Bcode,scratch);
         //printf("after schedule:\n"); code_print_list(b.Bcode);
     }
 }

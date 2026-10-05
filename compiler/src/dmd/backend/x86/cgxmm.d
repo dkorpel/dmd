@@ -194,7 +194,7 @@ void orthxmm(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t pretregs)
             if (sz == 8)
                 signbit.Vllong = 0x8000_0000_0000_0000;
             movxmmconst(cg, cdb,sreg, e1.Ety, &signbit, 0);
-            getregs(cdb,nretregs);
+            getregs(cg, cdb,nretregs);
             const opcode_t xop = (sz == 8) ? XORPD : XORPS;       // XORPD/S rreg,sreg
             cdb.gen2(xop,modregxrmx(3,rreg-XMM0,sreg-XMM0));
         }
@@ -225,7 +225,7 @@ void orthxmm(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t pretregs)
         return;
     }
 
-    getregs(cdb,retregs);
+    getregs(cg, cdb,retregs);
     cdb.gen2(op,modregxrmx(3,reg-XMM0,rreg-XMM0));
     if (op == CMPPS || op == CMPPD)
     {
@@ -491,7 +491,7 @@ void xmmcnvt(ref CGstate cg,ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         reg -= XMM0;
     else if (zx)
     {   assert(I64);
-        getregs(cdb,regs);
+        getregs(cg, cdb,regs);
         genregs(cdb,0x8B,reg,reg); // MOV reg,reg to zero upper 32-bit
                                    // Don't use x89 because that will get optimized away
         code_orflag(cdb.last(),CF.volatile);
@@ -553,7 +553,7 @@ void xmmopass(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         {   regvar = true;
             retregs = varregm;
             reg = varreg;                       // evaluate directly in target register
-            getregs(cdb,retregs);       // destroy these regs
+            getregs(cg, cdb,retregs);       // destroy these regs
         }
     }
 
@@ -623,7 +623,7 @@ void xmmpost(ref CGstate cg,ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
             regvar = true;
             retregs = varregm;
             reg = varreg;                       // evaluate directly in target register
-            getregs(cdb,retregs);       // destroy these regs
+            getregs(cg, cdb,retregs);       // destroy these regs
         }
     }
 
@@ -705,7 +705,7 @@ void xmmneg(ref CGstate cg,ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
      *    XOR reg,rreg
      */
     codelem(cg,cdb,e.E1,retregs,false);
-    getregs(cdb,retregs);
+    getregs(cg, cdb,retregs);
     const reg = findreg(retregs);
     regm_t rretregs = XMMREGS & ~retregs;
     const rreg = allocreg(cdb,rretregs,tyml);
@@ -717,7 +717,7 @@ void xmmneg(ref CGstate cg,ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
 
     movxmmconst(cg, cdb,rreg, tyml, &signbit, 0);
 
-    getregs(cdb,retregs);
+    getregs(cg, cdb,retregs);
     const op = (sz == 8) ? XORPD : XORPS;       // XORPD/S reg,rreg
     cdb.gen2(op,modregxrmx(3,reg-XMM0,rreg-XMM0));
     fixresult(cg,cdb,e,retregs,pretregs);
@@ -746,7 +746,7 @@ void xmmabs(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
      *    AND reg,rreg
      */
     codelem(cg,cdb,e.E1,retregs,false);
-    getregs(cdb,retregs);
+    getregs(cg, cdb,retregs);
     const reg = findreg(retregs);
     regm_t rretregs = XMMREGS & ~retregs;
     const rreg = allocreg(cdb,rretregs,tyml);
@@ -757,7 +757,7 @@ void xmmabs(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         mask.Vllong = 0x7FFF_FFFF_FFFF_FFFFL;
     movxmmconst(cg, cdb, rreg, tyml, &mask, 0);
 
-    getregs(cdb,retregs);
+    getregs(cg, cdb,retregs);
     const op = (sz == 8) ? ANDPD : ANDPS;       // ANDPD/S reg,rreg
     cdb.gen2(op,modregxrmx(3,reg-XMM0,rreg-XMM0));
     fixresult(cg,cdb,e,retregs,pretregs);
@@ -1267,7 +1267,7 @@ static if (0)
                 printf("op = x%x\n", op);
                 assert(0);
         }
-        getregs(cdb,retregs);
+        getregs(cg, cdb,retregs);
         cdb.genc2(op,modregrmx(3,r,reg-XMM0), cast(uint)el_tolong(op2));
     }
     else if (n == 2)
@@ -1340,7 +1340,7 @@ static if (0)
                 cs.Irex |= REX_B;
         }
 
-        getregs(cdb,retregs);
+        getregs(cg, cdb,retregs);
 
         switch (op)
         {
@@ -1492,7 +1492,7 @@ static if (0)
             {
                 codelem(cg,cdb,e1,retregs,false); // eval left leaf
                 const reg = cast(reg_t)(findreg(retregs) - XMM0);
-                getregs(cdb,retregs);
+                getregs(cg, cdb,retregs);
                 if (config.avx >= 2)
                 {
                     // VBROADCASTSS X/YMM,XMM
@@ -1532,7 +1532,7 @@ static if (0)
             {
                 codelem(cg,cdb,e1,retregs,false); // eval left leaf
                 const reg = cast(reg_t)(findreg(retregs) - XMM0);
-                getregs(cdb,retregs);
+                getregs(cg, cdb,retregs);
                 if (config.avx >= 2 && tysize(ty) == 32)
                 {
                     // VBROADCASTSD YMM,XMM
@@ -1692,7 +1692,7 @@ static if (0)
             {
                 codelem(cg,cdb,e1,retregs,true); // eval left leaf
                 const reg = cast(reg_t)(findreg(retregs) - XMM0);
-                getregs(cdb,retregs);
+                getregs(cg, cdb,retregs);
                 if (config.avx >= 2)
                 {
                     // VPBROADCASTD X/YMM,XMM
@@ -1734,7 +1734,7 @@ static if (0)
             {
                 codelem(cg,cdb,e1,retregs,true); // eval left leaf
                 const reg = cast(reg_t)(findreg(retregs) - XMM0);
-                getregs(cdb,retregs);
+                getregs(cg, cdb,retregs);
                 if (config.avx >= 2)
                 {
                     // VPBROADCASTQ X/YMM,XMM

@@ -348,7 +348,7 @@ void codgenx(ref CGstate cg, Symbol* sfunc)
             cg.startoffset = coffset + calcblksize(cg, cprolog) - cg.funcoffset;
             b.Bcode = cat(cprolog,b.Bcode);
         }
-        cgsched_block(b);
+        cgsched_block(cg, b);
         b.Bsize = calcblksize(cg, b.Bcode);       // calculate block size
         if (b.Balign)
         {
@@ -899,7 +899,7 @@ else
 
     if (tym == TYifunc)
     {
-        prolog_ifunc(cdbx,&tyf);
+        prolog_ifunc(cg, cdbx,&tyf);
         cg.hasframe = true;
         cdb.append(cdbx);
         goto Lcont;
@@ -1723,7 +1723,7 @@ static if (0)
                 outreg = findreg(retregs);
                 assert(retregs == mask(outreg)); /* no more bits are set */
             }
-            getregs(cdb,retregs);
+            getregs(cgstate, cdb,retregs);
             return outreg;
         }
         int count = 0;
@@ -1924,7 +1924,7 @@ L3:
             lastRetregs[i - 1] = lastRetregs[i - 2];
         }
         lastRetregs[0] = retregs; // and set new beginning of array
-        getregs(cdb, retregs);
+        getregs(cgstate, cdb, retregs);
         return reg;
 }
 
@@ -1984,17 +1984,16 @@ void useregs(ref CGstate cg, regm_t regm)
  */
 
 @trusted
-void getregs(ref CodeBuilder cdb, regm_t r)
+void getregs(ref CGstate cg, ref CodeBuilder cdb, regm_t r)
 {
     //printf("getregs() %s\n", regm_str(r));
-    CGstate* cg = &cgstate;
     regm_t ms = r & cg.regcon.cse.mops;           // mask of common subs we must save
-    useregs(cgstate, r);
+    useregs(cg, r);
     cg.regcon.cse.mval &= ~r;
     cg.msavereg &= ~r;                     // regs that are destroyed
     cg.regcon.immed.mval &= ~r;
     if (ms)
-        cse_save(cgstate, cdb, ms);
+        cse_save(cg, cdb, ms);
 }
 
 /*************************
@@ -2087,7 +2086,7 @@ void getregs_imm(ref CodeBuilder cdb, regm_t r)
 {
     CGstate* cg = &cgstate;
     regm_t save = cg.regcon.immed.mval;
-    getregs(cdb,r);
+    getregs(cgstate, cdb,r);
     cg.regcon.immed.mval = save;
 }
 
@@ -2098,10 +2097,10 @@ void getregs_imm(ref CodeBuilder cdb, regm_t r)
  */
 
 @trusted
-void cse_flush(ref CodeBuilder cdb, int do87)
+void cse_flush(ref CGstate cg, ref CodeBuilder cdb, int do87)
 {
     //dbg_printf("cse_flush()\n");
-    cse_save(cgstate, cdb,cgstate.regcon.cse.mops);      // save any CSEs to memory
+    cse_save(cg, cdb,cg.regcon.cse.mops);      // save any CSEs to memory
     if (do87)
         save87(cdb);    // save any 8087 temporaries
 }
@@ -2576,7 +2575,7 @@ private void loadcse(ref CodeBuilder cdb,elem* e,reg_t reg,regm_t regm)
             cse.flags |= CSEload;    /* it was loaded        */
             cg.regcon.cse.value[reg] = e;
             cg.regcon.cse.mval |= mask(reg);
-            getregs(cdb,mask(reg));
+            getregs(cgstate, cdb,mask(reg));
             gen_loadcse(cgstate, cdb, cse.e.Ety, reg, cse.slot);
             return;
         }
@@ -3126,7 +3125,7 @@ void scodelem(ref CGstate cg, ref CodeBuilder cdb, elem* e,ref regm_t pretregs,r
                     adjesp += size;
                 }
             }
-            getregs(cdbx,mi);
+            getregs(cg, cdbx,mi);
             tosave &= ~mi;
         }
     }

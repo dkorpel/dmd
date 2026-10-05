@@ -396,7 +396,7 @@ void nteh_filter(ref CGstate cg, ref CodeBuilder cdb, block* b)
                 mov     __ecode[EBP],EAX
          */
 
-        getregs(cdb,mAX);
+        getregs(cg, cdb,mAX);
 
         code cs;
         cs.Iop = 0x8B;
@@ -541,7 +541,7 @@ void cdsetjmp(ref CGstate cg, ref CodeBuilder cdb, elem* e,ref regm_t pretregs)
 
     pushParams(cg,cdb,e.E1,REGSIZE, TYnfunc);
 
-    getregs(cdb,~getRtlsym(cg, RTLSYM.SETJMP3).Sregsaved & (ALLREGS | mES));
+    getregs(cg, cdb,~getRtlsym(cg, RTLSYM.SETJMP3).Sregsaved & (ALLREGS | mES));
     cdb.gencs(0xE8,0,FL.func,getRtlsym(cg, RTLSYM.SETJMP3));      // CALL __setjmp3
 
     cod3_stackadj(cg, cdb, -(cg.stackpush - stackpushsave));
@@ -579,7 +579,7 @@ void nteh_unwind(ref CGstate cg, ref CodeBuilder cdb,regm_t saveregs,uint stop_i
 
     CodeBuilder cdbx;
     cdbx.ctor();
-    getregs(cdbx,desregs);
+    getregs(cg, cdbx,desregs);
 
     code cs;
     cs.Iop = LEA;
@@ -659,7 +659,7 @@ void nteh_monitor_prolog(ref CGstate cg, ref CodeBuilder cdb, Symbol* shandle)
 
     Symbol* s = getRtlsym(cg, RTLSYM.MONITOR_PROLOG);
     regm_t desregs = ~s.Sregsaved & ALLREGS;
-    getregs(cdbx,desregs);
+    getregs(cg, cdbx,desregs);
     cdbx.gencs(0xE8,0,FL.func,s);       // CALL _d_monitor_prolog
 
     cs.Iop = 0x89;
@@ -697,7 +697,7 @@ void nteh_monitor_epilog(ref CGstate cg,ref CodeBuilder cdb,regm_t retregs)
     gensaverestore(cg,retregs & desregs,cdbs,cdbr);
     cdb.append(cdbs);
 
-    getregs(cdb,desregs);
+    getregs(cg, cdb,desregs);
     cdb.gencs(0xE8,0,FL.func,s);               // CALL __d_monitor_epilog
 
     cdb.append(cdbr);

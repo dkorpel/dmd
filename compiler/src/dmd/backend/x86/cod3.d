@@ -1097,7 +1097,7 @@ void outblkexitcode(ref CGstate cg, ref CodeBuilder cdb, block* bl, ref int anys
             assert(ehmethod(funcsym_p) != EHmethod.EH_NONE);
             // Mark all registers as destroyed. This will prevent
             // register assignments to variables used in catch blocks.
-            getregs(cdb,lpadregs(cg));
+            getregs(cg, cdb,lpadregs(cg));
 
             if (config.ehmethod == EHmethod.EH_DWARF)
             {
@@ -1573,7 +1573,7 @@ static if (NTEXCEPTIONS)
             // Mark destroyed registers
             CodeBuilder cdbx; cdbx.ctor();
             cg.refparam |= bl.bIasmrefparam;
-            getregs(cdbx, iasm_regs(bl));         // mark destroyed registers
+            getregs(cg, cdbx, iasm_regs(bl));         // mark destroyed registers
             code* c = cdbx.finish();
             if (bl.Bsucc.length)
             {   nextb = bl.Bsucc[0];
@@ -2134,7 +2134,7 @@ void doswitch(ref CGstate cg, ref CodeBuilder cdb, block* b)
         if (modify)
         {
             assert(!(retregs & cg.regcon.mvar));
-            getregs(cdb,retregs);
+            getregs(cg, cdb,retregs);
         }
         if (vmin)                       // if there is a minimum
         {
@@ -2323,11 +2323,11 @@ else
             cdb.genc2(0x81,modregrm(3,7,DX),msw);
             genjmp(cdb,JNE,FL.block,b.Bsucc[0]); // JNE default
         }
-        getregs(cdb,mCX|mDI);
+        getregs(cg, cdb,mCX|mDI);
 
         if (config.flags3 & CFG3pic && config.exe & EX_posix)
         {   // Add in GOT
-            getregs(cdb,mDX);
+            getregs(cg, cdb,mDX);
             cdb.genc2(CALL,0,0);        //     CALL L1
             cdb.genpop(DI);             // L1: POP EDI
 
@@ -2359,11 +2359,11 @@ else
         if (config.flags3 & CFG3eseqds)
         {
             assert(!csseg);
-            getregs(cdb,mCX);           // allocate CX
+            getregs(cg, cdb,mCX);           // allocate CX
         }
         else
         {
-            getregs(cdb,mES|mCX);       // allocate ES and CX
+            getregs(cg, cdb,mES|mCX);       // allocate ES and CX
             cdb.gen1(csseg ? 0x0E : 0x1E);      // PUSH CS/DS
             cdb.gen1(0x07);                     // POP  ES
         }
@@ -2856,7 +2856,7 @@ void cod3_ptrchk(ref CGstate cg, ref CodeBuilder cdb,ref code pcs,regm_t keepmsk
         makeitextern(getRtlsym(cg, RTLSYM.PTRCHK));
 
         used &= ~(keepmsk | idxregs);           // regs destroyed by this exercise
-        getregs(cdb,used);
+        getregs(cg, cdb,used);
                                                 // CALL __ptrchk
         cdb.gencs((LARGECODE) ? 0x9A : CALL,0,FL.func,getRtlsym(cg, RTLSYM.PTRCHK));
     }
@@ -3295,13 +3295,13 @@ void genmovreg(ref CGstate cg, ref CodeBuilder cdb, reg_t to, reg_t from, tym_t 
  */
 
 @trusted
-void genmulimm(ref CodeBuilder cdb,reg_t r1,reg_t r2,targ_int imm)
+void genmulimm(ref CGstate cg, ref CodeBuilder cdb,reg_t r1,reg_t r2,targ_int imm)
 {
     // These optimizations should probably be put into pinholeopt()
     switch (imm)
     {
         case 1:
-            genmovreg(cgstate, cdb,r1,r2);
+            genmovreg(cg, cdb,r1,r2);
             break;
 
         case 5:
@@ -3684,7 +3684,7 @@ void genjmp(ref CodeBuilder cdb, opcode_t op, FL fltarg, block* targ)
  * Generate first part of prolog for interrupt function.
  */
 @trusted
-void prolog_ifunc(ref CodeBuilder cdb, tym_t* tyf)
+void prolog_ifunc(ref CGstate cg, ref CodeBuilder cdb, tym_t* tyf)
 {
     static immutable ubyte[4] ops2 = [ 0x60,0x1E,0x06,0 ];
     static immutable ubyte[11] ops0 = [ 0x50,0x51,0x52,0x53,
@@ -3698,7 +3698,7 @@ void prolog_ifunc(ref CodeBuilder cdb, tym_t* tyf)
 
     genregs(cdb,0x8B,BP,SP);     // MOV BP,SP
     if (localsize)
-        cod3_stackadj(cgstate, cdb, cast(int)localsize);
+        cod3_stackadj(cg, cdb, cast(int)localsize);
 
     *tyf |= mTYloadds;
 }
