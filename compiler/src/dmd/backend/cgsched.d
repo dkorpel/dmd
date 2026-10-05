@@ -2244,7 +2244,7 @@ nothrow:
         stagelist.dtor();
     }
 
-code** assemble(ref CGstate cg, code** pc)  // reassemble scheduled instructions
+code** assemble(bool AArch64, code** pc)  // reassemble scheduled instructions
 {
     code* c;
 
@@ -2286,7 +2286,7 @@ code** assemble(ref CGstate cg, code** pc)  // reassemble scheduled instructions
                 printf((i & 1) ? " V " : "U  ");
             }
             if (ci)
-                ci.c.print(cg.AArch64);
+                ci.c.print(AArch64);
             else
                 printf("\n");
         }
@@ -2346,7 +2346,7 @@ code** assemble(ref CGstate cg, code** pc)  // reassemble scheduled instructions
             continue;
 
         debug
-        if (debugs) { printf("appending: "); ci.c.print(cg.AArch64); }
+        if (debugs) { printf("appending: "); ci.c.print(AArch64); }
 
         *pc = ci.c;
         do
@@ -2673,13 +2673,13 @@ Linsert:
  */
 
 @trusted
-bool stage(ref CGstate cg, code* c)
+bool stage(bool AArch64, code* c)
 {
     //printf("stage: "); c.print();
     if (cinfomax == TBLMAX)             // if out of space
         return false;
     auto ci = &cinfo[cinfomax++];
-    *ci = getinfo(cg.AArch64, c);
+    *ci = getinfo(AArch64, c);
 
     if (c.Iflags & (CF.targ | CF.targ2 | CF.volatile | CF.vex))
     {
@@ -2826,13 +2826,13 @@ private code* schedule(ref CGstate cg, code* c,regm_t scratch)
         while (c)
         {
             //printf("insert %p\n",c);
-            if (!sch.stage(cg, c))          // store c in scheduling table
+            if (!sch.stage(cg.AArch64, c))          // store c in scheduling table
                 break;
             c = csnip(c);
         }
 
         //printf("assem %d\n",sch.tblmax);
-        pctail = sch.assemble(cg, pctail);  // reassemble instruction stream
+        pctail = sch.assemble(cg.AArch64, pctail);  // reassemble instruction stream
     }
     sch.dtor();
 

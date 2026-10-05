@@ -1460,7 +1460,7 @@ void insertFinallyBlockCalls(block* startblock)
     {
         printf("------- before ----------\n");
         numberBlocks(startblock);
-        foreach (b; BlockRange(startblock)) WRblock(cgstate, b);
+        foreach (b; BlockRange(startblock)) WRblock(cgstate.AArch64, b);
         printf("-------------------------\n");
     }
 
@@ -1605,7 +1605,7 @@ void insertFinallyBlockCalls(block* startblock)
     {
         printf("------- after ----------\n");
         numberBlocks(startblock);
-        foreach (b; BlockRange(startblock)) WRblock(cgstate, b);
+        foreach (b; BlockRange(startblock)) WRblock(cgstate.AArch64, b);
         printf("-------------------------\n");
     }
 }
@@ -1666,7 +1666,7 @@ void insertFinallyBlockGotos(block* startblock)
     {
         printf("------- after ----------\n");
         numberBlocks(startblock);
-        foreach (b; BlockRange(startblock)) WRblock(cgstate, b);
+        foreach (b; BlockRange(startblock)) WRblock(cgstate.AArch64, b);
         printf("-------------------------\n");
     }
 }

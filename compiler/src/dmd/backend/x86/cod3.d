@@ -1283,7 +1283,7 @@ static if (NTEXCEPTIONS)
         {
             assert(!e);
             cg.usednteh |= NTEH_except;
-            nteh_setsp(cg, cdb,0x8B);
+            nteh_setsp(cg.usednteh, cdb,0x8B);
             getregsNoSave(cg, cg.allregs);
             nextb = bl.Bsucc[0];
             goto L5;

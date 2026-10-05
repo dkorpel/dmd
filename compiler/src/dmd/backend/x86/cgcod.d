@@ -1038,7 +1038,7 @@ Lcont:
     static if (NTEXCEPTIONS == 2)
     {
         if (cg.usednteh & NTEH_except)
-            nteh_setsp(cg, cdb, 0x89);            // MOV __context[EBP].esp,ESP
+            nteh_setsp(cg.usednteh, cdb, 0x89);            // MOV __context[EBP].esp,ESP
     }
 
     // Load register parameters off of the stack. Do not use

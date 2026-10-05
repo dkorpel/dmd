@@ -366,7 +366,7 @@ void nteh_epilog(ref CGstate cg, ref CodeBuilder cdb)
  */
 
 @trusted
-void nteh_setsp(ref CGstate cg, ref CodeBuilder cdb, opcode_t op)
+void nteh_setsp(uint usednteh, ref CodeBuilder cdb, opcode_t op)
 {
     code cs;
     cs.Iop = op;
@@ -375,7 +375,7 @@ void nteh_setsp(ref CGstate cg, ref CodeBuilder cdb, opcode_t op)
     cs.Irex = 0;
     cs.IFL1 = FL.const_;
     // EBP offset of __context.esp
-    cs.IEV1.Vint = nteh_EBPoffset_esp(cg.usednteh);
+    cs.IEV1.Vint = nteh_EBPoffset_esp(usednteh);
     cdb.gen(&cs);               // MOV ESP,__context[EBP].esp
 }
 

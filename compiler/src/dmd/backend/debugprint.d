@@ -356,7 +356,7 @@ const(char)* fl_str(FL fl)
  */
 
 @trusted
-void WRblock(ref CGstate cg, block* b)
+void WRblock(bool AArch64, block* b)
 {
     if (OPTIMIZER)
     {
@@ -389,7 +389,7 @@ void WRblock(ref CGstate cg, block* b)
             }
         }
         if (b.Bcode)
-            b.Bcode.print(cg.AArch64);
+            b.Bcode.print(AArch64);
         ferr("\n");
     }
     else
@@ -492,5 +492,5 @@ void WRfunc(ref CGstate cg, const char* msg, Symbol* sfunc, block* startblock)
     printf("............%s...%s()\n", msg, sfunc.Sident.ptr);
     numberBlocks(startblock);
     for (block* b = startblock; b; b = b.Bnext)
-        WRblock(cg, b);
+        WRblock(cg.AArch64, b);
 }

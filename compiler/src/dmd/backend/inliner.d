@@ -421,7 +421,7 @@ private elem* inlineCall(ref CGstate cg, elem* e,Symbol* sfunc)
      */
     if (e.Eoper == OPcall)
     {
-        elem* eargs = initializeParamsWithArgs(cg, e.E2, sistart, globsym.length);
+        elem* eargs = initializeParamsWithArgs(cg.regcon.cse, e.E2, sistart, globsym.length);
         ec = el_combine(eargs,ec);
     }
 
@@ -450,7 +450,7 @@ private elem* inlineCall(ref CGstate cg, elem* e,Symbol* sfunc)
  *      expression representing the argument list
  */
 @trusted
-private elem* initializeParamsWithArgs(ref CGstate cg, elem* eargs, SYMIDX sistart, SYMIDX siend)
+private elem* initializeParamsWithArgs(ref cse_t cse, elem* eargs, SYMIDX sistart, SYMIDX siend)
 {
     /* Create args[] and fill it with the arguments
      */
@@ -458,7 +458,7 @@ private elem* initializeParamsWithArgs(ref CGstate cg, elem* eargs, SYMIDX sista
     assert(nargs < size_t.max / (2 * (elem*).sizeof));   // conservative overflow check
     elem*[] args = (cast(elem**)malloc(nargs * (elem*).sizeof))[0 .. nargs];
     elem** tmp = args.ptr;
-    el_paramArray(cg.regcon.cse, &tmp, eargs);
+    el_paramArray(cse, &tmp, eargs);
 
     elem* ecopy;
 

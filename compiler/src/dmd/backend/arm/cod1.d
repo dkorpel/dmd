@@ -1618,7 +1618,7 @@ void getClibFunction(regm_t fregsaved, uint clib, ref Symbol* s, ref ClibInfo* c
 }
 
 @trusted private
-void getClibInfo(ref CGstate cg, uint clib, Symbol** ps, ClibInfo** pinfo, objfmt_t objfmt, exefmt_t exe)
+void getClibInfo(regm_t fregsaved, uint clib, Symbol** ps, ClibInfo** pinfo, objfmt_t objfmt, exefmt_t exe)
 {
     static Symbol*[CLIB_A.max + 1] clibsyms;
     static ClibInfo[CLIB_A.max + 1] clibinfo;
@@ -1633,7 +1633,7 @@ void getClibInfo(ref CGstate cg, uint clib, Symbol** ps, ClibInfo** pinfo, objfm
     Symbol* s = clibsyms[clib];
     if (!s)
     {
-        getClibFunction(cg.fregsaved, clib, s, cinfo, objfmt, exe);
+        getClibFunction(fregsaved, clib, s, cinfo, objfmt, exe);
         clibsyms[clib] = s;
     }
 
@@ -1660,7 +1660,7 @@ void callclib(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint clib, ref regm_
 
     Symbol* s;
     ClibInfo* cinfo;
-    getClibInfo(cg, clib, &s, &cinfo, config.objfmt, config.exe);
+    getClibInfo(cg.fregsaved, clib, &s, &cinfo, config.objfmt, config.exe);
 
     getregs(cg, cdb,(~s.Sregsaved & (INSTR.ALLREGS | INSTR.FLOATREGS | mask(cg.BP)) & ~keepmask)); // mask of regs destroyed
     keepmask &= ~s.Sregsaved;
