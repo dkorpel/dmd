@@ -579,7 +579,7 @@ private bool looprotate(ref GlobalOptimizer go, ref BlockOpt bo, ref Loop l)
         // switches would be too expensive in terms of code
         // generated).
 
-        auto head2 = block_calloc(bo); // create new head block
+        auto head2 = block_calloc(bo.block_freelist); // create new head block
         head2.Btry = head.Btry;
         head2.Bflags = head.Bflags;
         head.Bflags = BFL.separate;       // move flags over to head2
@@ -727,7 +727,7 @@ restart:
         {
             if (debugc) printf("Generating preheader for loop\n");
             addblk = true;              // add one
-            block* p = block_calloc(bo);  // the preheader
+            block* p = block_calloc(bo.block_freelist);  // the preheader
             block* h = l.Lhead;         // loop header
 
             /* Find parent of h */
@@ -2008,7 +2008,7 @@ private void loopiv(ref GlobalOptimizer go, ref BlockOpt bo, ref Loop l)
     intronvars(go.changes, l);          /* introduce new variables              */
     elimbasivs(go.changes, bo, l);      /* eliminate basic IVs                  */
     if (!addblk)                // adding a block changes the Binlv
-        elimopeqs(go.changes, bo, l);   // eliminate op= variables
+        elimopeqs(go.changes, bo.dfo, l);   // eliminate op= variables
 
     foreach (ref iv; l.Livlist)
         iv.reset();
@@ -3056,7 +3056,7 @@ private void elimbasivs(ref uint changes, ref BlockOpt bo, ref Loop l)
                     /* more than one predecessor to b.      */
                     if (b.Bpred.length > 1)
                     {
-                        block* bn = block_calloc(bo);
+                        block* bn = block_calloc(bo.block_freelist);
                         bn.Btry = b.Btry;
                         bn.bc = BC.goto_;
                         bn.Bnext = bo.dfo[i].Bnext;
@@ -3129,7 +3129,7 @@ private void elimbasivs(ref uint changes, ref BlockOpt bo, ref Loop l)
  */
 
 @trusted
-private void elimopeqs(ref uint changes, ref BlockOpt bo, ref Loop l)
+private void elimopeqs(ref uint changes, ref Barray!(block*) dfo, ref Loop l)
 {
     elem** pref;
     Symbol* X;
@@ -3148,7 +3148,7 @@ private void elimopeqs(ref uint changes, ref BlockOpt bo, ref Loop l)
 
         X = biv.IVbasic;
         assert(symbol_isintab(X));
-        pref = onlyref(bo.dfo, X,l,*biv.IVincr,refcount);
+        pref = onlyref(dfo, X,l,*biv.IVincr,refcount);
 
         // if only ref of X is of the form (X) or (X relop e) or (e relop X)
         if (pref != null && refcount <= 1)
@@ -3156,9 +3156,9 @@ private void elimopeqs(ref uint changes, ref BlockOpt bo, ref Loop l)
         else if (refcount == 0)                 // if no uses of IV in loop
         {   // Eliminate the basic IV if it is not live on any successor
             uint i;
-            for (i = 0; (i = cast(uint) vec_index(i, l.Lexit)) < bo.dfo.length; ++i)  // for each exit block
+            for (i = 0; (i = cast(uint) vec_index(i, l.Lexit)) < dfo.length; ++i)  // for each exit block
             {
-                foreach (b; bo.dfo[i].Bsucc[])
+                foreach (b; dfo[i].Bsucc[])
                 {   // for each successor
                     if (vec_testbit(b.Bdfoidx,l.Lloop))
                         continue;       // inside loop

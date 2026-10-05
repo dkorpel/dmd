@@ -97,7 +97,7 @@ void Statement_toIR(Statement s, ref IRState irs)
             //printf("  KV: %s = %s\n", keyValue.key.toChars(), keyValue.value.toChars());
             LabelDsymbol label = cast(LabelDsymbol)keyValue.value;
             if (label.statement)
-                label.statement.extra = block_calloc(bo);
+                label.statement.extra = block_calloc(bo.block_freelist);
         }
 
     StmtState stmtstate;
@@ -149,7 +149,7 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
         StmtState mystate = StmtState(stmtstate, s);
 
         // bexit is the block that gets control after this IfStatement is done
-        block* bexit = mystate.breakBlock ? mystate.breakBlock : block_calloc(bo);
+        block* bexit = mystate.breakBlock ? mystate.breakBlock : block_calloc(bo.block_freelist);
 
         incUsage(irs, s.loc);
         e = toElemDtor(s.condition, irs);
@@ -1479,7 +1479,7 @@ void insertFinallyBlockCalls(block* startblock)
                 // Rewrite into a BC.goto_ => BC.ret
                 if (!bcret)
                 {
-                    bcret = block_calloc(bo);
+                    bcret = block_calloc(bo.block_freelist);
                     bcret.bc = BC.ret;
                 }
                 b.bc = BC.goto_;
@@ -1495,7 +1495,7 @@ void insertFinallyBlockCalls(block* startblock)
                     goto case BC.ret;
                 if (!bcretexp)
                 {
-                    bcretexp = block_calloc(bo);
+                    bcretexp = block_calloc(bo.block_freelist);
                     bcretexp.bc = BC.retexp;
                     type* t;
                     if ((ty == TYstruct || ty == TYarray) && e.ET)
@@ -1566,7 +1566,7 @@ void insertFinallyBlockCalls(block* startblock)
                     blast.Bsucc[0] = bf;
 
                     // Create new block, bnew, which will replace retblock
-                    block* bnew = block_calloc(bo);
+                    block* bnew = block_calloc(bo.block_freelist);
 
                     /* Rewrite BC.finRet block as:
                      *  if (sflag == flagvalue) goto breakblock; else goto bnew;
@@ -1714,7 +1714,7 @@ private void setScopeIndex(BlockState* blx, block* b, int scope_index)
 
 private block* block_calloc(BlockState* blx) @trusted
 {
-    block* b = block_calloc(bo);
+    block* b = block_calloc(bo.block_freelist);
     b.Btry = blx.tryblock;
     return b;
 }

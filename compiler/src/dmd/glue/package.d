@@ -796,7 +796,7 @@ void FuncDeclaration_toObjFile(ref CGstate cg, FuncDeclaration fd, bool multiobj
     Statement sbody = fd.fbody;
 
     BlockState bx;
-    bx.startblock = block_calloc(bo);
+    bx.startblock = block_calloc(bo.block_freelist);
     bx.curblock = bx.startblock;
     bx.funcsym = s;
     bx.scope_index = -1;
@@ -1043,7 +1043,7 @@ void FuncDeclaration_toObjFile(ref CGstate cg, FuncDeclaration fd, bool multiobj
             newConstructor.Sclass = SC.static_;
             func_t* funcState = newConstructor.Sfunc;
             //Init start block
-            funcState.Fstartblock = block_calloc(bo);
+            funcState.Fstartblock = block_calloc(bo.block_freelist);
             block* startBlk = funcState.Fstartblock;
             //Make that block run __cxa_atexit(&func);
             auto atexitSym = getRtlsym(RTLSYM.CXA_ATEXIT);
@@ -1060,7 +1060,7 @@ void FuncDeclaration_toObjFile(ref CGstate cg, FuncDeclaration fd, bool multiobj
             auto exec = el_bin(OPcall, TYvoid, el_var(atexitSym), paramPack);
             block_appendexp(startBlk, exec); //payload
             startBlk.bc = BC.goto_;
-            auto next = block_calloc(bo);
+            auto next = block_calloc(bo.block_freelist);
             startBlk.Bsucc.push(next);
             startBlk.Bnext = next;
             next.bc = BC.ret;
@@ -1246,7 +1246,7 @@ private Symbol* callFuncsAndGates(ref CGstate cg, Module m, Symbol*[] sctors, St
         ector = el_combine(ector, e);
     }
 
-    block* b = block_calloc(bo);
+    block* b = block_calloc(bo.block_freelist);
     b.bc = BC.ret;
     b.Belem = ector;
     sctor.Sfunc.Fstartline.Sfilename = m.arg.xarraydup.ptr;
@@ -1507,7 +1507,7 @@ private void genObjFile(ref CGstate cg, Module m, bool multiobj, bool doppelgang
         {
             localgot = glue.ictorlocalgot;
 
-            block* b = block_calloc(bo);
+            block* b = block_calloc(bo.block_freelist);
             b.bc = BC.ret;
             b.Belem = glue.eictor;
             msictor.Sfunc.Fstartline.Sfilename = m.arg.xarraydup.ptr;

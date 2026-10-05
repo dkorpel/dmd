@@ -78,9 +78,9 @@ pragma(inline, true) block* block_calloc_i(ref block* block_freelist)
 }
 
 public
-block* block_calloc(ref BlockOpt bo)
+block* block_calloc(ref block* block_freelist)
 {
-    return block_calloc_i(bo.block_freelist);
+    return block_calloc_i(block_freelist);
 }
 
 /*********************************
@@ -158,7 +158,7 @@ version (COMPILE)
 private
 void block_goto()
 {
-    block_goto((block_calloc(bo)).block_freelist);
+    block_goto((block_calloc(bo.block_freelist)).block_freelist);
 }
 
 private
@@ -1245,7 +1245,7 @@ private void blreturn(ref mftype mfoptim, ref BlockOpt bo, uint changes)
                 debug if (debugc)
                     printf("blreturn: splitting block B%d\n",b.Bdfoidx);
 
-                block* bn = block_calloc(bo);
+                block* bn = block_calloc(bo.block_freelist);
                 bn.bc = BC.ret;
                 bn.Bnext = b.Bnext;
                 static if(SCPP_OR_NTEXCEPTIONS)
@@ -1381,7 +1381,7 @@ private void bltailmerge(block* bstart, ref uint changes)
                     debug if (debugc)
                         printf("tail merging: %p and %p\n", b, bn);
 
-                    block* bnew = block_calloc(bo);
+                    block* bnew = block_calloc(bo.block_freelist);
                     bnew.Bnext = bn.Bnext;
                     bnew.bc = b.bc;
                     static if (SCPP_OR_NTEXCEPTIONS)
@@ -1806,8 +1806,8 @@ private void brtailrecursion(ref BlockOpt bo, ref uint changes)
             {
                 /* Split OPcond into a BC.iftrue block and two return blocks
                  */
-                block* b1 = block_calloc(bo);
-                block* b2 = block_calloc(bo);
+                block* b1 = block_calloc(bo.block_freelist);
+                block* b2 = block_calloc(bo.block_freelist);
 
                 b1.Belem = e.E2.E1;
                 e.E2.E1 = null;
@@ -1876,7 +1876,7 @@ private void brtailrecursion(ref BlockOpt bo, ref uint changes)
 
                 // Create a new startblock, bs, because startblock cannot
                 // have predecessors.
-                block* bs = block_calloc(bo);
+                block* bs = block_calloc(bo.block_freelist);
                 bs.bc = BC.goto_;
                 bs.Bnext = bo.startblock;
                 bs.Bsucc.push(bo.startblock);
@@ -2170,7 +2170,7 @@ private void blassertsplit(ref BlockOpt bo, ref uint changes)
             }
 
             // Create exit block
-            block* bexit = block_calloc(bo);
+            block* bexit = block_calloc(bo.block_freelist);
             bexit.bc = BC.exit;
             bexit.Belem = e.E2;
 
@@ -2194,7 +2194,7 @@ private void blassertsplit(ref BlockOpt bo, ref uint changes)
 
             /* Split b into two blocks, [b,b2]
              */
-            block* b2 = block_calloc(bo);
+            block* b2 = block_calloc(bo.block_freelist);
             b2.Bnext = b.Bnext;
             b.Bnext = b2;
             b2.bc = b.bc;
