@@ -904,6 +904,8 @@ string candidateProblem(size_t g, size_t f, string pname, bool[size_t] group = n
             continue;
         if (c.caller == size_t.max)
             return "call outside function " ~ lineOf(c.file, c.off);
+        if (!c.file.exists)
+            return "call from mixin " ~ c.file;
         const id = callIdent(c);
         if (id == uint.max || t.length == 0 || text(c.file)[id .. id + fn.name.length] != fn.name)
             return "odd call site " ~ lineOf(c.file, c.off);
