@@ -43,6 +43,7 @@ struct Call
     size_t callee;
     size_t caller;
     FuncDeclaration immediate;
+    bool inDebug;
     string file;
     uint off;
 }
@@ -164,6 +165,14 @@ extern (C++) final class Collector : SemanticTimeTransitiveVisitor
 
     size_t cur = size_t.max;
     Expression consumed;
+    int debugDepth;
+
+    override void visit(DebugStatement s)
+    {
+        debugDepth++;
+        super.visit(s);
+        debugDepth--;
+    }
 
     void useGlobal(VarDeclaration vd, Loc loc)
     {
@@ -197,6 +206,7 @@ extern (C++) final class Collector : SemanticTimeTransitiveVisitor
             c.callee = callee;
             c.caller = cur;
             c.immediate = cur == size_t.max ? null : funcs[cur].fd;
+            c.inDebug = debugDepth > 0;
             c.file = fileOf(e.loc);
             c.off = e.loc.off;
             calls ~= c;
@@ -843,7 +853,9 @@ string cannotTouchGlobal(FuncDeclaration fd)
     return null;
 }
 
-string candidateProblem(size_t g, size_t f, string pname)
+__gshared bool[size_t] gaining;
+
+string candidateProblem(size_t g, size_t f, string pname, bool[size_t] group = null, size_t* promote = null)
 {
     auto fn = &funcs[f];
     auto fd = fn.fd;
@@ -894,9 +906,13 @@ string candidateProblem(size_t g, size_t f, string pname)
         const id = callIdent(c);
         if (id == uint.max || t.length == 0 || text(c.file)[id .. id + fn.name.length] != fn.name)
             return "odd call site " ~ lineOf(c.file, c.off);
-        if (!existingParam(c.caller, g).length && c.caller != f)
+        if (!existingParam(c.caller, g).length && c.caller != f && c.caller !in group && !c.inDebug)
             if (auto bad = cannotTouchGlobal(c.immediate))
+            {
+                if (promote)
+                    *promote = c.caller;
                 return bad ~ " caller " ~ lineOf(c.file, c.off);
+            }
         uint recv;
         if (qualifier(c.file, id, fd, recv) == Qual.bad)
             return "complex qualifier " ~ lineOf(c.file, c.off);
@@ -915,10 +931,38 @@ string[] editableFiles()
     return editableCache;
 }
 
+__gshared string gainName;
+
 string callerArg(size_t caller, size_t g)
 {
     auto p = existingParam(caller, g);
-    return p.length ? p : globals[g].name;
+    if (p.length)
+        return p;
+    return caller in gaining ? gainName : globals[g].name;
+}
+
+size_t[] group(size_t g, size_t f, string pname, size_t limit, out string problem)
+{
+    bool[size_t] set = [f: true];
+    size_t[] order = [f];
+    for (size_t i = 0; i < order.length; i++)
+    {
+        while (true)
+        {
+            size_t promote = size_t.max;
+            problem = candidateProblem(g, order[i], pname, set, &promote);
+            if (!problem.length)
+                break;
+            if (promote == size_t.max || order.length >= limit)
+            {
+                problem = funcs[order[i]].name ~ ": " ~ problem;
+                return null;
+            }
+            set[promote] = true;
+            order ~= promote;
+        }
+    }
+    return order;
 }
 
 void planEdits(size_t g, size_t f, string pname)
@@ -1030,10 +1074,18 @@ int main(string[] args)
             break;
         if (skip.canFind(funcs[u].name) || only.length && !only.canFind(funcs[u].name) || !isLeaf(g, u, reach))
             continue;
-        if (candidateProblem(g, u, pn).length)
+        if (chosen.canFind(u))
             continue;
-        chosen ~= u;
+        string problem;
+        auto grp = group(g, u, pn, max - chosen.length, problem);
+        if (!grp.length || grp.any!(x => chosen.canFind(x) || skip.canFind(funcs[x].name)))
+            continue;
+        chosen ~= grp;
     }
+    gainName = pn;
+    foreach (u; chosen)
+        if (!existingParam(u, g).length)
+            gaining[u] = true;
     foreach (u; chosen)
         planEdits(g, u, pn);
     foreach (u; chosen)
