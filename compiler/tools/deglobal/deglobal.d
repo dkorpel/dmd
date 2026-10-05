@@ -20,7 +20,7 @@ import dmd.cond : VersionCondition;
 import dmd.dmodule;
 import dmd.dstruct;
 import dmd.dsymbol;
-import dmd.dsymbolsem : dsymbolSemantic, importAll, runDeferredSemantic, runDeferredSemantic2, runDeferredSemantic3, include;
+import dmd.dsymbolsem : search, toAlias, dsymbolSemantic, importAll, runDeferredSemantic, runDeferredSemantic2, runDeferredSemantic3, include;
 import dmd.dtemplate;
 import dmd.errorsink;
 import dmd.expression;
@@ -80,6 +80,7 @@ __gshared Global[] globals;
 __gshared size_t[void*] globalIndex;
 __gshared Call[] calls;
 __gshared string srcRoot;
+__gshared Module[] mods;
 
 string fileOf(Loc loc)
 {
@@ -343,7 +344,7 @@ void analyze()
     global.filePath.push((srcRoot ~ "/../../generated/linux/release/64").toStringz);
     global.filePath.push((srcRoot ~ "/../..").toStringz);
 
-    Module[] mods;
+    mods = null;
     foreach (file; dmdSources())
     {
         auto id = Identifier.idPool(file.baseName.stripExtension);
@@ -977,6 +978,8 @@ void planEdits(size_t g, size_t f, string pname)
         const open = paramListOpen(f);
         const next = skipWs(t, open + 1);
         const decl = "ref " ~ globals[g].type ~ " " ~ pn;
+        if (auto ts = globals[g].vd.type.isTypeStruct())
+            ensureVisible(fn.file, ts.sym);
         edits[fn.file] ~= Edit(open + 1, 0, t[next] == ')' ? decl : decl ~ ", ");
         if (pn != globals[g].name)
             deleted = patternLines(f, g, pn);
@@ -992,6 +995,8 @@ void planEdits(size_t g, size_t f, string pname)
         if (c.callee != f)
             continue;
         const arg = c.caller == f ? pn : callerArg(c.caller, g);
+        if (arg == globals[g].name && arg != pn)
+            ensureVisible(c.file, globals[g].vd);
         auto ct = text(c.file);
         const next = skipWs(ct, c.off + 1);
         uint recv;
@@ -1013,10 +1018,55 @@ void planEdits(size_t g, size_t f, string pname)
                 if (open == uint.max)
                     continue;
                 const arg = open > fn.nameOff && open < fn.endOff && file == fn.file ? pn : enclosingArg(file, open, g);
+                if (arg == globals[g].name)
+                    ensureVisible(file, globals[g].vd);
                 auto ct = text(file);
                 const next = skipWs(ct, open + 1);
                 edits[file] ~= Edit(open + 1, 0, ct[next] == ')' ? arg : arg ~ ", ");
             }
+}
+
+bool[string] importsAdded;
+
+void ensureVisible(string file, Dsymbol sym)
+{
+    Module m;
+    foreach (x; mods)
+        if (x.srcfile.toString == file)
+            m = x;
+    if (!m || sym.getModule() is m)
+        return;
+    auto found = search(m, Loc.initial, sym.ident);
+    if (found && found.toAlias() is sym)
+        return;
+    const key = file ~ ":" ~ sym.ident.toString.idup;
+    if (key in importsAdded)
+        return;
+    importsAdded[key] = true;
+    auto t = text(file);
+    uint at = uint.max;
+    uint i = 0;
+    while (i < t.length)
+    {
+        uint e = i;
+        while (e < t.length && t[e] != '\n')
+            e++;
+        auto line = t[i .. e];
+        if (line.startsWith("import ") || line.startsWith("module "))
+        {
+            while (e < t.length && !t[i .. e].canFind(';'))
+            {
+                e++;
+                while (e < t.length && t[e] != '\n')
+                    e++;
+            }
+            at = e + 1;
+        }
+        i = e + 1;
+    }
+    if (at == uint.max)
+        return;
+    edits[file] ~= Edit(at, 0, "import " ~ sym.getModule().toPrettyChars().fromStringz.idup ~ " : " ~ sym.ident.toString.idup ~ ";\n");
 }
 
 void applyEdits()
