@@ -121,7 +121,7 @@ private Symbol* win64_unwind(Symbol* sf, targ_size_t localsize)
     symbol_keep(sunwind);
     symbol_debug(sunwind);
 
-    sunwind.Sdt = unwind_data(localsize);
+    sunwind.Sdt = unwind_data(cgstate, localsize);
     sunwind.Sseg = symbol_iscomdat3(sf) ? MsCoffObj_seg_xdata_comdat(sf) : MsCoffObj_seg_xdata();
     sunwind.Salignment = 1;
     outdata(sunwind);
@@ -211,10 +211,10 @@ static if (0)
  *      slice of ui as dt_t anonymous bytes
  */
 @trusted
-private dt_t* unwind_data(targ_size_t localsize)
+private dt_t* unwind_data(ref CGstate cg, targ_size_t localsize)
 {
     UNWIND_INFO ui;
-    const(ubyte)[] slice = unwind_info_slice(cgstate, &ui, localsize);
+    const(ubyte)[] slice = unwind_info_slice(cg, &ui, localsize);
     auto dtb = DtBuilder(0);
     dtb.nbytes(slice);
     return dtb.finish();

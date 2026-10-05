@@ -142,9 +142,9 @@ void REGSAVE_restore(const ref REGSAVE regsave, ref CodeBuilder cdb, reg_t reg, 
  */
 
 @trusted
-regm_t regmask(tym_t tym, tym_t tyf)
+regm_t regmask(ref CGstate cg, tym_t tym, tym_t tyf)
 {
-    assert(cgstate.AArch64);
+    assert(cg.AArch64);
 
     switch (tybasic(tym))
     {
@@ -982,7 +982,7 @@ void epilog(ref CGstate cg, block* b)
     {
         regm_t retregs = 0;
         if (b.bc == BC.retexp)
-            retregs = regmask(b.Belem.Ety, tym);
+            retregs = regmask(cg, b.Belem.Ety, tym);
         nteh_monitor_epilog(cg,cdbx,retregs);
         xlocalsize += 8;
     }
@@ -1184,7 +1184,7 @@ void cod3_thunk(Symbol* sthunk,Symbol* sfunc,uint p,tym_t thisty,
     targ_size_t thunkoffset;
 
     int seg = sthunk.Sseg;
-    cod3_align(seg);
+    cod3_align(cgstate, seg);
 
     // Skip over return address
     tym_t thunkty = tybasic(sthunk.ty());

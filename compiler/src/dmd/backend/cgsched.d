@@ -1969,7 +1969,7 @@ private int conflict(Cinfo* ci1,Cinfo* ci2,int fpsched)
 static if (0)
 {
     if (c1.Iop == 0xFF && c2.Iop == 0x8B)
-    {   c1.print(); c2.print(); i = 1;
+    {   c1.print(cgstate); c2.print(cgstate); i = 1;
         printf("r1=%lx, w1=%lx, a1=%lx, sz1=%d, r2=%lx, w2=%lx, a2=%lx, sz2=%d\n",r1,w1,a1,sz1,r2,w2,a2,sz2);
     }
 }
@@ -2244,7 +2244,7 @@ nothrow:
         stagelist.dtor();
     }
 
-code** assemble(code** pc)  // reassemble scheduled instructions
+code** assemble(ref CGstate cg, code** pc)  // reassemble scheduled instructions
 {
     code* c;
 
@@ -2286,7 +2286,7 @@ code** assemble(code** pc)  // reassemble scheduled instructions
                 printf((i & 1) ? " V " : "U  ");
             }
             if (ci)
-                ci.c.print();
+                ci.c.print(cg);
             else
                 printf("\n");
         }
@@ -2346,7 +2346,7 @@ code** assemble(code** pc)  // reassemble scheduled instructions
             continue;
 
         debug
-        if (debugs) { printf("appending: "); ci.c.print(); }
+        if (debugs) { printf("appending: "); ci.c.print(cg); }
 
         *pc = ci.c;
         do
@@ -2832,7 +2832,7 @@ private code* schedule(code* c,regm_t scratch)
         }
 
         //printf("assem %d\n",sch.tblmax);
-        pctail = sch.assemble(pctail);  // reassemble instruction stream
+        pctail = sch.assemble(cgstate, pctail);  // reassemble instruction stream
     }
     sch.dtor();
 

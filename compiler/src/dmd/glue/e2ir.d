@@ -3819,7 +3819,7 @@ elem* toElem(Expression e, ref IRState irs)
         version (none)
         {
             printf("CastExp.toElem()\n");
-            ce.print();
+            ce.print(cgstate);
             printf("\tfrom: %s\n", ce.e1.type.toChars());
             printf("\tto  : %s\n", ce.to.toChars());
         }

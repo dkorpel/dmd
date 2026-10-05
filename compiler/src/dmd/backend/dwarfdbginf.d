@@ -111,7 +111,7 @@ static if (1)
      * Returns:
      *      true if unwinding needs to be done
      */
-    bool doUnwindEhFrame()
+    bool doUnwindEhFrame(ref CGstate cg)
     {
         if (funcsym_p.Sfunc.Fflags & Feh_none)
         {
@@ -122,8 +122,8 @@ static if (1)
          * (It hangs in unittests for std.datetime.)
          * g++ on FreeBSD does not generate mixed frames, while g++ on OSX and Linux does.
          */
-        assert(!(cgstate.usednteh & ~(EHtry | EHcleanup)));
-        return (cgstate.usednteh & (EHtry | EHcleanup)) ||
+        assert(!(cg.usednteh & ~(EHtry | EHcleanup)));
+        return (cg.usednteh & (EHtry | EHcleanup)) ||
                (config.exe & (EX_FREEBSD | EX_FREEBSD64 | EX_OPENBSD | EX_OPENBSD64 | EX_DRAGONFLYBSD64)) && config.useExceptions;
     }
 
@@ -1864,7 +1864,7 @@ static if (1)
         {
             if (config.objfmt == OBJ_MACH && AArch64())
             {
-                bool ehunwind = doUnwindEhFrame();
+                bool ehunwind = doUnwindEhFrame(cgstate);
                 IDXSEC dfseg = dwarf_compact_unwind_alloc();
                 OutBuffer* buf = SegData[dfseg].SDbuf;
                 buf.reserve(32 * 10);    // 32 bytes per instance of struct compact_unwind_entry
@@ -1873,7 +1873,7 @@ static if (1)
             }
             else
             {
-                bool ehunwind = doUnwindEhFrame();
+                bool ehunwind = doUnwindEhFrame(cgstate);
 
                 IDXSEC dfseg = dwarf_eh_frame_alloc();
 
@@ -3340,7 +3340,7 @@ static if (1)
     public
     void dwarf_except_gentables(Funcsym* sfunc, uint startoffset, uint retoffset)
     {
-        if (!doUnwindEhFrame())
+        if (!doUnwindEhFrame(cgstate))
             return;
 
         int seg = dwarf_except_table_alloc(sfunc);

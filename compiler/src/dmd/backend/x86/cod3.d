@@ -530,9 +530,9 @@ void cod3_align_bytes(bool AArch64, int seg, size_t nbytes)
  *      seg = segment of function
  */
 @trusted
-void cod3_align(int seg)
+void cod3_align(ref CGstate cg, int seg)
 {
-    if (cgstate.AArch64)
+    if (cg.AArch64)
     {
         const nbytes = -Offset(seg) & 3;
         cod3_align_bytes(true, seg, nbytes);
@@ -705,7 +705,7 @@ regm_t regmask(tym_t tym, tym_t tyf)
 {
     bool AArch64 = cgstate.AArch64;
     if (AArch64)
-        return dmd.backend.arm.cod3.regmask(tym, tyf);
+        return dmd.backend.arm.cod3.regmask(cgstate, tym, tyf);
 
     switch (tybasic(tym))
     {
@@ -5245,7 +5245,7 @@ void cod3_thunk(Symbol* sthunk,Symbol* sfunc,uint p,tym_t thisty,
     targ_size_t thunkoffset;
 
     int seg = sthunk.Sseg;
-    cod3_align(seg);
+    cod3_align(cgstate, seg);
 
     // Skip over return address
     tym_t thunkty = tybasic(sthunk.ty());
@@ -5723,7 +5723,7 @@ void assignaddrc(ref CGstate cg, code* c)
         {
         if (0)
         {       printf("assignaddrc()\n");
-                code_print(c);
+                code_print(cg, c);
         }
         if (code_next(c) && code_next(code_next(c)) == c)
             assert(0);
@@ -6709,7 +6709,7 @@ void pinholeopt(code* c,block* b)
     {
         printf("-pinholeopt(%p)\n",cstart);
         for (c = cstart; c; c = code_next(c))
-            code_print(c);
+            code_print(cgstate, c);
     }
 }
 
@@ -7378,7 +7378,7 @@ uint codout(int seg, code* c, Barray!ubyte* disasmBuf, ref targ_size_t framehand
     {
         debug
         {
-        if (debugc) { printf("off=%02x, sz=%d, ",cast(int)ggen.getOffset(),cast(int)calccodsize(c)); code_print(c); }
+        if (debugc) { printf("off=%02x, sz=%d, ",cast(int)ggen.getOffset(),cast(int)calccodsize(c)); code_print(cgstate, c); }
         uint startOffset = ggen.getOffset();
         }
 
@@ -7801,7 +7801,7 @@ uint codout(int seg, code* c, Barray!ubyte* disasmBuf, ref targ_size_t framehand
         if (ggen.getOffset() - startOffset != calccodsize(c))
         {
             printf("actual: %d, calc: %d\n", cast(int)(ggen.getOffset() - startOffset), cast(int)calccodsize(c));
-            code_print(c);
+            code_print(cgstate, c);
             assert(0);
         }
     }
@@ -8231,16 +8231,16 @@ private void do8bit(ref MiniCodeBuf pbuf, FL fl, ref evc uev)
  * Debug code to dump code structure.
  */
 
-void codeListPrint(code* c)
+void codeListPrint(ref CGstate cg, code* c)
 {
     for (; c; c = code_next(c))
-        code_print(c);
+        code_print(cg, c);
 }
 
 @trusted
-void code_print(scope code* c)
+void code_print(ref CGstate cg, scope code* c)
 {
-    debug assert(!cgstate.AArch64);
+    debug assert(!cg.AArch64);
 
     ubyte ins;
     ubyte rexb;

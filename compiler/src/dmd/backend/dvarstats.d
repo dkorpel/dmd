@@ -36,7 +36,7 @@ version (all) // free function version
             void function(Symbol*) nothrow fnWriteVar, void function() nothrow fnEndArgs,
             void function(int off,int len) nothrow fnBeginBlock, void function() nothrow fnEndBlock)
     {
-        varStats.writeSymbolTable(sfn, symtab, fnWriteVar, fnEndArgs, fnBeginBlock, fnEndBlock);
+        varStats.writeSymbolTable(cgstate, sfn, symtab, fnWriteVar, fnEndArgs, fnBeginBlock, fnEndBlock);
     }
 
     void varStats_startFunction()
@@ -296,11 +296,11 @@ private symtab_t* calcLexicalScope(ref CGstate cg, Symbol* sfn, return ref symta
     return &sortedSymtab;
 }
 
-public void writeSymbolTable(Symbol* sfn, ref symtab_t symtab,
+public void writeSymbolTable(ref CGstate cg, Symbol* sfn, ref symtab_t symtab,
             void function(Symbol*) nothrow fnWriteVar, void function() nothrow fnEndArgs,
             void function(int off,int len) nothrow fnBeginBlock, void function() nothrow fnEndBlock)
 {
-    auto symtab2 = calcLexicalScope(cgstate, sfn, symtab);
+    auto symtab2 = calcLexicalScope(cg, sfn, symtab);
 
     int openBlocks = 0;
     int lastOffset = 0;

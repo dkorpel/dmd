@@ -1021,7 +1021,7 @@ void writefunc2(Symbol* sfunc, ref GlobalOptimizer go, ref BlockOpt bo)
             objmod.codeseg(&funcsym_p.Sident[0], 1);
                                         // generate new code segment
         }
-        cod3_align(cseg);               // align start of function
+        cod3_align(cgstate, cseg);               // align start of function
         objmod.func_start(sfunc);
     }
 

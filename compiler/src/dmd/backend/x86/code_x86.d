@@ -401,9 +401,9 @@ struct code
 
     bool isJumpOP() { return Iop == JMP || Iop == JMPS; }
 
-    void print()               // pretty-printer
+    void print(ref CGstate cg)               // pretty-printer
     {
-        code_print(&this);
+        code_print(cg, &this);
     }
 }
 

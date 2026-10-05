@@ -389,7 +389,7 @@ void WRblock(block* b)
             }
         }
         if (b.Bcode)
-            b.Bcode.print();
+            b.Bcode.print(cgstate);
         ferr("\n");
     }
     else
