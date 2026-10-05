@@ -54,7 +54,7 @@ package __gshared DwEhTable dwehtable;
  *      retoffset = offset from start of function to epilog
  */
 
-void genDwarfEh(ref CGstate cg, Funcsym* sfunc, int seg, OutBuffer* et, bool scancode, uint startoffset, uint retoffset, ref DwEhTable deh)
+void genDwarfEh(bool AArch64, Funcsym* sfunc, int seg, OutBuffer* et, bool scancode, uint startoffset, uint retoffset, ref DwEhTable deh)
 {
     /* LPstart = encoding of LPbase
      * LPbase = landing pad base (normally omitted)
@@ -81,7 +81,7 @@ void genDwarfEh(ref CGstate cg, Funcsym* sfunc, int seg, OutBuffer* et, bool sca
 
 static if (0)
 {
-    WRfunc(cg.AArch64, "genDwarfEH()", funcsym_p, startblock);
+    WRfunc(AArch64, "genDwarfEH()", funcsym_p, startblock);
     printf("-------------------------\n");
 }
 
@@ -170,7 +170,7 @@ static if (0)
                     d.lpad = coffset;
                     index = d.prev;
                 }
-                coffset += calccodsize(cg.AArch64, c);
+                coffset += calccodsize(AArch64, c);
             }
             assert(n == 0);
         }

@@ -378,7 +378,7 @@ void optfunc(ref CGstate cg, ref GlobalOptimizer go, ref BlockOpt bo)
             scanForInlines(cg, funcsym_p);
 
         if (go.mfoptim & MFdc)
-            blockopt(cg, go, bo, go.changes); // do block optimization
+            blockopt(cg.AArch64, go, bo, go.changes); // do block optimization
         out_regcand(globsym[]);         // recompute register candidates
         go.changes = 0;                 // no changes yet
         sliceStructs(globsym, bo.startblock);
@@ -443,7 +443,7 @@ void optfunc(ref CGstate cg, ref GlobalOptimizer go, ref BlockOpt bo)
     if (debugc) printf("%d iterations\n",iter);
 
     if (go.mfoptim & MFdc)
-        blockopt(cg, go, bo, go.changes);         // do block optimization
+        blockopt(cg.AArch64, go, bo, go.changes);         // do block optimization
 
     for (block* b = bo.startblock; b; b = b.Bnext)
     {

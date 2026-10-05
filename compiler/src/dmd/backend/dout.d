@@ -1002,7 +1002,7 @@ void writefunc2(ref CGstate cg, Symbol* sfunc, ref GlobalOptimizer go, ref Block
     else
     {
         //printf("blockopt()\n");
-        blockopt(cg, go, bo, go.changes);       /* optimize                     */
+        blockopt(cg.AArch64, go, bo, go.changes);       /* optimize                     */
     }
 
     assert(funcsym_p == sfunc);

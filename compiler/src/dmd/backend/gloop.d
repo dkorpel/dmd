@@ -806,7 +806,7 @@ restart:
         {
             foreach (ref l; startloop)
             {
-                if (loopunroll(cg, go, bo, l))
+                if (loopunroll(cg.AArch64, go, bo, l))
                 {
                     compdfo(bo.dfo, bo.startblock);  // compute depth-first order
                     blockinit(bo);
@@ -3694,7 +3694,7 @@ private void unrollWalker(elem* e, uint defnum, Symbol* v, targ_llong increment,
  *      true if loop was unrolled
  */
 @trusted
-bool loopunroll(ref CGstate cg, ref GlobalOptimizer go, ref BlockOpt bo, ref Loop l)
+bool loopunroll(bool AArch64, ref GlobalOptimizer go, ref BlockOpt bo, ref Loop l)
 {
     const bool log = false;
     if (log) printf("loopunroll(%p)\n", &l);
@@ -3706,7 +3706,7 @@ bool loopunroll(ref CGstate cg, ref GlobalOptimizer go, ref BlockOpt bo, ref Loo
         return false;
     l.Lhead.Bflags |= BFL.keepRolled;
     if (log)
-        WRfunc(cg.AArch64, "loop", funcsym_p, bo.startblock);
+        WRfunc(AArch64, "loop", funcsym_p, bo.startblock);
 
     if (l.Lhead.Btry || l.Ltail.Btry)
         return false;
