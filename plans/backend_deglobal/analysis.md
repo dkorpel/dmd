@@ -131,3 +131,36 @@ through `toObjFile`, and data building (`todt.d`) emits vtables, which generate 
 
 1. Keep threading `cg` through glue (mechanical; touches every `toElem`/`Statement_toIR`/`todt` function).
 2. Carry it in `IRState` (already passed everywhere in glue), and defer thunk generation out of data building.
+
+## Narrowing oversized parameters
+
+Threading `ref CGstate cg` everywhere replaces a global with a parameter, but a function that only reads
+`cg.AArch64` still receives all 53 fields. That hides its real dependencies and blocks splitting `CGstate`
+into smaller structs. `narrow.d` finds and fixes this.
+
+```sh
+generated/deglobal/deglobal params                    # per struct type: parameters by number of fields used
+generated/deglobal/deglobal params --type=CGstate     # field popularity, common field sets, every parameter
+generated/deglobal/deglobal narrow --type=CGstate --max=40 [--skip=f] [--only=f] [--dry]
+compiler/tools/deglobal/loop.sh narrow:CGstate 40 8   # 8 rounds of narrow + build + oracle + commit
+```
+
+Analysis, per struct-typed parameter (`ref S`, `S*`, `S`, and `this` of struct methods):
+
+- Direct uses are field paths (`cg.regcon.cse.mops`), recorded as read or written. Writes include assignment,
+  `op=`, `++`, `&path`, slicing a static array, passing to a `ref`/`out` parameter, and `ref` variables.
+- Passing the parameter (or a sub-path) on to another function's struct parameter is a forward. Summaries are
+  joined over the call graph until nothing changes, so `f(cg)` needs whatever its callee needs.
+- Any other use of the bare parameter (copy, `&cg`, an indirect call through a table) means the whole struct.
+
+Rewrite, leaves first. A parameter whose paths share a common prefix P (for example `regcon.cse`) becomes a
+parameter of P's type named after its last component. Call sites pass `arg.P`, and the body's `cg.P` becomes the
+new name. A parameter with no uses is removed, together with its arguments. Forwards to callees that are not
+narrowed yet wait for a later round, the same "waits on" scheme as `step`.
+
+The new parameter is `ref` unless the path is never written through the parameter, the type is a scalar,
+pointer, class, slice or delegate, the field's address never escapes, and no function reachable from the
+callee writes the field (through any instance, including the global). Indirect calls reach address-taken
+functions of the same signature, and virtual calls reach methods of the same name. Reachability stops at
+functions outside `backend/`/`glue/`. This assumes the frontend does not call back into code generation while
+the backend runs, for example from `errorBackend`.
