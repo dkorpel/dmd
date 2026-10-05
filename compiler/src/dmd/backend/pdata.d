@@ -214,7 +214,7 @@ static if (0)
 private dt_t* unwind_data(targ_size_t localsize)
 {
     UNWIND_INFO ui;
-    const(ubyte)[] slice = unwind_info_slice(&ui, localsize);
+    const(ubyte)[] slice = unwind_info_slice(cgstate, &ui, localsize);
     auto dtb = DtBuilder(0);
     dtb.nbytes(slice);
     return dtb.finish();
@@ -230,7 +230,7 @@ private dt_t* unwind_data(targ_size_t localsize)
  */
 @trusted
 private
-const(ubyte)[] unwind_info_slice(UNWIND_INFO* ui, targ_size_t localsize)
+const(ubyte)[] unwind_info_slice(ref CGstate cg, UNWIND_INFO* ui, targ_size_t localsize)
 {
     /* 4 allocation size strategy:
      *  0:           no unwind instruction
@@ -253,7 +253,7 @@ const(ubyte)[] unwind_info_slice(UNWIND_INFO* ui, targ_size_t localsize)
 
     ui.Version = 1;
     //ui.Flags = 0;
-    ui.SizeOfProlog = cast(ubyte)cgstate.startoffset;
+    ui.SizeOfProlog = cast(ubyte)cg.startoffset;
 static if (0)
 {
     ui.CountOfCodes = strategy + 1;
@@ -276,16 +276,16 @@ static if (0)
             break;
 
         case 1:
-            ui.UnwindCode[0].FrameOffset = setUnwindCode(cgstate.prolog_allocoffset, UWOP.ALLOC_SMALL, (sz - 8) / 8);
+            ui.UnwindCode[0].FrameOffset = setUnwindCode(cg.prolog_allocoffset, UWOP.ALLOC_SMALL, (sz - 8) / 8);
             break;
 
         case 2:
-            ui.UnwindCode[0].FrameOffset = setUnwindCode(cgstate.prolog_allocoffset, UWOP.ALLOC_LARGE, 0);
+            ui.UnwindCode[0].FrameOffset = setUnwindCode(cg.prolog_allocoffset, UWOP.ALLOC_LARGE, 0);
             ui.UnwindCode[1].FrameOffset = (sz - 8) / 8;
             break;
 
         case 3:
-            ui.UnwindCode[0].FrameOffset = setUnwindCode(cgstate.prolog_allocoffset, UWOP.ALLOC_LARGE, 1);
+            ui.UnwindCode[0].FrameOffset = setUnwindCode(cg.prolog_allocoffset, UWOP.ALLOC_LARGE, 1);
             ui.UnwindCode[1].FrameOffset = sz & 0x0FFFF;
             ui.UnwindCode[2].FrameOffset = sz / 0x10000;
             break;

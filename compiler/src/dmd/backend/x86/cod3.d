@@ -873,12 +873,12 @@ void cgreg_dst_regs(reg_t* dst_integer_reg, reg_t* dst_float_reg)
 }
 
 @trusted
-void cgreg_set_priorities(tym_t ty, out const(reg_t)[] pseq, out const(reg_t)[] pseqmsw)
+void cgreg_set_priorities(ref CGstate cg, tym_t ty, out const(reg_t)[] pseq, out const(reg_t)[] pseqmsw)
 {
     //printf("cgreg_set_priorities %s\n", regm_str(ty));
     const sz = tysize(ty);
 
-    if (cgstate.AArch64)
+    if (cg.AArch64)
     {
         if (tyfloating(ty))
         {
@@ -1097,7 +1097,7 @@ void outblkexitcode(ref CGstate cg, ref CodeBuilder cdb, block* bl, ref int anys
             assert(ehmethod(funcsym_p) != EHmethod.EH_NONE);
             // Mark all registers as destroyed. This will prevent
             // register assignments to variables used in catch blocks.
-            getregs(cdb,lpadregs());
+            getregs(cdb,lpadregs(cg));
 
             if (config.ehmethod == EHmethod.EH_DWARF)
             {
@@ -1220,7 +1220,7 @@ void outblkexitcode(ref CGstate cg, ref CodeBuilder cdb, block* bl, ref int anys
             if (ehmethod(funcsym_p) == EHmethod.EH_DWARF)
             {
                 // Mark scratch registers as destroyed.
-                getregsNoSave(lpadregs());
+                getregsNoSave(lpadregs(cg));
 
                 regm_t retregsx = 0;
                 gencodelem(cdb,bl.Belem,retregsx,true);
@@ -1237,7 +1237,7 @@ void outblkexitcode(ref CGstate cg, ref CodeBuilder cdb, block* bl, ref int anys
                 {
                     // Mark all registers as destroyed. This will prevent
                     // register assignments to variables used in finally blocks.
-                    getregsNoSave(lpadregs());
+                    getregsNoSave(lpadregs(cg));
                 }
 
                 assert(!e);
@@ -1255,7 +1255,7 @@ void outblkexitcode(ref CGstate cg, ref CodeBuilder cdb, block* bl, ref int anys
             assert(ehmethod(funcsym_p) == EHmethod.EH_DWARF);
             // Mark all registers as destroyed. This will prevent
             // register assignments to variables used in finally blocks.
-            getregsNoSave(lpadregs());
+            getregsNoSave(lpadregs(cg));
 
             regm_t retregsx = 0;
             gencodelem(cdb,bl.Belem,retregsx,true);

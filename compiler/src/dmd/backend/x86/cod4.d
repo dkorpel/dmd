@@ -501,7 +501,7 @@ void cdeq(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
                         // MOV reg,imm
                         // MOV EA,reg
                         // MOV EA+2,reg
-                        regm_t rregm = getscratch() & ~idxregm(&cs);
+                        regm_t rregm = getscratch(cg) & ~idxregm(&cs);
                         if (rregm)
                         {
                             const regx = regwithvalue(cdb,rregm,e2.Vint,0);

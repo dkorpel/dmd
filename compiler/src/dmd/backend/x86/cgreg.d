@@ -908,7 +908,7 @@ int cgreg_assign(ref CGstate cg, Symbol* retsym)
         // Select sequence of registers to try to map s onto
         const(reg_t)[] pseq;                     // sequence to try for LSW
         const(reg_t)[] pseqmsw = null;           // sequence to try for MSW, null if none
-        cgreg_set_priorities(ty, pseq, pseqmsw);
+        cgreg_set_priorities(cg, ty, pseq, pseqmsw);
 
         u.benefit = 0;
         for (int i = 0; i < pseq.length; i++)

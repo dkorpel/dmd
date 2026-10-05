@@ -65,7 +65,7 @@ else
         config.flags & (CFGalwaysframe | CFGtrace) ||
 //      config.fulltypes ||
         (config.wflags & WFwindows && tyfarfunc(tym)) ||
-        need_prolog(startblock)
+        need_prolog(cgstate, startblock)
        )
     {   // First block gets the prolog, all return blocks
         // get the epilog.
@@ -79,7 +79,7 @@ else
     for (b = startblock; b; b = b.Bnext)
         b.Bflags &= ~BFL.outsideprolog;                 // start with them all off
 
-    pe_add(startblock);
+    pe_add(cgstate, startblock);
 
     // Look for only one block (bp) that will hold the prolog
     bp = null;
@@ -174,15 +174,15 @@ void cod5_noprol(block* startblock)
  * the function prolog.
  */
 
-private void pe_add(block* b)
+private void pe_add(ref CGstate cg, block* b)
 {
     if (b.Bflags & BFL.outsideprolog ||
-        need_prolog(b))
+        need_prolog(cg, b))
         return;
 
     b.Bflags |= BFL.outsideprolog;
     foreach (bl; b.Bsucc[])
-        pe_add(bl);
+        pe_add(cg, bl);
 }
 
 /**********************************************
@@ -190,9 +190,9 @@ private void pe_add(block* b)
  */
 
 @trusted
-private int need_prolog(block* b)
+private int need_prolog(ref CGstate cg, block* b)
 {
-    if (b.Bregcon.used & cgstate.fregsaved)
+    if (b.Bregcon.used & cg.fregsaved)
         goto Lneed;
 
     // If block referenced a param in 16 bit code

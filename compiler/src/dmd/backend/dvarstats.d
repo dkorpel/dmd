@@ -187,7 +187,7 @@ private bool isParameter(Symbol* s)
 
 // gather statistics about creation and destructions of variables that are
 //  used by the current function
-private symtab_t* calcLexicalScope(Symbol* sfn, return ref symtab_t symtab) return
+private symtab_t* calcLexicalScope(ref CGstate cg, Symbol* sfn, return ref symtab_t symtab) return
 {
     // make a copy of the symbol table
     // - arguments should be kept at the very beginning
@@ -253,7 +253,7 @@ private symtab_t* calcLexicalScope(Symbol* sfn, return ref symtab_t symtab) retu
     if(dupcnt == 0)
         return paramcnt > 0 ? &sortedSymtab : &symtab;
 
-    sortLineOffsets(cgstate);
+    sortLineOffsets(cg);
 
     // precalc the lexical blocks to emit so that identically named symbols don't overlap
     lifeTimes.setLength(dupcnt);
@@ -261,8 +261,8 @@ private symtab_t* calcLexicalScope(Symbol* sfn, return ref symtab_t symtab) retu
     for (SYMIDX si = 0; si < dupcnt; si++)
     {
         lifeTimes[si].sym = sortedSymtab[uniquecnt + si];
-        lifeTimes[si].offCreate = cast(int)getLineOffset(cgstate, lifeTimes[si].sym.lposscopestart.Slinnum);
-        lifeTimes[si].offDestroy = cast(int)getLineOffset(cgstate, lifeTimes[si].sym.lnoscopeend);
+        lifeTimes[si].offCreate = cast(int)getLineOffset(cg, lifeTimes[si].sym.lposscopestart.Slinnum);
+        lifeTimes[si].offDestroy = cast(int)getLineOffset(cg, lifeTimes[si].sym.lnoscopeend);
     }
     qsort(lifeTimes[].ptr, dupcnt, (lifeTimes[0]).sizeof, &cmpLifeTime);
 
@@ -286,7 +286,7 @@ private symtab_t* calcLexicalScope(Symbol* sfn, return ref symtab_t symtab) retu
             else if (strcmp(lifeTimes[si].sym.Sident.ptr, lifeTimes[sj].sym.Sident.ptr) == 0)
                 break;
 
-        lifeTimes[si].offDestroy = cast(int)(sj < dupcnt ? lifeTimes[sj].offCreate : cgstate.retoffset + cgstate.retsize); // function length
+        lifeTimes[si].offDestroy = cast(int)(sj < dupcnt ? lifeTimes[sj].offCreate : cg.retoffset + cg.retsize); // function length
     }
 
     // store duplicate symbols back with new ordering
@@ -300,7 +300,7 @@ public void writeSymbolTable(Symbol* sfn, ref symtab_t symtab,
             void function(Symbol*) nothrow fnWriteVar, void function() nothrow fnEndArgs,
             void function(int off,int len) nothrow fnBeginBlock, void function() nothrow fnEndBlock)
 {
-    auto symtab2 = calcLexicalScope(sfn, symtab);
+    auto symtab2 = calcLexicalScope(cgstate, sfn, symtab);
 
     int openBlocks = 0;
     int lastOffset = 0;

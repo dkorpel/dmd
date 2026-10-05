@@ -1950,9 +1950,8 @@ reg_t allocScratchReg(ref CodeBuilder cdb, regm_t regm)
  * to code entry point for exception handling.
  */
 @trusted
-regm_t lpadregs()
+regm_t lpadregs(ref CGstate cg)
 {
-    CGstate* cg = &cgstate;
     regm_t used;
     if (config.ehmethod == EHmethod.EH_DWARF)
         used = cg.allregs & ~cg.mfuncreg;
@@ -2244,10 +2243,9 @@ bool evalinregister(elem* e)
  */
 
 @trusted
-regm_t getscratch()
+regm_t getscratch(ref CGstate cg)
 {
     regm_t scratch = 0;
-    CGstate* cg = &cgstate;
     if (cg.pass == BackendPass.final_)
     {
         scratch = cg.allregs & ~(cg.regcon.mvar | cg.regcon.mpvar | cg.regcon.cse.mval |
