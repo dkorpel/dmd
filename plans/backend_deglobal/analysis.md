@@ -104,3 +104,30 @@ in the same step).
 Oracle notes: `SOURCE_DATE_EPOCH` is pinned because of `__TIME__`;
 `runnable/test17338.d` is excluded because its MS-COFF output differs from run
 to run with the same compiler.
+
+## Status of `cgstate` (2026-10-05)
+
+This branch gave 135 more functions a `ref CGstate cg` parameter (361 in total). Every generated commit builds in release, debug and unittest
+mode, and the oracle reports byte-identical objects.
+
+Functions on `compiler/tools/deglobal/keep-cgstate.txt` keep using the global on purpose:
+
+| Function | Reason |
+|---|---|
+| `getRtlsym`, `getRtlsymPersonality`, `symbol_func` | Read only `fregsaved`, a per-target ABI constant, and fill a global per-target cache. Threading them pulled codegen state into all of glue. `fregsaved` belongs in a target config, not in `CGstate`. |
+| `regm_str`, `disassemble` | Debug printing; `regm_str` has its own `__gshared` ring buffer |
+| `simplify_code` | Called by `CodeBuilder.gen`; a parameter would change about 400 `cdb.gen(...)` calls. Better: `CodeBuilder` holds a `CGstate*`. |
+
+Still blocked, to do by hand:
+
+- `cgelem.d` `el*` handlers (`elind`, `elstruct`, `elva_start`) sit in a function table and only read
+  `cgstate.AArch64` (a target flag) and call `prolog_genva_start`.
+- `cv8_outsym` is a callback; `ElfObj/MachObj/MsCoffObj_func_term` are called from the string mixin in `obj.d`.
+- `tryMain` in `main.d` calls `backend_init(cgstate, ...)`: the final owner.
+
+Open design question: the call graph reaches codegen from glue IR building. `toElem` emits static locals
+through `toObjFile`, and data building (`todt.d`) emits vtables, which generate thunk code through
+`toThunkSymbol` and `cod3_thunk`. Two options:
+
+1. Keep threading `cg` through glue (mechanical; touches every `toElem`/`Statement_toIR`/`todt` function).
+2. Carry it in `IRState` (already passed everywhere in glue), and defer thunk generation out of data building.
