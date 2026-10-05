@@ -173,14 +173,14 @@ void TypeInfo_toObjFile(Expression e, Loc loc, Type t)
     {
         // Generate a COMDAT for other TypeInfos not available as builtins in druntime -
         // but only once per compiler run (into the first referencing object file).
-        toObjFile(t.vtinfo, global.params.multiobj);
+        toObjFile(cgstate, t.vtinfo, global.params.multiobj);
     }
 }
 
 /* ================================================================== */
 
 package(dmd.glue)
-void toObjFile(Dsymbol ds, bool multiobj)
+void toObjFile(ref CGstate cg, Dsymbol ds, bool multiobj)
 {
     //printf("toObjFile(%s %s)\n", ds.kind(), ds.toChars());
 
@@ -216,7 +216,7 @@ void toObjFile(Dsymbol ds, bool multiobj)
         override void visit(FuncDeclaration fd)
         {
             // in glue/package.d
-            FuncDeclaration_toObjFile(cgstate, fd, multiobj);
+            FuncDeclaration_toObjFile(cg, fd, multiobj);
         }
 
         override void visit(ClassDeclaration cd)
@@ -1194,7 +1194,7 @@ private size_t emitVtbl(ref DtBuilder dtb, BaseClass* b, ref FuncDeclarations bv
             {
                 offset2 -= fd.interfaceVirtual.offset;
             }
-            dtb.xoff(toThunkSymbol(fd, offset2), 0, TYnptr);
+            dtb.xoff(toThunkSymbol(cgstate, fd, offset2), 0, TYnptr);
         }
         else
             dtb.size(0);

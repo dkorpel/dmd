@@ -388,7 +388,7 @@ void logexp(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint jcond, FL fltarg,
         return;
     }
 
-    docommas(cdb, e);             // scan down commas
+    docommas(cg, cdb, e);             // scan down commas
     cg.stackclean++;
 
     if (!OTleaf(e.Eoper) && !e.Ecount)     // if operator and not common sub

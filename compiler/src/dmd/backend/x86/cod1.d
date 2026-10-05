@@ -327,7 +327,7 @@ void genEEcode(ref CGstate cg)
     gencodelem(cg, cdb, eecontext.EEelem, retregs, false);
     code* c = cdb.finish();
     assignaddrc(cg,c);
-    pinholeopt(c,null);
+    pinholeopt(cg, c,null);
     jmpaddr(cg, c);
     eecontext.EEcode = gen1(c, 0xCC);        // INT 3
     eecontext.EEin--;
@@ -511,7 +511,7 @@ void logexp(ref CGstate cg, ref CodeBuilder cdb, elem* e, int jcond, FL fltarg, 
     }
 
     int no87 = (jcond & 2) == 0;
-    docommas(cdb, e);             // scan down commas
+    docommas(cg, cdb, e);             // scan down commas
     cg.stackclean++;
 
     code* c, ce;
@@ -626,7 +626,7 @@ void logexp(ref CGstate cg, ref CodeBuilder cdb, elem* e, int jcond, FL fltarg, 
     }
 
     regm_t retregs = mPSW;                // return result in flags
-    opcode_t op = jmpopcode(e);           // get jump opcode
+    opcode_t op = jmpopcode(cg, e);           // get jump opcode
     if (!(jcond & 1))
         op ^= 0x101;                      // toggle jump condition(s)
     codelem(cg,cdb, e, retregs, true);         // evaluate elem
@@ -4545,7 +4545,7 @@ void pushParams(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint stackalign, t
             elem* e1 = e.E1;
             if (sz == 0)
             {
-                docommas(cdb, e1); // skip over any commas
+                docommas(cg, cdb, e1); // skip over any commas
 
                 const stackpushsave = cg.stackpush;
                 const stackcleansave = cg.stackclean;
@@ -4567,7 +4567,7 @@ void pushParams(ref CGstate cg, ref CodeBuilder cdb, elem* e, uint stackalign, t
                 e = e1;
                 goto L1;
             }
-            docommas(cdb, e1);             // skip over any commas
+            docommas(cg, cdb, e1);             // skip over any commas
             CF seg = CF.zero;              // assume no seg override
             regm_t retregs = sz ? IDXREGS : 0;
             bool doneoff = false;

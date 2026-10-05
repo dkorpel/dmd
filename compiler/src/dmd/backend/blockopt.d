@@ -430,7 +430,7 @@ void block_initvar(Symbol* s)
 
 @trusted
 public
-void blockopt(ref GlobalOptimizer go, ref BlockOpt bo, ref uint changes)
+void blockopt(ref CGstate cg, ref GlobalOptimizer go, ref BlockOpt bo, ref uint changes)
 {
     if (OPTIMIZER)
     {
@@ -469,7 +469,7 @@ void blockopt(ref GlobalOptimizer go, ref BlockOpt bo, ref uint changes)
 
         debug if (debugw)
         {
-            WRfunc("After blockopt()", funcsym_p, bo.startblock);
+            WRfunc(cg, "After blockopt()", funcsym_p, bo.startblock);
         }
     }
     else
@@ -485,7 +485,7 @@ void blockopt(ref GlobalOptimizer go, ref BlockOpt bo, ref uint changes)
             debug if (debugb)
             {
                 printf("before doptelem():\n");
-                WRblock(cgstate, b);
+                WRblock(cg, b);
             }
 
             if (b.Belem)
@@ -498,7 +498,7 @@ void blockopt(ref GlobalOptimizer go, ref BlockOpt bo, ref uint changes)
             debug if (debugb)
             {
                 printf("after optelem():\n");
-                WRblock(cgstate, b);
+                WRblock(cg, b);
             }
         }
         if (localgot)
@@ -516,7 +516,7 @@ void blockopt(ref GlobalOptimizer go, ref BlockOpt bo, ref uint changes)
 
         debug if (debugb)
         {
-            WRfunc("After blockopt()", funcsym_p, bo.startblock);
+            WRfunc(cg, "After blockopt()", funcsym_p, bo.startblock);
         }
     }
 }

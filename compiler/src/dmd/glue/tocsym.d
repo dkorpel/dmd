@@ -64,6 +64,7 @@ import dmd.backend.cgcv;
 import dmd.backend.symbol;
 import dmd.backend.ty;
 import dmd.backend.x86.cgcod : cgstate;
+import dmd.backend.code : CGstate;
 
 /*************************************
  * Create a backend symbol from a D symbol.
@@ -707,7 +708,7 @@ Symbol* toImport(Dsymbol ds)
  * Thunks adjust the incoming 'this' pointer by 'offset'.
  */
 package(dmd.glue)
-Symbol* toThunkSymbol(FuncDeclaration fd, int offset)
+Symbol* toThunkSymbol(ref CGstate cg, FuncDeclaration fd, int offset)
 {
     Symbol* s = toSymbol(fd);
     if (!offset)
@@ -727,7 +728,7 @@ Symbol* toThunkSymbol(FuncDeclaration fd, int offset)
     auto sthunk = symbol_name(name[0 .. len],SC.static_,(cast(Symbol*)(fd.csym)).Stype);
     sthunk.Sflags |= SFLnodebug | SFLartifical;
     sthunk.Sflags |= SFLimplem;
-    outthunk(cgstate, sthunk, cast(Symbol*)fd.csym, 0, TYnptr, -offset, -1, 0);
+    outthunk(cg, sthunk, cast(Symbol*)fd.csym, 0, TYnptr, -offset, -1, 0);
     return sthunk;
 }
 

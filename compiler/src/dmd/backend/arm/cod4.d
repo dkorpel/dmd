@@ -369,8 +369,8 @@ void cdaddass(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     }
     else if (0 && (op == OPaddass || op == OPminass) &&
         !e2.Ecount &&
-        ((jop = jmpopcode(e2)) == JC || jop == JNC ||
-         (OTconv(e2.Eoper) && !e2.E1.Ecount && ((jop = jmpopcode(e2.E1)) == JC || jop == JNC)))
+        ((jop = jmpopcode(cg, e2)) == JC || jop == JNC ||
+         (OTconv(e2.Eoper) && !e2.E1.Ecount && ((jop = jmpopcode(cg, e2.E1)) == JC || jop == JNC)))
        )
     {
         /* e1 += (x < y)    ADC EA,0
@@ -1989,7 +1989,7 @@ void cdbyteint(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     const op = e.Eoper;
     elem* e1 = e.E1;
     if (e1.Eoper == OPcomma)
-        docommas(cdb,e1);
+        docommas(cg, cdb,e1);
 
     retregs = pretregs & cg.allregs;
     if (retregs == 0)

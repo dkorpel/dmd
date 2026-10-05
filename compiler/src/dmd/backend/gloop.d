@@ -46,6 +46,7 @@ char symbol_isintab(const Symbol* s) { return sytab[s.Sclass] & SCSS; }
 
 
 import dmd.backend.gother : findloopparameters;
+import dmd.backend.x86.cgcod : cgstate;
 
 alias Loops = Rarray!Loop;
 
@@ -3704,7 +3705,7 @@ bool loopunroll(ref GlobalOptimizer go, ref BlockOpt bo, ref Loop l)
         return false;
     l.Lhead.Bflags |= BFL.keepRolled;
     if (log)
-        WRfunc("loop", funcsym_p, bo.startblock);
+        WRfunc(cgstate, "loop", funcsym_p, bo.startblock);
 
     if (l.Lhead.Btry || l.Ltail.Btry)
         return false;

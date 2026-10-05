@@ -441,7 +441,7 @@ void nteh_framehandler(ref CGstate cg, Symbol* sfunc, Symbol* scopetable)
         cdb.gencs(0xE9,0,FL.func,getRtlsym(RTLSYM.D_HANDLER));      // JMP _d_framehandler
 
         code* c = cdb.finish();
-        pinholeopt(c,null);
+        pinholeopt(cg, c,null);
         targ_size_t framehandleroffset;
         codout(cg, sfunc.Sseg,c,null,framehandleroffset);
         code_free(c);

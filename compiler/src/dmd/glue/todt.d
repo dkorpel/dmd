@@ -57,6 +57,7 @@ import dmd.visitor;
 import dmd.backend.cc;
 import dmd.backend.dt;
 import dmd.backend.symbol;
+import dmd.backend.x86.cgcod : cgstate;
 
 package(dmd.glue):
 
@@ -606,7 +607,7 @@ void Expression_toDt(Expression e, ref DtBuilder dtb)
             e.fd.vthis = null;
         }
         Symbol* s = toSymbol(e.fd);
-        toObjFile(e.fd, false);
+        toObjFile(cgstate, e.fd, false);
         if (e.type.ty == Tdelegate)
             dtb.size(0);
         dtb.xoff(s, 0);

@@ -252,7 +252,7 @@ elem* scanExpressionForInlines(elem* e)
         e.E1 = scanExpressionForInlines(e.E1);
         e.E2 = scanExpressionForInlines(e.E2);
         if (op == OPcall)
-            e = tryInliningCall(e);
+            e = tryInliningCall(cgstate, e);
     }
     else if (OTunary(op))
     {
@@ -260,7 +260,7 @@ elem* scanExpressionForInlines(elem* e)
         e.E1 = scanExpressionForInlines(e.E1);
         if (op == OPucall)
         {
-            e = tryInliningCall(e);
+            e = tryInliningCall(cgstate, e);
         }
     }
     else /* leaf */
@@ -278,7 +278,7 @@ elem* scanExpressionForInlines(elem* e)
  */
 
 @trusted
-private elem* tryInliningCall(elem* e)
+private elem* tryInliningCall(ref CGstate cg, elem* e)
 {
     //elem_debug(e);
     assert(e && (e.Eoper == OPcall || e.Eoper == OPucall));
@@ -308,7 +308,7 @@ private elem* tryInliningCall(elem* e)
         /* Check to see if we inline expand the function, or queue  */
         /* it to be output.                                         */
         if ((f.Fflags & (Finline | Finlinenest)) == Finline)
-            e = inlineCall(cgstate, e,sfunc);
+            e = inlineCall(cg, e,sfunc);
         else
             {   } //queue_func(sfunc);
     }

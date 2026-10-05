@@ -684,7 +684,7 @@ void cdcond(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     COND jop1 = conditionCode(e21);
     COND jop2 = conditionCode(e22);
 
-    docommas(cdb,e1);
+    docommas(cg, cdb,e1);
     cg.stackclean++;
 
     if (!OTrel(op1) && e1 == e21 && sz1 <= REGSIZE)
@@ -1778,7 +1778,7 @@ void cdstreq(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     uint numbytes = cast(uint)type_size(e.ET);          // # of bytes in structure/union
     //printf("numbytes: %u\n", numbytes);
 
-    docommas(cdb,e2);
+    docommas(cg, cdb,e2);
 
     // load pointer to rvalue into source register
     regm_t srcregs = cg.allregs & ~pretregs;

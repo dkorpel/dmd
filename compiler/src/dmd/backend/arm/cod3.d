@@ -541,7 +541,7 @@ void prolog_saveregs(ref CGstate cg, ref CodeBuilder cdb, regm_t topush, int cfa
             config.ehmethod == EHmethod.EH_DWARF)
         {   // Emit debug_frame data giving location of saved register
             code* c = cdb.finish();
-            pinholeopt(c, null);
+            pinholeopt(cg, c, null);
             dwarf_CFA_set_loc(calcblksize(c));  // address after save
             dwarf_CFA_offset(reg, cast(int)(gpoffset - cfa_offset));
             cdb.reset();

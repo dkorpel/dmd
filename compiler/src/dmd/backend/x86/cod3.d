@@ -1333,7 +1333,7 @@ static if (NTEXCEPTIONS)
                     // For the final load into the return regs, don't set cg.regcon.used,
                     // so that the optimizer can potentially use retregs for register
                     // variable assignments.
-                    docommas(cdb,e);
+                    docommas(cg, cdb,e);
                     if (OTleaf(e.Eoper))
                     {
                         const usedsave = cg.regcon.used;
@@ -1414,7 +1414,7 @@ static if (NTEXCEPTIONS)
                 if (config.flags4 & CFG4optimized)
                 {   regm_t usedsave;
 
-                    docommas(cdb,e);
+                    docommas(cg, cdb,e);
                     usedsave = cg.regcon.used;
                     if (!OTleaf(e.Eoper))
                         gencodelem(cg, cdb,e,retregs,true);
@@ -1995,7 +1995,7 @@ void doswitch(ref CGstate cg, ref CodeBuilder cdb, block* b)
     //printf("doswitch(%d)\n", b.bc);
     elem* e = b.Belem;
     elem_debug(e);
-    docommas(cdb,e);
+    docommas(cg, cdb,e);
     cg.stackclean++;
     tym_t tys = tybasic(e.Ety);
     int sz = _tysize[tys];
@@ -2183,7 +2183,7 @@ void doswitch(ref CGstate cg, ref CodeBuilder cdb, block* b)
 
                 b.Btablesize = cast(int) (vmax - vmin + 1) * 4;
                 code* ce = cdbe.finish();
-                pinholeopt(ce, null);
+                pinholeopt(cg, ce, null);
 
                 cdb.append(cdbe);
             }
@@ -2569,7 +2569,7 @@ void outswitab(block* b)
  */
 
 @trusted
-int jmpopcode(elem* e)
+int jmpopcode(ref CGstate cg, elem* e)
 {
     //printf("jmpopcode()\n"); elem_print(e);
     tym_t tym;
@@ -2615,7 +2615,7 @@ int jmpopcode(elem* e)
          tymx == TYcdouble || tymx == TYcfloat ||
          (tyxmmreg(tymx) && config.fpxmmregs && e.Ecount != e.Ecomsub) ||
          op == OPind ||
-         (OTcall(op) && (regmask(cgstate, tymx, tybasic(e.E1.Eoper)) & (mST0 | XMMREGS))));
+         (OTcall(op) && (regmask(cg, tymx, tybasic(e.E1.Eoper)) & (mST0 | XMMREGS))));
 
     if (!needsNanCheck)
     {
@@ -4141,7 +4141,7 @@ void prolog_saveregs(ref CGstate cg, ref CodeBuilder cdb, regm_t topush, int cfa
                     config.ehmethod == EHmethod.EH_DWARF)
                 {   // Emit debug_frame data giving location of saved register
                     code* c = cdb.finish();
-                    pinholeopt(c, null);
+                    pinholeopt(cg, c, null);
                     dwarf_CFA_set_loc(calcblksize(cg, c));  // address after save
                     dwarf_CFA_offset(reg, cast(int)(gpoffset - cfa_offset));
                     cdb.reset();
@@ -4176,7 +4176,7 @@ void prolog_saveregs(ref CGstate cg, ref CodeBuilder cdb, regm_t topush, int cfa
                 {   // Emit debug_frame data giving location of saved register
                     // relative to 0[EBP]
                     code* c = cdb.finish();
-                    pinholeopt(c, null);
+                    pinholeopt(cg, c, null);
                     dwarf_CFA_set_loc(calcblksize(cg, c));  // address after PUSH reg
                     dwarf_CFA_offset(reg, -cg.EBPtoESP - cfa_offset);
                     cdb.reset();
@@ -4379,7 +4379,7 @@ void prolog_genvarargs(ref CGstate cg, ref CodeBuilder cdb, Symbol* sv)
     // MOV 9+16[RAX],R11
     cdb.genc1(0x89,(REX_W << 16) | modregxrm(2,R11,AX),FL.const_,9 + 16);   // into stack_args_save
 
-    pinholeopt(cdb.peek(), null);
+    pinholeopt(cg, cdb.peek(), null);
     useregs(cg, mAX|mR11);
 }
 
@@ -5146,7 +5146,7 @@ static if (0)
         }
     }
 
-    pinholeopt(c, null);
+    pinholeopt(cg, c, null);
     cg.retsize += calcblksize(cg, c);          // compute size of function epilog
     cdb.append(cdbx);
     b.Bcode = cdb.finish();
@@ -5403,7 +5403,7 @@ void cod3_thunk(ref CGstate cg, Symbol* sthunk,Symbol* sfunc,uint p,tym_t thisty
 
     thunkoffset = Offset(seg);
     code* c = cdb.finish();
-    pinholeopt(c,null);
+    pinholeopt(cg, c,null);
     targ_size_t framehandleroffset;
     codout(cg, seg,c,null,framehandleroffset);
     code_free(c);
@@ -6130,9 +6130,9 @@ targ_size_t cod3_bpoffset(ref CGstate cg, Symbol* s)
  */
 
 @trusted
-void pinholeopt(code* c,block* b)
+void pinholeopt(ref CGstate cg, code* c,block* b)
 {
-    if (cgstate.AArch64)
+    if (cg.AArch64)
         return;
 
     targ_size_t a;
@@ -6708,7 +6708,7 @@ void pinholeopt(code* c,block* b)
     {
         printf("-pinholeopt(%p)\n",cstart);
         for (c = cstart; c; c = code_next(c))
-            code_print(cgstate, c);
+            code_print(cg, c);
     }
 }
 
@@ -6791,7 +6791,7 @@ private void pinholeopt_unittest()
         cs.IEV1.Vsize_t = pin.ev1;
         cs.IEV2.Vsize_t = pin.ev2;
         cs.Iflags = cast(CF)pin.flags;
-        pinholeopt(&cs, null);
+        pinholeopt(cgstate, &cs, null);
         if (cs.Iop != pout.op)
         {   printf("[%d] Iop = x%02x, pout = x%02x\n", i, cs.Iop, pout.op);
             assert(0);

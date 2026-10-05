@@ -309,7 +309,7 @@ void codgenx(ref CGstate cg, Symbol* sfunc)
     prolog(cg, cdbprolog);           // gen function start code
     code* cprolog = cdbprolog.finish();
     if (cprolog)
-        pinholeopt(cprolog,null);       // optimize
+        pinholeopt(cg, cprolog,null);       // optimize
 
     cg.funcoffset = Offset(sfunc.Sseg);
     targ_size_t coffset = Offset(sfunc.Sseg);
@@ -342,7 +342,7 @@ void codgenx(ref CGstate cg, Symbol* sfunc)
                 break;
         }
         assignaddr(cg,b);          // assign addresses
-        pinholeopt(b.Bcode,b);         // do pinhole optimization
+        pinholeopt(cg, b.Bcode,b);         // do pinhole optimization
         if (b.Bflags & BFL.prolog)      // do function prolog
         {
             cg.startoffset = coffset + calcblksize(cg, cprolog) - cg.funcoffset;
@@ -1000,7 +1000,7 @@ else
     if (config.exe == EX_WIN64)
     {
         code* c = cdbx.peek();
-        pinholeopt(c, null);
+        pinholeopt(cg, c, null);
         cg.prolog_allocoffset = calcblksize(cg, c);
     }
 
@@ -3003,7 +3003,7 @@ void scodelem(ref CGstate cg, ref CodeBuilder cdb, elem* e,ref regm_t pretregs,r
                 else
                     regm &= mLSW | XMMREGS;
             }
-            fixresult(cgstate,cdb,e,regm,pretregs);
+            fixresult(cg,cdb,e,regm,pretregs);
             cssave(cg, e,regm,0);
             freenode(cg, e);
 
@@ -3033,7 +3033,7 @@ void scodelem(ref CGstate cg, ref CodeBuilder cdb, elem* e,ref regm_t pretregs,r
     if (tosave)
     {
         cg.stackclean++;
-        genstackclean(cgstate,cdbx,cg.stackpush - stackpushsave,pretregs | cg.msavereg);
+        genstackclean(cg,cdbx,cg.stackpush - stackpushsave,pretregs | cg.msavereg);
         cg.stackclean--;
     }
 
@@ -3256,9 +3256,8 @@ const(char)* regm_str(regm_t rm)
  */
 
 @trusted
-void docommas(ref CodeBuilder cdb, ref elem* pe)
+void docommas(ref CGstate cg, ref CodeBuilder cdb, ref elem* pe)
 {
-    CGstate* cg = &cgstate;
     uint stackpushsave = cg.stackpush;
     int stackcleansave = cg.stackclean;
     cg.stackclean = 0;
@@ -3273,15 +3272,15 @@ void docommas(ref CodeBuilder cdb, ref elem* pe)
         if (e.Eoper != OPcomma)
             break;
         regm_t retregs = 0;
-        codelem(*cg,cdb,e.E1,retregs,true);
+        codelem(cg,cdb,e.E1,retregs,true);
         elem* eold = e;
         e = e.E2;
-        freenode(cgstate, eold);
+        freenode(cg, eold);
     }
     pe = e;
     assert(cg.stackclean == 0);
     cg.stackclean = stackcleansave;
-    genstackclean(*cg,cdb,cg.stackpush - stackpushsave,0);
+    genstackclean(cg,cdb,cg.stackpush - stackpushsave,0);
 }
 
 /**************************

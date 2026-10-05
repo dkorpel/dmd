@@ -38,6 +38,7 @@ import dmd.backend.debugprint : WRfunc;
 import dmd.backend.dout : out_regcand;
 import dmd.backend.util2 : binary;
 import dmd.backend.inliner;
+import dmd.backend.x86.cgcod : cgstate;
 
 public import dmd.backend.gdag : builddags, boolopt;
 public import dmd.backend.gflow : flowrd, flowlv, flowvbe, flowcp, flowae, genkillae;
@@ -309,7 +310,7 @@ void optfunc(ref GlobalOptimizer go, ref BlockOpt bo)
 
     debug if (debugb)
     {
-        WRfunc("before optimization", funcsym_p, bo.startblock);
+        WRfunc(cgstate, "before optimization", funcsym_p, bo.startblock);
     }
 
     if (localgot)
@@ -376,7 +377,7 @@ void optfunc(ref GlobalOptimizer go, ref BlockOpt bo)
             scanForInlines(funcsym_p);
 
         if (go.mfoptim & MFdc)
-            blockopt(go, bo, go.changes); // do block optimization
+            blockopt(cgstate, go, bo, go.changes); // do block optimization
         out_regcand(globsym[]);         // recompute register candidates
         go.changes = 0;                 // no changes yet
         sliceStructs(globsym, bo.startblock);
@@ -441,7 +442,7 @@ void optfunc(ref GlobalOptimizer go, ref BlockOpt bo)
     if (debugc) printf("%d iterations\n",iter);
 
     if (go.mfoptim & MFdc)
-        blockopt(go, bo, go.changes);         // do block optimization
+        blockopt(cgstate, go, bo, go.changes);         // do block optimization
 
     for (block* b = bo.startblock; b; b = b.Bnext)
     {
@@ -457,7 +458,7 @@ void optfunc(ref GlobalOptimizer go, ref BlockOpt bo)
 
     debug if (debugb)
     {
-        WRfunc("after optimization", funcsym_p, bo.startblock);
+        WRfunc(cgstate, "after optimization", funcsym_p, bo.startblock);
     }
 
     // Prepare for code generator

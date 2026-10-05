@@ -4576,7 +4576,7 @@ elem* Dsymbol_toElem(Dsymbol s, ref IRState irs)
         if (vd.storage_class & STC.manifest)
             return null;
         if (vd.isStatic() || vd.storage_class & (STC.extern_ | STC.tls | STC.gshared))
-            toObjFile(vd, false);
+            toObjFile(cgstate, vd, false);
         else
         {
             Symbol* sp = toSymbol(s);

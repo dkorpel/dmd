@@ -844,10 +844,10 @@ void out_regcand(Symbol*[] psymtab)
  */
 
 @trusted public
-void writefunc(Symbol* sfunc)
+void writefunc(ref CGstate cg, Symbol* sfunc)
 {
     cstate.CSpsymtab = &globsym;
-    writefunc2(cgstate, sfunc, go, bo);
+    writefunc2(cg, sfunc, go, bo);
     cstate.CSpsymtab = null;
 }
 
@@ -989,7 +989,7 @@ void writefunc2(ref CGstate cg, Symbol* sfunc, ref GlobalOptimizer go, ref Block
     {
         if (debugb)
         {
-            WRfunc("codegen", funcsym_p, bo.startblock);
+            WRfunc(cg, "codegen", funcsym_p, bo.startblock);
         }
     }
 
@@ -1002,7 +1002,7 @@ void writefunc2(ref CGstate cg, Symbol* sfunc, ref GlobalOptimizer go, ref Block
     else
     {
         //printf("blockopt()\n");
-        blockopt(go, bo, go.changes);       /* optimize                     */
+        blockopt(cg, go, bo, go.changes);       /* optimize                     */
     }
 
     assert(funcsym_p == sfunc);

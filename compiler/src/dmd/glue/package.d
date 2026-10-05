@@ -586,7 +586,7 @@ void FuncDeclaration_toObjFile(ref CGstate cg, FuncDeclaration fd, bool multiobj
             FuncDeclaration fp = fdc.toParent2().isFuncDeclaration();
             if (fp && fp.semanticRun < PASS.obj)
             {
-                toObjFile(fp, multiobj);
+                toObjFile(cg, fp, multiobj);
             }
         }
     }
@@ -603,7 +603,7 @@ void FuncDeclaration_toObjFile(ref CGstate cg, FuncDeclaration fd, bool multiobj
         FuncDeclaration fdp = fd.toParent2().isFuncDeclaration();
         if (fdp && fdp.semanticRun < PASS.obj)
         {
-            toObjFile(fdp, multiobj);
+            toObjFile(cg, fdp, multiobj);
         }
     }
     else
@@ -990,7 +990,7 @@ void FuncDeclaration_toObjFile(ref CGstate cg, FuncDeclaration fd, bool multiobj
         return;
     }
 
-    writefunc(s); // hand off to backend
+    writefunc(cg, s); // hand off to backend
 
     buildCapture(fd);
 
@@ -1065,7 +1065,7 @@ void FuncDeclaration_toObjFile(ref CGstate cg, FuncDeclaration fd, bool multiobj
             startBlk.Bnext = next;
             next.bc = BC.ret;
             //Emit in binary
-            writefunc(newConstructor);
+            writefunc(cg, newConstructor);
             //Mark as a CONSTRUCTOR because our thunk implements the destructor
             objmod.setModuleCtorDtor(newConstructor, true);
         }
@@ -1073,14 +1073,14 @@ void FuncDeclaration_toObjFile(ref CGstate cg, FuncDeclaration fd, bool multiobj
 
     foreach (sd; *irs.deferToObj)
     {
-        toObjFile(sd, false);
+        toObjFile(cg, sd, false);
     }
 
     if (ud)
     {
         foreach (fdn; ud.deferredNested)
         {
-            toObjFile(fdn, false);
+            toObjFile(cg, fdn, false);
         }
     }
 
@@ -1163,7 +1163,7 @@ private void obj_write_deferred(ref OutBuffer objbuf, Library library, ref Dsymb
             // it doesn't make sense to make up a module if we don't know where to put the symbol
             //  so output it into its own object file without ModuleInfo
             objmod.initfile(idbuf.peekChars(), null, mname);
-            toObjFile(s, false);
+            toObjFile(cgstate, s, false);
             objmod.termfile();
         }
         else
@@ -1251,7 +1251,7 @@ private Symbol* callFuncsAndGates(Module m, Symbol*[] sctors, StaticDtorDeclarat
     b.Belem = ector;
     sctor.Sfunc.Fstartline.Sfilename = m.arg.xarraydup.ptr;
     sctor.Sfunc.Fstartblock = b;
-    writefunc(sctor); // hand off to backend
+    writefunc(cgstate, sctor); // hand off to backend
 
     return sctor;
 }
@@ -1434,7 +1434,7 @@ private void genObjFile(Module m, bool multiobj, bool doppelganger)
     {
         auto member = (*m.members)[i];
         //printf("toObjFile %s %s\n", member.kind(), member.toChars());
-        toObjFile(member, multiobj);
+        toObjFile(cgstate, member, multiobj);
     }
 
     Symbol* msictor;
@@ -1512,7 +1512,7 @@ private void genObjFile(Module m, bool multiobj, bool doppelganger)
             b.Belem = glue.eictor;
             msictor.Sfunc.Fstartline.Sfilename = m.arg.xarraydup.ptr;
             msictor.Sfunc.Fstartblock = b;
-            writefunc(msictor);
+            writefunc(cgstate, msictor);
         }
 
         msctor = callFuncsAndGates(m, glue.sctors[], glue.ectorgates[], "__modctor");
