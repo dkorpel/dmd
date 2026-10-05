@@ -1166,6 +1166,39 @@ void planEdits(size_t g, size_t f, string pname)
 
 bool[string] importsAdded;
 
+bool importsName(string file, string mod, string name)
+{
+    auto tks = allTokens(file);
+    for (size_t i = 0; i < tks.length; i++)
+    {
+        if (tks[i].value != TOK.import_)
+            continue;
+        string cur;
+        bool selective;
+        for (i++; i < tks.length && tks[i].value != TOK.semicolon; i++)
+        {
+            const v = tks[i].value;
+            if (v == TOK.identifier && !selective)
+                cur ~= tks[i].ident;
+            else if (v == TOK.dot && !selective)
+                cur ~= ".";
+            else if (v == TOK.comma && !selective)
+            {
+                if (cur == mod)
+                    return true;
+                cur = null;
+            }
+            else if (v == TOK.colon)
+                selective = true;
+            else if (v == TOK.identifier && selective && cur == mod && tks[i].ident == name)
+                return true;
+        }
+        if (!selective && cur == mod)
+            return true;
+    }
+    return false;
+}
+
 void ensureVisible(string file, Dsymbol sym)
 {
     Module m;
@@ -1174,8 +1207,10 @@ void ensureVisible(string file, Dsymbol sym)
             m = x;
     if (!m || sym.getModule() is m)
         return;
+    if (importsName(file, sym.getModule().toPrettyChars().fromStringz.idup, sym.ident.toString.idup))
+        return;
     auto found = search(m, Loc.initial, sym.ident);
-    if (found && found.toAlias() is sym)
+    if (found && found.toAlias() is sym && (found is sym || found.getModule() is m || found.visible().kind != Visibility.Kind.private_))
         return;
     const key = file ~ ":" ~ sym.ident.toString.idup;
     if (key in importsAdded)

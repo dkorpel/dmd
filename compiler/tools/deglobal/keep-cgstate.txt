@@ -3,3 +3,4 @@ getRtlsymPersonality
 regm_str
 disassemble
 simplify_code
+symbol_func
