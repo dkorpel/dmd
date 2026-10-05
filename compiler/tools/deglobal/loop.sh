@@ -17,17 +17,17 @@ build() {
     ./compiler/src/build.d unittest >>"$log.build" 2>&1
 }
 
-skips() { paste -sd, "$skipfile"; }
+skips() { [ -s "$skipfile" ] && echo "--skip=$(paste -sd, "$skipfile")"; }
 
 for ((i = 0; i < steps; i++)); do
     git diff --quiet compiler/src || { echo "dirty tree"; exit 1; }
-    chosen=$($tool step --global="$global" --max="$max" --skip="$(skips)")
+    chosen=$($tool step --global="$global" --max="$max" $(skips)) || { echo "tool failed"; exit 1; }
     [ -z "$chosen" ] && { echo "no more candidates"; exit 0; }
     if ! build; then
         git checkout -q compiler/src
         good=()
         for f in $(echo "$chosen" | awk '{print $1}'); do
-            $tool step --global="$global" --max=1 --only="$f" --skip="$(skips)" >/dev/null
+            $tool step --global="$global" --max=1 --only="$f" $(skips) >/dev/null
             if build; then
                 good+=("$f")
             else
@@ -37,7 +37,7 @@ for ((i = 0; i < steps; i++)); do
             git checkout -q compiler/src
         done
         [ ${#good[@]} = 0 ] && continue
-        chosen=$($tool step --global="$global" --max="$max" --only="$(IFS=,; echo "${good[*]}")" --skip="$(skips)")
+        chosen=$($tool step --global="$global" --max="$max" --only="$(IFS=,; echo "${good[*]}")" $(skips))
         build || { echo "combined build failed"; git checkout -q compiler/src; exit 1; }
     fi
     if ! ./compiler/tools/deglobal/oracle.sh "$base" > "$log.oracle"; then
