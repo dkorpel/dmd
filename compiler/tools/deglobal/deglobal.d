@@ -627,7 +627,7 @@ bool settled(size_t g, size_t f, bool[size_t] reach)
     if (f in doneBusy)
         return true;
     doneBusy[f] = true;
-    bool r = globals[g].users.canFind(f) ? skipNames.canFind(funcs[f].name) || problemOf(g, f).length && calleesSettled(g, f, reach) : calleesSettled(g, f, reach);
+    bool r = globals[g].users.canFind(f) ? skipNames.canFind(funcs[f].name) || problemOf(g, f).length || calleesSettled(g, f, reach) : calleesSettled(g, f, reach);
     doneBusy.remove(f);
     doneMemo[f] = r;
     return r;
@@ -671,6 +671,13 @@ void report(string only)
         foreach (u; gl.users)
         {
             auto why = problemOf(g, u);
+            if (!why.length && !isLeaf(g, u, reach))
+                foreach (c; funcs[u].calls)
+                    if (c != u && c in reach && !settled(g, c, reach))
+                    {
+                        why = "waits on " ~ funcs[c].name;
+                        break;
+                    }
             printf("  %s %-30s %-28s refs=%-3zu callers=%-3zu %s\n", isLeaf(g, u, reach) ? "leaf".ptr : "    ".ptr,
                 funcs[u].name.toStringz, rel(funcs[u].file).toStringz, funcs[u].globalRefs[g].length,
                 funcs[u].callers.length, why.length ? why.toStringz : "ok".ptr);

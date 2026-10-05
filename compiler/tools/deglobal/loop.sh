@@ -17,7 +17,8 @@ build() {
     ./compiler/src/build.d unittest >>"$log.build" 2>&1
 }
 
-skips() { [ -s "$skipfile" ] && echo "--skip=$(paste -sd, "$skipfile")"; }
+keepfile=compiler/tools/deglobal/keep-$global.txt
+skips() { local s; s=$(cat "$skipfile" "$keepfile" 2>/dev/null | grep . | paste -sd,); [ -n "$s" ] && echo "--skip=$s"; }
 
 for ((i = 0; i < steps; i++)); do
     git diff --quiet compiler/src || { echo "dirty tree"; exit 1; }
