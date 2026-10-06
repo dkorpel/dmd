@@ -226,6 +226,23 @@ void test9()
 }
 
 /**************************************/
+// https://github.com/dlang/dmd/issues/23985
+
+struct Inner { int arr[3]; };
+struct Outer { struct Inner inr; };
+
+struct Outer a10 = { .inr.arr[0] = 11 };
+struct Outer b10 = { .inr.arr[1] = 22 };
+
+void test10()
+{
+    __check(a10.inr.arr[0] == 11);
+    __check(a10.inr.arr[1] == 0);
+    __check(b10.inr.arr[0] == 0);
+    __check(b10.inr.arr[1] == 22);
+}
+
+/**************************************/
 
 int main()
 {
@@ -238,5 +255,6 @@ int main()
     test7();
     test8();
     test9();
+    test10();
     return 0;
 }

@@ -954,18 +954,17 @@ Initializer initializerSemantic(Initializer init, Scope* sc, ref Type tx, NeedIn
                              */
                             else if (tarr)
                             {
-                                /*
-                                 * so tempting to check for null cases for field._init.
-                                 * but if your object is set to null on decl, you can't use designators anymore
-                                 * and D does well to default initialize for us
-                                 */
-                                auto ai = field._init.isArrayInitializer();
+                                ArrayInitializer ai;
+                                foreach (k, ident; subsi.field[])
+                                {
+                                    if (ident == id && subsi.value[k])
+                                        ai = subsi.value[k].isArrayInitializer();
+                                }
 
                                 if (ai is null)
                                 {
                                     ai = new ArrayInitializer(ci.loc);
                                     subsi.addInit(id, ai);
-                                    field._init = ai;
                                 }
 
                                 auto ndx = (*dlist)[i+1].exp;
