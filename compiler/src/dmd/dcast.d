@@ -2519,8 +2519,7 @@ Expression castTo(Expression e, Scope* sc, Type t, Type att = null)
             se = e.copy().isStringExp();
             uinteger_t szx = tb.nextOf().size();
             assert(szx <= 255);
-            se.sz = cast(ubyte)szx;
-            se.length = cast(size_t)tb.isTypeSArray().dim.toInteger();
+            se.setData(cast(void*) e.peekData().ptr, cast(size_t)tb.isTypeSArray().dim.toInteger(), cast(ubyte)szx);
             se.committed = true;
             se.type = t;
 

@@ -1306,13 +1306,9 @@ bool sliceBoundsCheck(uinteger_t lwr, uinteger_t upr, uinteger_t newlwr, uintege
  */
 void sliceAssignArrayLiteralFromString(ArrayLiteralExp existingAE, const StringExp newval, size_t firstIndex)
 {
-    const len = newval.length;
     Type elemType = existingAE.type.nextOf();
-    foreach (j; 0 .. len)
-    {
-        const val = newval.getIndex(j);
-        (*existingAE.elements)[j + firstIndex] = new IntegerExp(newval.loc, val, elemType);
-    }
+    foreach (j; 0 .. newval.length)
+        existingAE[j + firstIndex] = new IntegerExp(newval.loc, newval.getIndex(j), elemType);
 }
 
 /* Set a slice of string 'existingSE' from a char array literal 'newae'.
