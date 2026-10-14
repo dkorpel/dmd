@@ -326,6 +326,7 @@ public:
     static StringExp *create(Loc loc, const char *s);
     static StringExp *create(Loc loc, const void *s, d_size_t len);
     char32_t getCodeUnit(d_size_t i) const;
+    d_size_t length() const;
     dinteger_t getIndex(d_size_t i) const;
     void accept(Visitor *v) override { v->visit(this); }
     size_t numberOfCodeUnits(int tynto = 0) const;
@@ -368,14 +369,19 @@ class ArrayLiteralExp final : public Expression
 public:
     OwnedBy ownedByCtfe;
     d_bool onstack;
-    Expression *basis;
-    Expressions *elements;
+    Expression *_basis;
+    Expressions *_elements;
     Expression *lowering;
     AssocArrayLiteralExp* aaLiteral; // set if this is an array of keys/values of an AA literal
 
     static ArrayLiteralExp *create(Loc loc, Expressions *elements);
     ArrayLiteralExp *syntaxCopy() override;
     Expression *getElement(d_size_t i);
+    d_size_t length() const;
+    dinteger_t getIndex(d_size_t i);
+    Expressions *&elements();
+    const Expressions *elements() const;
+    Expression *&basis();
 
     void accept(Visitor *v) override { v->visit(this); }
 };

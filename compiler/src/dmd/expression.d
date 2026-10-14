@@ -902,7 +902,7 @@ extern (C++) final class StringExp : Expression
         dchar* dstring; // if sz == 4
         ulong* lstring; // if sz == 8
     }                   // (const if ownedByCtfe == OwnedBy.code)
-    size_t len;         // number of code units
+    private size_t len;         // number of code units
     ubyte sz = 1;       // 1: char, 2: wchar, 4: dchar
 
     /**
@@ -1053,6 +1053,34 @@ extern (C++) final class StringExp : Expression
     {
         assert(this.sz <= dchar.sizeof);
         return cast(dchar) getIndex(i);
+    }
+
+    size_t length() const pure nothrow @nogc @safe
+    {
+        return len;
+    }
+
+    extern (D) Type elementType()
+    {
+        if (type)
+        {
+            Type tb = type.toBaseTypeNonSemantic();
+            if (tb.ty == Tarray || tb.ty == Tsarray || tb.ty == Tpointer)
+                return (cast(TypeNext) tb).next;
+        }
+        switch (sz)
+        {
+            case 1: return Type.tchar;
+            case 2: return Type.twchar;
+            case 4: return Type.tdchar;
+            case 8: return Type.tuns64;
+            default: assert(0);
+        }
+    }
+
+    extern (D) Expression opIndex(size_t i)
+    {
+        return new IntegerExp(loc, getIndex(i), elementType());
     }
 
     /// Returns: integer at index `i`
@@ -1327,9 +1355,9 @@ extern (C++) final class ArrayLiteralExp : Expression
      * "default" element value. In other words, non-null elements[i] overrides
      * this 'basis' value.
      */
-    Expression basis;
+    private Expression _basis;
 
-    Expressions* elements;
+    private Expressions* _elements;
 
     Expression lowering;
 
@@ -1341,22 +1369,22 @@ extern (C++) final class ArrayLiteralExp : Expression
     {
         super(loc, EXP.arrayLiteral);
         this.type = type;
-        this.elements = elements;
+        this._elements = elements;
     }
 
     extern (D) this(Loc loc, Type type, Expression e)
     {
         super(loc, EXP.arrayLiteral);
         this.type = type;
-        elements = new Expressions(e);
+        _elements = new Expressions(e);
     }
 
     extern (D) this(Loc loc, Type type, Expression basis, Expressions* elements) @safe
     {
         super(loc, EXP.arrayLiteral);
         this.type = type;
-        this.basis = basis;
-        this.elements = elements;
+        this._basis = basis;
+        this._elements = elements;
     }
 
     static ArrayLiteralExp create(Loc loc, Expressions* elements) @safe
@@ -1368,8 +1396,8 @@ extern (C++) final class ArrayLiteralExp : Expression
     {
         return new ArrayLiteralExp(loc,
             null,
-            basis ? basis.syntaxCopy() : null,
-            arraySyntaxCopy(elements));
+            _basis ? _basis.syntaxCopy() : null,
+            arraySyntaxCopy(_elements));
     }
 
     Expression getElement(size_t i) // use opIndex instead
@@ -1379,17 +1407,29 @@ extern (C++) final class ArrayLiteralExp : Expression
 
     extern (D) inout(Expression) opIndex(size_t i) inout
     {
-        auto el = (*elements)[i];
-        return el ? el : basis;
+        auto el = (*_elements)[i];
+        return el ? el : _basis;
     }
 
     extern (D) Expression opIndexAssign(Expression value, size_t i)
     {
-        (*elements)[i] = value;
+        (*_elements)[i] = value;
         return value;
     }
 
-    extern (D) size_t length() const { return elements ? elements.length : 0; }
+    size_t length() const pure nothrow @nogc @safe { return _elements ? _elements.length : 0; }
+
+    dinteger_t getIndex(size_t i)
+    {
+        import dmd.expressionsem : toInteger;
+        return this[i].toInteger();
+    }
+
+    ref Expressions* elements() return pure nothrow @nogc @safe { return _elements; }
+
+    const(Expressions)* elements() const pure nothrow @nogc @safe { return _elements; }
+
+    ref Expression basis() return pure nothrow @nogc @safe { return _basis; }
 
     override void accept(Visitor v)
     {
