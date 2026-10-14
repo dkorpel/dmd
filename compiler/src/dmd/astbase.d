@@ -5011,6 +5011,36 @@ struct ASTBase
         }
     }
 
+    extern (C++) final class ArrayLiteralExp : Expression
+    {
+        Expression basis;
+        Expressions* elements;
+
+        extern (D) this(Loc loc, Expressions* elements)
+        {
+            super(loc, EXP.arrayLiteral, __traits(classInstanceSize, ArrayLiteralExp));
+            this.elements = elements;
+        }
+
+        extern (D) this(Loc loc, Expression e)
+        {
+            super(loc, EXP.arrayLiteral, __traits(classInstanceSize, ArrayLiteralExp));
+            elements = new Expressions(e);
+        }
+
+        extern (D) this(Loc loc, Expression basis, Expressions* elements)
+        {
+            super(loc, EXP.arrayLiteral, __traits(classInstanceSize, ArrayLiteralExp));
+            this.basis = basis;
+            this.elements = elements;
+        }
+
+        override void accept(Visitor v)
+        {
+            v.visit(this);
+        }
+    }
+
     extern (C++) class NewExp : Expression
     {
         Expression thisexp;         // if !=null, 'this' for class being allocated
@@ -5046,36 +5076,6 @@ struct ASTBase
             assert(keys.length == values.length);
             this.keys = keys;
             this.values = values;
-        }
-
-        override void accept(Visitor v)
-        {
-            v.visit(this);
-        }
-    }
-
-    extern (C++) final class ArrayLiteralExp : Expression
-    {
-        Expression basis;
-        Expressions* elements;
-
-        extern (D) this(Loc loc, Expressions* elements)
-        {
-            super(loc, EXP.arrayLiteral, __traits(classInstanceSize, ArrayLiteralExp));
-            this.elements = elements;
-        }
-
-        extern (D) this(Loc loc, Expression e)
-        {
-            super(loc, EXP.arrayLiteral, __traits(classInstanceSize, ArrayLiteralExp));
-            elements = new Expressions(e);
-        }
-
-        extern (D) this(Loc loc, Expression basis, Expressions* elements)
-        {
-            super(loc, EXP.arrayLiteral, __traits(classInstanceSize, ArrayLiteralExp));
-            this.basis = basis;
-            this.elements = elements;
         }
 
         override void accept(Visitor v)

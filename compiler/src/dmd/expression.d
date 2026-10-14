@@ -888,6 +888,87 @@ extern (C++) final class NullExp : Expression
     }
 }
 
+extern (C++) final class InterpExp : Expression
+{
+    char postfix = NoPostfix;   // 'c', 'w', 'd'
+    OwnedBy ownedByCtfe = OwnedBy.code;
+    InterpolatedSet* interpolatedSet;
+
+    enum char NoPostfix = 0;
+
+    extern (D) this(Loc loc, InterpolatedSet* set, char postfix = NoPostfix) scope @safe
+    {
+        super(loc, EXP.interpolated);
+        this.interpolatedSet = set;
+        this.postfix = postfix;
+    }
+
+    override void accept(Visitor v)
+    {
+        v.visit(this);
+    }
+}
+
+
+/***********************************************************
+ * A sequence of expressions
+ *
+ * ---
+ * alias AliasSeq(T...) = T;
+ * alias Tup = AliasSeq!(3, int, "abc");
+ * ---
+ */
+extern (C++) final class TupleExp : Expression
+{
+    /* Tuple-field access may need to take out its side effect part.
+     * For example:
+     *      foo().tupleof
+     * is rewritten as:
+     *      (ref __tup = foo(); tuple(__tup.field0, __tup.field1, ...))
+     * The declaration of temporary variable __tup will be stored in TupleExp.e0.
+     */
+    Expression e0;
+
+    Expressions* exps;
+
+    extern (D) this(Loc loc, Expression e0, Expressions* exps) @safe
+    {
+        super(loc, EXP.tuple);
+        //printf("TupleExp(this = %p)\n", this);
+        this.e0 = e0;
+        this.exps = exps;
+    }
+
+    extern (D) this(Loc loc, Expressions* exps) @safe
+    {
+        super(loc, EXP.tuple);
+        //printf("TupleExp(this = %p)\n", this);
+        this.exps = exps;
+    }
+
+    extern (D) this(Loc loc, TupleDeclaration tup)
+    {
+        super(loc, EXP.tuple);
+        this.exps = new Expressions();
+        // the rest of the constructor is moved to expressionsem.d in fillTupleExpExps function
+    }
+
+    static TupleExp create(Loc loc, Expressions* exps) @safe
+    {
+        return new TupleExp(loc, exps);
+    }
+
+    override TupleExp syntaxCopy()
+    {
+        return new TupleExp(loc, e0 ? e0.syntaxCopy() : null, arraySyntaxCopy(exps));
+    }
+
+    override void accept(Visitor v)
+    {
+        v.visit(this);
+    }
+}
+
 /***********************************************************
  * https://dlang.org/spec/expression.html#string_literals
  */
@@ -1252,87 +1333,6 @@ extern (C++) final class StringExp : Expression
         this.string = cast(char*)s;
         this.len = len;
         this.sz = sz;
-    }
-
-    override void accept(Visitor v)
-    {
-        v.visit(this);
-    }
-}
-
-extern (C++) final class InterpExp : Expression
-{
-    char postfix = NoPostfix;   // 'c', 'w', 'd'
-    OwnedBy ownedByCtfe = OwnedBy.code;
-    InterpolatedSet* interpolatedSet;
-
-    enum char NoPostfix = 0;
-
-    extern (D) this(Loc loc, InterpolatedSet* set, char postfix = NoPostfix) scope @safe
-    {
-        super(loc, EXP.interpolated);
-        this.interpolatedSet = set;
-        this.postfix = postfix;
-    }
-
-    override void accept(Visitor v)
-    {
-        v.visit(this);
-    }
-}
-
-
-/***********************************************************
- * A sequence of expressions
- *
- * ---
- * alias AliasSeq(T...) = T;
- * alias Tup = AliasSeq!(3, int, "abc");
- * ---
- */
-extern (C++) final class TupleExp : Expression
-{
-    /* Tuple-field access may need to take out its side effect part.
-     * For example:
-     *      foo().tupleof
-     * is rewritten as:
-     *      (ref __tup = foo(); tuple(__tup.field0, __tup.field1, ...))
-     * The declaration of temporary variable __tup will be stored in TupleExp.e0.
-     */
-    Expression e0;
-
-    Expressions* exps;
-
-    extern (D) this(Loc loc, Expression e0, Expressions* exps) @safe
-    {
-        super(loc, EXP.tuple);
-        //printf("TupleExp(this = %p)\n", this);
-        this.e0 = e0;
-        this.exps = exps;
-    }
-
-    extern (D) this(Loc loc, Expressions* exps) @safe
-    {
-        super(loc, EXP.tuple);
-        //printf("TupleExp(this = %p)\n", this);
-        this.exps = exps;
-    }
-
-    extern (D) this(Loc loc, TupleDeclaration tup)
-    {
-        super(loc, EXP.tuple);
-        this.exps = new Expressions();
-        // the rest of the constructor is moved to expressionsem.d in fillTupleExpExps function
-    }
-
-    static TupleExp create(Loc loc, Expressions* exps) @safe
-    {
-        return new TupleExp(loc, exps);
-    }
-
-    override TupleExp syntaxCopy()
-    {
-        return new TupleExp(loc, e0 ? e0.syntaxCopy() : null, arraySyntaxCopy(exps));
     }
 
     override void accept(Visitor v)

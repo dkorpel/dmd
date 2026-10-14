@@ -311,28 +311,6 @@ public:
     void accept(Visitor *v) override { v->visit(this); }
 };
 
-class StringExp final : public Expression
-{
-public:
-    utf8_t postfix;      // 'c', 'w', 'd'
-    OwnedBy ownedByCtfe;
-    void *string;       // char, wchar, dchar, or long data
-    size_t len;         // number of chars, wchars, or dchars
-    unsigned char sz;   // 1: char, 2: wchar, 4: dchar
-    d_bool committed;   // if type is committed
-    d_bool hexString;   // if string is parsed from a hex string literal
-    d_bool cMacro;      // If the string is from a collected C macro
-
-    static StringExp *create(Loc loc, const char *s);
-    static StringExp *create(Loc loc, const void *s, d_size_t len);
-    char32_t getCodeUnit(d_size_t i) const;
-    d_size_t length() const;
-    dinteger_t getIndex(d_size_t i) const;
-    void accept(Visitor *v) override { v->visit(this); }
-    size_t numberOfCodeUnits(int tynto = 0) const;
-    void writeTo(void* dest, bool zero, int tyto = 0) const;
-};
-
 class InterpExp final : public Expression
 {
 public:
@@ -362,6 +340,28 @@ public:
     TupleExp *syntaxCopy() override;
 
     void accept(Visitor *v) override { v->visit(this); }
+};
+
+class StringExp final : public Expression
+{
+public:
+    utf8_t postfix;      // 'c', 'w', 'd'
+    OwnedBy ownedByCtfe;
+    void *string;       // char, wchar, dchar, or long data
+    size_t len;         // number of chars, wchars, or dchars
+    unsigned char sz;   // 1: char, 2: wchar, 4: dchar
+    d_bool committed;   // if type is committed
+    d_bool hexString;   // if string is parsed from a hex string literal
+    d_bool cMacro;      // If the string is from a collected C macro
+
+    static StringExp *create(Loc loc, const char *s);
+    static StringExp *create(Loc loc, const void *s, d_size_t len);
+    char32_t getCodeUnit(d_size_t i) const;
+    d_size_t length() const;
+    dinteger_t getIndex(d_size_t i) const;
+    void accept(Visitor *v) override { v->visit(this); }
+    size_t numberOfCodeUnits(int tynto = 0) const;
+    void writeTo(void* dest, bool zero, int tyto = 0) const;
 };
 
 class ArrayLiteralExp final : public Expression
