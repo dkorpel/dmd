@@ -206,7 +206,7 @@ void orthxmm(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t pretregs)
     regm_t retregs = pretregs & XMMREGS;
     if (!retregs)
         retregs = XMMREGS;
-    const constflag = OTrel(e.Eoper);
+    const constflag = OTrel(e.Eoper) && !tyvector(tybasic(e.Ety));
     codelem(cg,cdb,e1,retregs,constflag); // eval left leaf
     const reg = findreg(retregs);
     regm_t rretregs = XMMREGS & ~retregs;
@@ -218,7 +218,7 @@ void orthxmm(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t pretregs)
     /* We should take advantage of mem addressing modes for OP XMM,MEM
      * but we do not at the moment.
      */
-    if (OTrel(e.Eoper) && !tyvector(tybasic(e.Ety)))
+    if (constflag)
     {
         cdb.gen2(op,modregxrmx(3,rreg-XMM0,reg-XMM0));
         checkSetVex(cdb.last(), e1.Ety);
