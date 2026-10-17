@@ -1168,7 +1168,7 @@ private bool checkReturnEscapeImpl(ref Scope sc, Expression e, bool refs, bool g
         {
             if (!gag)
                 sc.eSink.error(e.loc, "returning `%s` escapes a reference to variadic parameter `%s`", e.toErrMsg(), v.toErrMsg());
-            result = false;
+            result = true;
         }
         else if (v.isScope())
         {
@@ -1210,13 +1210,11 @@ private bool checkReturnEscapeImpl(ref Scope sc, Expression e, bool refs, bool g
                 {
                     // https://issues.dlang.org/show_bug.cgi?id=23191
                     if (!gag)
-                    {
                         previewErrorFunc(eSink, sc.isDeprecated(), sc.useDIP1000)(e.loc,
                             "scope parameter `%s` may not be returned", v.toChars()
                         );
-                        result = true;
-                        return;
-                    }
+                    result = true;
+                    return;
                 }
                 else
                 {
