@@ -53,7 +53,7 @@ import dmd.dtemplate;
 import dmd.errorsink;
 import dmd.func;
 import dmd.funcsem;
-import dmd.globals : Param;
+import dmd.globals : global, Param;
 import dmd.hdrgen : toErrMsg;
 import dmd.identifier;
 import dmd.id;
@@ -170,9 +170,12 @@ extern (D) elem* incUsageElem(ref IRState irs, Loc loc)
 
     Module m = cast(Module)irs.blx._module;
     //printf("m.cov %p linnum %d filename %s srcfile %s numlines %d\n", m.cov, linnum, loc.filename, m.srcfile.toChars(), m.numlines);
-    if (!m.cov || !linnum ||
+    if (!global.params.cov || !linnum || linnum > m.numlines ||
         strcmp(loc.filename, m.srcfile.toChars()))
         return null;
+
+    if (!m.cov)
+        coverageSymbol(m);
 
     //printf("cov = %p, covb = %p, linnum = %u\n", m.cov, m.covb.ptr, p, linnum);
 

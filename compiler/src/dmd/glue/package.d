@@ -1317,6 +1317,49 @@ private void obj_end(ref OutBuffer objbuf, Library library, const(char)[] objfil
     }
 }
 
+package(dmd.glue) Symbol* coverageSymbol(Module m)
+{
+    Symbol* mcov = toSymbolX(m, "__coverage", SC.comdat, type_fake(TYint), "Z");
+    m.cov = mcov;
+    mcov.Sflags |= SFLhidden;
+    mcov.Stype.Tmangle = Mangle.d;
+    mcov.Sfl = FL.data;
+
+    auto dtb = DtBuilder(0);
+
+    if (m.ctfe_cov)
+    {
+        static extern (C) int comp_uints (const scope void* a, const scope void* b)
+            { return (*cast(uint*) a) - (*cast(uint*) b); }
+
+        uint[] sorted_lines = m.ctfe_cov.keys;
+        qsort(sorted_lines.ptr, sorted_lines.length, sorted_lines[0].sizeof,
+            &comp_uints);
+
+        uint lastLine = 0;
+        foreach (line;sorted_lines)
+        {
+            if (line)
+            {
+                assert(line > lastLine);
+                dtb.nzeros((line - lastLine - 1) * 4);
+            }
+            dtb.dword(m.ctfe_cov[line]);
+            lastLine = line;
+        }
+        if (m.numlines > lastLine)
+            dtb.nzeros((m.numlines - lastLine) * 4);
+    }
+    else
+    {
+        dtb.nzeros(4 * m.numlines);
+    }
+    mcov.Sdt = dtb.finish();
+
+    outdata(mcov);
+    return mcov;
+}
+
 /**************************************
  * Generate .obj file for Module.
  */
@@ -1379,50 +1422,9 @@ private void genObjFile(Module m, bool multiobj, bool doppelganger)
     Symbol* mcov;
     if (global.params.cov)
     {
-        /* Create coverage identifier:
-         *  uint[numlines] __coverage;
-         */
-        mcov = toSymbolX(m, "__coverage", SC.static_, type_fake(TYint), "Z");
-        m.cov = mcov;
-        mcov.Sflags |= SFLhidden;
-        mcov.Stype.Tmangle = Mangle.d;
-        mcov.Sfl = FL.data;
-
-        auto dtb = DtBuilder(0);
-
-        if (m.ctfe_cov)
-        {
-            // initalize the uint[] __coverage symbol with data from ctfe.
-            static extern (C) int comp_uints (const scope void* a, const scope void* b)
-                { return (*cast(uint*) a) - (*cast(uint*) b); }
-
-            uint[] sorted_lines = m.ctfe_cov.keys;
-            qsort(sorted_lines.ptr, sorted_lines.length, sorted_lines[0].sizeof,
-                &comp_uints);
-
-            uint lastLine = 0;
-            foreach (line;sorted_lines)
-            {
-                // zero fill from last line to line.
-                if (line)
-                {
-                    assert(line > lastLine);
-                    dtb.nzeros((line - lastLine - 1) * 4);
-                }
-                dtb.dword(m.ctfe_cov[line]);
-                lastLine = line;
-            }
-            // zero fill from last line to end
-            if (m.numlines > lastLine)
-                dtb.nzeros((m.numlines - lastLine) * 4);
-        }
-        else
-        {
-            dtb.nzeros(4 * m.numlines);
-        }
-        mcov.Sdt = dtb.finish();
-
-        outdata(mcov);
+        foreach (Module mod; Module.amodules)
+            mod.cov = null;
+        mcov = coverageSymbol(m);
 
         size_t sz = m.covb[0].sizeof;
         size_t n = (m.numlines + sz * 8) / (sz * 8);
