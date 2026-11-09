@@ -826,7 +826,7 @@ void toObjFile(Dsymbol ds, bool multiobj)
                 }
                 //printf("TemplateInstance.toObjFile(%p, '%s')\n", ti, ti.toPrettyChars());
 
-                if (multiobj)
+                if (multiobj && mayEmitSymbols(ti.members))
                 {
                     // Append to list of object files to be written later
                     obj_append(ti);
@@ -1036,6 +1036,29 @@ static if (0) {
 
     scope v = new ToObjFile(multiobj, ds.isCsymbol());
     ds.accept(v);
+}
+
+private bool mayEmitSymbols(Dsymbols* members)
+{
+    if (!members)
+        return false;
+    foreach (s; *members)
+    {
+        if (s.isTemplateDeclaration() || s.isAliasDeclaration() || s.isAliasAssign() || s.isStaticAssert() || s.isImport())
+            continue;
+        if (auto vd = s.isVarDeclaration())
+        {
+            if (!vd.aliasTuple && !vd.canTakeAddressOf())
+                continue;
+        }
+        else if (auto ad = s.isAttribDeclaration())
+        {
+            if (ad.dsym != DSYM.pragmaDeclaration && !mayEmitSymbols(ad.include(null)))
+                continue;
+        }
+        return true;
+    }
+    return false;
 }
 
 
