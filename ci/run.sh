@@ -261,6 +261,12 @@ download_install_sh() {
     done
     sleep $((1 << i))
   done
+  ci_error "Could not download install.sh from any mirror: ${mirrors[*]}"
+}
+
+ci_error() {
+  echo "::error::$*" >&2
+  exit 1
 }
 
 # install D host compiler
@@ -268,11 +274,15 @@ install_host_compiler() {
   if [ "${HOST_DMD:0:5}" == "gdmd-" ] ; then
     local gdc_version="${HOST_DMD:5}"
     if [ ! -e ~/dlang/gdc-$gdc_version/activate ] ; then
-        sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
-        sudo apt-get update
-        sudo apt-get install -y gdc-$gdc_version
+        timeout 180 sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test \
+          || ci_error "Could not add PPA ppa:ubuntu-toolchain-r/test (Launchpad unreachable?)"
+        timeout 600 sudo apt-get update \
+          || ci_error "apt-get update failed"
+        timeout 600 sudo apt-get install -y gdc-$gdc_version \
+          || ci_error "Could not install gdc-$gdc_version"
         # fetch the gdmd wrapper for CLI compatibility with dmd
-        sudo curl -fsSL -A "$CURL_USER_AGENT" --connect-timeout 5 --speed-time 30 --speed-limit 1024 --retry 5 --retry-delay 5 https://raw.githubusercontent.com/D-Programming-GDC/GDMD/master/dmd-script -o /usr/bin/gdmd-$gdc_version
+        sudo curl -fsSL -A "$CURL_USER_AGENT" --connect-timeout 5 --speed-time 30 --speed-limit 1024 --retry 5 --retry-delay 5 https://raw.githubusercontent.com/D-Programming-GDC/GDMD/master/dmd-script -o /usr/bin/gdmd-$gdc_version \
+          || ci_error "Could not download the gdmd wrapper script"
         sudo chmod +x /usr/bin/gdmd-$gdc_version
         # fake install script and create a fake 'activate' script
         mkdir -p ~/dlang/gdc-$gdc_version
@@ -287,7 +297,8 @@ install_host_compiler() {
   else
     local install_sh="install.sh"
     download_install_sh "$install_sh"
-    CURL_USER_AGENT="$CURL_USER_AGENT" bash "$install_sh" "$HOST_DMD"
+    CURL_USER_AGENT="$CURL_USER_AGENT" bash "$install_sh" "$HOST_DMD" \
+      || ci_error "Could not install host compiler $HOST_DMD"
   fi
 }
 

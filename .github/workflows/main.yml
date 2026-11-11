@@ -147,9 +147,11 @@ jobs:
 
       - name: 'Posix: Install host compiler'
         if: runner.os != 'Windows'
+        timeout-minutes: 20
         run: ci/run.sh install_host_compiler
       - name: 'Windows: Install host compiler'
         if: runner.os == 'Windows'
+        timeout-minutes: 20
         uses: dlang-community/setup-dlang@v2
         with:
           compiler: ${{ matrix.host_dmd }}
@@ -174,6 +176,7 @@ jobs:
 
           ci/run.sh setup_repos "$REPO_BRANCH"
       - name: Build
+        id: build
         run: ${{ matrix.disable_debug_for_dmd_unittests && 'ENABLE_DEBUG=0' || '' }} ci/run.sh build
       - name: Rebuild dmd (with enabled coverage)
         if: matrix.coverage
@@ -185,13 +188,13 @@ jobs:
       - name: Test dmd
         run: ci/run.sh test_dmd
       - name: Test frontend subpackage
-        if: '!matrix.coverage && (success() || failure()) && (matrix.host_dmd == ''dmd'' || matrix.host_dmd == ''dmd-latest'')'
+        if: '!matrix.coverage && !cancelled() && steps.build.outcome == ''success'' && (matrix.host_dmd == ''dmd'' || matrix.host_dmd == ''dmd-latest'')'
         run: ci/run.sh test_frontend_subpackage
       - name: Test druntime
-        if: '!matrix.coverage && (success() || failure())'
+        if: '!matrix.coverage && !cancelled() && steps.build.outcome == ''success'''
         run: ci/run.sh test_druntime
       - name: 'Windows x86: Add 32-bit libcurl.dll to PATH (required for Phobos unittests)'
-        if: runner.os == 'Windows' && env.MODEL == '32' && !matrix.coverage && (success() || failure())
+        if: runner.os == 'Windows' && env.MODEL == '32' && !matrix.coverage && !cancelled() && steps.build.outcome == 'success'
         run: |
           set -uexo pipefail
           if [[ "$HOST_DMD" =~ ^ldc ]]; then
@@ -200,10 +203,10 @@ jobs:
             echo "$(dirname "$DC")/../bin" >> $GITHUB_PATH
           fi
       - name: Test phobos
-        if: '!matrix.coverage && (success() || failure())'
+        if: '!matrix.coverage && !cancelled() && steps.build.outcome == ''success'''
         run: ci/run.sh test_phobos
       - name: Test self-compile
-        if: '!matrix.coverage && (success() || failure())' # already re-built with enabled coverage
+        if: '!matrix.coverage && !cancelled() && steps.build.outcome == ''success''' # already re-built with enabled coverage
         run: ENABLE_RELEASE=0 ci/run.sh rebuild
       - name: Upload coverage report
         if: matrix.coverage
