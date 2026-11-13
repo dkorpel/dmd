@@ -48,7 +48,7 @@ concurrency:
 
 jobs:
   main:
-    name: Run
+    name: "C++ interop: ${{ matrix.os }}, ${{ matrix.compiler || (matrix.xcode && format('Xcode {0}', matrix.xcode)) || 'MSVC' }}, ${{ matrix.model }}-bit"
     if: github.repository == 'dlang/dmd'
 
     strategy:

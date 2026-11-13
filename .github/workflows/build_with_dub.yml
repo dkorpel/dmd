@@ -10,7 +10,7 @@ on:
 
 jobs:
     test:
-        name: Build D compiler using dub
+        name: Build with dub (${{ matrix.os }})
         strategy:
             matrix:
                 os: [ubuntu-latest, windows-latest]

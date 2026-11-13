@@ -107,7 +107,7 @@ if [ "$HOST_DMD_VERSION" = "2.079.0" ] ; then
     targets=("runnable" "compilable" "fail_compilation" "dshell")
     args=() # use default set of args
 fi
-./run --environment --jobs=$N "${targets[@]}" "${args[@]}" CC="$CC" CXX="$CXX"
+./run --environment --quiet --jobs=$N "${targets[@]}" "${args[@]}" CC="$CC" CXX="$CXX"
 
 ###############################################################################
 # Upload coverage reports and exit if ENABLE_COVERAGE is specified
@@ -123,7 +123,7 @@ fi
 ################################################################################
 
 cd "$DMD_DIR/druntime"
-"$GNU_MAKE" -j$N MODEL=$MODEL DMD="$DMD_BIN_PATH" CC="$CC" unittest
+"$GNU_MAKE" -j$N MODEL=$MODEL DMD="$DMD_BIN_PATH" CC="$CC" QUIET=@ unittest
 
 # run some tests for shared druntime
 
