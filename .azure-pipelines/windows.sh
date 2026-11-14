@@ -123,7 +123,7 @@ fi
 ################################################################################
 
 cd "$DMD_DIR/druntime"
-"$GNU_MAKE" -j$N MODEL=$MODEL DMD="$DMD_BIN_PATH" CC="$CC" unittest
+"$GNU_MAKE" -j$N MODEL=$MODEL DMD="$DMD_BIN_PATH" CC="$CC" QUIET=@ unittest
 
 # run some tests for shared druntime
 

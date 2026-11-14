@@ -30,8 +30,8 @@ if [ "$OS_NAME" == "linux" ]; then
       # ci/run.sh uses `sudo add-apt-repository ...` to add a PPA repo
       packages="$packages sudo software-properties-common"
     fi
-    apt-get -q update
-    apt-get install -yq $packages
+    apt-get -qq update
+    apt-get install -yqq -o=Dpkg::Use-Pty=0 $packages
   fi
 elif [ "$OS_NAME" == "osx" ]; then
   # upgrade GNU make

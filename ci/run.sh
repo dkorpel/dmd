@@ -3,7 +3,12 @@
 # Implements CI steps for multiple CI services.
 # This file is invoked from the DMD and Phobos CI YAMLs.
 
-set -uexo pipefail
+set -ueo pipefail
+
+run() {
+    echo "+ $*" >&2
+    "$@"
+}
 
 # N: number of parallel build jobs
 if [ -z ${N+x} ] ; then echo "Variable 'N' needs to be set."; exit 1; fi
@@ -64,10 +69,10 @@ build() {
         source ~/dlang/*/activate # activate host compiler, incl. setting `DMD`
     fi
     if [ $unittest -eq 1 ]; then
-        make -j$N MODEL=$MODEL HOST_DMD=$DMD HOST_DFLAGS="$CI_DFLAGS" BUILD=debug dmd-unittest
+        run make -j$N MODEL=$MODEL HOST_DMD=$DMD HOST_DFLAGS="$CI_DFLAGS" BUILD=debug dmd-unittest
     fi
-    make -j$N MODEL=$MODEL HOST_DMD=$DMD HOST_DFLAGS="$CI_DFLAGS" ENABLE_RELEASE=${ENABLE_RELEASE:-1}
-    make -j$N -C ../phobos MODEL=$MODEL
+    run make -j$N MODEL=$MODEL HOST_DMD=$DMD HOST_DFLAGS="$CI_DFLAGS" ENABLE_RELEASE=${ENABLE_RELEASE:-1}
+    run make -j$N -C ../phobos MODEL=$MODEL
     if [ "$OS_NAME" != "windows" ]; then
         deactivate # deactivate host compiler
     fi
@@ -91,7 +96,7 @@ rebuild() {
     cp $build_path/dmd$dotexe _${build_path}/host_dmd$dotexe
     cp $build_path/$conf _${build_path}/
     rm -rf $build_path
-    make -j$N MODEL=$MODEL HOST_DMD=_${build_path}/host_dmd$dotexe HOST_DFLAGS="$CI_DFLAGS" ENABLE_RELEASE=${ENABLE_RELEASE:-1} dmd
+    run make -j$N MODEL=$MODEL HOST_DMD=_${build_path}/host_dmd$dotexe HOST_DFLAGS="$CI_DFLAGS" ENABLE_RELEASE=${ENABLE_RELEASE:-1} dmd
 
     # compare binaries to test reproducible build
     if [ $compare -eq 1 ]; then
@@ -133,12 +138,12 @@ test_dmd() {
 
 # build and run druntime unit tests
 test_druntime() {
-    make -j$N -C druntime MODEL=$MODEL unittest
+    run make -j$N -C druntime MODEL=$MODEL QUIET=@ unittest
 }
 
 # build and run Phobos unit tests
 test_phobos() {
-    make -j$N -C ../phobos MODEL=$MODEL unittest
+    run make -j$N -C ../phobos MODEL=$MODEL unittest
 
     if [ "$OS_NAME" == "windows" ]; then
         echo "FIXME: Skipping publictests on Windows (test failures)"
@@ -149,13 +154,13 @@ test_phobos() {
     else
         source ~/dlang/*/activate # activate host compiler - need dub
 
-        make -j$N -C ../phobos MODEL=$MODEL publictests
-        make -j$N -C ../phobos MODEL=$MODEL publictests NO_BOUNDSCHECKS=1
+        run make -j$N -C ../phobos MODEL=$MODEL publictests
+        run make -j$N -C ../phobos MODEL=$MODEL publictests NO_BOUNDSCHECKS=1
 
         if [ "$OS_NAME" == "osx" ]; then
             echo "FIXME: Skipping betterc on macOS (Apple linker assertions)"
         else
-            make -j$N -C ../phobos MODEL=$MODEL betterc
+            run make -j$N -C ../phobos MODEL=$MODEL betterc
         fi
 
         deactivate # deactivate host compiler
@@ -180,13 +185,13 @@ test_dub_package() {
                 dubcmd="build"
             fi
             # build with host compiler
-            dub $dubcmd --single "$file"
+            run dub $dubcmd --single "$file"
             # build with built compiler (~master)
-            DFLAGS="-de" dub $dubcmd --single --compiler="${abs_build_path}/dmd" "$file"
+            DFLAGS="-de" run dub $dubcmd --single --compiler="${abs_build_path}/dmd" "$file"
         done
         popd
         # Test rdmd build
-        "${build_path}/dmd" -version=NoBackend -version=GC -version=NoMain -Jgenerated/dub -Jcompiler/src/dmd/res -Icompiler/src -i -run compiler/test/dub_package/frontend.d
+        run "${build_path}/dmd" -version=NoBackend -version=GC -version=NoMain -Jgenerated/dub -Jcompiler/src/dmd/res -Icompiler/src -i -run compiler/test/dub_package/frontend.d
     fi
     if [ "$OS_NAME" != "windows" ]; then
         deactivate
@@ -199,8 +204,8 @@ test_frontend_subpackage() {
         source ~/dlang/*/activate # activate host compiler
     fi
     local abs_build_path="$PWD/$build_path"
-    dub --single compiler/test/dub_package/frontend_subpackage.d
-    DFLAGS="-m${MODEL:-64} -de" dub --single --compiler="${abs_build_path}/dmd" compiler/test/dub_package/frontend_subpackage.d
+    run dub --single compiler/test/dub_package/frontend_subpackage.d
+    DFLAGS="-m${MODEL:-64} -de" run dub --single --compiler="${abs_build_path}/dmd" compiler/test/dub_package/frontend_subpackage.d
     if [ "$OS_NAME" != "windows" ]; then
         deactivate
     fi
@@ -214,9 +219,9 @@ setup_repos() {
             if [ $branch != master ] && [ $branch != stable ] &&
                    ! git ls-remote --exit-code --heads https://github.com/dlang/$proj.git $branch > /dev/null; then
                 # use master as fallback for other repos to test feature branches
-                clone https://github.com/dlang/$proj.git ../$proj master
+                run clone https://github.com/dlang/$proj.git ../$proj master
             else
-                clone https://github.com/dlang/$proj.git ../$proj $branch
+                run clone https://github.com/dlang/$proj.git ../$proj $branch
             fi
         fi
     done
@@ -287,7 +292,7 @@ install_host_compiler() {
   else
     local install_sh="install.sh"
     download_install_sh "$install_sh"
-    CURL_USER_AGENT="$CURL_USER_AGENT" bash "$install_sh" "$HOST_DMD"
+    CURL_USER_AGENT="$CURL_USER_AGENT" run bash "$install_sh" "$HOST_DMD"
   fi
 }
 
