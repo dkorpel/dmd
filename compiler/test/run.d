@@ -13,13 +13,14 @@ See the README.md for all available test targets
 
 import std.algorithm, std.conv, std.datetime, std.exception, std.file, std.format,
        std.getopt, std.parallelism, std.path, std.process, std.range, std.stdio,
-       std.string, std.traits, core.atomic;
+       std.string, std.traits, core.atomic, core.sync.mutex, core.thread, core.time;
 
 import tools.paths;
 
 const scriptDir = __FILE_FULL_PATH__.dirName.buildNormalizedPath;
 immutable testDirs = ["runnable", "runnable_cxx", "dshell", "compilable", "fail_compilation"];
 shared bool verbose; // output verbose logging
+shared bool quiet;
 shared bool force; // always run all tests (ignores timestamp checking)
 shared string hostDMD; // path to host DMD binary (used for building the tools)
 shared string unitTestRunnerCommand;
@@ -91,6 +92,7 @@ int tryMain(string[] args)
         std.getopt.config.passThrough,
         "j|jobs", "Specifies the number of jobs (commands) to run simultaneously (default: %d)".format(jobs), &jobs,
         "v", "Verbose command output", (cast(bool*) &verbose),
+        "q|quiet", "Only print the output of failing tests, plus progress", (cast(bool*) &quiet),
         "f", "Force run (ignore timestamps and always run all tests)", (cast(bool*) &force),
         "u|unit-tests", "Runs the unit tests", &runUnitTests,
         "e|environment", "Print current environment variables", &dumpEnvironment,
@@ -191,16 +193,52 @@ Options:
     if (targets.length > 0)
     {
         shared string[] failedTargets;
+        auto outputMutex = new Mutex;
+        MonoTime[string] running;
+        size_t finished;
+        const githubActions = environment.get("GITHUB_ACTIONS") == "true";
+        if (quiet)
+            startWatchdog(outputMutex, running);
+
         foreach (target; parallel(targets, 1))
         {
+            const string name = target.filename
+                        ? target.normalizedTestName
+                        : "`unit` tests: " ~ (cast(string)unitTestRunnerCommand) ~ " " ~ join(target.args, " ");
             log("run: %-(%s %)", target.args);
-            int status = spawnProcess(target.args, env, Config.none, scriptDir).wait;
+            int status;
+            if (quiet)
+            {
+                synchronized (outputMutex)
+                    running[name] = MonoTime.currTime;
+                const result = execute(target.args, env, Config.none, size_t.max, scriptDir);
+                status = result.status;
+                synchronized (outputMutex)
+                {
+                    running.remove(name);
+                    if (status != 0)
+                    {
+                        write(result.output);
+                        if (githubActions && target.filename)
+                        {
+                            const reasonStart = result.output.lastIndexOf("\nTest '");
+                            const reason = reasonStart < 0 ? result.output : result.output[reasonStart + 1 .. $];
+                            writeln(githubAnnotation("error", "compiler/test/" ~ name.replace('\\', '/'),
+                                name ~ " failed", reason.strip));
+                        }
+                    }
+                    const prevPercent = finished * 10 / targets.length;
+                    finished++;
+                    if (finished * 10 / targets.length != prevPercent)
+                        writefln("[%3d%%] %d/%d tests done", finished * 100 / targets.length, finished, targets.length);
+                    stdout.flush();
+                }
+            }
+            else
+                status = spawnProcess(target.args, env, Config.none, scriptDir).wait;
+
             if (status != 0)
             {
-                const string name = target.filename
-                            ? target.normalizedTestName
-                            : "`unit` tests: " ~ (cast(string)unitTestRunnerCommand) ~ " " ~ join(target.args, " ");
-
                 writeln(">>> TARGET FAILED: ", name);
                 synchronized failedTargets ~= name;
             }
@@ -208,10 +246,11 @@ Options:
         if (failedTargets.length > 0)
         {
             // print overview of failed targets (for CIs)
-            writeln("FAILED targets:");
+            writefln("FAILED targets (%d of %d):", failedTargets.length, targets.length);
             failedTargets.each!(l => writeln("- ",  l));
             return 1;
         }
+        writefln("All %d tests passed", targets.length);
     }
 
     return 0;
@@ -603,6 +642,49 @@ void log(T...)(T args)
 {
     if (verbose)
         writefln(args);
+}
+
+void startWatchdog(Mutex mutex, ref MonoTime[string] running)
+{
+    auto runningPtr = &running;
+    auto watchdog = new Thread({
+        bool[string] reported;
+        while (true)
+        {
+            Thread.sleep(30.seconds);
+            synchronized (mutex)
+            {
+                foreach (name, start; *runningPtr)
+                {
+                    const elapsed = MonoTime.currTime - start;
+                    if (elapsed > 5.minutes && name !in reported)
+                    {
+                        reported[name] = true;
+                        writefln("... still running after %s minutes: %s", elapsed.total!"minutes", name);
+                    }
+                }
+                stdout.flush();
+            }
+        }
+    });
+    watchdog.isDaemon = true;
+    watchdog.start();
+}
+
+string githubAnnotation(string level, string file, string title, string message)
+{
+    enum maxLength = 4000;
+    if (message.length > maxLength)
+        message = message[0 .. maxLength] ~ "\n[...]";
+    static string escape(string s)
+    {
+        return s.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A");
+    }
+    static string escapeProperty(string s)
+    {
+        return escape(s).replace(":", "%3A").replace(",", "%2C");
+    }
+    return format("::%s file=%s,title=%s::%s", level, escapeProperty(file), escapeProperty(title), escape(message));
 }
 
 // Add the executable filename extension to the given `name` for the current OS.

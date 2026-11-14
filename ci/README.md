@@ -6,10 +6,15 @@ Since DMD runs on many platforms and lots of D infrastructure depends on it, the
 ## Troubleshooting failed checks
 When your PR fails checks, click on the "Details" link next to it to see what the error is.
 
-Most log files are the output of `make`, which prints the commands it invokes followed by the output of that command.
-Execution stops after a failed command, so errors can usually be found near the end of the log.
-Because of multi-threaded builds, they don't need to be at the very end however.
-You can Ctrl+F search for a triple asterisk `***` to easily find failed commands.
+On GitHub Actions, failing compiler tests are listed as annotations on the run's summary page,
+showing the expected and actual output, so you often don't need to open the log at all.
+
+In the logs:
+- The compiler test suite only prints the output of failing tests, followed by a `FAILED targets` list at the end.
+- Search for `>>> TARGET FAILED` to find a failing compiler test, or `****** FAIL` for a failing druntime/Phobos module.
+- Search for a triple asterisk `***` to find a failed `make` command.
+  Because of parallel builds, it's not necessarily at the very end of the log.
+- A test that runs for over 5 minutes is reported with `still running after`, which helps identify hangs and timeouts.
 
 Errors caused by the changes you made should be addressed by pushing new commits to your branch.
 
