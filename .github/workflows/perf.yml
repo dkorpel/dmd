@@ -18,6 +18,7 @@ permissions:
 
 jobs:
   perf:
+    name: Compiler performance (vs. base branch)
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:

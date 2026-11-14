@@ -15,6 +15,7 @@ concurrency:
 
 jobs:
   call-precommit:
+    name: Lint
     uses: ./.github/workflows/pre_commit.yml
 
   main:

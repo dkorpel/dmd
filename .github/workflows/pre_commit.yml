@@ -5,10 +5,14 @@ on:
     branches:
       - master
       - stable
+    paths:
+      - 'spec/**'
   push:
     branches:
       - master
       - stable
+    paths:
+      - 'spec/**'
   workflow_dispatch:
   workflow_call:
 
