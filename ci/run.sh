@@ -162,6 +162,23 @@ test_phobos() {
     fi
 }
 
+# build rdmd, ddemangle and dustmite and run the rdmd tests with the host compiler
+test_tools() {
+    if [ "${HOST_DMD:0:5}" == "gdmd-" ]; then
+        echo "Skipping tools tests with GDC host compiler"
+        return
+    fi
+    if [ "$OS_NAME" != "windows" ]; then
+        source ~/dlang/*/activate
+    fi
+    local dmd_name
+    dmd_name=$(basename "$DMD")
+    make -j$N -C tools MODEL=$MODEL DMD="${dmd_name%.*}" rdmd ddemangle dustmite test_rdmd
+    if [ "$OS_NAME" != "windows" ]; then
+        deactivate
+    fi
+}
+
 # test dub package
 test_dub_package() {
     if [ "$OS_NAME" != "windows" ]; then
@@ -309,6 +326,7 @@ if [ "$#" -gt 0 ]; then
     test_dmd) test_dmd ;;
     test_druntime) test_druntime ;;
     test_phobos) test_phobos ;;
+    test_tools) test_tools ;;
     test_dub_package) test_dub_package ;;
     test_frontend_subpackage) test_frontend_subpackage ;;
     testsuite) testsuite ;;

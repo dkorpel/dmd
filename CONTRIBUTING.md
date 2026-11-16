@@ -17,7 +17,7 @@ When creating a new issue, include:
   - Avoid dependencies on foreign code (e.g. dub packages).
   - Avoid any imports from phobos / druntime if possible.
 Minimize the test case using the [DustMite tool](https://github.com/CyberShadow/DustMite/wiki).
-DustMite is also available from our [tools](https://github.com/dlang/tools) repository and is distributed with DMD.
+DustMite is distributed with DMD; its source is in [tools/DustMite](tools/DustMite).
 
 ### Regressions
 

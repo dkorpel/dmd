@@ -7,9 +7,6 @@ Usage:
 
 See `--help` for targets.
 
-detab, tolf, install targets - require the D Language Tools (detab.exe, tolf.exe)
-  https://github.com/dlang/tools.
-
 zip target - requires Info-ZIP or equivalent (zip32.exe)
   http://www.info-zip.org/Zip.html#Downloads
 */
@@ -43,12 +40,9 @@ immutable rootRules = [
     &dmdPGO,
     &runDmdUnittest,
     &clean,
-    &checkwhitespace,
     &runTests,
     &runCxxUnittest,
     &runCppLayoutTest,
-    &detab,
-    &tolf,
     &zip,
     &html,
     &toolchainInfo,
@@ -610,38 +604,6 @@ alias clean = makeRule!((builder, rule) => builder
     })
 );
 
-alias toolsRepo = makeRule!((builder, rule) => builder
-    .target(env["TOOLS_DIR"])
-    .msg("(GIT) DLANG/TOOLS")
-    .condition(() => !exists(rule.target))
-    .commandFunction(delegate() {
-        auto toolsDir = env["TOOLS_DIR"];
-        version(Win32)
-            // Win32-git seems to confuse C:\... as a relative path
-            toolsDir = toolsDir.relativePath(compilerDir);
-        run([env["GIT"], "clone", "--depth=1", env["GIT_HOME"] ~ "/tools", toolsDir]);
-    })
-);
-
-alias checkwhitespace = makeRule!((builder, rule) => builder
-    .name("checkwhitespace")
-    .description("Check for trailing whitespace and tabs")
-    .msg("(RUN) checkwhitespace")
-    .deps([toolsRepo])
-    .sources(allRepoSources)
-    .commandFunction(delegate() {
-        const cmdPrefix = [env["HOST_DMD_RUN"], "-run", env["TOOLS_DIR"].buildPath("checkwhitespace.d")];
-        auto chunkLength = allRepoSources.length;
-        version (Win32)
-            chunkLength = 80; // avoid command-line limit on win32
-        foreach (nextSources; taskPool.parallel(allRepoSources.chunks(chunkLength), 1))
-        {
-            const nextCommand = cmdPrefix ~ nextSources;
-            run(nextCommand);
-        }
-    })
-);
-
 alias style = makeRule!((builder, rule)
 {
     const dscannerDir = env["GENERATED"].buildPath("dscanner");
@@ -738,20 +700,6 @@ alias man = makeRule!((builder, rule) {
         ))
     ).array);
 });
-
-alias detab = makeRule!((builder, rule) => builder
-    .name("detab")
-    .description("Replace hard tabs with spaces")
-    .command([env["DETAB"]] ~ allRepoSources)
-    .msg("(DETAB) DMD")
-);
-
-alias tolf = makeRule!((builder, rule) => builder
-    .name("tolf")
-    .description("Convert to Unix line endings")
-    .command([env["TOLF"]] ~ allRepoSources)
-    .msg("(TOLF) DMD")
-);
 
 alias zip = makeRule!((builder, rule) => builder
     .name("zip")
@@ -1061,7 +1009,6 @@ void parseEnvironment()
     }
 
     env.setDefault("GIT", "git");
-    env.setDefault("GIT_HOME", "https://github.com/dlang");
     env.setDefault("SYSCONFDIR", "/etc");
     env.setDefault("TMP", tempDir);
     env.setDefault("RES", srcDir.buildPath("dmd", "res"));
@@ -1086,7 +1033,6 @@ void parseEnvironment()
     auto generated = env["GENERATED"] = dmdRepo.buildPath("generated");
     auto g = env["G"] = generated.buildPath(os, build, model);
     mkdirRecurse(g);
-    env.setDefault("TOOLS_DIR", compilerDir.dirName.buildPath("tools"));
 
     auto hostDmdDef = env.getDefault("HOST_DMD", null);
     if (hostDmdDef.length == 0)
@@ -1178,8 +1124,6 @@ void processEnvironment()
     }
 
     env["DMD_PATH"] = env["G"].buildPath("dmd").exeName;
-    env.setDefault("DETAB", "detab");
-    env.setDefault("TOLF", "tolf");
     version (Windows)
         env.setDefault("ZIP", "zip32");
     else
@@ -1345,9 +1289,6 @@ string detectHostCxx()
 ////////////////////////////////////////////////////////////////////////////////
 // D source files
 ////////////////////////////////////////////////////////////////////////////////
-
-/// Returns: all source files in the repository
-alias allRepoSources = memoize!(() => srcDir.dirEntries("*.{d,h,di}", SpanMode.depth).map!(e => e.name).array);
 
 /// Returns: all make/build files
 alias buildFiles = memoize!(() => "osmodel.mak build.d".split().map!(e => srcDir.buildPath(e)).array);

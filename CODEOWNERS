@@ -41,3 +41,7 @@ src/dmd/vcbuild @rainers
 posix.mak @MartinNowak @wilzbach
 src/posix.mak @MartinNowak @wilzbach
 circle.sh @MartinNowak @wilzbach
+
+# Tools
+tools/DustMite/ @CyberShadow
+tools/rdmd*.d @CyberShadow

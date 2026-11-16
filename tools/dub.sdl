@@ -1,0 +1,43 @@
+name "dtools"
+description "D Tools"
+authors "DLang Community"
+copyright "Copyright © 1999-2018, The D Language Foundation"
+license "BSL-1.0"
+targetType "none"
+
+subPackage {
+  name "tests_extractor"
+  targetType "executable"
+  dependency "libdparse" version="~>0.25.1"
+  sourceFiles "tests_extractor.d"
+}
+
+subPackage {
+  name "ddemangle"
+  targetType "executable"
+  sourceFiles "ddemangle.d"
+}
+
+subPackage {
+  name "rdmd"
+  targetType "executable"
+  sourceFiles "rdmd.d"
+}
+
+subPackage {
+  name "contributors"
+  targetType "executable"
+  sourceFiles "contributors.d"
+}
+
+subPackage {
+  name "changed"
+  targetType "executable"
+  sourceFiles "changed.d"
+}
+
+subPackage {
+  name "dustmite"
+  targetType "executable"
+  sourcePaths "DustMite"
+}

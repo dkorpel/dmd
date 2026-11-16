@@ -1,0 +1,25 @@
+# line 2
+void unittest_line_2()
+{
+    import betterc;
+
+    int a = 1;
+    assert(a == 2);
+}
+
+# line 9
+void unittest_line_9()
+{
+    import betterc;
+
+    int b = 2;
+    assert(b == 2);
+    assert(b == 3);
+}
+
+extern(C) void main()
+{
+    static foreach(test; __traits(allMembers, mixin(__MODULE__)))
+        static if (test.length > 8 && test[0..8] == "unittest")
+            mixin(test)();
+}

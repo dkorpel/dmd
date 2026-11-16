@@ -8,6 +8,7 @@ repos:
         ^compiler/test/runnable/extra-files/.*$|
         ^compiler/test/compilable/extra-files/.*$|
         ^druntime/src/etc/valgrind/.*\.h$|
+        ^tools/test/tests_extractor/.*\.ext$|
       )$
   - id: end-of-file-fixer
     exclude: >
@@ -15,6 +16,7 @@ repos:
         ^compiler/test/runnable/extra-files/.*$|
         ^compiler/test/compilable/extra-files/.*$|
         ^druntime/src/etc/valgrind/.*\.h$|
+        ^tools/test/tests_extractor/.*\.ext$|
       )$
   - id: check-merge-conflict
   - id: check-added-large-files

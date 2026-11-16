@@ -19,7 +19,7 @@
 QUIET:=
 
 DUB=dub
-TOOLS_DIR=../../tools
+TOOLS_DIR=../tools
 
 include ../compiler/src/osmodel.mak
 

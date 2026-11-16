@@ -202,6 +202,9 @@ jobs:
       - name: Test phobos
         if: '!matrix.coverage && (success() || failure())'
         run: ci/run.sh test_phobos
+      - name: Test tools
+        if: "!matrix.coverage && !contains(matrix.job_name, 'bootstrap') && (success() || failure())"
+        run: ci/run.sh test_tools
       - name: Test self-compile
         if: '!matrix.coverage && (success() || failure())' # already re-built with enabled coverage
         run: ENABLE_RELEASE=0 ci/run.sh rebuild
