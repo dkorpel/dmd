@@ -1,6 +1,6 @@
 normal := basic
 merge := merge merge_true
-TESTS := $(normal) $(merge) no_code merge_override report_open
+TESTS := $(normal) $(merge) no_code merge_override report_open duplicate
 include ../common.mak
 
 normal_tests := $(normal:%=$(ROOT)/%.done)
@@ -96,10 +96,31 @@ all: $(ROOT)/long_report.done
 long_component := aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 long_report_dir := $(ROOT)/coverage reports/$(long_component)/$(long_component)/$(long_component)
 $(ROOT)/long_report.done: $(ROOT)/basic$(DOTEXE)
-	@mkdir -p "$(long_report_dir)"
-	@$(RM) "$(long_report_dir)/src-basic.lst"
-	$< "$(long_report_dir)"
-	$(SED) 's@^src.@src/@' < "$(long_report_dir)/src-basic.lst" > $(ROOT)/long-report.lst
+	@set -e; \
+	trap '$(RM) -r "$(ROOT)/coverage reports"' EXIT; \
+	mkdir -p "$(long_report_dir)"; \
+	$(RM) "$(long_report_dir)/src-basic.lst"; \
+	$< "$(long_report_dir)"; \
+	$(SED) 's@^src.@src/@' < "$(long_report_dir)/src-basic.lst" > $(ROOT)/long-report.lst; \
 	$(DIFF) src-basic.lst.exp $(ROOT)/long-report.lst
 	@touch $@
 endif
+
+$(ROOT)/duplicate.done: $(ROOT)/duplicate$(DOTEXE) $(SRC)/duplicate-lines.txt
+	@set -e; for path in same alias; do for order in forward reverse; do \
+		$(RM) $(ROOT)/src-duplicate-lines.lst $(ROOT)/src-.-duplicate-lines.lst; \
+		$< $(ROOT) $$path $$order; \
+		grep -Eq '^[[:space:]]*5\|overlap' $(ROOT)/src-duplicate-lines.lst; \
+		grep -Eq '^[[:space:]]*3\|second only' $(ROOT)/src-duplicate-lines.lst; \
+		grep -Eq '^0000000\|unhit' $(ROOT)/src-duplicate-lines.lst; \
+		test ! -f $(ROOT)/src-.-duplicate-lines.lst; \
+	done; done
+	@$(RM) $(ROOT)/src-duplicate-lines.lst
+	$< $(ROOT) empty forward
+	grep -F 'has no code' $(ROOT)/src-duplicate-lines.lst
+	@$(RM) $(ROOT)/src-duplicate-lines.lst $(ROOT)/src-duplicate.lst
+	@if $< $(ROOT) stale forward 2>$(ROOT)/duplicate.err; then exit 1; else test $$? -eq 1; fi
+	grep -F 'different source lengths' $(ROOT)/duplicate.err
+	test ! -f $(ROOT)/src-duplicate-lines.lst
+	test -s $(ROOT)/src-duplicate.lst
+	@touch $@

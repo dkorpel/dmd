@@ -1033,7 +1033,13 @@ void cdaddass(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
                 cs.Irm |= modregrm(0,mode,0);
                 switch (op)
                 {
-                    case OPminass:      // convert to +=
+                    case OPminass:
+                        if (i == 0x8000_0000)  // -int.min overflows back to int.min
+                        {
+                            cs.IEV2.Vsize_t = i;
+                            break;
+                        }
+                        // convert to +=
                         cs.Irm ^= modregrm(0,5,0);
                         i = -i;
                         cs.IEV2.Vsize_t = i;
@@ -3820,9 +3826,9 @@ void cdshtlng(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
                     goto L1;
                 }
             }
-            if (op == OPs16_32 && retregs == mAX)
+            if (op == OPs16_32 && (retregs & ~mPSW) == mAX)
                 cdb.gen1(0x98);         // CWDE
-            else if (op == OPs32_64 && retregs == mAX)
+            else if (op == OPs32_64 && (retregs & ~mPSW) == mAX)
             {
                 cdb.gen1(0x98);         // CDQE
                 code_orrex(cdb.last(), REX_W);

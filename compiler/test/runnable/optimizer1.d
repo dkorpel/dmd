@@ -8,7 +8,6 @@ import core.math : fabs;
 import core.simd;
 
 /****************************************************/
-
 // https://github.com/dlang/dmd/issues/24111
 
 long f_24111(ulong a, long b) { return (a & 0xFFFF_FFFF) + (b <= 0); }
@@ -19,7 +18,6 @@ void test24111()
 }
 
 /****************************************************/
-
 // https://github.com/dlang/dmd/issues/24112
 
 uint f_24112(uint x) { return x / 0xFFFF_FFFF; }
@@ -109,8 +107,8 @@ void test24307()
 }
 
 /**************************************************/
-static if (0)
-{
+// https://github.com/dlang/dmd/issues/24308
+
 long f_24308(int p)
 {
     long v = -1;
@@ -123,6 +121,11 @@ void test24308()
     assert(f_24308(0) == 0xFFFF_FFFF);
 }
 
+/**************************************************/
+// https://github.com/dlang/dmd/issues/24309a
+
+static if (0)
+{
 __gshared long g_24309a = 1;
 
 int nz_24309a(int x) { return x == 0 ? 1 : x; }
@@ -139,6 +142,9 @@ void test24309a()
     assert(f_24309a(g_24309a) == 0);
 }
 
+/**************************************************/
+// https://github.com/dlang/dmd/issues/24309b
+
 pragma(inline, true) ulong nz_24309b(ulong x) { return x == 0 ? 1 : x; }
 
 ulong f_24309b(int p) { return 1 / nz_24309b(cast(ubyte)(0 < p)); }
@@ -147,6 +153,10 @@ void test24309b()
 {
     assert(f_24309b(-5) == 1);
 }
+}
+
+/**************************************************/
+// https://github.com/dlang/dmd/issues/24310
 
 bool f_24310(ulong z) { return cast(long)(z % 3) > -1; }
 
@@ -155,6 +165,11 @@ void test24310()
     assert(f_24310(0));
 }
 
+/**************************************************/
+// https://github.com/dlang/dmd/issues/24311
+
+static if (0)
+{
 pragma(inline, true) ulong id_24311(ulong x) { return x; }
 
 short f_24311(ulong p)
@@ -169,6 +184,11 @@ void test24311()
 {
     assert(f_24311(0) == 0);
 }
+}
+
+/**************************************************/
+// https://github.com/dlang/dmd/issues/24312
+
 
 long f_24312(ulong a, long b)
 {
@@ -183,6 +203,11 @@ void test24312()
     assert(f_24312(0, 0) == 1);
 }
 
+/**************************************************/
+// https://github.com/dlang/dmd/issues/24313
+
+static if (0)
+{
 long f_24313(ulong a, ulong b)
 {
     short v = 0;
@@ -197,6 +222,10 @@ void test24313()
 {
     assert(f_24313(0, 0xFFFF_FFFF_FFFF_FFFC) == -4);
 }
+}
+
+/**************************************************/
+// https://github.com/dlang/dmd/issues/24314
 
 bool f_24314(int a, int b) { return cast(ubyte)(a & b) != 0; }
 
@@ -205,12 +234,21 @@ void test24314()
     assert(!f_24314(0x100, 0x100));
 }
 
+/**************************************************/
+// https://github.com/dlang/dmd/issues/24315
+
+static if (0)
+{
 bool f_24315(long x) { return x > 0xFFFF_FFFF; }
 
 void test24315()
 {
     assert(!f_24315(-1));
 }
+}
+
+/**************************************************/
+// https://github.com/dlang/dmd/issues/24316
 
 ulong f_24316(long x) { return (x << 38) + 1; }
 
@@ -218,6 +256,9 @@ void test24316()
 {
     assert(f_24316(1) == 0x40_0000_0001);
 }
+
+/**************************************************/
+// https://github.com/dlang/dmd/issues/24317
 
 long e19_24317(byte p0, ulong p1, ushort p2) { return (((p1 * 0xaU) - (1)) - p0); }
 
@@ -230,6 +271,9 @@ void test24317()
     for (int k = 0; k < 1; k++)
         check_24317("e19_24317 %d %llx\n", k, cast(ulong)e19_24317(cast(byte)inputs_24317[(0) % 1], inputs_24317[(1) % 2], cast(ushort)inputs_24317[(k + 0) % 2]));
 }
+
+/**************************************************/
+// https://github.com/dlang/dmd/issues/24318
 
 struct S1_24318 { int[1] m0; }
 struct S2_24318 { int m0; short m1; }
@@ -283,6 +327,9 @@ void test24318()
     }
 }
 
+/**************************************************/
+// https://github.com/dlang/dmd/issues/24319
+
 __gshared uint g_24319 = 0x80;
 
 bool f_24319(uint x) { return ((x >> 30) | (x << 2)) != 0; }
@@ -293,6 +340,11 @@ void test24319()
         assert(f_24319(g_24319));
 }
 
+/**************************************************/
+// https://github.com/dlang/dmd/issues/24320
+
+static if (0)
+{
 version (D_SIMD)
 {
     __gshared ulong g0_24320 = 1;
@@ -305,6 +357,10 @@ version (D_SIMD)
         assert(f_24320()[0] == 1);
     }
 }
+}
+
+/**************************************************/
+// https://github.com/dlang/dmd/issues/24321
 
 uint rol8_24321(uint v) { return (v << 8) | (v >> 24); }
 
@@ -314,6 +370,10 @@ void test24321()
 {
     assert(f_24321(-3) == 0xFFFF_FFFF);
 }
+
+
+/************************************************/
+// https://github.com/dlang/dmd/issues/24323
 
 __gshared byte c_24323 = -6;
 __gshared int k_24323 = 1;
@@ -327,12 +387,17 @@ void test24323()
     assert(f_24323() == -6);
 }
 
+/*************************************************/
+static if (0)
+{
 long f_24309d(uint p1, byte p2) { return (p2 == 7 ? 5L : cast(long)cast(byte)(p1 <= 15)) != 0; }
 
 void test24309d()
 {
     assert(f_24309d(100, 0) == 0);
 }
+
+/*************************************************/
 
 __gshared int sink_24325a;
 
@@ -412,6 +477,10 @@ void test24329()
 {
     assert(f_24329() == 3);
 }
+}
+
+/***********************************************/
+// https://github.com/dlang/dmd/issues/24330
 
 long f_24330(long x) { return x / long.min; }
 
@@ -420,12 +489,21 @@ void test24330()
     assert(f_24330(0) == 0);
 }
 
+/***********************************************/
+// https://github.com/dlang/dmd/issues/24331
+
+static if (0)
+{
 byte f_24331a(int a) { return cast(byte)((a & 1) - ((a * -1) != 0)); }
 
 void test24331a()
 {
     assert(f_24331a(2) == -1);
 }
+}
+
+/***********************************************/
+// https://github.com/dlang/dmd/issues/24332
 
 long f_24332(long g)
 {
@@ -438,12 +516,20 @@ void test24332()
     assert(f_24332(0) == 0x8000_0000);
 }
 
+/***********************************************/
+// https://github.com/dlang/dmd/issues/24333
+
+static if (0)
+{
 ulong f_24333(ulong x) { return (x / 0xFFFF_FFFF_FFFF_FFFE) / 0xFFFF_FFFF_0000_0000; }
 
 void test24333()
 {
     assert(f_24333(ulong.max - 1) == 0);
 }
+
+/***********************************************/
+// https://github.com/dlang/dmd/issues/24309
 
 pragma(inline, true) long nz_24309c(long x) { return x == 0 ? 0 : x; }
 
@@ -453,6 +539,9 @@ void test24309c()
 {
     assert(f_24309c(1, 0) == 0);
 }
+
+/***********************************************/
+// https://github.com/dlang/dmd/issues/24325
 
 long f_24325c(byte p)
 {
@@ -868,61 +957,59 @@ void main()
     test24305();
     test24306();
     test24307();
-/*
     test24308();
-    test24309a();
-    test24309b();
+    //test24309a();
+    //test24309b();
     test24310();
-    test24311();
+    //test24311();
     test24312();
-    test24313();
+    //test24313();
     test24314();
-    test24315();
+    //test24315();
     test24316();
     test24317();
-    test24318();
+    //test24318();
     test24319();
-    version (D_SIMD) test24320();
+    //version (D_SIMD) test24320();
     test24321();
     test24323();
-    test24309d();
-    test24325a();
-    test24327();
-    test24328();
-    test24325b();
-    test24329();
+    //test24309d();
+    //test24325a();
+    //test24327();
+    //test24328();
+    //test24325b();
+    //test24329();
     test24330();
-    test24331a();
+    //test24331a();
     test24332();
-    test24333();
-    test24309c();
-    test24325c();
-    version (D_SIMD) test24334();
-    version (D_AVX2) test24335a();
-    version (D_AVX2) test24335b();
-    test24309e();
-    test24351d();
-    test24351e();
-    test24339();
-    test24340();
-    test24341();
-    test24331b();
-    test24331c();
-    test24342a();
-    test24342b();
-    version (D_AVX2) test24343a();
-    version (D_SIMD) test24343b();
-    version (D_AVX) test24343c();
-    test24351a();
-    test24351g();
-    test24351b();
-    test24351f();
-    version (D_SIMD) test24351c();
-    test24351h();
-    test24351i();
-    test24351k();
-    assert(test24354() == 0);
-    test24351j();
-    test24351l();
-*/
+    //test24333();
+    //test24309c();
+    //test24325c();
+    //version (D_SIMD) test24334();
+    //version (D_AVX2) test24335a();
+    //version (D_AVX2) test24335b();
+    //test24309e();
+    //test24351d();
+    //test24351e();
+    //test24339();
+    //test24340();
+    //test24341();
+    //test24331b();
+    //test24331c();
+    //test24342a();
+    //test24342b();
+    //version (D_AVX2) test24343a();
+    //version (D_SIMD) test24343b();
+    //version (D_AVX) test24343c();
+    //test24351a();
+    //test24351g();
+    //test24351b();
+    //test24351f();
+    //version (D_SIMD) test24351c();
+    //test24351h();
+    //test24351i();
+    //test24351k();
+    //assert(test24354() == 0);
+    //test24351j();
+    //test24351l();
 }

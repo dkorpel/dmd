@@ -27,19 +27,19 @@ import dmd.dclass;
 import dmd.declaration;
 import dmd.dstruct;
 import dmd.dsymbol;
-import dmd.dsymbolsem;
+import dmd.dsymbolsem : ctfeSemantic, isOverlappedWith, toAlias;
 import dmd.dtemplate;
 import dmd.errorsink;
 import dmd.expression;
 import dmd.expressionsem;
 import dmd.func;
-import dmd.funcsem;
+import dmd.funcsem : isVirtual;
 import dmd.globals;
 import dmd.hdrgen;
 import dmd.id;
 import dmd.identifier;
 import dmd.init;
-import dmd.initsem;
+import dmd.initsem : initializerToExpression;
 import dmd.location;
 import dmd.mtype;
 import dmd.root.rmem;
@@ -480,7 +480,7 @@ private Expression interpretFunction(UnionExp* pue, FuncDeclaration fd, InterSta
         fdError("circular dependency. Functions cannot be interpreted while being compiled");
         return CTFEExp.cantexp;
     }
-    if (!functionSemantic3(fd))
+    if (!ctfeSemantic(fd))
         return CTFEExp.cantexp;
     if (fd.semanticRun < PASS.semantic3done)
     {
@@ -2125,8 +2125,7 @@ public:
 
             if (!v.originalType && v.semanticRun < PASS.semanticdone) // semantic() not yet run
             {
-                v.dsymbolSemantic(null);
-                if (v.type.ty == Terror)
+                if (!ctfeSemantic(v))
                     return CTFEExp.cantexp;
             }
 
@@ -2138,11 +2137,7 @@ public:
                     return CTFEExp.cantexp;
                 }
                 if (v._scope)
-                {
-                    v.inuse++;
-                    v._init = v._init.initializerSemantic(v._scope, v.type, INITinterpret, global.errorSink); // might not be run on aggregate members
-                    v.inuse--;
-                }
+                    ctfeSemantic(v);
                 if (v._init.isVoidInitializer())
                 {
                     eSink.error(loc, "cannot read uninitialized variable `%s` in CTFE", v.toErrMsg());
@@ -4232,7 +4227,7 @@ public:
                     // https://issues.dlang.org/show_bug.cgi?id=14024
 
                     Type elemtype = aggregate.type.nextOf();
-                    bool needsPostblit = e.e2.isLvalue();
+                    bool needsPostblit = e.e2.isLvalue() || e.e2.isSliceExp();
 
                     if (aggregate == ale2 && srclower < lowerbound && lowerbound < srcupper)
                     {
@@ -5255,7 +5250,7 @@ public:
             // Pointer to a non-array variable
             if (agg.op == EXP.symbolOffset)
             {
-                eSink.error(e.loc, "mutable variable `%s` cannot be %s at compile time, even through a pointer", cast(char*)(modify ? "modified" : "read"), agg.isSymOffExp().var.toErrMsg());
+                eSink.error(e.loc, "mutable variable `%s` cannot be %s at compile time, even through a pointer", agg.isSymOffExp().var.toErrMsg(), cast(char*)(modify ? "modified" : "read"));
                 return false;
             }
 

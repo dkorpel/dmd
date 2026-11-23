@@ -2763,7 +2763,7 @@ private elem* eldiv(elem* e, Goal goal)
                         op = (sz == 2) ? OP32_16 : (sz == 4) ? OP64_32 : OP128_64;
                     }
                     e.Eoper = OPremquo;
-                    e = el_una(op, tym, e);
+                    e = el_una(op, e.Ety, e);
                     e.E1.Ety = (sz == 2) ? TYlong : (sz == 4) ? TYllong : TYcent;
                     return e;
                 }
@@ -2784,6 +2784,7 @@ private elem* swaplog(elem* e, Goal goal)
     elem* e1 = e.E1;
     e.E1 = e1.E2;
     e1.E2 = e;
+    e1.Ety = e.Ety;
     return optelem(e1,goal);
 }
 
@@ -5391,7 +5392,8 @@ private elem* elshl(elem* e, Goal goal)
         e2.Eoper == OPconst &&
         (e1.Eoper == OPshr || e1.Eoper == OPashr) &&
         e1.E2.Eoper == OPconst &&
-        el_tolong(e2) == el_tolong(e1.E2))
+        el_tolong(e2) == el_tolong(e1.E2) &&
+        e.Eoper == OPshl)
     {   /* Rewrite:
          *  (x >> c) << c)
          * with:

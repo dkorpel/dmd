@@ -329,7 +329,7 @@ void cdorth(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
                 cs.IEV2.Vint = cast(targ_int)value;
                 cs.IFL2 = FL.const_;
             }
-            cs.Iop = op1 ^ isbyte;
+            cs.Iop = op1;
             cs.Iflags |= word | CF.psw;
             freenode(e1);
             freenode(e2);
@@ -349,7 +349,7 @@ void cdorth(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
             code_newreg(&cs, reg);
             if (I64 && isbyte && reg >= 4)
                 cs.Irex |= REX;
-            cs.Iop = op1 ^ isbyte;
+            cs.Iop = op1;
             cs.Iflags |= word | CF.psw;
             freenode(e1);
             freenode(e2);
@@ -1696,7 +1696,7 @@ void cddiv(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
                 {
                     // This may be better done by cgelem.d
                     assert(pow2 == 63);
-                    cdb.genc2(0x81,grex | modregrmx(3,4,rhi),0x8000_0000); // ADD rhi,0x8000_000
+                    cdb.genc2(0x81,grex | modregrmx(3,0,rhi),0x8000_0000); // ADD rhi,0x8000_000
                     cdb.genregs(0x09,rlo,rhi);                             // OR  rlo,rhi
                     cdb.gen2(0x0F94,modregrmx(3,0,rlo));                   // SETZ rlo
                     cdb.genregs(MOVZXb,rlo,rlo);                           // MOVZX rlo,rloL
@@ -2380,9 +2380,11 @@ void cdcond(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
                 retregs = BYTEREGS;
         }
 
-        cg.cmp_flag = 1 | rex;
         v1 = cast(targ_size_t)e21.Vllong;
         v2 = cast(targ_size_t)e22.Vllong;
+        cg.cmp_flag = 1;
+        if (rex && v1 != 0xFFFF_FFFF && v2 != 0xFFFF_FFFF) // if not zero-extending the results
+            cg.cmp_flag |= rex;
         if (jop == JNC)
         {   v1 = v2;
             v2 = cast(targ_size_t)e21.Vllong;
@@ -2438,7 +2440,8 @@ void cdcond(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
                 else if (v2 == -1L && !I64)
                     cdb.gen1(0x48 + reg);                     // DEC reg
                 else
-                {   cdb.genc2(opcode,grex | modregrmx(3,0,reg),v2);   // ADD reg,v2
+                {
+                    cdb.genc2(opcode,grex | modregrmx(3,0,reg),v2);   // ADD reg,v2
                     if (I64 && sz2 == 1 && reg >= 4)
                         code_orrex(cdb.last(), REX);
                 }
@@ -2742,7 +2745,7 @@ void cdshift(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
     if (cg.AArch64)
         return dmd.backend.arm.cod2.cdshift(cg, cdb, e, pretregs);
 
-    //printf("cdshift()\n");
+    //printf("cdshift(pretregs: %s)\n", regm_str(pretregs));
     reg_t resreg;
     uint shiftcnt;
     regm_t retregs,rretregs;
@@ -2978,7 +2981,7 @@ void cdshift(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
                         if (forccs)
                             code_orflag(cdb.last(),CF.psw);
                     }
-                    if (sz <= REGSIZE)
+                    if (sz <= REGSIZE && s1 >= 2)      // ROL/ROR don't set flags
                         pretregs &= mBP | ALLREGS;     // flags already set
                 }
                 freenode(e2);
@@ -3028,7 +3031,7 @@ void cdshift(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
                 // Note that a shift by CL does not set the flags if
                 // CL == 0. If e2 is a constant, we know it isn't 0
                 // (it would have been optimized out).
-                if (e2isconst)
+                if (e2isconst && s1 >= 2)      // ROL/ROR don't set flags
                     pretregs &= mBP | ALLREGS; // flags already set with result
             }
             else if (sz == 2 * REGSIZE &&
