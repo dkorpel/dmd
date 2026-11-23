@@ -963,7 +963,7 @@ bool equals(const Expression _this, const Expression e)
     static bool stringExpEquals(const StringExp _this, const StringExp e)
     {
         //printf("StringExp::equals('%s') %s\n", o.toChars(), toChars());
-        return _this.compare(e) == 0;
+        return _this.sz == e.sz && _this.compare(e) == 0;
     }
 
     static bool tupleExpEquals(const TupleExp _this, const TupleExp e)

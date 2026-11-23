@@ -326,3 +326,6 @@ static assert (__traits(getCppNamespaces, GNTT.foo) == Seq!(`inst`,/*`decl`,*/ `
 int[1] arr;
 // test that index assignment parses as an expression, not a type
 enum _ = __traits(compiles, arr[0] = 0);
+
+static assert(!__traits(isSame, "a", "a"w));
+static assert(!__traits(isSame, "a"w, "a"d));
