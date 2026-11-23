@@ -999,6 +999,7 @@ $(SECTION3 $(GNAME getFunctionVariadicStyle),
         $(TROW $(D "stdarg"), C style variadic function, $(MREF core,stdc,stdarg),
             $(D extern (C) void abc(int, ...)))
         $(TROW $(D "typesafe"), typesafe variadic function, array on stack, $(D void def(int[] ...)))
+        $(TROW $(D "KR"), ImportC K&amp;R style function, $(NBSP), $(D void ghi();) in a C file)
     )
 
 $(SPEC_RUNNABLE_EXAMPLE_COMPILE
