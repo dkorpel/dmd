@@ -1355,6 +1355,12 @@ Expression semanticTraits(TraitsExp e, Scope* sc)
         auto cd = s ? s.isClassDeclaration() : null;
         if (!cd)
         {
+            if (auto ex = isExpression(o))
+                if (auto tc = ex.type.toBasetype().isTypeClass())
+                    cd = tc.sym;
+        }
+        if (!cd)
+        {
             eSink.error(e.loc, "first argument is not a class");
             return ErrorExp.get();
         }

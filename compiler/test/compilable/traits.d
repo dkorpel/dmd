@@ -343,3 +343,8 @@ static assert(__traits(getFunctionAttributes, &fpTarget)[0] == "pure");
 static assert(__traits(getLinkage, &fpTarget) == "D");
 static assert(__traits(getFunctionVariadicStyle, &fpTarget) == "none");
 static assert(!__traits(isReturnOnStack, &fpTarget));
+
+class CI { int x; }
+CI ci;
+static assert(__traits(classInstanceSize, ci) == __traits(classInstanceSize, CI));
+static assert(__traits(classInstanceAlignment, new CI) == __traits(classInstanceAlignment, CI));
