@@ -260,7 +260,7 @@ string symTitle(ScopeDsymbol s, ref Attrs a, ref Attrs b, ref uint line)
     if (s.isWithScopeSymbol())
         return "`with` statement";
     if (s.isArrayScopeSymbol())
-        return "index/slice (`$` = length)";
+        return "`$` scope";
     if (s.isForwardingScopeDsymbol())
         return "`static foreach` body";
     if (s.isAggregateDeclaration() || s.isEnumDeclaration() || s.isTemplateDeclaration() || s.isNspace())
@@ -275,7 +275,7 @@ string symTitle(ScopeDsymbol s, ref Attrs a, ref Attrs b, ref uint line)
         if (b.tinst && b.tinst.argsym is s)
         {
             line = lineOf(b.tinst);
-            return "template arguments of `" ~ str(b.tinst.toChars()) ~ "` (parameters bound to the arguments)";
+            return "template arguments of `" ~ str(b.tinst.toChars()) ~ "`";
         }
         auto td = templateOfParams(s);
         if (td || allTemplateParams(s))
@@ -289,7 +289,7 @@ string symTitle(ScopeDsymbol s, ref Attrs a, ref Attrs b, ref uint line)
                 return "template parameters of " ~ what ~ " while matching `" ~ str(b.tinst.toChars()) ~ "`";
             if (bound)
                 return "template arguments" ~ (b.tinst ? " of `" ~ str(b.tinst.toChars()) ~ "`" : "")
-                    ~ " (parameters bound to the arguments)";
+                    ~ "";
             return "template parameters of " ~ what;
         }
         if (b.tinst && b.tinst !is a.tinst)
@@ -307,7 +307,7 @@ string symTitle(ScopeDsymbol s, ref Attrs a, ref Attrs b, ref uint line)
         {
             char[32] tmp;
             const n = snprintf(tmp.ptr, tmp.length, "%u", s.endloc.linnum);
-            return "block scope `{ }` (ends line " ~ tmp[0 .. n].idup ~ ")";
+            return "block scope (to line " ~ tmp[0 .. n].idup ~ ")";
         }
         return "block scope";
     }
@@ -322,57 +322,56 @@ string visText(Visibility v)
     return s;
 }
 
-/// Attribute changes `b` makes relative to `a`, one human-readable item each.
+/// Attribute changes `b` makes relative to `a`.
 string[] diff(ref Attrs a, ref Attrs b)
 {
     string[] r;
     const added = b.stc & ~a.stc, removed = a.stc & ~b.stc;
     if (added)
-        r ~= "storage class +" ~ stcText(added) ~ "  (applied to every declaration in this scope)";
+        r ~= "+" ~ stcText(added);
     if (removed)
-        r ~= "storage class -" ~ stcText(removed) ~ "  (not inherited here)";
+        r ~= "-" ~ stcText(removed);
     if (a.linkage != b.linkage)
-        r ~= "linkage extern(" ~ linkageToString(a.linkage) ~ ") -> extern(" ~ linkageToString(b.linkage) ~ ")";
+        r ~= "extern(" ~ linkageToString(a.linkage) ~ ") -> extern(" ~ linkageToString(b.linkage) ~ ")";
     if (a.cppmangle != b.cppmangle)
-        r ~= "C++ mangling of aggregates changed";
+        r ~= "cppmangle";
     if (a.visibility.kind != b.visibility.kind || a.visibility.pkg !is b.visibility.pkg)
-        r ~= "default visibility " ~ visText(cast() a.visibility) ~ " -> " ~ visText(cast() b.visibility)
-            ~ "  (for declarations without their own visibility attribute)";
+        r ~= visText(cast() a.visibility) ~ " -> " ~ visText(cast() b.visibility);
     if (a.aligndecl !is b.aligndecl)
-        r ~= b.aligndecl ? "field alignment set by `align` (line " ~ num(lineOf(cast() b.aligndecl)) ~ ")" : "field alignment back to default";
+        r ~= b.aligndecl ? "align" : "align default";
     if (a.inlining !is b.inlining)
-        r ~= b.inlining ? "pragma(inline) set for functions declared here" : "pragma(inline) reset";
+        r ~= b.inlining ? "pragma(inline)" : "pragma(inline) off";
     if (a.depdecl !is b.depdecl && b.depdecl)
-        r ~= "deprecated: using these declarations gives a deprecation message";
+        r ~= "deprecated";
     if (a.uda !is b.uda && b.uda)
-        r ~= "user-defined attributes attached to declarations in this scope";
+        r ~= "UDAs";
     if (a.namespace !is b.namespace && b.namespace)
-        r ~= "C++ namespace for declarations";
+        r ~= "extern(C++, namespace)";
     if (a.func !is b.func)
-        r ~= b.func ? "inside function `" ~ symName(cast() b.func) ~ "` (locals, `return`, `this` refer to it)" : "outside any function";
+        r ~= b.func ? "func `" ~ symName(cast() b.func) ~ "`" : "func null";
     if (a.inunion !is b.inunion)
-        r ~= b.inunion ? "members of a union (they overlap)" : "no longer in a union";
+        r ~= b.inunion ? "inunion" : "inunion off";
     if (a.contract != b.contract)
-        r ~= b.contract == Contract.require ? "in contract (`in`)" : b.contract == Contract.ensure ? "out contract (`out`)" :
-             b.contract == Contract.invariant_ ? "invariant" : "contract ends";
+        r ~= b.contract == Contract.require ? "contract in" : b.contract == Contract.ensure ? "contract out" :
+             b.contract == Contract.invariant_ ? "contract invariant" : "contract none";
     if (b.debug_ && !a.debug_)
-        r ~= "inside `debug`: purity/@nogc/nothrow checks relaxed";
+        r ~= "debug";
     if (b.ctfe && !a.ctfe)
-        r ~= "compile-time only (CTFE): not code generated";
+        r ~= "ctfe";
     if (b.condition && !a.condition && a.scopesym is b.scopesym)
-        r ~= "evaluating a `static if`/`static assert` condition";
+        r ~= "condition";
     if (b.inTemplateConstraint && !a.inTemplateConstraint)
-        r ~= "evaluating a template constraint";
+        r ~= "inTemplateConstraint";
     if (b.traitsCompiles && !a.traitsCompiles)
-        r ~= "inside `__traits(compiles)`/`is(...)`: errors are gagged";
+        r ~= "traitsCompiles";
     if (b.inLoop && !a.inLoop)
-        r ~= "inside a loop body (`break`/`continue` allowed)";
+        r ~= "inLoop";
     if (b.inDefaultArg && !a.inDefaultArg)
-        r ~= "default argument: `__FILE__`/`__LINE__` refer to the call site";
+        r ~= "inDefaultArg";
     if (b.noAccessCheck && !a.noAccessCheck)
-        r ~= "visibility checks disabled";
+        r ~= "noAccessCheck";
     if (b.intypeof && !a.intypeof)
-        r ~= "inside `typeof(...)`: expression is not evaluated";
+        r ~= "intypeof";
     return r;
 }
 
@@ -411,7 +410,7 @@ View makeView(Node n)
     {
         string[] r;
         foreach (c; v.changes)
-            if (c.length < 6 || c[0 .. 6] != "inside")
+            if (!startsWith(c, "func "))
                 r ~= c;
         v.changes = r;
     }
@@ -462,7 +461,7 @@ bool transparent(View v)
     if (v.title != "internal scope")
         return false;
     foreach (c; v.changes)
-        if (!startsWith(c, "storage class") && !startsWith(c, "outside any function"))
+        if (c[0] != '+' && c[0] != '-' && c != "func null")
             return false;
     return true;
 }
@@ -497,15 +496,6 @@ void render(ref OutBuffer buf)
             continue;
         views[n] = addKid(p ? views[p] : root, v);
     }
-
-    buf.writestring("How to read this: dmd keeps a stack of `Scope`s during semantic analysis. Each entry below\n");
-    buf.writestring("is a scope pushed while compiling this module, nested under the scope it was pushed from.\n");
-    buf.writestring("Scopes with a symbol table (module, aggregate, function, block) list the names they declare.\n");
-    buf.writestring("Name lookup starts in the innermost such scope and walks outward; a module's imports are\n");
-    buf.writestring("searched only after the module's own symbols. Attribute scopes (`@safe:`, `private { }`,\n");
-    buf.writestring("`extern(C)`) declare nothing themselves: they only change the defaults applied to the\n");
-    buf.writestring("declarations inside them, whose names live in the enclosing symbol table.\n");
-    buf.writestring("×N = the same scope was pushed N times (once per semantic pass that visits it).\n\n");
 
     renderKids(buf, root, 0);
 }
@@ -707,13 +697,7 @@ void renderSymbols(ref OutBuffer buf, View v, int depth)
 
     const isModule = v.syms.length && v.syms[0].isModule();
     const isAggregate = v.syms.length && v.syms[0].isAggregateDeclaration();
-    if (!list.length)
-    {
-        indent(buf, depth);
-        buf.writestring("(declares no names)");
-        endLine(buf, v.line);
-    }
-    else
+    if (list.length)
     {
         indent(buf, depth);
         buf.writestring("declares:");
@@ -729,12 +713,10 @@ void renderSymbols(ref OutBuffer buf, View v, int depth)
             buf.writeByte(' ');
         buf.writeByte(' ');
         buf.writestring(str(s.kind()));
-        if (name.length > 2 && name[0 .. 2] == "__")
-            buf.writestring(" (compiler-generated)");
         if (isModule || isAggregate)
         {
-            buf.writestring(" — ");
-            buf.writestring(visibilityExplanation(s, v));
+            buf.writeByte(' ');
+            buf.writestring(visText(s.visible()));
         }
         auto sh = shadowExplanation(s, v);
         if (sh.length)
@@ -746,30 +728,6 @@ void renderSymbols(ref OutBuffer buf, View v, int depth)
     }
     if (isModule)
         renderImports(buf, v, depth);
-}
-
-string visibilityExplanation(Dsymbol s, View v)
-{
-    Visibility vis = s.visible();
-    const where = v.syms[0].isModule() ? "module" : str(v.syms[0].kind());
-    final switch (vis.kind)
-    {
-        case Visibility.Kind.private_:
-            return "private: only code in module `" ~ str(s.getModule() ? s.getModule().toPrettyChars() : null)
-                ~ "` can access it (D's `private` is per module, not per " ~ (where == "module" ? "type" : where) ~ ")";
-        case Visibility.Kind.package_:
-            return vis.pkg ? "package: any module in package `" ~ str(vis.pkg.toPrettyChars()) ~ "` can access it" : "package: modules in the same package as this one can access it";
-        case Visibility.Kind.protected_:
-            return "protected: this module and classes derived from `" ~ symName(v.syms[0]) ~ "`";
-        case Visibility.Kind.public_:
-            return "public: accessible wherever the enclosing " ~ where ~ " is";
-        case Visibility.Kind.export_:
-            return "export: public, and exported from a shared library/DLL";
-        case Visibility.Kind.none:
-            return "no access";
-        case Visibility.Kind.undefined:
-            return "visibility not determined";
-    }
 }
 
 /// Explain which declaration in an enclosing scope `s` hides, and whether
@@ -788,15 +746,15 @@ string shadowExplanation(Dsymbol s, View v)
             continue;
         if (auto ti = v.syms.length ? v.syms[0].isTemplateInstance() : null)
             if (ti.tempdecl is t)
-                return "eponymous member: `" ~ str(ti.toChars()) ~ "` resolves to this declaration";
-        const where = "`" ~ symName(t) ~ "` (" ~ str(t.kind()) ~ (lineOf(t) ? ", line " ~ num(lineOf(t)) : "") ~ ") of " ~ o.title;
+                return "eponymous member";
+        const where = str(t.kind()) ~ " `" ~ symName(t) ~ "`" ~ (lineOf(t) ? " (line " ~ num(lineOf(t)) ~ ")" : "");
         if (myFunc && o.func is myFunc && s.isVarDeclaration() && t.isVarDeclaration())
-            return "shadows local " ~ where ~ ": an error in D, a local may not shadow another local of the same function";
+            return "shadows " ~ where ~ ": error";
         if (o.sym.isModule())
-            return "shadows " ~ where ~ "; inside this scope the name means this declaration, use `." ~ symName(s) ~ "` for the module-level one";
+            return "shadows " ~ where ~ ", use `." ~ symName(s) ~ "`";
         if (o.sym.isAggregateDeclaration())
-            return "shadows member " ~ where ~ "; use `this." ~ symName(s) ~ "` to reach the member";
-        return "shadows " ~ where ~ "; allowed because it's in a different function";
+            return "shadows " ~ where ~ ", use `this." ~ symName(s) ~ "`";
+        return "shadows " ~ where;
     }
     if (s.isImport() || s.isPackage())
         return null;
@@ -812,7 +770,7 @@ string shadowExplanation(Dsymbol s, View v)
                 {
                     if (t.visible().kind == Visibility.Kind.private_)
                         continue;
-                    return "hides imported `" ~ str(t.toPrettyChars()) ~ "`: a module's own symbols are found before imports";
+                    return "hides `" ~ str(t.toPrettyChars()) ~ "`";
                 }
             }
     }
@@ -825,7 +783,7 @@ void renderImports(ref OutBuffer buf, View v, int depth)
     if (!m.importedScopes || !m.importedScopes.length)
         return;
     indent(buf, depth);
-    buf.writestring("imports (searched after the names above, in this order):");
+    buf.writestring("imports:");
     endLine(buf, v.line);
     foreach (i, imp; *m.importedScopes)
     {
@@ -834,13 +792,8 @@ void renderImports(ref OutBuffer buf, View v, int depth)
         indent(buf, depth + 1);
         buf.writestring(str(imp.toPrettyChars()));
         const vk = m.visibilities ? m.visibilities[i] : Visibility.Kind.private_;
-        buf.writestring(" — ");
-        if (imp.ident && imp.ident.toString() == "object")
-            buf.writestring("implicit `import object;` of every module");
-        else if (vk == Visibility.Kind.public_)
-            buf.writestring("public import: importers of this module see its symbols too");
-        else
-            buf.writestring(visibilityToString(vk) ~ " import: visible only inside this module");
+        buf.writeByte(' ');
+        buf.writestring(visibilityToString(vk));
         endLine(buf, 0);
     }
 }
