@@ -564,7 +564,7 @@ Expression semanticTraits(TraitsExp e, Scope* sc)
         auto t = isType(o);
         if (!t)
         {
-            eSink.error(e.loc, "type expected as second argument of __traits `%s` instead of `%s`",
+            eSink.error(e.loc, "type expected as first argument of __traits `%s` instead of `%s`",
                 e.ident.toErrMsg(), o.toErrMsg());
             return ErrorExp.get();
         }
@@ -588,7 +588,7 @@ Expression semanticTraits(TraitsExp e, Scope* sc)
         auto t = isType(o);
         if (!t)
         {
-            eSink.error(e.loc, "type expected as second argument of __traits `%s` instead of `%s`",
+            eSink.error(e.loc, "type expected as first argument of __traits `%s` instead of `%s`",
                 e.ident.toErrMsg(), o.toErrMsg());
             return ErrorExp.get();
         }
@@ -617,7 +617,7 @@ Expression semanticTraits(TraitsExp e, Scope* sc)
         auto t = isType(o);
         if (!t)
         {
-            eSink.error(e.loc, "type expected as second argument of __traits `%s` instead of `%s`",
+            eSink.error(e.loc, "type expected as first argument of __traits `%s` instead of `%s`",
                     e.ident.toErrMsg(), o.toErrMsg());
             return ErrorExp.get();
         }
@@ -641,7 +641,7 @@ Expression semanticTraits(TraitsExp e, Scope* sc)
         auto t = isType(o);
         if (!t)
         {
-            eSink.error(e.loc, "type expected as second argument of __traits `%s` instead of `%s`",
+            eSink.error(e.loc, "type expected as first argument of __traits `%s` instead of `%s`",
                     e.ident.toErrMsg(), o.toErrMsg());
             return ErrorExp.get();
         }
@@ -1051,7 +1051,7 @@ Expression semanticTraits(TraitsExp e, Scope* sc)
         auto ex = isExpression((*e.args)[0]);
         if (!ex)
         {
-            eSink.error(e.loc, "expression expected as second argument of __traits `%s`", e.ident.toErrMsg());
+            eSink.error(e.loc, "expression expected as first argument of __traits `%s`", e.ident.toErrMsg());
             return ErrorExp.get();
         }
         ex = ex.ctfeInterpret();
@@ -2106,7 +2106,7 @@ Expression semanticTraits(TraitsExp e, Scope* sc)
         Type t = isType(o);
         if (!t)
         {
-            eSink.error(e.loc, "type expected as second argument of __traits `%s` instead of `%s`",
+            eSink.error(e.loc, "type expected as first argument of __traits `%s` instead of `%s`",
                 e.ident.toErrMsg(), o.toErrMsg());
             return ErrorExp.get();
         }

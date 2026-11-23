@@ -1,7 +1,7 @@
 /*
 TEST_OUTPUT:
 ---
-fail_compilation/fail_isZeroInit.d(11): Error: type expected as second argument of __traits `isZeroInit` instead of `a`
+fail_compilation/fail_isZeroInit.d(11): Error: type expected as first argument of __traits `isZeroInit` instead of `a`
 ---
 */
 void test()

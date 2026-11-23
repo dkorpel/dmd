@@ -2,7 +2,7 @@
 TEST_OUTPUT:
 ---
 fail_compilation/fix21585.d(103): Error: expected 1 arguments for `toType` but had 0
-fail_compilation/fix21585.d(104): Error: expression expected as second argument of __traits `toType`
+fail_compilation/fix21585.d(104): Error: expression expected as first argument of __traits `toType`
 fail_compilation/fix21585.d(105): Error: `string` expected for __traits(toType, string), not `(1)` of type `int`
 fail_compilation/fix21585.d(106): Error: cannot determine `__traits(toType, "hello betty")`
 ---

@@ -101,11 +101,11 @@ TEST_OUTPUT:
 ---
 fail_compilation/traits.d(602): Error: expected 1 arguments for `hasCopyConstructor` but had 0
 fail_compilation/traits.d(602):        while evaluating `pragma(msg, __traits(hasCopyConstructor))`
-fail_compilation/traits.d(603): Error: type expected as second argument of __traits `hasCopyConstructor` instead of `S()`
+fail_compilation/traits.d(603): Error: type expected as first argument of __traits `hasCopyConstructor` instead of `S()`
 fail_compilation/traits.d(603):        while evaluating `pragma(msg, __traits(hasCopyConstructor, S()))`
 fail_compilation/traits.d(604): Error: expected 1 arguments for `hasPostblit` but had 0
 fail_compilation/traits.d(604):        while evaluating `pragma(msg, __traits(hasPostblit))`
-fail_compilation/traits.d(605): Error: type expected as second argument of __traits `hasPostblit` instead of `S()`
+fail_compilation/traits.d(605): Error: type expected as first argument of __traits `hasPostblit` instead of `S()`
 fail_compilation/traits.d(605):        while evaluating `pragma(msg, __traits(hasPostblit, S()))`
 ---
 */
