@@ -174,3 +174,12 @@ fail_compilation/traits.d(1002): Error: expected 1 arguments for `isDeprecated` 
 @__future int fut10;
 enum fut10a = __traits(isFuture, fut10, fut10);
 enum dep10 = __traits(isDeprecated);
+
+/********************************************
+TEST_OUTPUT:
+---
+fail_compilation/traits.d(1100): Error: unrecognized trait `isTemplte`, did you mean `isTemplate`?
+---
+*/
+#line 1100
+enum tt11 = __traits(isTemplte, int);

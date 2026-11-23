@@ -2435,7 +2435,7 @@ private void traitNotFound(TraitsExp e)
         initialized = true;     // lazy initialization
 
         // All possible traits
-        __gshared Identifier*[60] idents =
+        __gshared Identifier*[70] idents =
         [
             &Id.allMembers,
             &Id.child,
@@ -2497,6 +2497,16 @@ private void traitNotFound(TraitsExp e)
             &Id.isZeroInit,
             &Id.parameters,
             &Id.parent,
+            &Id.isTemplate,
+            &Id.isBitfield,
+            &Id.needsDestruction,
+            &Id.isCOMClass,
+            &Id.getBitfieldOffset,
+            &Id.getBitfieldWidth,
+            &Id.toType,
+            &Id.initSymbol,
+            &Id.getCppNamespaces,
+            &Id.hasMoveConstructor,
         ];
 
         StringTable!(bool)* stringTable = cast(StringTable!(bool)*) &traitsStringTable;
