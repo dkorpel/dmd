@@ -137,6 +137,8 @@ private struct Previews
     }
 }
 
+__gshared void function(Scope* sc, Scope* from, Dsymbol cause, bool popped) scopeTraceHook;
+
 extern (C++) struct Scope
 {
     Scope* enclosing;               /// enclosing Scope
@@ -231,6 +233,8 @@ extern (C++) struct Scope
          * The copied scope should not inherit fieldinit.
          */
         sc.ctorflow.fieldinit = null;
+        if (scopeTraceHook)
+            scopeTraceHook(sc, &this, null, false);
         return sc;
     }
 
@@ -298,6 +302,8 @@ extern (C++) struct Scope
     extern (D) Scope* pop()
     {
         //printf("Scope::pop() %p nofree = %d\n", this, nofree);
+        if (scopeTraceHook)
+            scopeTraceHook(&this, null, null, true);
         if (enclosing)
             enclosing.ctorflow.OR(ctorflow);
         ctorflow.freeFieldinit();

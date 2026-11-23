@@ -266,6 +266,10 @@
     <h2 title="printAST after semantic analysis: like -vcg-ast, but labels nodes by their internal DMD class name (e.g. AddExp, CompoundStatement) instead of regenerated D syntax">Semantic tree (printAST, post-semantic)</h2>
     <pre id="sema"></pre>
   </div>
+  <div class="pane" data-pane="scope" data-stage="semantic" data-title="Scopes" data-tip="Every scope dmd pushes during semantic analysis: what caused it, which attributes it changes, and the symbols it declares, with their visibility and what they shadow">
+    <h2 title="Recorded from Scope.push/pop while dmd analyses this module. Hover a line to see the source it came from.">Scopes (semantic analysis)</h2>
+    <pre id="scope"></pre>
+  </div>
   <div class="pane" data-pane="ast" data-stage="semantic" data-title="Lowered AST" data-tip="The Abstract Syntax Tree after lowering, regenerated as D source (-vcg-ast)">
     <h2>Lowered AST (-vcg-ast)</h2>
     <pre id="ast"></pre>
@@ -1014,10 +1018,11 @@ cols.addEventListener("mouseleave", () => { hoverLine = null; applyHighlight(); 
 // ---- Compile + render -----------------------------------------------------
 
 // Render one result object produced by the worker's compile(). Pure DOM work.
-function render({ lex, parse, sema, ast, ir, irOpt, asm, asmUnopt, wat, errors, diagnostics }) {
+function render({ lex, parse, sema, scope, ast, ir, irOpt, asm, asmUnopt, wat, errors, diagnostics }) {
     renderLined("lex", lex, /*positional*/ true);
     renderLined("parse", parse);
     renderLined("sema", sema);
+    renderLined("scope", scope);
     if (ast) $("ast").innerHTML = highlightD(ast); else $("ast").textContent = "(no output)";
     renderLined("ir", ir, false, "(no code generated)");
     renderLined("iropt", irOpt, false, "(no code generated)");

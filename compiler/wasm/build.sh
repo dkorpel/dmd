@@ -54,7 +54,7 @@ run_wasm_opt() {
   fi
 }
 
-SRC="compiler/wasm/dmdwasm.d compiler/wasm/dmdwasm_lexdump.d compiler/wasm/dmdwasm_irdump.d compiler/wasm/druntime_embed.d"
+SRC="compiler/wasm/dmdwasm.d compiler/wasm/dmdwasm_lexdump.d compiler/wasm/dmdwasm_irdump.d compiler/wasm/dmdwasm_scopes.d compiler/wasm/druntime_embed.d"
 
 # Symbols JS reaches into. __wasm_call_ctors and dmdwasm_init bring the instance
 # up; the rest are the compile entry point and the output-buffer accessors.
@@ -63,6 +63,7 @@ EXPORTS="--export=__wasm_call_ctors --export=dmdwasm_init \
   --export=dmdwasm_ast_ptr --export=dmdwasm_ast_len \
   --export=dmdwasm_parse_ptr --export=dmdwasm_parse_len \
   --export=dmdwasm_sema_ptr --export=dmdwasm_sema_len \
+  --export=dmdwasm_scope_ptr --export=dmdwasm_scope_len \
   --export=dmdwasm_lex_ptr --export=dmdwasm_lex_len \
   --export=dmdwasm_ir_ptr --export=dmdwasm_ir_len \
   --export=dmdwasm_iropt_ptr --export=dmdwasm_iropt_len \

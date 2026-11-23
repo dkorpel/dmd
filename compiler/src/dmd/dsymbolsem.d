@@ -9306,6 +9306,8 @@ extern(D) Scope* newScope(Dsymbol d, Scope* sc)
 {
     scope nsv = new NewScopeVisitor(sc);
     d.accept(nsv);
+    if (scopeTraceHook && nsv.sc !is sc)
+        scopeTraceHook(nsv.sc, sc, d, false);
     return nsv.sc;
 }
 

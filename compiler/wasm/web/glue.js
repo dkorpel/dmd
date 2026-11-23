@@ -162,7 +162,7 @@ function runOnce(source, optimize) {
         exports.dmdwasm_run(ptr, bytes.length, optimize ? 1 : 0);
     } catch (e) {
         return {
-            lex: "", parse: "", sema: "", ast: "", ir: "", irOpt: "",
+            lex: "", parse: "", sema: "", scope: "", ast: "", ir: "", irOpt: "",
             asm: stdoutText,
             errors: exports.dmdwasm_errors() || 1,
             diagnostics: stderrText + "\ndmd.wasm trapped: " + e.message,
@@ -178,6 +178,9 @@ function runOnce(source, optimize) {
     const semaPtr = exports.dmdwasm_sema_ptr();
     const semaLen = exports.dmdwasm_sema_len();
     const sema = semaLen ? td.decode(new Uint8Array(memory.buffer, semaPtr, semaLen)) : "";
+    const scopePtr = exports.dmdwasm_scope_ptr();
+    const scopeLen = exports.dmdwasm_scope_len();
+    const scope = scopeLen ? td.decode(new Uint8Array(memory.buffer, scopePtr, scopeLen)) : "";
     const lexPtr = exports.dmdwasm_lex_ptr();
     const lexLen = exports.dmdwasm_lex_len();
     const lex = lexLen ? td.decode(new Uint8Array(memory.buffer, lexPtr, lexLen)) : "";
@@ -187,7 +190,7 @@ function runOnce(source, optimize) {
     const irOptPtr = exports.dmdwasm_iropt_ptr();
     const irOptLen = exports.dmdwasm_iropt_len();
     const irOpt = irOptLen ? td.decode(new Uint8Array(memory.buffer, irOptPtr, irOptLen)) : "";
-    return { lex, parse, sema, ast, ir, irOpt, asm: stdoutText, errors: exports.dmdwasm_errors(), diagnostics: stderrText };
+    return { lex, parse, sema, scope, ast, ir, irOpt, asm: stdoutText, errors: exports.dmdwasm_errors(), diagnostics: stderrText };
 }
 
 // Compile `source` for the wasm target in a fresh instance, returning the WAT

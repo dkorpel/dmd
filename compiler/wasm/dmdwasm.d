@@ -33,6 +33,10 @@ struct WasmBuffers
     /// as `parse`, but with types resolved and lowerings filled in.
     OutBuffer sema;
 
+    /// Scope view: every Scope pushed while analysing the input module
+    /// (dmdwasm_scopes).
+    OutBuffer scopes;
+
     /// Internal lexer dump: one output line per source line, listing the TOK enum
     /// member names of that line's tokens. Tokens carrying a value (literals,
     /// identifiers) get that value as a parenthesized postfix, e.g. float32Literal(3.5).
@@ -81,6 +85,8 @@ const(char)* dmdwasm_parse_ptr() => cast(const(char)*) buffers.parse[].ptr;
 size_t       dmdwasm_parse_len() => buffers.parse[].length;
 const(char)* dmdwasm_sema_ptr() => cast(const(char)*) buffers.sema[].ptr;
 size_t       dmdwasm_sema_len() => buffers.sema[].length;
+const(char)* dmdwasm_scope_ptr() => cast(const(char)*) buffers.scopes[].ptr;
+size_t       dmdwasm_scope_len() => buffers.scopes[].length;
 const(char)* dmdwasm_lex_ptr() => cast(const(char)*) buffers.lex[].ptr;
 size_t       dmdwasm_lex_len() => buffers.lex[].length;
 const(char)* dmdwasm_ir_ptr()  => cast(const(char)*) buffers.ir[].ptr;
@@ -248,6 +254,7 @@ private void runImpl(const(char)* src, size_t len, int optimize)
     buffers.ast.doindent = 1;
     buffers.parse.reset();
     buffers.sema.reset();
+    buffers.scopes.reset();
     buffers.lex.reset();
     buffers.ir.reset();
     buffers.irOpt.reset();
@@ -289,11 +296,18 @@ private void runImpl(const(char)* src, size_t len, int optimize)
 
     if (global.errors == 0)
     {
+        import dmdwasm_scopes : beginScopeTrace, endScopeTrace, currentPass;
+        beginScopeTrace(m);
         m.importAll(null);
+        currentPass = "semantic";
         m.dsymbolSemantic(null);
+        currentPass = "deferred semantic";
         runDeferredSemantic();
+        currentPass = "semantic2";
         m.semantic2(null);
+        currentPass = "semantic3";
         m.semantic3(null);
+        endScopeTrace(buffers.scopes);
     }
 
     // Dump the AST again after semantic analysis: same internal-class-name
