@@ -144,3 +144,19 @@ fail_compilation/traits.d(801): Error: `bool` expected as third argument of `__t
 #line 800
 class C8 { void g() {} }
 enum ov8 = __traits(getOverloads, C8, "g", int);
+
+/********************************************
+TEST_OUTPUT:
+---
+fail_compilation/traits.d(903): Error: expected 1 arguments for `identifier` but had 2
+fail_compilation/traits.d(904): Error: expected 1 arguments for `getAttributes` but had 0
+fail_compilation/traits.d(905): Error: expected 1 arguments for `getVisibility` but had 2
+---
+*/
+#line 900
+alias Seq9(T...) = T;
+struct S9 {}
+int var9;
+enum id9 = __traits(identifier, Seq9!(var9, S9));
+enum at9 = __traits(getAttributes, Seq9!());
+enum vis9 = __traits(getVisibility, Seq9!(var9, S9));

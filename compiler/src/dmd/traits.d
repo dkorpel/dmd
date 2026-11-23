@@ -797,6 +797,7 @@ Expression semanticTraits(TraitsExp e, Scope* sc)
          */
         if (!TemplateInstance_semanticTiargs(e.loc, sc, e.args, 2))
             return ErrorExp.get();
+        dim = e.args ? e.args.length : 0;
         if (dim != 1)
             return dimError(1);
 
@@ -913,6 +914,10 @@ Expression semanticTraits(TraitsExp e, Scope* sc)
         sc2.pop();
         if (!ok)
             return ErrorExp.get();
+
+        dim = e.args ? e.args.length : 0;
+        if (dim != 1)
+            return dimError(1);
 
         auto o = (*e.args)[0];
         auto s = getDsymbolWithoutExpCtx(o);
@@ -1386,6 +1391,7 @@ Expression semanticTraits(TraitsExp e, Scope* sc)
         if (!TemplateInstance_semanticTiargs(e.loc, sc, e.args, 3))
             return ErrorExp.get();
 
+        dim = e.args ? e.args.length : 0;
         if (dim != 1)
             return dimError(1);
 
