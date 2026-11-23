@@ -7594,6 +7594,7 @@ bool isZeroInit(Type t, Loc loc)
         case Treference:
         case Tdelegate:
         case Tclass:
+        case Tnull:
         case Tpointer:         return true;
         case Tstruct:          return visitStruct(t.isTypeStruct());
         case Tenum:            return visitEnum(t.isTypeEnum());

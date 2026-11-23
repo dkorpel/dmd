@@ -335,3 +335,5 @@ void fpCall(int function(ref int) f, int delegate(lazy int) dg, int x)
     static assert(__traits(getParameterStorageClasses, f(x), 0)[0] == "ref");
     static assert(__traits(getParameterStorageClasses, dg(x), 0)[0] == "lazy");
 }
+
+static assert(__traits(isZeroInit, typeof(null)));
