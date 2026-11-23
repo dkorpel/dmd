@@ -400,7 +400,7 @@ Expression semanticTraits(TraitsExp e, Scope* sc)
                 t = isType(o);
         }
         else
-            t = isType(o);
+            t = getType(o);
 
         if (t)
         {

@@ -337,3 +337,9 @@ void fpCall(int function(ref int) f, int delegate(lazy int) dg, int x)
 }
 
 static assert(__traits(isZeroInit, typeof(null)));
+
+int fpTarget(ref int) pure;
+static assert(__traits(getFunctionAttributes, &fpTarget)[0] == "pure");
+static assert(__traits(getLinkage, &fpTarget) == "D");
+static assert(__traits(getFunctionVariadicStyle, &fpTarget) == "none");
+static assert(!__traits(isReturnOnStack, &fpTarget));
