@@ -1026,7 +1026,10 @@ Expression semanticTraits(TraitsExp e, Scope* sc)
         else if (auto ti = symc.isScopeDsymbol())
             ex = new DotExp(e.loc, ex, new ScopeExp(e.loc, ti));
         else
-            assert(0);
+        {
+            eSink.error(e.loc, "symbol expected as second argument of __traits `child` instead of `%s`", oc.toErrMsg());
+            return ErrorExp.get();
+        }
 
         ex = ex.expressionSemantic(sc);
         return ex;
