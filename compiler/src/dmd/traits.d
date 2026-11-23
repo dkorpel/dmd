@@ -2127,8 +2127,9 @@ Expression semanticTraits(TraitsExp e, Scope* sc)
         }
         se = se.toUTF8(sc);
 
+        import core.stdc.string : strlen;
         const slice = se.peekString();
-        Expression r = target.getTargetInfo(slice.ptr, e.loc); // BUG: reliance on terminating 0
+        Expression r = strlen(slice.ptr) == slice.length ? target.getTargetInfo(slice.ptr, e.loc) : null;
         if (!r)
         {
             eSink.error(e.loc, "`getTargetInfo` key `\"%.*s\"` not supported by this implementation",
