@@ -5,7 +5,7 @@
  * segment to wasm-ld, and leaves zeros/padded LEBs behind for it to patch. When
  * `wasmSelfLink` is set the whole program is compiled as one unit instead, and
  * this module supplies what the linker would: it resolves the data and code
- * relocations in place, concatenates the per-module "minfo" segments druntime
+ * relocations in place, concatenates the per-module "__minfo" segments druntime
  * scans, lays out the shadow stack and heap above the data section, and emits
  * the table, memory, global and element sections. The `linking`/`reloc.*`
  * metadata is then dropped, leaving a module a host can instantiate directly.
@@ -65,8 +65,8 @@ private uint linkerSymbolAddr(ref WasmModule wmod, const(char)[] name)
         case "__stack_high":    return wmod.stackHigh;
         case "__heap_base":     return wmod.heapBase;
         case "__heap_end":      return wmod.memPages * 65536;
-        case "__start_minfo":   return wmod.minfoStart;
-        case "__stop_minfo":    return wmod.minfoStop;
+        case "__start___minfo":   return wmod.minfoStart;
+        case "__stop___minfo":    return wmod.minfoStop;
         default:                return uint.max;
     }
 }
@@ -147,15 +147,15 @@ private void applyDataRelocs(ref WasmModule wmod)
     }
 }
 
-/// druntime walks the ModuleInfo array between `__start_minfo` and
-/// `__stop_minfo`, which wasm-ld synthesizes by concatenating the per-module
-/// "minfo" segments. Those segments are interleaved with ordinary data here, so
+/// druntime walks the ModuleInfo array between `__start___minfo` and
+/// `__stop___minfo`, which wasm-ld synthesizes by concatenating the per-module
+/// "__minfo" segments. Those segments are interleaved with ordinary data here, so
 /// gather their (already relocated) contents into one contiguous segment.
 private void gatherMinfo(ref WasmModule wmod)
 {
     OutBuffer* buf = new OutBuffer();
     foreach (ref WasmDataSeg ds; wmod.dataSegs)
-        if (ds.name == "minfo")
+        if (ds.name == "__minfo")
             buf.write(ds.data.peekSlice());
     if (!buf.length())
         return;
@@ -164,7 +164,7 @@ private void gatherMinfo(ref WasmModule wmod)
     WasmDataSeg ds;
     ds.data = buf;
     ds.offset = base;
-    ds.name = "minfo.all";
+    ds.name = "__minfo.all";
     ds.alignLog2 = 2;
     ds.reserved = cast(uint) buf.length();
     wmod.dataSegs ~= ds;

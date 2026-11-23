@@ -15,6 +15,7 @@
 module dmd.backend.arm.instr;
 
 import core.stdc.stdio;
+import core.bitop;
 
 nothrow:
 @safe:
@@ -1606,7 +1607,7 @@ struct INSTR
 }
 
 /**********************
- * Encode bit mask
+ * Encode bit mask. Only AArch64 is supported.
  * Params:
  *      bitmask = mask to encode
  *      N = set to N bit
@@ -1625,9 +1626,13 @@ bool encodeNImmrImms(ulong value, out uint N, out uint immr, out uint imms)
 
     /* `size` is the number of bits in the pattern
      */
-    uint size = 64;
+    uint size;
+
+    //if ((value & 0xFFFF_FFFF) != ((value >> 32) & 0xFFF_FFFF))
     if ((value ^ (value >> 32)) & 0xFFFF_FFFF)
+    {
         size = 64;
+    }
     else
     {
         value &= 0xFFFF_FFFF;
@@ -1663,18 +1668,7 @@ bool encodeNImmrImms(ulong value, out uint N, out uint immr, out uint imms)
     /* `value` is now the pattern that is `size` bits in length
      */
 
-    static uint popcount(ulong x)
-    {
-        uint n = 0;
-        while (x)
-        {
-            n += cast(uint)x & 1;
-            x >>= 1;
-        }
-        return n;
-    }
-
-    uint numOnes = popcount(value);
+    uint numOnes = popcnt(value);
 
     /* Is n a right-justified run of 1's?
      */
@@ -1713,8 +1707,10 @@ bool encodeNImmrImms(ulong value, out uint N, out uint immr, out uint imms)
         return false;
 
     immr = ((size - rotation) & (size - 1)) & 0x3F;
-    imms = ((~(size - 1) << 1) | (numOnes - 1)) & 0x3F;
-    N = size == 64;
+    imms = ((~(size - 1) << 1) | (numOnes - 1));
+    N = ((imms >> 6) & 1) ^ 1;
+    imms &= 0x3F;
+
     return true;
 }
 

@@ -2,7 +2,7 @@
  * Code generation 3
  *
  * Includes:
- * - generating a function prolog (pushing return address, loading paramters)
+ * - generating a function prolog (pushing return address, loading parameters)
  * - generating a function epilog (restoring registers, returning)
  * - generation / peephole optimizations of jump / branch instructions
  *
@@ -31,7 +31,7 @@ import dmd.backend.cc;
 import dmd.backend.cdef;
 import dmd.backend.cgcse;
 import dmd.backend.code;
-import dmd.backend.arm.cod1 : loadFromEA, storeToEA;
+import dmd.backend.arm.cod1 : loadFromEA, storeToEA, getlvalue;
 import dmd.backend.arm.disasmarm : encodeHFD;
 import dmd.backend.x86.cgcod : disassemble;
 import dmd.backend.x86.code_x86;

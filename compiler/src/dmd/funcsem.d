@@ -1109,6 +1109,9 @@ private int classFuncSemantic(ClassDeclaration cd, FuncDeclaration funcdecl,
                     }
                 }
                 cd.vtbl.insert(funcdecl.vtblIndex, funcdecl);
+                // the reserved C++ destructor slot is not a vtblIndex, so shift it explicitly
+                if (found && cd.cppDtorVtblIndex >= funcdecl.vtblIndex)
+                    ++cd.cppDtorVtblIndex;
 
                 debug foreach (const i, s; cd.vtbl)
                 {
@@ -2055,7 +2058,7 @@ FuncDeclaration resolveFuncCall(Loc loc, Scope* sc, Dsymbol s,
     {
         auto arg = (*fargs)[0];
         eSink.error(loc, "no property `%s` for `%s` of type `%s`", s.ident.toErrMsg(), arg.toErrMsg(), arg.type.toErrMsg());
-        eSink.errorSupplemental(loc, "the following error occured while looking for a UFCS match");
+        eSink.errorSupplemental(loc, "the following error occurred while looking for a UFCS match");
     }
 
     if (!fd)
@@ -3277,7 +3280,12 @@ void modifyReturns(FuncLiteralDeclaration fld, Scope* sc, Type tret)
     // This is required so the code generator does not try to cast the
     // modified returns back to the original type.
     if (fld.inferRetType && fld.type.nextOf() != tret)
-        fld.type.toTypeFunction().next = tret;
+    {
+        auto tfn = cast(TypeFunction)fld.type.copy();
+        tfn.next = tret;
+        tfn.deco = null;
+        fld.type = tfn.merge();
+    }
 }
 
 /**************************************
@@ -4352,7 +4360,7 @@ extern (D) bool checkNestedReference(VarDeclaration vd, Scope* sc, Loc loc)
     // https://issues.dlang.org/show_bug.cgi?id=3326
     if (vd.ident == Id.dollar)
     {
-        sc.eSink.error(loc, "cannnot use `$` inside a function literal");
+        sc.eSink.error(loc, "cannot use `$` inside a function literal");
         return true;
     }
     if (vd.ident == Id.withSym) // https://issues.dlang.org/show_bug.cgi?id=1759

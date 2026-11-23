@@ -39,7 +39,7 @@ jobs:
           - job_name: Ubuntu 22.04 x86, DMD (latest)
             os: ubuntu-22.04
             model: 32
-            host_dmd: dmd
+            host_dmd: dmd-2.113.1
           # Disabled because of failure https://issues.dlang.org/show_bug.cgi?id=24518
           # - job_name: Ubuntu 22.04 x86, DMD (coverage)
           #   os: ubuntu-22.04
@@ -62,24 +62,24 @@ jobs:
             container_image: alpine:3.21
             host_dmd: ldmd2
           # macOS
-          - job_name: macOS 14 x64, DMD (latest)
-            os: macos-14
+          - job_name: macOS 15 x64, DMD (latest)
+            os: macos-15-intel
             host_dmd: dmd
           # Disabled because of failure https://issues.dlang.org/show_bug.cgi?id=24518
-          #- job_name: macOS 14 x64, DMD (coverage)
-          #  os: macos-14
+          #- job_name: macOS 15 x64, DMD (coverage)
+          #  os: macos-15-intel
           #  host_dmd: dmd
           #  coverage: true
-          - job_name: macOS 14 x64, DMD (bootstrap)
-            os: macos-14
-            host_dmd: dmd-2.107.1
+          - job_name: macOS 15 x64, DMD (bootstrap)
+            os: macos-15-intel
+            host_dmd: dmd-2.112.1
           # Windows
           - job_name: Windows x64, LDC
             os: windows-2022
             host_dmd: ldc-latest
           - job_name: Windows x86, DMD (latest)
             os: windows-2022
-            host_dmd: dmd-latest
+            host_dmd: dmd-2.113.1
             model: 32
           # FreeBSD (VMs on Ubuntu)
           - job_name: FreeBSD 14.4 x64, DMD (latest)
@@ -139,7 +139,7 @@ jobs:
 
       - name: 'Posix: Install prerequisites'
         if: runner.os != 'Windows'
-        run: ${{ runner.os == 'macOS' && 'ci/cirrusci.sh' || 'sudo -E ci/cirrusci.sh' }}
+        run: ${{ runner.os == 'macOS' && 'ci/cirrusci.sh' || 'sudo --preserve-env=OS_NAME,MODEL,HOST_DMD,FULL_BUILD,N ci/cirrusci.sh' }}
 
       - name: 'macOS: Switch Xcode version if required'
         if: runner.os == 'macOS' && matrix.xcode
@@ -180,9 +180,8 @@ jobs:
         run: ENABLE_RELEASE=0 ENABLE_DEBUG=1 ENABLE_COVERAGE=1 ci/run.sh rebuild
       - name: 'Windows: Set up MSVC environment' # some tests need cl.exe etc. in PATH
         if: runner.os == 'Windows'
-        uses: seanmiddleditch/gha-setup-vsdevenv@v5
-        with:
-          arch: ${{ env.MODEL == '64' && 'x64' || 'x86' }}
+        shell: pwsh
+        run: ./.github/scripts/setup_msvc.ps1 -Arch ${{ env.MODEL == '64' && 'x64' || 'x86' }}
       - name: Test dmd
         run: ci/run.sh test_dmd
       - name: Test frontend subpackage
@@ -213,7 +212,7 @@ jobs:
   arm-qemu:
     needs: call-precommit
     name: 'Ubuntu 24.04 x64, DMD (AArch64 cross-compile via QEMU, WASM via wasmtime)'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
       OS_NAME: linux
@@ -232,7 +231,7 @@ jobs:
         run: echo "N=$(nproc)" >> $GITHUB_ENV
 
       - name: Install prerequisites
-        run: sudo -E ci/cirrusci.sh
+        run: sudo --preserve-env=OS_NAME,MODEL,HOST_DMD,FULL_BUILD,N ci/cirrusci.sh
 
       - name: Install host compiler
         run: ci/run.sh install_host_compiler
@@ -284,10 +283,21 @@ jobs:
           path: generated/wasm/wasi-sysroot-33.tar.gz
           key: wasi-sysroot-33.0+m
 
+      - name: Check for the Phobos wasm target
+        id: phobos_wasm
+        run: |
+          if make -C ../phobos -n wasm > /dev/null 2>&1; then
+            echo "available=true" >> $GITHUB_OUTPUT
+          else
+            echo "available=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Build WASM druntime and phobos
+        if: steps.phobos_wasm.outputs.available == 'true'
         run: make -j$N -C ../phobos wasm
 
       - name: Test WASM cross-compile and run via wasmtime
+        if: steps.phobos_wasm.outputs.available == 'true'
         run: |
           source ~/dlang/*/activate
           compiler/test/run.d wasm

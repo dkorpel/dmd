@@ -557,7 +557,7 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
 
         ScopeDsymbol sym = new ScopeDsymbol();
         sym.parent = sc.scopesym;
-        sym.endlinnum = ss.endloc.linnum;
+        sym.endloc = ss.endloc;
         sc = sc.push(sym);
 
         // for CompoundStatement flatten just returns its statements, so no need
@@ -718,7 +718,7 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
 
         auto sym = new ScopeDsymbol();
         sym.parent = sc.scopesym;
-        sym.endlinnum = fs.endloc.linnum;
+        sym.endloc = fs.endloc;
         sc = sc.push(sym);
         sc.inLoop = true;
 
@@ -821,7 +821,7 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
             // https://issues.dlang.org/show_bug.cgi?id=14653
             // Extend the life of rvalue aggregate till the end of foreach.
             vinit = copyToTemp(STC.rvalue, "__aggr", fs.aggr);
-            vinit.endlinnum = fs.endloc.linnum;
+            vinit.endloc = fs.endloc;
             vinit.dsymbolSemantic(sc);
             fs.aggr = new VarExp(fs.aggr.loc, vinit);
         }
@@ -849,14 +849,14 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
                 if (fs.op == TOK.foreach_reverse_)
                 {
                     eSink.errorSupplemental(fs.loc, "`foreach_reverse` works with bidirectional ranges"~
-                        " (implementing `back` and `popBack`), aggregates implementing" ~
+                        " (implementing `empty`, `back`, and `popBack`), aggregates implementing" ~
                         " `opApplyReverse`, or the result of an aggregate's `.tupleof` property");
                     eSink.errorSupplemental(fs.loc, "https://dlang.org/phobos/std_range_primitives.html#isBidirectionalRange");
                 }
                 else
                 {
                     eSink.errorSupplemental(fs.loc, "`foreach` works with input ranges"~
-                        " (implementing `front` and `popFront`), aggregates implementing" ~
+                        " (implementing `empty`, `front`, and `popFront`), aggregates implementing" ~
                         " `opApply`, or the result of an aggregate's `.tupleof` property");
                     eSink.errorSupplemental(fs.loc, "https://dlang.org/phobos/std_range_primitives.html#isInputRange");
                 }
@@ -940,7 +940,7 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
 
         auto sym = new ScopeDsymbol();
         sym.parent = sc.scopesym;
-        sym.endlinnum = fs.endloc.linnum;
+        sym.endloc = fs.endloc;
         auto sc2 = sc.push(sym);
         sc2.inLoop = true;
 
@@ -1765,7 +1765,7 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
 
         auto sym = new ScopeDsymbol();
         sym.parent = sc.scopesym;
-        sym.endlinnum = ifs.endloc.linnum;
+        sym.endloc = ifs.endloc;
         Scope* scd = sc.push(sym);
         if (ifs.param)
         {
@@ -1774,26 +1774,26 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
              */
             // Make sure the location of the initializer reflects the condition, not the if statement.
             auto ei = new ExpInitializer(ifs.condition.loc, ifs.condition);
-            ifs.match = new VarDeclaration(ifs.loc, ifs.param.type, ifs.param.ident, ei);
-            ifs.match.parent = scd.func;
-            ifs.match.storage_class |= ifs.param.storageClass;
-            ifs.match.dsymbolSemantic(scd);
+            auto v = new VarDeclaration(ifs.loc, ifs.param.type, ifs.param.ident, ei);
+            v.parent = scd.func;
+            v.storage_class |= ifs.param.storageClass;
+            v.dsymbolSemantic(scd);
 
-            auto de = new DeclarationExp(ifs.loc, ifs.match);
-            auto ve = new VarExp(ifs.loc, ifs.match);
+            auto de = new DeclarationExp(ifs.loc, v);
+            auto ve = new VarExp(ifs.loc, v);
             ifs.condition = new CommaExp(ifs.loc, de, ve);
             ifs.condition = ifs.condition.expressionSemantic(scd);
 
-            if (ifs.match.edtor)
+            if (v.edtor)
             {
-                Statement sdtor = new DtorExpStatement(ifs.loc, ifs.match.edtor, ifs.match);
+                Statement sdtor = new DtorExpStatement(ifs.loc, v.edtor, v);
                 sdtor = new ScopeGuardStatement(ifs.loc, TOK.onScopeExit, sdtor);
                 ifs.ifbody = new CompoundStatement(ifs.loc, sdtor, ifs.ifbody);
-                ifs.match.storage_class |= STC.nodtor;
+                v.storage_class |= STC.nodtor;
 
                 // the destructor is always called
                 // whether the 'ifbody' is executed or not
-                Statement sdtor2 = new DtorExpStatement(ifs.loc, ifs.match.edtor, ifs.match);
+                Statement sdtor2 = new DtorExpStatement(ifs.loc, v.edtor, v);
                 if (ifs.elsebody)
                     ifs.elsebody = new CompoundStatement(ifs.loc, sdtor2, ifs.elsebody);
                 else
@@ -2075,7 +2075,11 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
                     }
                 }
             }
-            eSink.error(gcs.loc, "`case %s` not found", gcs.exp.toErrMsg());
+            if (gcs.exp.isConst())
+                eSink.error(gcs.loc, "`case %s` not found", gcs.exp.toErrMsg());
+            else
+                eSink.error(gcs.loc, "case expression `%s` cannot be read at compile time",
+                    gcs.exp.toErrMsg());
             sc.pop();
             return setError();
         }
@@ -4297,16 +4301,8 @@ void catchSemantic(Catch c, Scope* sc)
     sym.parent = sc.scopesym;
     sc = sc.push(sym);
 
-    if (!c.type)
-    {
-        eSink.error(c.loc, "`catch` statement without an exception specification is deprecated");
-        eSink.errorSupplemental(c.loc, "use `catch(Throwable)` for old behavior");
-        c.errors = true;
-
-        // reference .object.Throwable
-        c.type = getThrowable();
-    }
-    else if (!c.type.isNaked && !c.type.isConst())
+    assert(c.type);
+    if (!c.type.isNaked && !c.type.isConst())
     {
         // @@@DEPRECATED_2.115@@@
         // Deprecated in 2.105, change into an error & uncomment assign in 2.115
@@ -4368,6 +4364,9 @@ void catchSemantic(Catch c, Scope* sc)
         c.var = new VarDeclaration(c.loc, c.type, ident, null, stc);
         c.var.iscatchvar = true;
         c.var.dsymbolSemantic(sc);
+        // A caught Throwable is always a D class reference, regardless of
+        // the enclosing scope's linkage.
+        c.var._linkage = LINK.d;
         sc.insert(c.var);
 
         if (sc.previews.dip1008 && stc & STC.scope_)

@@ -30,6 +30,7 @@ import dmd.compiler;
 import dmd.cond;
 import dmd.console;
 import dmd.cpreprocess;
+import dmd.declaration;
 import dmd.deps;
 import dmd.dinifile;
 import dmd.dinterpret;
@@ -657,6 +658,12 @@ private int tryMain(const(char)[][] argv, out Param params)
         //fatal();
     }
 
+    // Must run after dsymbolSemantic() above, which is what overwrites an
+    // ImportC `static` global's visibility, and before semantic2/3 below,
+    // which is where code referencing such a variable would otherwise be
+    // allowed to access it.
+    VarDeclaration.fixImportCStaticVisibility();
+
     // Do pass 2 semantic analysis
     foreach (m; modules)
     {
@@ -692,6 +699,12 @@ private int tryMain(const(char)[][] argv, out Param params)
     runDeferredSemantic3();
     if (global.errors)
         removeHdrFilesAndFail(params.dihdr.doOutput, modules);
+
+    // Must run before the inline scans below: they rewrite call sites of
+    // always-inline functions in place, erasing the very call references
+    // this needs to see to tell whether an ImportC inline/__forceinline
+    // function is genuinely unused.
+    scanImportCInlineUsage(&modules);
 
     {
     timeTraceBeginEvent(TimeTraceEventType.inlineGeneral);
@@ -730,12 +743,9 @@ private int tryMain(const(char)[][] argv, out Param params)
     if (global.errors || global.warnings)
         removeHdrFilesAndFail(params.dihdr.doOutput, modules);
 
-    // inlineScan incrementally run semantic3 of each expanded functions.
     // So deps file generation should be moved after the inlining stage.
     if (OutBuffer* ob = params.moduleDeps.buffer)
     {
-        foreach (i; 1 .. modules[0].aimports.length)
-            semantic3OnDependencies(modules[0].aimports[i]);
         runDeferredSemantic3();
 
         const data = (*ob)[];
@@ -1025,7 +1035,7 @@ bool parseCommandlineAndConfig(const(char)[][] argv, out Param params, ref Strin
     if (char* p = getenv("DDOCFILE"))
         global.params.ddoc.files.shift(p);
 
-    if (arch.length == 2 && target.isX86_64 != isX86_64)
+    if (arch.length == 2 && !target.isWasm && target.isX86_64 != isX86_64)
         eSink.error(Loc.initial, "the architecture must not be changed in the %s section of %.*s",
               envsection.ptr, cast(int)global.inifilename.length, global.inifilename.ptr);
 

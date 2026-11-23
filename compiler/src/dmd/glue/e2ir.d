@@ -740,21 +740,7 @@ elem* toElem(Expression e, ref IRState irs)
             }
         }
 
-        /* Check for @__ctfe functions - they cannot be referenced at runtime
-         */
-        if (FuncDeclaration fd = se.var.isFuncDeclaration())
-        {
-            if (auto tf = fd.type.isTypeFunction())
-            {
-                if (tf.isCtfeOnly)
-                {
-                    irs.eSink.error(se.loc, "function `%s` is `@__ctfe` and cannot be used at runtime", fd.toPrettyChars());
-                    return el_long(TYsize_t, 0);
-                }
-            }
-        }
-
-        Symbol* s = toSymbol(se.var);
+        Symbol* s = toSymbolNRVO(se.var);
 
         // VarExp generated for `__traits(initSymbol, Aggregate)`?
         if (auto symDec = se.var.isSymbolDeclaration())
@@ -781,9 +767,7 @@ elem* toElem(Expression e, ref IRState irs)
         if (se.var.toParent2())
             fd = se.var.toParent2().isFuncDeclaration();
 
-        const bool nrvo = fd && (fd.isNRVO && fd.nrvo_var == se.var || se.var.nrvo && fd.shidden);
-        if (nrvo)
-            s = cast(Symbol*)fd.shidden;
+        const bool nrvo = fd && s == fd.shidden;
 
         if (s.Sclass == SC.auto_ || s.Sclass == SC.parameter || s.Sclass == SC.shadowreg)
         {
@@ -1910,6 +1894,9 @@ elem* toElem(Expression e, ref IRState irs)
             ev = el_una(OPind, tym, ev);
         }
         elem* er = toElem(be.e2, irs);
+
+        if (tybasic(er.Ety) == TYnoreturn)
+            op = OPcomma;
 
         elem* e;
         if (op == OPmodass &&
@@ -4002,6 +3989,13 @@ elem* toElem(Expression e, ref IRState irs)
 
         //printf("IndexExp.toElem() %s\n", ie.toChars());
         Type t1 = ie.e1.type.toBasetype();
+
+        if (t1.isTypeNoreturn())
+        {
+            elem_setLoc(n1, ie.loc);
+            return n1;
+        }
+
         if (auto taa = t1.isTypeAArray())
         {
             assert(false, "no index lowering for associative array literal");
@@ -4318,13 +4312,9 @@ elem* toElemRVO(Expression e, elem* ehidden, ref IRState irs, Type forceType = n
     // int[] f(); void g() { int[] a = f(); } // wasm returns slices by hidden pointer
     import dmd.target : target;
     const wasmNonAgg = target.isWasm && basetype.ty != Tstruct && basetype.ty != Tsarray;
-    if (wasmNonAgg)
-    {
-        if (!ehidden)
-            return toElem(e, irs);
-    }
-    else
-        assert(basetype.ty == Tstruct || basetype.ty == Tsarray);
+    if (wasmNonAgg && !ehidden)
+        return toElem(e, irs);
+    assert(wasmNonAgg || basetype.ty == Tstruct || basetype.ty == Tsarray);
 
     /* There are cases where RVO appears to be possible in the frontend,
      * but can't be done here. Generate a blit here and wait for bug reports,
@@ -4428,7 +4418,7 @@ elem* toElemRVO(Expression e, elem* ehidden, ref IRState irs, Type forceType = n
          * replace it with ehidden.
          */
         if (ehidden.Eoper == OPvar && ehidden.Voffset == 0 &&
-            ehidden.Vsym == toSymbol(ve.var))
+            ehidden.Vsym == toSymbolNRVO(ve.var))
         {
             if (tybasic(ehidden.Ety) == TYnptr)
             {
@@ -4535,6 +4525,9 @@ elem* toElemRVO(Expression e, elem* ehidden, ref IRState irs, Type forceType = n
         if (auto ts2 = e.type.toBasetype().isTypeSArray())
             sameLayout = ts1.size() == ts2.size() && offset == 0;
 
+    if (wasmNonAgg && offset == 0 && basetype.equals(e.type.toBasetype()))
+        sameLayout = true;
+
     /* Accessing a field or coercing types. At the moment, the only possible
      * RVO case is extracting from a struct literal. Blit otherwise.
      */
@@ -4561,16 +4554,7 @@ elem* toElemRVO(Expression e, elem* ehidden, ref IRState irs, Type forceType = n
         case EXP.structLiteral: return doStructLiteralRVO(e.isStructLiteralExp());
         default:
             assert(wasmNonAgg);
-            elem* ev = toElem(e, irs);
-            elem* ed = el_copytree(ehidden);
-            if (tybasic(ed.Ety) == TYnptr)
-            {
-                ed = el_una(OPind, ev.Ety, ed);
-                ed.ET = ev.ET;
-            }
-            elem* ea = el_bin(OPeq, ev.Ety, ed, ev);
-            elem_setLoc(ea, e.loc);
-            return ea;
+            return blitToStorage(e);
     }
 }
 
@@ -4791,8 +4775,9 @@ elem* toElemCast(CastExp ce, elem* e, bool isLvalue, ref IRState irs)
     TY fty;
     TY tty;
     if (t.equals(tfrom) ||
-        t.equals(Type.tvoid)) // https://issues.dlang.org/show_bug.cgi?id=18573
-                              // Remember to pop value left on FPU stack
+        t.equals(Type.tvoid) ||       // https://issues.dlang.org/show_bug.cgi?id=18573
+        tybasic(e.Ety) == TYnoreturn) // https://issues.dlang.org/show_bug.cgi?id=23950
+                                      // Remember to pop value left on FPU stack
         return e;
 
     fty = tfrom.ty;
@@ -7296,7 +7281,7 @@ elem* toElemStructLit(StructLiteralExp sle, ref IRState irs, EXP op, Symbol* sym
                 /* Initialize entire location the bitfield is in
                  * ep = (ep & ((1 << bf.fieldWidth) - 1)) << bf.bitOffset
                  */
-                auto ex = el_bin(OPand, tym, ep, el_long(tym, (1L << bf.fieldWidth) - 1));
+                auto ex = el_bin(OPand, tym, ep, el_long(tym, ~0UL >> (64 - bf.fieldWidth)));
                 ep = el_bin(OPshl, tym, ex, el_long(tym, bitOffset));
                 vbf = v;
             }
@@ -7680,11 +7665,15 @@ elem* callCAssert(ref IRState irs, Loc loc, Expression exp, Expression emsg, con
     auto eline = el_long(TYint, loc.linnum);
 
     elem* ea;
-    if (irs.target.os == Target.OS.OSX)
+    if (irs.target.os == Target.OS.OSX ||
+        irs.target.os == Target.OS.FreeBSD ||
+        irs.target.os == Target.OS.DragonFlyBSD)
     {
         // __assert_rtn(func, file, line, msg);
+        // __assert(func, file, line, failedexpr);
         elem* efunc = getFuncName();
-        auto eassert = el_var(getRtlsym(RTLSYM.C__ASSERT_RTN));
+        const rtlsym = (irs.target.os == Target.OS.OSX) ? RTLSYM.C__ASSERT_RTN : RTLSYM.C__ASSERT;
+        auto eassert = el_var(getRtlsym(rtlsym));
         ea = el_bin(OPcall, TYvoid, eassert, el_params(elmsg, eline, efilename, efunc, null));
         return ea;
     }

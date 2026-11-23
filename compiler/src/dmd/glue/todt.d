@@ -35,7 +35,6 @@ import dmd.denum;
 import dmd.dstruct;
 import dmd.dsymbol;
 import dmd.dtemplate;
-import dmd.errors : fatal;
 import dmd.errorsink;
 import dmd.expression;
 import dmd.id;
@@ -122,7 +121,8 @@ void Initializer_toDt(Initializer init, ref DtBuilder dtb, bool isCfile)
         foreach (i, idx; ai.index)
         {
             if (idx)
-                length = cast(uint)idx.toInteger();
+                if (auto ei = idx.isExpInitializer())
+                    length = cast(uint)ei.exp.toInteger();
             //printf("\tindex[%d] = %p, length = %u, dim = %u\n", i, idx, length, ai.dim);
 
             assert(length < ai.dim);
@@ -264,7 +264,7 @@ void Expression_toDt(Expression e, ref DtBuilder dtb)
 
         size_t len;
         if (auto strExp = e.e1.isStringExp())
-            len = strExp.len;
+            len = strExp.length;
         else if (auto arrExp = e.e1.isArrayLiteralExp())
             len = arrExp.length;
         else
@@ -1054,7 +1054,7 @@ private void membersToDt(AggregateDeclaration ad, ref DtBuilder dtb,
                 assert(ie);
                 auto value = ie.getInteger();
                 const width = bf.fieldWidth;
-                const mask = (1L << width) - 1;
+                const mask = ~0UL >> (64 - width);
                 bitFieldValue = (bitFieldValue & ~(mask << bf.bitOffset)) | ((value & mask) << bf.bitOffset);
                 //printf("bitFieldValue x%llx\n", bitFieldValue);
             }
@@ -1076,7 +1076,7 @@ private void membersToDt(AggregateDeclaration ad, ref DtBuilder dtb,
 
                 auto value = ie.getInteger();
                 const width = bf.fieldWidth;
-                const mask = (1L << width) - 1;
+                const mask = ~0UL >> (64 - width);
                 bitFieldValue = (bitFieldValue & ~(mask << bf.bitOffset)) | ((value & mask) << bf.bitOffset);
             }
         }
@@ -1244,6 +1244,19 @@ private void classFieldsToDt(ClassDeclaration cd, Expressions* elements, ref DtB
     ClassReferenceExp_toInstanceDt(cre, dtb);
 }
 
+bool checkTypeInfoSize(AggregateDeclaration typeclass, size_t expected, Dsymbol user = null)
+{
+    if (typeclass.structsize == expected)
+        return true;
+    auto eSink = global.errorSink;
+    eSink.error(typeclass.loc, "`%s` is declared with size %d bytes, but the compiler expects %d bytes",
+        typeclass.toPrettyChars(), cast(uint)typeclass.structsize, cast(uint)expected);
+    if (user)
+        eSink.errorSupplemental(user.loc, "required by %s `%s`", user.kind(), user.toPrettyChars());
+    eSink.errorSupplemental(typeclass.loc, "object.d does not match this compiler version, check installation and import paths with `-v` compiler switch");
+    return false;
+}
+
 /****************************************************
  */
 private extern (C++) class TypeInfoDtVisitor : Visitor
@@ -1253,24 +1266,12 @@ private extern (C++) class TypeInfoDtVisitor : Visitor
     /*
      * Used in TypeInfo*.toDt to verify the runtime TypeInfo sizes
      */
-    static void verifyStructSize(ClassDeclaration typeclass, size_t expected)
+    static bool verifyStructSize(ClassDeclaration typeclass, size_t expected)
     {
         if (!typeclass.hasMonitor)
             expected -= target.ptrsize;
 
-        if (typeclass.structsize != expected)
-        {
-            debug
-            {
-                printf("expected = x%x, %s.structsize = x%x\n", cast(uint)expected,
-                    typeclass.toChars(), cast(uint)typeclass.structsize);
-            }
-            auto eSink = global.errorSink;
-            eSink.error(typeclass.loc, "`%s`: mismatch between compiler (%d bytes) and object.d or object.di (%d bytes) found",
-                typeclass.toErrMsg(), cast(uint)expected, cast(uint)typeclass.structsize);
-            eSink.errorSupplemental(typeclass.loc, "check installation and import paths with `-v` compiler switch");
-            fatal();
-        }
+        return checkTypeInfoSize(typeclass, expected);
     }
 
     this(ref DtBuilder dtb) scope
@@ -1321,7 +1322,8 @@ private extern (C++) class TypeInfoDtVisitor : Visitor
     override void visit(TypeInfoEnumDeclaration d)
     {
         //printf("TypeInfoEnumDeclaration.toDt()\n");
-        verifyStructSize(Type.typeinfoenum, 7 * target.ptrsize);
+        if (!verifyStructSize(Type.typeinfoenum, 7 * target.ptrsize))
+            return;
 
         dtb.xoff(toVtblSymbol(Type.typeinfoenum), 0); // vtbl for TypeInfo_Enum
         if (Type.typeinfoenum.hasMonitor())
@@ -1425,7 +1427,8 @@ private extern (C++) class TypeInfoDtVisitor : Visitor
     override void visit(TypeInfoFunctionDeclaration d)
     {
         //printf("TypeInfoFunctionDeclaration.toDt()\n");
-        verifyStructSize(Type.typeinfofunction, 5 * target.ptrsize);
+        if (!verifyStructSize(Type.typeinfofunction, 5 * target.ptrsize))
+            return;
 
         dtb.xoff(toVtblSymbol(Type.typeinfofunction), 0); // vtbl for TypeInfo_Function
         if (Type.typeinfofunction.hasMonitor())
@@ -1449,7 +1452,8 @@ private extern (C++) class TypeInfoDtVisitor : Visitor
     override void visit(TypeInfoDelegateDeclaration d)
     {
         //printf("TypeInfoDelegateDeclaration.toDt()\n");
-        verifyStructSize(Type.typeinfodelegate, 5 * target.ptrsize);
+        if (!verifyStructSize(Type.typeinfodelegate, 5 * target.ptrsize))
+            return;
 
         dtb.xoff(toVtblSymbol(Type.typeinfodelegate), 0); // vtbl for TypeInfo_Delegate
         if (Type.typeinfodelegate.hasMonitor())
@@ -1473,10 +1477,8 @@ private extern (C++) class TypeInfoDtVisitor : Visitor
     override void visit(TypeInfoStructDeclaration d)
     {
         //printf("TypeInfoStructDeclaration.toDt() '%s'\n", d.toChars());
-        if (target.isX86_64 || target.isAArch64)
-            verifyStructSize(Type.typeinfostruct, 17 * target.ptrsize);
-        else
-            verifyStructSize(Type.typeinfostruct, 15 * target.ptrsize);
+        if (!verifyStructSize(Type.typeinfostruct, (target.isX86_64 || target.isAArch64 ? 17 : 15) * target.ptrsize))
+            return;
 
         dtb.xoff(toVtblSymbol(Type.typeinfostruct), 0); // vtbl for TypeInfo_Struct
         if (Type.typeinfostruct.hasMonitor())
@@ -1612,7 +1614,7 @@ private extern (C++) class TypeInfoDtVisitor : Visitor
     override void visit(TypeInfoClassDeclaration d)
     {
         //printf("TypeInfoClassDeclaration.toDt() %s\n", tinfo.toChars());
-        assert(0);
+        assert(0, "TypeInfo_Class instances are emitted once as part of ClassDeclaration codegen");
     }
 
     override void visit(TypeInfoInterfaceDeclaration d)

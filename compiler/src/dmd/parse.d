@@ -6056,12 +6056,42 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
     }
 
     /***
+     * Peek whether the tokens starting at `token` begin an assignment condition
+     * (`auto x = ...`, `Type x = ...`), without consuming anything.
+     *
+     * `parseAssignCondition` consumes leading storage classes and cannot give
+     * them back, so a caller that also accepts a plain expression has to check
+     * first.
+     *
+     * Returns:
+     *      true if an assignment condition follows
+     */
+    private bool peekIsAssignCondition()
+    {
+        Token* t = &token;
+        bool anyStorageClass = false;
+
+        // isDeclaration() steps over leading type qualifiers itself, but `auto`,
+        // `ref` and `scope` are not part of a type, so skip those here.
+        while (t.value == TOK.auto_ || t.value == TOK.ref_ || t.value == TOK.scope_)
+        {
+            anyStorageClass = true;
+            t = peek(t);
+        }
+
+        if (anyStorageClass && t.value == TOK.identifier && peek(t).value == TOK.assign)
+            return true;
+
+        return isDeclaration(t, NeedDeclaratorId.must, TOK.assign, null);
+    }
+
+    /***
      * Parse an assignment condition for `if`, `switch`, `while` or `with` statements.
      *
      * Returns:
      *      The variable that is declared inside the condition
      */
-    AST.Parameter parseAssignCondition(bool _with = false)
+    AST.Parameter parseAssignCondition()
     {
         STC storageClass = STC.none;
         STC stc = STC.none;
@@ -6141,10 +6171,9 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
             check(TOK.assign);
             return new AST.Parameter(aloc, storageClass, at, ai, null, null, null);
         }
-        else if (storageClass != 0 && !_with)
-        {
+        else if (storageClass != 0)
             error("found `%s` while expecting `=` or identifier", n.toChars());
-        }
+
         return null;
     }
 
@@ -6975,7 +7004,10 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
 
                 nextToken();
                 check(TOK.leftParenthesis);
-                auto param = parseAssignCondition(true);
+                // `with` also accepts a plain qualified expression such as
+                // `with(const S())`. Entering parseAssignCondition() there would
+                // consume the qualifier and silently drop it.
+                auto param = peekIsAssignCondition() ? parseAssignCondition() : null;
                 exp = parseExpression();
                 closeCondition("with", param, exp);
                 _body = parseStatement(ParseStatementFlags.scope_, null, &endloc);
@@ -7004,10 +7036,8 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
                     nextToken();
                     if (token.value != TOK.leftParenthesis)
                     {
-                        deprecation("`catch` statement without an exception specification is deprecated");
-                        deprecationSupplemental("use `catch(Throwable)` for old behavior");
-                        t = null;
-                        id = null;
+                        error("`catch` statement without an exception specification is disallowed");
+                        errorSupplemental("use `catch(Throwable)` for old behavior");
                     }
                     else
                     {
@@ -7294,7 +7324,7 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
                     if (--brackets == 0)
                     {
                         t = peek(t);
-                        if (t.value != TOK.semicolon && t.value != TOK.comma && t.value != TOK.rightBracket && t.value != TOK.rightCurly)
+                        if (t.value != TOK.semicolon && t.value != TOK.colon && t.value != TOK.comma && t.value != TOK.rightBracket && t.value != TOK.rightCurly)
                             return parseExpInitializer(loc);
                         break;
                     }
@@ -7328,18 +7358,15 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
                     if (!e)
                         break;
 
-                    AST.Initializer value;
+                    AST.Initializer value = new AST.ExpInitializer(e.loc, e);
+                    AST.Initializer index;
                     if (token.value == TOK.colon)
                     {
                         nextToken();
+                        index = value;
                         value = parseInitializer();
                     }
-                    else
-                    {
-                        value = new AST.ExpInitializer(e.loc, e);
-                        e = null;
-                    }
-                    ia.addInit(e, value);
+                    ia.addInit(index, value);
                     commaExpected = true;
                     continue;
 
@@ -7348,20 +7375,15 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
                     if (commaExpected)
                         error("comma expected separating array initializers, not `%s`", token.toChars());
                     auto value = parseInitializer();
-                    AST.Expression e;
+                    AST.Initializer index;
 
                     if (token.value == TOK.colon)
                     {
                         nextToken();
-                        if (auto ei = value.isExpInitializer())
-                        {
-                            e = ei.exp;
-                            value = parseInitializer();
-                        }
-                        else
-                            error("initializer expression expected following colon, not `%s`", token.toChars());
+                        index = value;
+                        value = parseInitializer();
                     }
-                    ia.addInit(e, value);
+                    ia.addInit(index, value);
                     commaExpected = true;
                     continue;
 
@@ -8996,8 +9018,9 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
             }
         case TOK.leftBracket:
             {
-                /* Parse array literals and associative array literals:
+                /* Parse (sparse) array literals and associative array literals:
                  *  [ value, value, value ... ]
+                 *  [ value, index: value, value ... ]
                  *  [ key:value, key:value, key:value ... ]
                  */
                 auto values = new AST.Expressions();
@@ -9017,8 +9040,7 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
                     }
                     else if (keys)
                     {
-                        error("`key:value` expected for associative array literal");
-                        keys = null;
+                        keys.push(null);
                     }
                     values.push(e);
                     if (token.value == TOK.rightBracket)
@@ -9053,7 +9075,11 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
         Lerr:
             // Anything for e, as long as it's not NULL
             e = new AST.ErrorExp();
-            nextToken();
+            // don't skip tokens that are unlikely to be part of the current expression
+            if (token.value != TOK.rightBracket &&
+                token.value != TOK.rightCurly &&
+                token.value != TOK.semicolon)
+                nextToken();
             break;
         }
         return e;
@@ -10040,7 +10066,7 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
     {
         if (mod.edition >= Edition.v2024)
         {
-            eSink.error(token.loc, "usage of identifer `body` as a keyword is obsolete. Use `do` instead.");
+            eSink.error(token.loc, "usage of identifier `body` as a keyword is obsolete. Use `do` instead.");
         }
     }
 }

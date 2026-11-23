@@ -4797,7 +4797,7 @@ private MATCHpair deduceFunctionTemplateMatch(TemplateDeclaration td, TemplateIn
                     {
                         if (StringExp se = farg.isStringExp())
                         {
-                            argtype = se.type.nextOf().sarrayOf(se.len);
+                            argtype = se.type.nextOf().sarrayOf(se.length);
                         }
                         else if (ArrayLiteralExp ale = farg.isArrayLiteralExp())
                         {
@@ -5420,7 +5420,7 @@ private RootObject declareParameter(TemplateDeclaration td, Scope* sc, TemplateP
     /* So the caller's o gets updated with the result of semantic() being run on o
      */
     if (v)
-        o = v._init.initializerToExpression();
+        o = v._init.initializerToExpression(sc, null, global.errorSink);
     return o;
 }
 
@@ -7685,7 +7685,7 @@ MATCH deduceType(scope RootObject o, scope Scope* sc, scope Type tparam,
             if (e.type.ty == Tarray && (tparam.ty == Tsarray || tparam.ty == Taarray && (taai = (cast(TypeAArray)tparam).index).ty == Tident && (cast(TypeIdentifier)taai).idents.length == 0))
             {
                 // Consider compile-time known boundaries
-                e.type.nextOf().sarrayOf(e.len).accept(this);
+                e.type.nextOf().sarrayOf(e.length).accept(this);
                 return;
             }
             visit(cast(Expression)e);

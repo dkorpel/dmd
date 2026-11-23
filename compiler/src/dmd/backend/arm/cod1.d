@@ -113,6 +113,7 @@ void loadFromEA(ref code cs, reg_t reg, uint szw, uint szr)
     if (cs.reg != NOREG)
     {
         uint sf = szw == 8;
+        assert(cs.reg < 32);
         void mov()
         {
             if (cs.reg != reg)                  // no need to mov onto itself
@@ -2789,7 +2790,7 @@ void loaddata(ref CGstate cg, ref CodeBuilder cdb, elem* e, ref regm_t outretreg
             if (0 && (outretregs & (mSTACK | mPSW)) == mSTACK)
             {
                 // Note that we allocreg(DOUBLEREGS) needlessly
-                cg.stackchanged = 1;
+                cg.stackchanged = true;
                 int i = sz - REGSIZE;
                 do
                 {

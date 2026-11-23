@@ -490,6 +490,11 @@ dmd -cov -unittest myprog.d
             q"{$(P Adds $(I directory) to the list of paths to be searched for imports.
              Multiple `-I`'s can be used, and the paths are searched in the same order.)
 
+             $(P For ImportC, `-Ibindings` allows `import foo;` to find `foo.c` in
+             the `bindings` directory. Use $(SWLINK -P) to pass additional include
+             directories to the C preprocessor for `#include` directives, for example
+             $(UNIX `-P-Iheaders`)$(WINDOWS `-P/Iheaders`) to search the `headers` directory.)
+
              $(P The process of finding a module during the resolution of an import
              declaration involves several steps.
              $(UL
@@ -521,8 +526,10 @@ dmd -cov -unittest myprog.d
                         $(LI Look for a package module if the file name is a directory.)
                     )
                 )
-                $(LI $(B File extensions): Modules are matched to files with specific
-                file extensions. The order in which each extension is searched is as follows:
+                $(LI $(B File extensions): In each directory, DMD checks the following
+                candidates in order and stops at the first match. For example, with
+                `-Ifirst -Isecond`, `import foo;` selects `foo.c` in `first` even
+                if `second` contains `foo.d`.
                     $(OL
                         $(LI `.di`)
                         $(LI `.d`)
@@ -661,16 +668,8 @@ dmd -cov -unittest myprog.d
         ),
         Option("mwasm32",
             "generate WebAssembly 32 bit code",
-            `Compile a WebAssembly 32 bit module. Use together with $(SWLINK -os=wasm).
-            Defines the $(D WebAssembly), $(D WASM32), $(D WASI), $(D WASIp1), and $(D CRuntime_WASI) version identifiers.`,
-        ),
-        Option("mwasm-selflink",
-            "emit a complete WebAssembly module instead of a relocatable object",
-            `Lay out linear memory, the shadow stack, the indirect function table
-            and the element segment in the compiler and resolve every relocation
-            in place, producing a module that can be instantiated directly.
-            The program must be compiled as a whole (see $(SWLINK -i)); any symbol
-            it does not define stays an import for the host to supply.`,
+            `Compile a WebAssembly 32 bit module. Targets WASI unless $(SWLINK -os=emscripten) is given.
+            Defines the $(D WebAssembly), $(D WASI), $(D WASIp1), $(D Posix), and $(D CRuntime_WASI) version identifiers.`,
         ),
         Option("main",
             "add default main() if not present already (e.g. for unittesting)",
@@ -831,7 +830,9 @@ dmd -cov -unittest myprog.d
                     $(LI $(I solaris): Solaris)
                     $(LI $(I hurd): Hurd)
                     $(LI $(I windows): Windows)
-                    $(LI $(I wasm): WebAssembly)
+                    $(LI $(I wasi), $(I wasip1): WebAssembly with WASI preview 1)
+                    $(LI $(I wasip2): WebAssembly with WASI preview 2)
+                    $(LI $(I emscripten): WebAssembly linked by Emscripten's $(D emcc))
                 )`
         ),
         Option("P=<preprocessorflag>",
@@ -962,8 +963,9 @@ dmd -cov -unittest myprog.d
             "verbose",
             `Enable verbose output for each compiler pass`,
         ),
-        Option("vasm",
-            "list generated assembler for each function"
+        Option("vasm[=<string>]",
+            "list generated assembler for each function",
+            "<string> restricts the disassembly to functions for which <string> is a substring of its name"
         ),
         Option("vcolumns",
             "print character (column) numbers in diagnostics"
@@ -1014,7 +1016,7 @@ dmd -cov -unittest myprog.d
             )",
         ),
         Option("vnan",
-            "warnings about default initalization of floating point variables to nan",
+            "warnings about default initialization of floating point variables to nan",
             `floating point variables are initialized to nan by default. This switch
             will cause a warning to be emitted for default nan initialization`,
             TargetOS.all, false,

@@ -1096,7 +1096,8 @@ private final class DsymbolPrettyPrintVisitor : Visitor
     {
         buf.put("alias ");
         buf.put(d.ident.toString());
-        buf.put(" this;\n");
+        buf.put(" this;");
+        buf.writenl();
     }
 
     void visitAttribDeclaration(AttribDeclaration d)
@@ -1617,6 +1618,18 @@ private final class DsymbolPrettyPrintVisitor : Visitor
 
     void visitTemplateInstance(TemplateInstance ti)
     {
+        if (hgs.fullDump)
+        {
+            // skip instances that are not code generated, and what they instantiated
+            for (auto t = ti; t; t = t.tinst)
+            {
+                if (auto fd = t.aliasdecl ? t.aliasdecl.isFuncDeclaration() : null)
+                {
+                    if (fd.skipCodegen)
+                        return;
+                }
+            }
+        }
         buf.put(ti.name.toChars());
         tiargsToBuffer(ti, *buf, *hgs);
 
@@ -2240,7 +2253,8 @@ private void expressionPrettyPrint(Expression e, ref OutBuffer buf, ref HdrGenSt
                     {
                         foreach (em; *sym.members)
                         {
-                            if ((cast(EnumMember)em).value.isIntegerExp().value == v)
+                            auto ev = (cast(EnumMember)em).value;
+                            if (ev && ev.isIntegerExp() && ev.isIntegerExp().value == v)
                             {
                                 const id = em.ident.toString();
                                 buf.printf("%s.%.*s", sym.toChars(), cast(int)id.length, id.ptr);
@@ -2414,8 +2428,8 @@ private void expressionPrettyPrint(Expression e, ref OutBuffer buf, ref HdrGenSt
         {
             buf.put('x');
             buf.put('"');
-            foreach (i; 0 .. e.len)
-                buf.printf("%0*llX", e.sz, e.getIndex(i));
+            foreach (i; 0 .. e.length)
+                buf.printf("%0*llX", e.sz * 2, e.getIndex(i));
             buf.put('"');
             if (e.postfix)
                 buf.put(e.postfix);
@@ -2423,7 +2437,7 @@ private void expressionPrettyPrint(Expression e, ref OutBuffer buf, ref HdrGenSt
         }
         buf.put('"');
         const o = buf.length;
-        foreach (i; 0 .. e.len)
+        foreach (i; 0 .. e.length)
         {
             writeCharLiteral(e.getCodeUnit(i), &buf.put);
         }
@@ -4143,7 +4157,7 @@ private void objectToBuffer(RootObject oarg, ref OutBuffer buf, ref HdrGenState 
     }
     else if (auto e = isExpression(oarg))
     {
-        if (e.op == EXP.variable)
+        if (e.op == EXP.variable && !e.isVarExp().var.inuse)
             e = e.optimize(WANTvalue); // added to fix https://issues.dlang.org/show_bug.cgi?id=7375
         expToBuffer(e, PREC.assign, buf, hgs);
     }
@@ -4360,7 +4374,7 @@ private void initializerToBuffer(Initializer inx, ref OutBuffer buf, ref HdrGenS
                 buf.put(", ");
             if (ex)
             {
-                ex.expressionToBuffer(buf, hgs);
+                ex.initializerToBuffer(buf, hgs);
                 buf.put(':');
             }
             if (auto iz = ai.value[i])

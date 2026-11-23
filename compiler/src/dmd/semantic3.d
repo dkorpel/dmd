@@ -337,7 +337,7 @@ private extern(C++) final class Semantic3Visitor : Visitor
             auto ss = new ScopeDsymbol(funcdecl.loc, null);
             // find enclosing scope symbol, might skip symbol-less CTFE and/or FuncExp scopes
             ss.parent = sc.inner().scopesym;
-            ss.endlinnum = funcdecl.endloc.linnum;
+            ss.endloc = funcdecl.endloc;
             Scope* sc2 = sc.push(ss);
             sc2.func = funcdecl;
             sc2.parent = funcdecl;
@@ -576,10 +576,10 @@ private extern(C++) final class Semantic3Visitor : Visitor
                 /* https://issues.dlang.org/show_bug.cgi?id=3657
                  * Set the correct end line number for fensure scope.
                  */
-                uint fensure_endlin = funcdecl.endloc.linnum;
+                Loc fensure_endloc = funcdecl.endloc;
                 if (funcdecl.fensure)
                     if (auto s = funcdecl.fensure.isScopeStatement())
-                        fensure_endlin = s.endloc.linnum;
+                        fensure_endloc = s.endloc;
 
                 if ((needEnsure && global.params.useOut == CHECKENABLE.on) || fpostinv)
                 {
@@ -589,7 +589,7 @@ private extern(C++) final class Semantic3Visitor : Visitor
                 // scope of out contract (need for vresult.semantic)
                 auto sym = new ScopeDsymbol(funcdecl.loc, null);
                 sym.parent = sc2.scopesym;
-                sym.endlinnum = fensure_endlin;
+                sym.endloc = fensure_endloc;
                 scout = sc2.push(sym);
             }
 
@@ -597,7 +597,7 @@ private extern(C++) final class Semantic3Visitor : Visitor
             {
                 auto sym = new ScopeDsymbol(funcdecl.loc, null);
                 sym.parent = sc2.scopesym;
-                sym.endlinnum = funcdecl.endloc.linnum;
+                sym.endloc = funcdecl.endloc;
                 sc2 = sc2.push(sym);
 
                 auto ad2 = funcdecl.isMemberLocal();
@@ -861,6 +861,17 @@ private extern(C++) final class Semantic3Visitor : Visitor
                         ReturnStatement rs = (*funcdecl.returns)[i];
                         Expression exp = rs.exp;
                         Scope* sc3 = rs.scope_;
+                        if (rs.fesFunc)
+                        {
+                            // Create a scope with foreach body being `.parent`
+                            // and `funcdecl` as `.func`. So the return value
+                            // is aware of closure access, but picks up
+                            // attributes and instantiates templated copy/move
+                            // ctors in the context of `funcdecl`.
+                            // BUG: remove this fragile hack
+                            sc3 = sc3.push();
+                            sc3.func = funcdecl;
+                        }
                         if (exp.op == EXP.error)
                             continue;
                         if (tret.ty == Terror)
@@ -995,24 +1006,9 @@ private extern(C++) final class Semantic3Visitor : Visitor
 
                         if (funcdecl.vresult)
                         {
-                            Scope* scret = sc3;
-
-                            if (rs.fesFunc)
-                            {
-                                // Create a scope with foreach body being `.parent`
-                                // and `funcdecl` as `.func`. So the return value
-                                // is aware of closure access, but picks up
-                                // attributes and instantiates templated copy/move
-                                // ctors in the context of `funcdecl`.
-                                // BUG: remove this fragile hack
-                                scret = rs.fesFunc._scope.push();
-                                scret.parent = rs.fesFunc;
-                                scret.func = funcdecl;
-                            }
-
                             // Create: return (vresult = exp, vresult);
                             exp = new ConstructExp(rs.loc, funcdecl.vresult, exp);
-                            exp = exp.expressionSemantic(scret);
+                            exp = exp.expressionSemantic(sc3);
                             exp = Expression.combine(exp, new VarExp(rs.loc, funcdecl.vresult));
 
                             if (rs.caseDim)
@@ -1060,7 +1056,7 @@ private extern(C++) final class Semantic3Visitor : Visitor
                  */
                 auto sym = new ScopeDsymbol(funcdecl.loc, null);
                 sym.parent = sc2.scopesym;
-                sym.endlinnum = funcdecl.endloc.linnum;
+                sym.endloc = funcdecl.endloc;
                 sc2 = sc2.push(sym);
                 sc2.contract = Contract.require;
 
@@ -1684,7 +1680,6 @@ private extern(C++) final class Semantic3Visitor : Visitor
         ti.entry = e.type;
         if (auto ts = ti.entry.isTypeStruct())
         {
-            ts.sym.requestTypeInfo = true;
             if (auto tmpl = ts.sym.isInstantiated())
                 tmpl.minst = sc2._module.importedFrom; // ensure it gets emitted
         }

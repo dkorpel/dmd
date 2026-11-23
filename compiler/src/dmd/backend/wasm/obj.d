@@ -427,7 +427,7 @@ public WasmFuncType buildFuncType(type* t, Symbol* sfunc, uint hiddenLeadingPtrs
     {
         if (sfunc.identifier == "_Dmain")
             return WasmFuncType([WASM_I32, WASM_PTR], [WASM_I32]);
-        if (sfunc.identifier == "__main_argc_argv")
+        if (sfunc.identifier == "__main_argc_argv" || sfunc.identifier == "main")
             return WasmFuncType([WASM_I32, WASM_I32], [WASM_I32]);
         if (sfunc.identifier == "__main_void")
             return WasmFuncType([], [WASM_I32]);
@@ -445,8 +445,6 @@ public WasmFuncType buildFuncType(type* t, Symbol* sfunc, uint hiddenLeadingPtrs
 
     if (dstyleVariadic(t))
         ft.params ~= WASM_I32;
-
-    const tym_t fty = tybasic(t.Tty);
 
     foreach (param_t p; t.Tparamtypes ? *t.Tparamtypes : null)
     {
@@ -851,7 +849,7 @@ private bool emitLinkingSection(ref OutBuffer out_, ref WasmModule wmod)
             seginfo.writeuLEB128(cast(uint) segName.length);
             seginfo.write(segName.ptr, cast(uint) segName.length);
             seginfo.writeuLEB128(ds.alignLog2);
-            const uint segFlags = ds.name == "minfo" ? WASM_SEG.RETAIN : 0;
+            const uint segFlags = ds.name == "__minfo" ? WASM_SEG.RETAIN : 0;
             seginfo.writeuLEB128(segFlags);
         }
 
@@ -871,7 +869,7 @@ private bool emitLinkingSection(ref OutBuffer out_, ref WasmModule wmod)
         initFuncs.writeuLEB128(cast(uint) initFuncSyms.length);
         foreach (symIdx; initFuncSyms)
         {
-            initFuncs.writeuLEB128(65535); // priority, as clang emits for a plain constructor
+            initFuncs.writeuLEB128(65_535); // priority, as clang emits for a plain constructor
             initFuncs.writeuLEB128(symIdx);
         }
 
@@ -1405,7 +1403,7 @@ void WasmObj_moduleinfo(Symbol* scc)
     if (!scc)
         return;
 
-    pushDataSeg(4, 4, null, "minfo");
+    pushDataSeg(4, 4, null, "__minfo");
 
     const uint segIdx = wmod.activeSegIdx;
     uint zero = 0;

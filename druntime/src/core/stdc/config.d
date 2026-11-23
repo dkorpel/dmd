@@ -266,7 +266,7 @@ else version (DigitalMars)
         else version (Hurd)
             alias c_long_double = real;
     }
-    else version (WASM32)
+    else version (WebAssembly)
         alias c_long_double = real;
 }
 

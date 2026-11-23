@@ -26,6 +26,7 @@ SRCS=\
 	src\core\gc\config.d \
 	src\core\gc\gcinterface.d \
 	src\core\gc\registry.d \
+	src\core\gc\monitor.d \
 	\
 	src\core\internal\abort.d \
 	src\core\internal\atomic.d \
@@ -583,7 +584,7 @@ SRCS=\
 	src\rt\critical_.d \
 	src\rt\deh.d \
 	src\rt\deh_win32.d \
-	src\rt\deh_win64_posix.d \
+	src\rt\deh_win64.d \
 	src\rt\dmain2.d \
 	src\rt\dwarfeh.d \
 	src\rt\ehalloc.d \

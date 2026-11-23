@@ -1012,11 +1012,12 @@ L1:
            e1.E2.Eoper == OPrelconst &&
            e1.E2.Vsym == e2.Vsym)
     {
+        tym_t tym = I64 ? TYllong : TYint;
         e2.Eoper = OPconst;
-        e2.Ety = TYint;
+        e2.Ety = tym;
         e1.Ety = e1.E1.Ety;
         e1.E2.Eoper = OPconst;
-        e1.E2.Ety = TYint;
+        e1.E2.Ety = tym;
         {
             /* Watch out for pointer types changing, requiring a conversion */
             tym_t ety = tybasic(e.Ety);
@@ -1399,6 +1400,7 @@ private elem* elbitwise(elem* e, Goal goal)
                 {
                     elem* e11 = e1.E1;
                     e11.Ety = touns(e11.Ety) | (e11.Ety & ~mTYbasic);
+                    e1.Eoper = OPshr;
                     goto L1;
                 }
 
@@ -1439,6 +1441,7 @@ private elem* elbitwise(elem* e, Goal goal)
                 {
                     elem* e11 = e1.E1;
                     e11.Ety = touns(e11.Ety) | (e11.Ety & ~mTYbasic);
+                    e1.Eoper = OPshr;
                     goto L1;
                 }
 
@@ -1546,16 +1549,6 @@ private elem* elbitwise(elem* e, Goal goal)
                 e.E1 = e1.E1;
                 e1.E1 = e;
                 e = e1;
-                goto Lopt;
-            }
-
-            // Replace (((a & b) ^ c) & d) with ((a ^ c) & e), where
-            // e is (b&d).
-            if (e.Eoper == OPand && op == OPxor && e1.E1.Eoper == OPand &&
-                e1.E1.E2.Eoper == OPconst)
-            {
-                e2.Vullong &= e1.E1.E2.Vullong;
-                e1.E1 = el_selecte1(e1.E1);
                 goto Lopt;
             }
 
@@ -2166,7 +2159,7 @@ private elem* elcond(elem* e, Goal goal)
                 el_free(e1);
                 return elcond(e,goal);
             }
-            if (e1.Ety == TYnoreturn)
+            if (tybasic(e1.Ety) == TYnoreturn)
             {
                 return el_selecte1(e);
             }
@@ -2501,7 +2494,7 @@ L2:
         goto L2;
     }
 
-    if (e1.Ety == TYnoreturn)
+    if (tybasic(e1.Ety) == TYnoreturn)
     {
         e = el_selecte1(e);
         goto Lret;
@@ -2770,7 +2763,7 @@ private elem* eldiv(elem* e, Goal goal)
                         op = (sz == 2) ? OP32_16 : (sz == 4) ? OP64_32 : OP128_64;
                     }
                     e.Eoper = OPremquo;
-                    e = el_una(op, tym, e);
+                    e = el_una(op, e.Ety, e);
                     e.E1.Ety = (sz == 2) ? TYlong : (sz == 4) ? TYllong : TYcent;
                     return e;
                 }
@@ -2791,6 +2784,7 @@ private elem* swaplog(elem* e, Goal goal)
     elem* e1 = e.E1;
     e.E1 = e1.E2;
     e1.E2 = e;
+    e1.Ety = e.Ety;
     return optelem(e1,goal);
 }
 
@@ -2808,7 +2802,7 @@ private elem* eloror(elem* e, Goal goal)
         return eloror(e, goal);
     }
 
-    if (e1.Ety == TYnoreturn)
+    if (tybasic(e1.Ety) == TYnoreturn)
     {
         return el_selecte1(e);
     }
@@ -3112,7 +3106,7 @@ private elem* elandand(elem* e, Goal goal)
         el_free(e1);
         return elandand(e, goal);
     }
-    if (e1.Ety == TYnoreturn)
+    if (tybasic(e1.Ety) == TYnoreturn)
     {
         return el_selecte1(e);
     }
@@ -3570,11 +3564,21 @@ elem* elstruct(elem* e, Goal goal)
         return optelem(e, goal);
     }
 
-    // Replace (e = e) with (e, e)
-    if (e.Eoper == OPstreq && el_match(e.E1, e.E2))
+    if (e.Eoper == OPstreq)
     {
-        e.Eoper = OPcomma;
-        return optelem(e, goal);
+        // Replace (e = noreturn) with (e, noreturn)
+        if (tybasic(e.E2.Ety) == TYnoreturn)
+        {
+            e.Eoper = OPcomma;
+            return optelem(e, Goal.none);
+        }
+
+        // Replace (e = e) with (e, e)
+        if (el_match(e.E1, e.E2))
+        {
+            e.Eoper = OPcomma;
+            return optelem(e, goal);
+        }
     }
 
     if (!e.ET)
@@ -3862,6 +3866,12 @@ static if (0)  // Doesn't work too well, removed
         return optelem(e, Goal.value);
     }
 }
+
+    if (tybasic(e.E2.Ety) == TYnoreturn)
+    {
+        e.Eoper = OPcomma;
+        return optelem(e, Goal.none);
+    }
 
     // Replace (a=(r1 pair r2)) with (a1=r1), (a2=r2)
     // For WASM this must run even at -O0 so slices/delegates are lowered to two
@@ -5382,7 +5392,8 @@ private elem* elshl(elem* e, Goal goal)
         e2.Eoper == OPconst &&
         (e1.Eoper == OPshr || e1.Eoper == OPashr) &&
         e1.E2.Eoper == OPconst &&
-        el_tolong(e2) == el_tolong(e1.E2))
+        el_tolong(e2) == el_tolong(e1.E2) &&
+        e.Eoper == OPshl)
     {   /* Rewrite:
          *  (x >> c) << c)
          * with:
@@ -5874,6 +5885,7 @@ beg:
                     if (!el_sideeffect(e2.E1))
                     {
                         e.Eoper = OPoror;
+                        e2.Ety = e2.E2.Ety;
                         e.E2 = el_selecte2(e2);
                         e.Ety = TYint;
                         goto beg;
@@ -5881,6 +5893,7 @@ beg:
                     else if (!el_sideeffect(e2.E2))
                     {
                         e.Eoper = OPandand;
+                        e2.Ety = e2.E1.Ety;
                         e.E2 = el_selecte1(e2);
                         e.Ety = TYint;
                         goto beg;
@@ -5892,11 +5905,13 @@ beg:
                     {
                         if (!e22)
                         {
+                            e.Ety = e.E1.Ety;
                             e = el_selecte1(e);
                             goto beg;
                         }
                         // Rewrite (e1 ? null : e22) as (e1 || e22)
                         e.Eoper = OPoror;
+                        e2.Ety = e2.E2.Ety;
                         e.E2 = el_selecte2(e2);
                         goto beg;
                     }
@@ -5904,6 +5919,7 @@ beg:
                     {
                         // Rewrite (e1 ? e21 : null) as (e1 && e21)
                         e.Eoper = OPandand;
+                        e2.Ety = e2.E1.Ety;
                         e.E2 = el_selecte1(e2);
                         goto beg;
                     }
@@ -6060,6 +6076,19 @@ beg:
             if (!leftgoal)
                 e.Ety = e1.Ety;
             return el_selecte1(e);
+        }
+
+        if (OTassign(op) &&
+            (tybasic(e1.Ety) == TYnoreturn ||
+             tybasic(e2.Ety) == TYnoreturn))
+        {
+            if (OTrtol(op)) // check defensively
+            {
+                e.E1 = e2;
+                e.E2 = e1;
+            }
+            e.Eoper = OPcomma;
+            goto beg;
         }
 
         if (op == OPparam && !goal)

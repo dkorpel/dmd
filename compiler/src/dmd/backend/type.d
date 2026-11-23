@@ -90,7 +90,7 @@ struct type
     }
 }
 
-@nogc
+@nogc pure
 void type_debug(const type* t)
 {
     debug assert(t.id == t.IDtype);

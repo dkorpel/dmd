@@ -133,7 +133,7 @@ void codgenx(ref CGstate cg, Symbol* sfunc)
         cg.needframe = 0;
         cg.enforcealign = false;
         cg.gotref = 0;
-        cg.stackchanged = 0;
+        cg.stackchanged = false;
         cg.stackpush = 0;
         cg.refparam = 0;
         cg.calledafunc = 0;
@@ -469,10 +469,32 @@ static if (0)
 
             assert(0);
         }
+
         sfunc.Ssize = Offset(sfunc.Sseg) - cg.funcoffset;    // size of function
 
         if (config.vasm)
-            disassemble(disasmBuf[]);                   // disassemble the code
+        {
+            const(char)[] fident = funcsym_p.Sident.ptr[0 .. strlen(funcsym_p.Sident.ptr)];
+            const(char)[] name = config.vasmName;
+
+            if (name.length)
+            {
+                // disassemble if name[] is a substring of fident[]
+                if (name.length <= fident.length)
+                {
+                    foreach (i; 0 .. fident.length - name.length)
+                    {
+                        if (name[] == fident[i .. i + name.length])
+                        {
+                            disassemble(*funcsym_p, disasmBuf[]);   // disassemble the code
+                            break;
+                        }
+                    }
+                }
+            }
+            else
+                disassemble(*funcsym_p, disasmBuf[]);             // disassemble the code
+        }
 
         const nteh = cg.usednteh & NTEH_try;
         if (nteh)
@@ -1007,16 +1029,17 @@ else
     }
 
     if (cg.usednteh & NTEHjmonitor)
-    {   Symbol* sthis;
-
+    {
         for (SYMIDX si = 0; 1; si++)
         {   assert(si < globsym.length);
-            sthis = globsym[si];
+            Symbol* sthis = globsym[si];
             if (strcmp(sthis.Sident.ptr,"this".ptr) == 0)
+            {
+                nteh_monitor_prolog(cg,cdbx,sthis);
+                cg.EBPtoESP += 3 * 4;
                 break;
+            }
         }
-        nteh_monitor_prolog(cg,cdbx,sthis);
-        cg.EBPtoESP += 3 * 4;
     }
 
     cdb.append(cdbx);
@@ -1024,6 +1047,8 @@ else
 
 Lcont:
     //printf("2 prolog() needframe %d\n", cg.needframe);
+    if (cg.hasframe)
+        funcsym_p.Sfunc.Fflags |= Fhasframe;    // tell context_unwind there's a standard stack frame
 
     if (config.exe == EX_WIN64)
     {
@@ -1149,9 +1174,8 @@ void stackoffsets(ref CGstate cg, ref symtab_t symtab, bool estimate)
     }
     size_t autosi = 0;  // number used in autos[]
 
-    for (int si = 0; si < symtab.length; si++)
-    {   Symbol* s = symtab[si];
-
+    foreach (s; symtab[])
+    {
         /* Don't allocate space for dead or zero size parameters
          */
         switch (s.Sclass)
@@ -1296,10 +1320,8 @@ void stackoffsets(ref CGstate cg, ref symtab_t symtab, bool estimate)
 
         vec_t tbl = vec_calloc(autosi);
 
-        for (size_t si = 0; si < autosi; si++)
+        foreach (si, s; autos[0 .. autosi])
         {
-            Symbol* s = autos[si];
-
             targ_size_t sz = type_size(s.Stype);
             if (sz == 0)
                 sz++;               // can't handle 0 length structs
@@ -1316,7 +1338,7 @@ void stackoffsets(ref CGstate cg, ref symtab_t symtab, bool estimate)
                 !(cg.usednteh & (NTEH_try | NTEH_except | NTEHcpp | EHcleanup | EHtry | NTEHpassthru)) &&
                 s.Srange && !(s.Sflags & SFLspill))
             {
-                for (size_t i = 0; i < si; i++)
+                foreach (i; 0 .. si)
                 {
                     if (!vec_testbit(i,tbl))
                         continue;
@@ -1353,6 +1375,39 @@ void stackoffsets(ref CGstate cg, ref symtab_t symtab, bool estimate)
 }
 
 /****************************
+ * Determine existing immediate values in registers by ANDing
+ * together the values from all the predecessors of `bl`.
+ * Params:
+ *      cg = code generator state
+ *      bl = block about to be generated
+ */
+@trusted
+private void mergePredRegcon(ref CGstate cg, block* bl)
+{
+    cg.regcon.immed.mval = 0;      // assume no previous contents in registers
+//    cg.regcon.cse.mval = 0;
+    if (!bl.Bpred.length)
+        return;
+
+    block* bp0 = bl.Bpred[0];
+    cg.regcon.immed = bp0.Bregcon.immed;
+    cg.regcon.params = bp0.Bregcon.params;
+//  cg.regcon.cse = bp0.Bregcon.cse;
+
+    foreach (bp; bl.Bpred[1 .. $])
+    {
+        cg.regcon.params &= bp.Bregcon.params;
+        if ((cg.regcon.immed.mval &= bp.Bregcon.immed.mval) != 0)
+            // Actual values must match, too
+            foreach (r; 0 .. REGMAX)
+            {
+                if (cg.regcon.immed.value[r] != bp.Bregcon.immed.value[r])
+                    cg.regcon.immed.mval &= ~mask(r);
+            }
+    }
+}
+
+/****************************
  * Generate code for a block.
  * Params:
  *      cg = code generator state
@@ -1366,33 +1421,8 @@ private void blcodgen(ref CGstate cg, block* bl)
 
     //dbg_printf("blcodgen(%p)\n",bl);
 
-    /* Determine existing immediate values in registers by ANDing
-        together the values from all the predecessors of b.
-     */
     assert(bl.Bregcon.immed.mval == 0);
-    cg.regcon.immed.mval = 0;      // assume no previous contents in registers
-//    cg.regcon.cse.mval = 0;
-    foreach (bp; bl.Bpred[])
-    {
-        if (bp == bl.Bpred[0])
-        {   cg.regcon.immed = bp.Bregcon.immed;
-            cg.regcon.params = bp.Bregcon.params;
-//          cg.regcon.cse = bp.Bregcon.cse;
-        }
-        else
-        {
-            int i;
-
-            cg.regcon.params &= bp.Bregcon.params;
-            if ((cg.regcon.immed.mval &= bp.Bregcon.immed.mval) != 0)
-                // Actual values must match, too
-                for (i = 0; i < REGMAX; i++)
-                {
-                    if (cg.regcon.immed.value[i] != bp.Bregcon.immed.value[i])
-                        cg.regcon.immed.mval &= ~mask(i);
-                }
-        }
-    }
+    mergePredRegcon(cg, bl);
     cg.regcon.cse.mops &= cg.regcon.cse.mval;
 
     // Set cg.regcon.mvar according to what variables are in registers for this block
@@ -1476,7 +1506,7 @@ private void blcodgen(ref CGstate cg, block* bl)
     outblkexitcode(cg, cdb, bl, anyspill, sflsave, &cg.retsym, mfuncregsave);
     bl.Bcode = cdb.finish();
 
-    for (int i = 0; i < anyspill; i++)
+    foreach (i; 0 .. anyspill)
     {
         Symbol* s = globsym[i];
         s.Sfl = sflsave[i];    // undo block register assignments
@@ -1554,9 +1584,9 @@ void freenode(elem* e)
     if (e.Ecount)                        /* if it was a CSE              */
     {
         CGstate* cg = &cgstate;
-        for (size_t i = 0; i < cg.regcon.cse.value.length; i++)
+        foreach (i, value; cg.regcon.cse.value[])
         {
-            if (cg.regcon.cse.value[i] == e)       /* if a register is holding it  */
+            if (value == e)       /* if a register is holding it  */
             {
                 cg.regcon.cse.mval &= ~mask(cast(uint)i);
                 cg.regcon.cse.mops &= ~mask(cast(uint)i);    /* free masks                   */
@@ -2223,9 +2253,10 @@ bool evalinregister(elem* e)
     /* it's in a register already, the computation should be done   */
     /* using that register.                                         */
     regm_t emask = 0;
-    for (uint i = 0; i < cg.regcon.cse.value.length; i++)
-        if (cg.regcon.cse.value[i] == e)
-            emask |= mask(i);
+    foreach (i, value; cg.regcon.cse.value[])
+        if (value == e)
+            emask |= mask(cast(uint)i);
+
     emask &= cg.regcon.cse.mval;       // mask of available CSEs
     if (sz <= REGSIZE)
         return emask != 0;      /* the CSE is in a register     */
@@ -2811,6 +2842,7 @@ private immutable nothrow void function (ref CGstate, ref CodeBuilder,elem *,ref
 @trusted
 void codelem(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs,uint constflag)
 {
+    //printf("codelem(retregs: %s)\n", regm_str(pretregs));
     Symbol* s;
 
     debug if (debugw)
@@ -2861,7 +2893,7 @@ void codelem(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs,uin
                 {
                     if ((pretregs & (cg.allregs | INSTR.FLOATREGS)) == 0)
                     {
-                        pretregs = (tyfloating(e.Ety)) ? INSTR.FLOATREGS : cg.allregs;
+                        pretregs |= (tyfloating(e.Ety)) ? INSTR.FLOATREGS : cg.allregs;
                     }
                 }
                 else if ((pretregs & (mSTACK | mES | ALLREGS | mBP | XMMREGS)) == 0)
@@ -3042,7 +3074,7 @@ void scodelem(ref CGstate cg, ref CodeBuilder cdb, elem* e,ref regm_t pretregs,r
     else
         cg.mfuncreg = (XMMREGS | mBP | mES | ALLREGS) & ~cg.regcon.mvar;
     uint stackpushsave = cg.stackpush;
-    char calledafuncsave = cg.calledafunc;
+    bool calledafuncsave = cg.calledafunc;
     cg.calledafunc = 0;
     CodeBuilder cdbx; cdbx.ctor();
     codelem(cg,cdbx,e,pretregs,constflag);    // generate code for the elem
@@ -3135,7 +3167,7 @@ void scodelem(ref CGstate cg, ref CodeBuilder cdb, elem* e,ref regm_t pretregs,r
                 cs2 = cat(cdby.finish(),cs2);
                 if (size)
                 {
-                    cg.stackchanged = 1;
+                    cg.stackchanged = true;
                     adjesp += size;
                 }
             }
@@ -3220,7 +3252,8 @@ const(char)* regm_str(regm_t rm)
     if (++i == NUM)
         i = 0;
     *p = 0;
-    for (uint j = 0; j < (AArch64 ? 64 : 32); j++)
+    const uint numregs = (AArch64 ? 64 : 32);
+    foreach (j; 0 .. numregs)
     {
         if (mask(j) & rm)
         {
@@ -3236,7 +3269,7 @@ const(char)* regm_str(regm_t rm)
                     strcat(p, "PSW");
                 else
                 {
-                    char[4] buf;
+                    char[4] buf = void;
                     char c = j < 32 ? 'r' : 'f';
                     sprintf(buf.ptr, "%c%u", c, j);
                     strcat(p, buf.ptr);
@@ -3336,12 +3369,13 @@ void andregcon(const ref con_t pregconsave)
 /**********************************************
  * Disassemble the code instruction bytes
  * Params:
+ *    funcsym = function being disassembled
  *    code = array of instruction bytes
  */
 @trusted
-void disassemble(ubyte[] code)
+void disassemble(ref Symbol funcsym, ubyte[] code)
 {
-    printf("%s:\n", funcsym_p.Sident.ptr);
+    printf("%s:\n", funcsym.Sident.ptr);
 
     @trusted
     void put(char c) { printf("%c", c); }

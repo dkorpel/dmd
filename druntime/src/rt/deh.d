@@ -2,9 +2,9 @@
  * Entry point for exception handling support routines.
  *
  * There are four style of exception handling being supported by DMD:
- * DWARF, Win32, Win64 and WebAssembly. The Win64 code also supports POSIX.
+ * DWARF, Win32, Win64 and WebAssembly.
  * Support for those scheme is in `rt.dwarfeh`, `rt.deh_win32`,
- * `rt.deh_win64_posix` and `rt.wasm.eh`, respectively, and publicly imported here.
+ * `rt.deh_win64` and `rt.wasm.eh`, respectively, and publicly imported here.
  *
  * When an exception is thrown by the user, the compiler translates
  * code like `throw e;` into either `_d_throwdwarf` (for DWARF exceptions)
@@ -55,10 +55,10 @@ version (GNU)
 else version (Win32)
     public import rt.deh_win32;
 else version (Win64)
-    public import rt.deh_win64_posix;
+    public import rt.deh_win64;
 else version (WebAssembly)
     public import rt.wasm.eh;
 else version (Posix)
-    public import rt.deh_win64_posix;
+    public import rt.dwarfeh;
 else
     static assert (0, "Unsupported architecture");

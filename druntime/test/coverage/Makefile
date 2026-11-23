@@ -1,6 +1,6 @@
 normal := basic
 merge := merge merge_true
-TESTS := $(normal) $(merge) no_code merge_override
+TESTS := $(normal) $(merge) no_code merge_override report_open duplicate
 include ../common.mak
 
 normal_tests := $(normal:%=$(ROOT)/%.done)
@@ -78,3 +78,49 @@ endif
 	@touch $@
 $(ROOT)/no_code$(DOTEXE): $(SRC)/no_code_imp.d
 $(ROOT)/no_code$(DOTEXE): extra_sources += $(SRC)/no_code_imp.d
+
+# A failed report open must not abort during runtime shutdown.
+$(ROOT)/report_open.done: $(ROOT)/basic$(DOTEXE)
+	@test ! -e $(ROOT)/missing-report-directory
+	$< $(ROOT)/missing-report-directory
+	@test ! -e $(ROOT)/missing-report-directory
+	@echo not-a-directory > $(ROOT)/report-destination-file
+	$< $(ROOT)/report-destination-file
+	@$(RM) $(ROOT)/report-destination-file
+	@touch $@
+
+ifeq (windows,$(OS))
+all: $(ROOT)/long_report.done
+
+# Each component is valid, but the complete path exceeds MAX_PATH.
+long_component := aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+long_report_dir := $(ROOT)/coverage reports/$(long_component)/$(long_component)/$(long_component)
+$(ROOT)/long_report.done: $(ROOT)/basic$(DOTEXE)
+	@set -e; \
+	trap '$(RM) -r "$(ROOT)/coverage reports"' EXIT; \
+	mkdir -p "$(long_report_dir)"; \
+	$(RM) "$(long_report_dir)/src-basic.lst"; \
+	$< "$(long_report_dir)"; \
+	$(SED) 's@^src.@src/@' < "$(long_report_dir)/src-basic.lst" > $(ROOT)/long-report.lst; \
+	$(DIFF) src-basic.lst.exp $(ROOT)/long-report.lst
+	@touch $@
+endif
+
+$(ROOT)/duplicate.done: $(ROOT)/duplicate$(DOTEXE) $(SRC)/duplicate-lines.txt
+	@set -e; for path in same alias; do for order in forward reverse; do \
+		$(RM) $(ROOT)/src-duplicate-lines.lst $(ROOT)/src-.-duplicate-lines.lst; \
+		$< $(ROOT) $$path $$order; \
+		grep -Eq '^[[:space:]]*5\|overlap' $(ROOT)/src-duplicate-lines.lst; \
+		grep -Eq '^[[:space:]]*3\|second only' $(ROOT)/src-duplicate-lines.lst; \
+		grep -Eq '^0000000\|unhit' $(ROOT)/src-duplicate-lines.lst; \
+		test ! -f $(ROOT)/src-.-duplicate-lines.lst; \
+	done; done
+	@$(RM) $(ROOT)/src-duplicate-lines.lst
+	$< $(ROOT) empty forward
+	grep -F 'has no code' $(ROOT)/src-duplicate-lines.lst
+	@$(RM) $(ROOT)/src-duplicate-lines.lst $(ROOT)/src-duplicate.lst
+	@if $< $(ROOT) stale forward 2>$(ROOT)/duplicate.err; then exit 1; else test $$? -eq 1; fi
+	grep -F 'different source lengths' $(ROOT)/duplicate.err
+	test ! -f $(ROOT)/src-duplicate-lines.lst
+	test -s $(ROOT)/src-duplicate.lst
+	@touch $@

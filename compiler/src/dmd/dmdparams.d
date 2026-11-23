@@ -61,6 +61,9 @@ struct DMDparams
     bool symdebug;          // insert debug symbolic information
     bool symdebugref;       // insert debug information for all referenced types, too
 
+    const(char)[] vasmName;       // if non-empty, restricts vasm output to functions
+                                  // for which vasmString is a substring
+
     const(char)[] defaultlibname;   // default library for non-debug builds
     const(char)[] debuglibname;     // default library for debug builds
     const(char)[] mscrtlib;         // MS C runtime library
@@ -173,11 +176,6 @@ struct Triple
             isWasm = true;
             isX86_64 = false;
         }
-        else if (matches("wasm64"))
-        {
-            isWasm = true;
-            isX86_64 = true;
-        }
         else
             return unknown(arch, "architecture");
 
@@ -244,8 +242,10 @@ struct Triple
             os =  Target.OS.Hurd;
         else if (matches("windows"))
             os =  Target.OS.Windows;
-        else if (matches("wasm") || matches("wasip1"))
-            os =  Target.OS.WASM;
+        else if (matches("wasip") || matches("wasi"))
+            os =  Target.OS.WASI;
+        else if (matches("emscripten"))
+            os =  Target.OS.Emscripten;
         else
         {
             unknown(_os, "operating system");

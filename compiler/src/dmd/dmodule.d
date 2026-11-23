@@ -388,8 +388,6 @@ extern (C++) final class Module : Package
      */
     Module importedFrom;
 
-    Dsymbols* decldefs;         // top level declarations for this Module
-
     Modules aimports;           // all imported modules
 
     Identifiers* debugids;      // debug identifiers
@@ -400,9 +398,6 @@ extern (C++) final class Module : Package
 
     MacroTable macrotable;      // document comment macros
     void* _escapetable;         // document comment escapes (Escape*)
-
-    size_t nameoffset;          // offset of module name from start of ModuleInfo
-    size_t namelen;             // length of module name in characters
 
     extern (D) this(Loc loc, const(char)[] filename, Identifier ident, int doDocComment, int doHdrGen)
     {

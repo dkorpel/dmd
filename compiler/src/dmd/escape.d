@@ -98,7 +98,6 @@ bool checkMutableArguments(ref Scope sc, FuncDeclaration fd, TypeFunction tf,
     {
         VarDeclarations byref;
         VarDeclarations byvalue;
-        Parameter param;        // null if no Parameter for this argument
         bool isMutable;         // true if reference to mutable
     }
 
@@ -115,13 +114,12 @@ bool checkMutableArguments(ref Scope sc, FuncDeclaration fd, TypeFunction tf,
             arg = (*arguments)[i];
             if (i < paramLength)
             {
-                eb.param = tf.parameterList[i];
-                refs = eb.param.isReference();
-                eb.isMutable = eb.param.isReferenceToMutable(arg.type);
+                Parameter param = tf.parameterList[i];
+                refs = param.isReference();
+                eb.isMutable = param.isReferenceToMutable(arg.type);
             }
             else
             {
-                eb.param = null;
                 refs = false;
                 eb.isMutable = arg.type.isReferenceToMutable();
             }
@@ -131,7 +129,6 @@ bool checkMutableArguments(ref Scope sc, FuncDeclaration fd, TypeFunction tf,
             /* ethis is passed by value if a class reference,
              * by ref if a struct value
              */
-            eb.param = null;
             arg = ethis;
             auto ad = fd.isThis();
             assert(ad);
@@ -151,7 +148,6 @@ bool checkMutableArguments(ref Scope sc, FuncDeclaration fd, TypeFunction tf,
         else
         {
             // outer variables are passed by ref
-            eb.param = null;
             refs = true;
             auto var = outerVars[i - (len - outerVars.length)];
             eb.isMutable = var.type.isMutable();
@@ -245,15 +241,7 @@ bool checkMutableArguments(ref Scope sc, FuncDeclaration fd, TypeFunction tf,
 public
 bool checkArrayLiteralEscape(ref Scope sc, ArrayLiteralExp ae, bool gag)
 {
-    bool errors;
-    if (ae.basis)
-        errors = checkNewEscape(sc, ae.basis, gag);
-    foreach (ex; *ae.elements)
-    {
-        if (ex)
-            errors |= checkNewEscape(sc, ex, gag);
-    }
-    return errors;
+    return (ae.basis && checkNewEscape(sc, ae.basis, gag)) | checkNewEscape(sc, ae.elements, gag);
 }
 
 /******************************************
@@ -269,17 +257,14 @@ bool checkArrayLiteralEscape(ref Scope sc, ArrayLiteralExp ae, bool gag)
 public
 bool checkAssocArrayLiteralEscape(ref Scope sc, AssocArrayLiteralExp ae, bool gag)
 {
+    return checkNewEscape(sc, ae.keys, gag) | checkNewEscape(sc, ae.values, gag);
+}
+
+private bool checkNewEscape(ref Scope sc, Expressions* es, bool gag)
+{
     bool errors;
-    foreach (ex; *ae.keys)
-    {
-        if (ex)
-            errors |= checkNewEscape(sc, ex, gag);
-    }
-    foreach (ex; *ae.values)
-    {
-        if (ex)
-            errors |= checkNewEscape(sc, ex, gag);
-    }
+    foreach (ex; *es)
+        errors |= ex && checkNewEscape(sc, ex, gag);
     return errors;
 }
 
@@ -361,7 +346,7 @@ bool checkParamArgumentEscape(ref Scope sc, FuncDeclaration fdc, Identifier parI
         if (assertmsg)
         {
             result |= sc.setUnsafeDIP1000(gag, arg.loc,
-                "assigning" ~ desc ~ " `%s` to non-scope parameter calling `assert()`", v);
+                "assigning " ~ desc ~ " `%s` to non-scope parameter calling `assert()`", v);
             return;
         }
 
@@ -405,7 +390,6 @@ bool checkParamArgumentEscape(ref Scope sc, FuncDeclaration fdc, Identifier parI
 
         Dsymbol p = v.toParent2();
 
-        doNotInferScope(v, arg);
         if (checkScopeVarAddr(v, arg, sc, gag))
         {
             result = true;
@@ -519,7 +503,7 @@ bool checkConstructorEscape(ref Scope sc, CallExp ce, bool gag)
     if (!tthis.hasPointers())
         return false;
 
-    if (!ce.arguments && ce.arguments.length)
+    if (!ce.arguments)
         return false;
 
     DotVarExp dve = ce.e1.isDotVarExp();
@@ -825,9 +809,6 @@ bool checkAssignEscape(ref Scope sc, Expression e, bool gag, bool byRef)
             }
         }
 
-        if (!(va && va.isScope()))
-            doNotInferScope(v, e);
-
         if (p != sc.func)
             return;
 
@@ -866,7 +847,7 @@ bool checkAssignEscape(ref Scope sc, Expression e, bool gag, bool byRef)
                 doNotInferScope(v, e);
 
             if (!(v.isReference() || v.isScope()) || p != fd)
-                return;
+                continue;
 
             if (va && !va.isDataseg() && (va.isScope() || va.maybeScope))
             {
@@ -898,7 +879,7 @@ bool checkAssignEscape(ref Scope sc, Expression e, bool gag, bool byRef)
         }
 
         const(char)* msg = (ee.op == EXP.structLiteral) ?
-            "assigning address of struct literal `%s`  to `%s` with longer lifetime" :
+            "assigning address of struct literal `%s` to `%s` with longer lifetime" :
             "assigning address of expression temporary returned by `%s` to `%s` with longer lifetime";
 
         result |= sc.setUnsafeDIP1000(gag, ee.loc, msg, ee, e1);
@@ -1251,7 +1232,7 @@ private bool checkReturnEscapeImpl(ref Scope sc, Expression e, bool refs, bool g
         {
             const(char)* safeMsg = v.isParameter() ?
                 "escaping a reference to parameter `%s` by returning `%s`" :
-                "escaping a reference to local variable `%s` by returning `%s` ";
+                "escaping a reference to local variable `%s` by returning `%s`";
             if (v.isParameter() && v.isReference())
             {
                 if (setUnsafePreview(&sc, featureState, gag, e.loc, safeMsg, v, e) ||
@@ -1328,8 +1309,7 @@ private bool checkReturnEscapeImpl(ref Scope sc, Expression e, bool refs, bool g
              vsr == ScopeRef.RefScope ||
              vsr == ScopeRef.Ref_ReturnScope)
         {
-            if (p == sc.func && (vsr == ScopeRef.Ref || vsr == ScopeRef.RefScope) &&
-                inferReturn(sc.func, v, /*returnScope:*/ false))
+            if (p == sc.func && inferReturn(sc.func, v, /*returnScope:*/ false))
             {
                 return;
             }
@@ -1365,7 +1345,7 @@ private bool checkReturnEscapeImpl(ref Scope sc, Expression e, bool refs, bool g
 
     void onFunc(FuncDeclaration fd, bool called)
     {
-        if (called && fd.isNested())
+        if (called)
             result |= sc.setUnsafeDIP1000(gag, e.loc, "escaping local variable through nested function `%s`", fd);
     }
 

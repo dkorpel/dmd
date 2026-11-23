@@ -315,9 +315,25 @@ void getenv_setargv(const(char)* envvalue, Strings* args)
  */
 const(char)[] parse_arch_arg(Strings* args, const(char)[] arch)
 {
+    bool emscripten = arch == "wasm32-emscripten";
     foreach (const p; *args)
     {
         const arg = p.toDString;
+
+        if (arg.startsWith("-os="))
+        {
+            const os = arg[4 .. $];
+            emscripten = os == "emscripten";
+            if (emscripten || os.startsWith("wasi"))
+                arch = "wasm32";
+            continue;
+        }
+        if (arg.startsWith("-target=wasm32"))
+        {
+            arch = "wasm32";
+            emscripten = arg.length >= 10 && arg[$ - 10 .. $] == "emscripten";
+            continue;
+        }
 
         switch (arg)
         {
@@ -339,6 +355,8 @@ const(char)[] parse_arch_arg(Strings* args, const(char)[] arch)
         }
         break;
     }
+    if (arch == "wasm32" && emscripten)
+        return "wasm32-emscripten";
     return arch;
 }
 
@@ -399,7 +417,7 @@ void setDefaultLibraries(const ref Target target, ref const(char)[] defaultlibna
         {
             defaultlibname = "phobos2";
         }
-        else if (target.os == Target.OS.WASM)
+        else if (target.isWasm)
         {
             defaultlibname = "libphobos2-wasm.a";
         }
@@ -1003,27 +1021,23 @@ bool parseCommandLine(const ref Strings arguments, const size_t argc, out Param 
             continue; // skip druntime options, e.g. used to configure the GC
         }
         else if (arg == "-marm64") // https://dlang.org/dmd.html#switch-marm64
-            target.setArch(aarch64: true);
+            target.setArch(Target.Arch.aarch64);
         else if (arg == "-m32") // https://dlang.org/dmd.html#switch-m32
-            target.setArch(x86: true);
+            target.setArch(Target.Arch.x86);
         else if (arg == "-m64") // https://dlang.org/dmd.html#switch-m64
-            target.setArch(x86_64: true);
+            target.setArch(Target.Arch.x86_64);
         else if (arg == "-m32mscoff") // https://dlang.org/dmd.html#switch-m32mscoff
-            target.setArch(x86: true);
+            target.setArch(Target.Arch.x86);
         else if (arg == "-mwasm32")
         {
-            target.setArch(wasm: true);
-            target.os = Target.OS.WASM;
+            target.setArch(Target.Arch.wasm32);
+            if (!(target.os & (Target.OS.WASI | Target.OS.Emscripten)))
+                target.os = Target.OS.WASI;
         }
         else if (arg == "-mwasm-selflink") // https://dlang.org/dmd.html#switch-mwasm-selflink
         {
             import dmd.backend.wasm.selflink : wasmSelfLink;
             wasmSelfLink = true;
-        }
-        else if (arg == "-mwasm64")
-        {
-            target.setArch(wasm: true, x86_64: true);
-            target.os = Target.OS.WASM;
         }
         else if (startsWith(p + 1, "mscrtlib="))
         {
@@ -1051,10 +1065,24 @@ bool parseCommandLine(const ref Strings arguments, const size_t argc, out Param 
         }
         else if (arg == "-v") // https://dlang.org/dmd.html#switch-v
             params.v.verbose = true;
+        else if (startsWith(p + 1, "vasm")) // https://dlang.org/dmd.html#switch-vasm
+        {
+            driverParams.vasm = true;
+            enum len = "-vasm".length;
+            const char c = p[len];
+            if (c)
+            {
+                if (c != '=')
+                {
+                    errorInvalidSwitch(p, "Expected string following `-vasm=`, e.g. `-vasm=<string>`");
+                    return true;
+                }
+                driverParams.vasmName = p[len + 1 .. arg.length];
+            }
+            //printf("vasm: %.*s\n", cast(int)driverParams.vasmName.length, driverParams.vasmName.ptr);
+        }
         else if (arg == "-vcg-ast")
             params.vcg_ast = true;
-        else if (arg == "-vasm") // https://dlang.org/dmd.html#switch-vasm
-            driverParams.vasm = true;
         else if (arg == "-vnan")  // https://dlang.org/dmd.html#switch-vnan
             params.v.nanInit = true;
         else if (arg == "-vtls") // https://dlang.org/dmd.html#switch-vtls
@@ -1183,7 +1211,7 @@ bool parseCommandLine(const ref Strings arguments, const size_t argc, out Param 
             enum len = "-os=".length;
             // Parse:
             //      -os=identifier
-            immutable string msg = "Only `host`, `linux`, `windows`, `osx`,`openbsd`, `freebsd`, `solaris`, `dragonflybsd`, `hurd`, `wasm` allowed for `-os`";
+            immutable string msg = "Only `host`, `linux`, `windows`, `osx`,`openbsd`, `freebsd`, `solaris`, `dragonflybsd`, `hurd`, `wasi`, `wasip1`, `wasip2`, `emscripten` allowed for `-os`";
             if (Identifier.isValidIdentifier(p + len))
             {
                 const ident = p + len;
@@ -1198,11 +1226,16 @@ bool parseCommandLine(const ref Strings arguments, const size_t argc, out Param 
                 case "solaris":      target.os = Target.OS.Solaris;      break;
                 case "dragonflybsd": target.os = Target.OS.DragonFlyBSD; break;
                 case "hurd":         target.os = Target.OS.Hurd;         break;
-                case "wasm":         target.os = Target.OS.WASM;
-                    target.isWasm = true;
-                    target.isX86 = false;
-                    target.isX86_64 = false;
-                    target.isAArch64 = false;
+                case "wasi":
+                case "wasip1":
+                case "wasip2":
+                    target.os = Target.OS.WASI;
+                    target.osMajor = ident.toDString() == "wasip2" ? 2 : 1;
+                    target.setArch(Target.Arch.wasm32);
+                    break;
+                case "emscripten":
+                    target.os = Target.OS.Emscripten;
+                    target.setArch(Target.Arch.wasm32);
                     break;
                 default:
                     errorInvalidSwitch(p, msg);

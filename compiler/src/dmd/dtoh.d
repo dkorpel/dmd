@@ -774,9 +774,12 @@ public:
         // printf("FuncDeclaration %s %s\n", fd.toPrettyChars(), fd.type.toChars());
         visited[cast(void*)fd] = true;
 
-        // silently ignore non-user-defined destructors
+        // silently ignore non-user-defined destructors and C++ base-object constructors
         if (fd.isGenerated && fd.isDtorDeclaration())
             return;
+        if (auto ctor = fd.isCtorDeclaration())
+            if (ctor.isCppBaseCtor)
+                return;
 
         // Note that tf might be null for templated (member) functions
         auto tf = cast(AST.TypeFunction)fd.type;
@@ -1015,7 +1018,7 @@ public:
                     buf.writestring(" { ");
                     writeIdentifier(vd, true);
                     buf.writestring(" = ");
-                    auto ie = AST.initializerToExpression(vd._init).isIntegerExp();
+                    auto ie = AST.initializerToExpression(vd._init, null, null, eSink).isIntegerExp();
                     visitInteger(ie.toInteger(), type);
                     buf.writestring(" };");
                     break;
@@ -1034,7 +1037,7 @@ public:
                         buf.writestring(" ");
                     writeIdentifier(vd, true);
                     buf.writestring(" = ");
-                    auto e = AST.initializerToExpression(vd._init);
+                    auto e = AST.initializerToExpression(vd._init, null, null, eSink);
                     printExpressionFor(target, e);
                     buf.writestring(";");
                     break;
@@ -1275,6 +1278,15 @@ public:
     {
         debug (Debug_DtoH) mixin(traceVisit!ad);
 
+        // The anonymous struct/union has no visibility of its own, and C++ can't
+        // give its members different ones, so use the most accessible member's.
+        // This has to be written before entering it, since writeProtection is a
+        // no-op inside. Otherwise it lands in whatever section came before, e.g.
+        // `private` at the start of a class.
+        const vis = maxMemberVisibility(ad);
+        if (vis != AST.Visibility.Kind.undefined)
+            writeProtection(vis);
+
         const anonStash = inAnonymousDecl;
         inAnonymousDecl = true;
         scope (exit) inAnonymousDecl = anonStash;
@@ -1288,6 +1300,30 @@ public:
         }
         buf.level--;
         buf.writestringln("};");
+    }
+
+    /// Returns: the most accessible visibility of the declarations inside `ad`,
+    ///          looking through nested attributes and anonymous structs/unions,
+    ///          or `undefined` if there are none
+    private static AST.Visibility.Kind maxMemberVisibility(AST.AttribDeclaration ad)
+    {
+        auto result = AST.Visibility.Kind.undefined;
+        auto decl = ad.include(null);
+        if (!decl)
+            return result;
+
+        foreach (s; *decl)
+        {
+            auto kind = AST.Visibility.Kind.undefined;
+            if (auto nested = s.isAttribDeclaration())
+                kind = maxMemberVisibility(nested);
+            else if (auto d = s.isDeclaration())
+                kind = d.visibility.kind;
+
+            if (kind > result)
+                result = kind;
+        }
+        return result;
     }
 
     private bool memberField(AST.VarDeclaration vd) @safe
@@ -1397,7 +1433,7 @@ public:
 
                 if (vd._init)
                 {
-                    auto e = AST.initializerToExpression(vd._init);
+                    auto e = AST.initializerToExpression(vd._init, null, null, eSink);
                     printExpressionFor(vd.type, e, true);
                 }
                 buf.printf(")");
@@ -2523,7 +2559,7 @@ public:
                     }
                 }
 
-                buf.printf("%u, ", cast(uint)se.len);
+                buf.printf("%u, ", cast(uint)se.length);
                 visit(se);
 
                 if (!isCtor)
@@ -2721,7 +2757,7 @@ public:
             buf.writeByte('U');
         buf.writeByte('"');
 
-        foreach (i; 0 .. e.len)
+        foreach (i; 0 .. e.length)
         {
             writeCharLiteral(e.getCodeUnit(i), &buf.put);
         }
@@ -2846,7 +2882,7 @@ public:
     private static AST.Expression findDefaultInitializer(AST.VarDeclaration vd)
     {
         if (vd._init && !vd._init.isVoidInitializer())
-            return AST.initializerToExpression(vd._init);
+            return AST.initializerToExpression(vd._init, null, null, global.errorSink);
         if (auto ts = vd.type.isTypeStruct())
         {
             if (!ts.sym.noDefaultCtor && !ts.sym.isUnionDeclaration())

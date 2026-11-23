@@ -75,8 +75,9 @@ void genDwarfEh(Funcsym* sfunc, int seg, OutBuffer* et, bool scancode, uint star
 
     et.reserve(100);
     block* startblock = sfunc.Sfunc.Fstartblock;
-    //printf("genDwarfEh: func = %s, offset = x%x, startblock.Boffset = x%x, scancode = %d startoffset=x%x, retoffset=x%x\n",
-      //sfunc.Sident.ptr, cast(int)sfunc.Soffset, cast(int)startblock.Boffset, scancode, startoffset, retoffset);
+    static if (0)
+    printf("genDwarfEh: sfunc: %s seg: %d offset: x%x startblock.Boffset: x%x, scancode: %d startoffset: x%x retoffset: x%x\n",
+      sfunc.Sident.ptr, seg, cast(int)sfunc.Soffset, cast(int)startblock.Boffset, scancode, startoffset, retoffset);
 
 static if (0)
 {
@@ -276,6 +277,9 @@ else
     const ubyte TType = (config.flags3 & CFG3pic)
                                 ? DW_EH_PE_indirect | DW_EH_PE_pcrel | DW_EH_PE_sdata4
                                 : DW_EH_PE_absptr | DW_EH_PE_udata4;
+
+    //if (config.objfmt == OBJ_MACH && config.target_cpu == TARGET_AArch64)
+
     et.writeByte(TType);
 
     /* Compute TTbase, which is the sum of:
@@ -341,7 +345,10 @@ else
         if (config.objfmt == OBJ_ELF)
             elf_dwarf_reftoident(seg, et.length(), s, 0);
         else if (config.objfmt == OBJ_MACH)
+        {
+            assert(et == SegData[seg].SDbuf);
             mach_dwarf_reftoident(seg, et.length(), s, 0);
+        }
     }
     assert(TToffset == et.length() - startsize);
 }

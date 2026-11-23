@@ -101,7 +101,7 @@ dmd)
   # WASI has no mmap; wasi-libc ships a malloc-backed emulation that
   # dmd.common.file's FileMapping links against (dead code in the browser, but it
   # has to resolve).
-  "$DMD" -mwasm32 ${DMD_OPT--O} -version=WASI_EMULATED_MMAN \
+  "$DMD" -mwasm32 ${DMD_OPT--O} -version=WASI_EMULATED_MMAN -version=WASI_EMULATED_PROCESS_CLOCKS \
     -i=dmd -i=druntime_embed \
     -Icompiler/src \
     -J. -Jcompiler/src/dmd/res -Jcompiler/wasm -J"$DRT" -J"$PHOBOS_ROOT" \

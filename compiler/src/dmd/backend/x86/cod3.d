@@ -2,7 +2,7 @@
  * Code generation 3
  *
  * Includes:
- * - generating a function prolog (pushing return address, loading paramters)
+ * - generating a function prolog (pushing return address, loading parameters)
  * - generating a function epilog (restoring registers, returning)
  * - generation / peephole optimizations of jump / branch instructions
  *
@@ -2615,7 +2615,7 @@ int jmpopcode(elem* e)
 
     op = e.Eoper;
     tym_t tymx = tybasic(e.Ety);
-    bool needsNanCheck = tyfloating(tymx) && config.inline8087 &&
+    bool needsNanCheck = tyfloating(tymx) && config.inline8087 && op != OPconst &&
         (tymx == TYreal || tymx == TYireal || tymx == TYcreal ||
          tymx == TYcdouble || tymx == TYcfloat ||
          (tyxmmreg(tymx) && config.fpxmmregs && e.Ecount != e.Ecomsub) ||
@@ -2808,7 +2808,7 @@ void cod3_ptrchk(ref CGstate cg, ref CodeBuilder cdb,ref code pcs,regm_t keepmsk
         {
             int push,pop;
 
-            cg.stackchanged = 1;
+            cg.stackchanged = true;
             if (i == ES)
             {   push = 0x06;
                 pop = 0x07;
@@ -3363,7 +3363,7 @@ void movregconst(ref CGstate cg,ref CodeBuilder cdb,reg_t reg,targ_size_t value,
     reg_t r;
     regm_t mreg;
 
-    //printf("movregconst(reg=%s, value= %lld (%llx), flags=%x)\n", regm_str(mask(reg)), value, value, flags);
+    //printf("movregconst(reg=%s, value= %lld (%llx), flags=%llx)\n", regm_str(mask(reg)), value, value, flags);
 
     regm_t regm = cg.regcon.immed.mval & mask(reg);
     targ_size_t regv = cg.regcon.immed.value[reg];
@@ -3421,7 +3421,11 @@ void movregconst(ref CGstate cg,ref CodeBuilder cdb,reg_t reg,targ_size_t value,
                 regv = 0;
             }
             else
+            {
                 genregs(cdb,0x30,reg,reg);      // XOR regL,regL
+                if (reg >= 4 && I64)
+                    code_orrex(cdb.last(), REX);
+            }
             flags &= ~mPSW;                     // flags already set by XOR
         }
         else
@@ -6814,11 +6818,16 @@ private void pinholeopt_unittest()
 @trusted
 void simplify_code(code* c)
 {
+    //printf("simplify_code()\n");
     reg_t reg;
     if (config.flags4 & CFG4optimized &&
         (c.Iop == 0x81 || c.Iop == 0x80) &&
         c.IFL2 == FL.const_ &&
-        reghasvalue((c.Iop == 0x80) ? BYTEREGS : ALLREGS,I64 ? c.IEV2.Vsize_t : c.IEV2.Vlong,reg) &&
+        reghasvalue((c.Iop == 0x80) ? BYTEREGS : ALLREGS,
+                     I64 ? (c.Irex & REX_W ? cast(long)cast(int)c.IEV2.Vsize_t
+                                           : c.IEV2.Vsize_t)
+                         : c.IEV2.Vlong,
+                     reg) &&
         !(I16 && c.Iflags & CF.opsize)
        )
     {
@@ -6826,7 +6835,7 @@ void simplify_code(code* c)
         static immutable ubyte[8] regop =
                 [ 0x00,0x08,0x10,0x18,0x20,0x28,0x30,0x38 ];
 
-        //printf("replacing 0x%02x, val = x%lx\n",c.Iop,c.IEV2.Vlong);
+        //printf("replacing 0x%02x, val = x%llx\n",c.Iop,cast(ulong)cast(int)c.IEV2.Vsize_t);
         c.Iop = regop[(c.Irm & modregrm(0,7,0)) >> 3] | (c.Iop & 1);
         code_newreg(c, reg);
         if (I64 && !(c.Iop & 1) && (reg & 4))

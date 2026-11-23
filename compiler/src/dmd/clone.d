@@ -954,8 +954,27 @@ void buildDtors(AggregateDeclaration ad, Scope* sc)
     default:
         // Build the aggregate destructor, calling all dtors in order.
         assert(!dtorIsCppPrototype);
+        // Itanium C++ ABI: the base-class subobject is destroyed by its base-object destructor
+        if (auto cldec = ad.isClassDeclaration())
+            if (cldec.baseClass && cldec.baseClass.cppBaseDtor && dtors[dtors.length - 1] is cldec.baseClass.aggrDtor)
+                dtors[dtors.length - 1] = cldec.baseClass.cppBaseDtor;
         ad.aggrDtor = buildAggregateDtor(ad, declLoc, dtors, landsInCppVtbl, sc);
         break;
+    }
+
+    if (ClassDeclaration cldec = ad.isClassDeclaration())
+    {
+        // If this class has no explicit cpp destructor, but the base class
+        // has, then set cppDtorVtblIndex, so destructors for fields can be called.
+        if (cldec.cppDtorVtblIndex == -1 && cldec.baseClass && cldec.aggrDtor)
+            cldec.cppDtorVtblIndex = cldec.baseClass.cppDtorVtblIndex;
+    }
+
+    // Itanium C++ ABI: build the base-object destructor paired with the aggregate destructor
+    if (landsInCppVtbl && target.cpp.twoDtorInVtable && ad.aggrDtor)
+    {
+        auto owner = ad.aggrDtor.isMember();
+        ad.cppBaseDtor = owner is ad ? buildCppBaseDtor(ad, ad.aggrDtor, sc) : owner.cppBaseDtor;
     }
 
     // Set/build `ad.dtor`.
@@ -1137,6 +1156,106 @@ private DtorDeclaration buildAggregateDtor(AggregateDeclaration ad, Loc declLoc,
 }
 
 /**
+ * Build the Itanium C++ ABI base-object destructor (D2) of a C++ class.
+ * D classes have no virtual bases, so it does the same as the complete-object destructor (D1):
+ * it calls `dtor` when D defines it, and is only declared when C++ does.
+ *
+ * Params:
+ *  ad = the class that contains the destructor
+ *  dtor = the aggregate destructor
+ *  sc = the scope in which to analyze the new function
+ *
+ * Returns:
+ *  the base-object destructor, semantically analyzed and added to the class as a member
+ */
+private DtorDeclaration buildCppBaseDtor(AggregateDeclaration ad, DtorDeclaration dtor, Scope* sc)
+{
+    const STC stc = (dtor.storage_class & ~STC.scope_) | mergeFuncAttrs(STC.safe | STC.nothrow_ | STC.pure_ | STC.nogc, dtor);
+    auto func = new DtorDeclaration(dtor.loc, Loc.initial, stc, Id.cppbasedtor);
+    func.isGenerated = true;
+    func.visibility = dtor.visibility;
+    if (dtor.fbody)
+    {
+        Loc loc; // internal code should have no loc to prevent coverage
+        auto call = new CallExp(loc, new DotVarExp(loc, new ThisExp(loc), dtor, false));
+        call.directcall = true;
+        func.fbody = new ExpStatement(loc, call);
+        func.storage_class |= STC.inference;
+    }
+
+    auto sc2 = sc.push();
+    sc2.stc &= ~STC.static_; // not a static destructor
+    sc2.linkage = LINK.cpp;
+    ad.members.push(func);
+    func.dsymbolSemantic(sc2);
+    sc2.pop();
+    return func;
+}
+
+/**
+ * Build the Itanium C++ ABI base-object constructor (C2) for each C++ constructor of a C++ class.
+ * D classes have no virtual bases, so it does the same as the complete-object constructor (C1):
+ * it forwards to the constructor when D defines it, and is only declared when C++ does.
+ * The base-object constructors are not added to the symbol table, so they take no part in
+ * overload resolution.
+ *
+ * Params:
+ *  cldec = the class that contains the constructors
+ *  sc = the scope in which to analyze the new functions
+ */
+void buildCppBaseCtors(ClassDeclaration cldec, Scope* sc)
+{
+    if (cldec.classKind != ClassKind.cpp || !target.cpp.twoDtorInVtable || !cldec.ctor)
+        return;
+
+    CtorDeclaration[] ctors;
+    overloadApply(cldec.ctor, (Dsymbol s)
+    {
+        if (auto ctor = s.isCtorDeclaration())
+            if (ctor._linkage == LINK.cpp && !ctor.isCpCtor && !ctor.isMoveCtor)
+                ctors ~= ctor;
+        return 0;
+    });
+
+    foreach (ctor; ctors)
+    {
+        auto tf = ctor.type.isTypeFunction();
+        if (!tf || tf.parameterList.varargs != VarArg.none)
+            continue;
+
+        Loc loc; // internal code should have no loc to prevent coverage
+        auto params = new Parameters;
+        auto args = new Expressions;
+        foreach (i, p; tf.parameterList)
+        {
+            auto id = Identifier.generateId("__p", i);
+            params.push(new Parameter(loc, p.storageClass, p.type, id, p.defaultArg ? p.defaultArg.syntaxCopy() : null, null, null));
+            args.push(new IdentifierExp(loc, id));
+        }
+        const STC stc = ctor.storage_class | mergeFuncAttrs(STC.safe | STC.nothrow_ | STC.pure_ | STC.nogc, ctor);
+        auto ftype = new TypeFunction(ParameterList(params), null, LINK.cpp, stc);
+        ftype.mod = tf.mod;
+
+        auto func = new CtorDeclaration(ctor.loc, Loc.initial, stc, ftype);
+        func.isGenerated = true;
+        func.isCppBaseCtor = true;
+        func.visibility = ctor.visibility;
+        if (ctor.fbody)
+        {
+            func.fbody = new ExpStatement(loc, new CallExp(loc, new ThisExp(loc), args));
+            func.storage_class |= STC.inference;
+        }
+
+        auto sc2 = sc.push();
+        sc2.linkage = LINK.cpp;
+        cldec.members.push(func);
+        func.dsymbolSemantic(sc2);
+        sc2.pop();
+        ctor.cppBaseCtor = func;
+    }
+}
+
+/**
  * build a shim function around the compound dtor that accepts an argument
  *  that is used to implement the deleting C++ destructor
  *
@@ -1306,6 +1425,7 @@ FuncDeclaration buildInv(AggregateDeclaration ad, Scope* sc)
                 Id.classInvariant, new ExpStatement(Loc.initial, e));
         ad.members.push(inv);
         inv.dsymbolSemantic(sc);
+        inv.addMember(sc, ad);
         return inv;
     }
 }
@@ -1588,9 +1708,9 @@ FuncDeclaration buildPostBlit(StructDeclaration sd, Scope* sc)
         if (xpostblit && !xpostblit.isDisabled())
         {
             auto eSink = global.errorSink;
-            eSink.deprecation(sd.loc, "`struct %s` implicitly-generated postblit hides copy constructor.", sd.toChars);
-            eSink.deprecationSupplemental(sd.loc, "The field postblit will have priority over the copy constructor.");
-            eSink.deprecationSupplemental(sd.loc, "To change this, the postblit should be disabled for `struct %s`", sd.toChars());
+            eSink.error(sd.loc, "`struct %s` implicitly-generated postblit hides copy constructor.", sd.toChars);
+            eSink.errorSupplemental(sd.loc, "The field postblit will have priority over the copy constructor.");
+            eSink.errorSupplemental(sd.loc, "To change this, the postblit should be disabled for `struct %s`", sd.toChars());
             sd.hasCopyCtor = false;
         }
         else
@@ -1738,7 +1858,9 @@ private void findMoveAndCopyConstructors(Dsymbol ctor, out CtorDeclaration copyC
 void needCopyOrMoveCtor(StructDeclaration sd, out bool hasCopyCtor, out bool hasMoveCtor, out bool needCopyCtor, out bool needMoveCtor)
 {
     //printf("needCopyOrMoveCtor() %s\n", sd.toChars());
-    if (global.errors)
+    // Only real errors stop this: errors gagged by a speculative analysis would otherwise
+    // leave a struct whose semantic finishes inside it without its copy constructor.
+    if (global.errors != global.gaggedErrors)
         return;
 
     Dsymbol ctor;

@@ -1751,7 +1751,7 @@ void cdshtlng(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
             Extend extend = e1.Eoper == OPu8_16 ? Extend.UXTB : Extend.UXTH;
             cs.Sextend = cast(ubyte)((cs.Sextend & 8) | extend);  // preserve S bit
             reg_t reg = allocreg(cdb,retregs,TYint);
-            loadFromEA(cs,reg,8,tysize(e1.Ety));
+            loadFromEA(cs,reg,8,tysize(e1.E1.Ety));
             cdb.gen(&cs);
             freenode(e1.E1);
             freenode(e1);
@@ -1822,10 +1822,10 @@ void cdshtlng(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
             reg_t reg = allocreg(cdb,retregs,TYint);
             if (cs.reg != NOREG)
             {
-                //    INSTR.log_imm(sf,opc,N,immr,imms,Rn,Rd)
+                //    INSTR.log_imm(sf,opc,0,immr,imms,Rn,Rd)
                 uint N,immr,imms;
                 assert(encodeNImmrImms(0xFF,N,immr,imms));
-                uint ins = INSTR.log_imm(0,0,N,immr,imms,cs.reg,reg); // AND reg,cs.reg,#0xFF
+                uint ins = INSTR.log_imm(0,0,0,immr,imms,cs.reg,reg); // AND reg,cs.reg,#0xFF
                 cdb.gen1(ins);
             }
             else

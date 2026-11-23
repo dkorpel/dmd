@@ -345,6 +345,8 @@ final class CParser(AST) : Parser!AST
         case TOK.union_:
         case TOK.enum_:
         case TOK.typeof_:
+        case TOK.__typeof__:
+        case TOK.__typeof:
 
         // storage-class-specifiers
         case TOK.typedef_:
@@ -361,6 +363,8 @@ final class CParser(AST) : Parser!AST
 
         // type-qualifiers
         case TOK.const_:
+        case TOK.__const__:
+        case TOK.__const:
         case TOK.volatile:
         case TOK.restrict:
         case TOK.__stdcall:
@@ -421,6 +425,8 @@ final class CParser(AST) : Parser!AST
              *    statement
              */
             nextToken();
+            if (flags & ParseStatementFlags.curlyScope)
+                typedefTab.push(null);  // introduce new block scope
             AST.Statements statements;
             while (token.value != TOK.rightCurly && token.value != TOK.endOfFile)
             {
@@ -481,6 +487,7 @@ final class CParser(AST) : Parser!AST
 
             nextToken();
             check(TOK.leftParenthesis);
+            typedefTab.push(null);      // C11 6.8.5-5 a for statement is a block
             if (token.value == TOK.semicolon)
             {
                 _init = null;
@@ -674,6 +681,8 @@ final class CParser(AST) : Parser!AST
             switch (peekNext())
             {
                 case TOK.const_:
+                case TOK.__const__:
+                case TOK.__const:
                 case TOK.goto_:
                 case TOK.inline:
                 case TOK.restrict:
@@ -1072,6 +1081,8 @@ final class CParser(AST) : Parser!AST
             break;
 
         case TOK._Alignof:
+        case TOK.__alignof__:
+        case TOK.__alignof:
         case TOK.sizeof_:
             e = cparseSizeofOrAlignofExp();
             break;
@@ -2076,7 +2087,7 @@ final class CParser(AST) : Parser!AST
                         !(specifier.scw & (SCW.xextern | SCW.xstatic | SCW.x_Thread_local) || level == LVL.global))
                         initializer = new AST.VoidInitializer(token.loc);
                     auto vd = new AST.VarDeclaration(id.loc, dt, id.name, initializer, specifiersToSTC(level, specifier));
-                    specifiersToVarDeclaration(vd, specifier);
+                    specifiersToVarDeclaration(level, vd, specifier);
                     s = vd;
                 }
                 if (level != LVL.global)
@@ -2243,6 +2254,14 @@ final class CParser(AST) : Parser!AST
             }
         }
 
+        /* Parameter names hide typedefs of the same name in the function body, C11 6.2.1-4
+         */
+        foreach (i; 0 .. ft.parameterList.length)
+        {
+            if (auto pid = ft.parameterList[i].ident)
+                insertIdToTypedefTab(pid);
+        }
+
         /* gets set to true if somebody references __func__ in this function, //ditto for __FUNCTION__ */
         addFuncName = false;
         refFuncName = false;
@@ -2256,6 +2275,8 @@ final class CParser(AST) : Parser!AST
         stc &= ~STC.gshared;    // no gshared functions
         auto fd = new AST.FuncDeclaration(id.loc, prevloc, id.name, stc, ft, specifier.noreturn);
         specifiersToFuncDeclaration(fd, specifier);
+        if (fd.inlining == PINLINE.always)
+            fd.registerImportCInlineCandidate();
 
         AST.Statements stmts;
 
@@ -2447,6 +2468,8 @@ final class CParser(AST) : Parser!AST
 
                 // Type qualifiers
                 case TOK.const_:     modx = MOD.xconst;     break;
+                case TOK.__const__:  modx = MOD.xconst;     break;
+                case TOK.__const:    modx = MOD.xconst;     break;
                 case TOK.volatile:   modx = MOD.xvolatile;  break;
                 case TOK.restrict:   modx = MOD.xrestrict;  break;
                 case TOK.__stdcall:  modx = MOD.x__stdcall; break;
@@ -2534,6 +2557,8 @@ final class CParser(AST) : Parser!AST
                 }
 
                 case TOK.typeof_:
+                case TOK.__typeof__:
+                case TOK.__typeof:
                 {
                     /* GNU extension (added in C23)
                      */
@@ -2625,7 +2650,7 @@ final class CParser(AST) : Parser!AST
             }
         }
 
-        specifier.scw = scw;
+        specifier.scw |= scw;
         specifier.mod = mod;
 
         // Convert TKW bits to type t
@@ -2769,6 +2794,13 @@ final class CParser(AST) : Parser!AST
             e = new AST.TypeExp(loc, cparseTypeName());
         else
             e = cparseExpression();
+
+        if (auto ie = e.isIdentifierExp())
+            if (auto fd = findFuncDeclaration(ie.ident))
+            {
+                check(TOK.rightParenthesis);
+                return fd.type;
+            }
 
         if (token.value != TOK.rightParenthesis)
         {
@@ -3006,10 +3038,7 @@ final class CParser(AST) : Parser!AST
                         {
                             error(arrayLoc, "variable length arrays are not supported");
                         }
-                        if (isStatic) // C11 6.7.6.3
-                        {
-                            error(arrayLoc, "static array parameters are not supported");
-                        }
+
                         if (declarator != DTR.xparameter)
                         {
                             /* C11 6.7.6.2-4: '*' can only be used with function prototype scope.
@@ -3145,6 +3174,8 @@ final class CParser(AST) : Parser!AST
             switch (token.value)
             {
                 case TOK.const_:     mod |= MOD.xconst;     break;
+                case TOK.__const__:  mod |= MOD.xconst;     break;
+                case TOK.__const:    mod |= MOD.xconst;     break;
                 case TOK.volatile:   mod |= MOD.xvolatile;  break;
                 case TOK.restrict:   mod |= MOD.xrestrict;  break;
                 case TOK._Atomic:    mod |= MOD.x_Atomic;   break;
@@ -3555,6 +3586,8 @@ final class CParser(AST) : Parser!AST
                     continue;
 
                 case TOK.const_:
+                case TOK.__const__:
+                case TOK.__const:
                 case TOK.restrict:
                     error(token.loc, "`%s` is not a valid `asm` qualifier", token.toChars());
                     nextToken();
@@ -3815,6 +3848,8 @@ final class CParser(AST) : Parser!AST
             case TOK.unsigned:
             case TOK.int64:
             case TOK.const_:
+            case TOK.__const__:
+            case TOK.__const:
             case TOK.extern_:
             case TOK.register:
             case TOK.typedef_:
@@ -4401,6 +4436,8 @@ final class CParser(AST) : Parser!AST
 
                 // type-qualifiers
                 case TOK.const_:
+                case TOK.__const__:
+                case TOK.__const:
                 case TOK.volatile:
                 case TOK.restrict:
                 case TOK.__stdcall:
@@ -4412,6 +4449,8 @@ final class CParser(AST) : Parser!AST
                 // atomic-type-specifier
                 case TOK._Atomic:
                 case TOK.typeof_:
+                case TOK.__typeof__:
+                case TOK.__typeof:
                     return true;
 
                 default:
@@ -4548,6 +4587,8 @@ final class CParser(AST) : Parser!AST
             switch (t.value)
             {
                 case TOK.const_:
+                case TOK.__const__:
+                case TOK.__const:
                 case TOK.restrict:
                 case TOK.volatile:
                 case TOK._Atomic:
@@ -4581,6 +4622,8 @@ final class CParser(AST) : Parser!AST
 
             // Type Qualifiers
             case TOK.const_:
+            case TOK.__const__:
+            case TOK.__const:
             case TOK.restrict:
             case TOK.volatile:
             case TOK.__stdcall:
@@ -4610,6 +4653,8 @@ final class CParser(AST) : Parser!AST
             // atomic-type-specifier
             case TOK._Atomic:
             case TOK.typeof_:
+            case TOK.__typeof__:
+            case TOK.__typeof:
             case TOK.__attribute__:
                 return true;
 
@@ -4791,13 +4836,23 @@ final class CParser(AST) : Parser!AST
     /***********************
      * Add attributes from Specifier to variable
      * Params:
-     *  vd = function to apply them to
+     *  level = declaration context
+     *  vd = variable to apply them to
      *  specifier = specifiers
      */
-    void specifiersToVarDeclaration(AST.VarDeclaration vd, const ref Specifier specifier)
+    void specifiersToVarDeclaration(LVL level, AST.VarDeclaration vd, const ref Specifier specifier)
     {
         vd.dllImport = specifier.dllimport;
         vd.dllExport = specifier.dllexport;
+
+        // C `static` at file scope is internal linkage: invisible outside
+        // this translation unit. D's own `static` storage class doesn't
+        // restrict cross-module access the way C's does, and setting
+        // vd.visibility here directly would just get overwritten once
+        // dsymbolSemantic() runs for this declaration, so it has to be
+        // fixed up again afterwards instead - see registerImportCStaticGlobal().
+        if (level == LVL.global && (specifier.scw & SCW.xstatic))
+            vd.registerImportCStaticGlobal();
     }
 
     /***********************
@@ -5040,6 +5095,23 @@ final class CParser(AST) : Parser!AST
     //{
 
     /********************************
+     * Find a function declared in the current scope by name.
+     * Params:
+     *  ident = name to look for
+     * Returns:
+     *  the function's declaration, or null if not found
+     */
+    private AST.FuncDeclaration findFuncDeclaration(Identifier ident)
+    {
+        if (!symbols)
+            return null;
+        foreach (s; *symbols)
+            if (s.ident == ident)
+                return s.isFuncDeclaration();
+        return null;
+    }
+
+    /********************************
      * Determines if type t is a function type.
      * Params:
      *  t = type to test
@@ -5088,6 +5160,7 @@ final class CParser(AST) : Parser!AST
              */
             auto tab = cast(void*[void*])(typedefTab[$ - 1]);
             tab[cast(void*)id] = cast(void*)null;
+            typedefTab[$ - 1] = cast(void*)tab;
         }
     }
 

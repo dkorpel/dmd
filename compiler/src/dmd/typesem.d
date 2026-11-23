@@ -1601,11 +1601,7 @@ private void resolveHelper(TypeQualified mt, Loc loc, Scope* sc, Dsymbol s, Dsym
             // Same check as in dotIdSemanticProp(DotIdExp)
             else if (sm.isPackage() && checkAccess(sc, sm.isPackage()))
             {
-                // @@@DEPRECATED_2.106@@@
-                // Should be an error in 2.106. Just remove the deprecation call
-                // and uncomment the null assignment
-                eSink.deprecation(loc, "%s %s is not accessible here, perhaps add 'static import %s;'", sm.kind(), sm.toPrettyChars(), sm.toPrettyChars());
-                //sm = null;
+                sm = null;
             }
         }
         if (global.errors != errorsave)
@@ -2589,7 +2585,7 @@ private extern(D) MATCH argumentMatchParameter (FuncDeclaration fd, TypeFunction
             if (ta.ty != Tsarray)
             {
                 Type tn = tp.nextOf().castMod(ta.nextOf().mod);
-                dinteger_t dim = (cast(StringExp)arg).len;
+                dinteger_t dim = (cast(StringExp)arg).length;
                 ta = tn.sarrayOf(dim);
             }
         }
@@ -3062,10 +3058,10 @@ uinteger_t size(Type t, Loc loc)
 }
 
 /*******************************
- * Determine if converting 'this' to 'to' is an identity operation,
+ * Determine if converting 'from' to 'to' is an identity operation,
  * a conversion to const operation, or the types aren't the same.
  * Returns:
- *      MATCH.exact      'this' == 'to'
+ *      MATCH.exact      'from' == 'to'
  *      MATCH.constant      'to' is const
  *      MATCH.nomatch    conversion to mutable or invariant
  */
@@ -3073,7 +3069,7 @@ MATCH constConv(Type from, Type to)
 {
     MATCH visitType(Type from)
     {
-        //printf("Type::constConv(this = %s, to = %s)\n", from.toChars(), to.toChars());
+        //printf("Type::constConv(from = %s, to = %s)\n", from.toChars(), to.toChars());
         if (from.equals(to))
             return MATCH.exact;
         if (from.ty == to.ty && MODimplicitConv(from.mod, to.mod))
@@ -3147,7 +3143,8 @@ MATCH constConv(Type from, Type to)
     MATCH visitFunction(TypeFunction from)
     {
         // Attributes need to match exactly, otherwise it's an implicit conversion
-        if (from.ty != to.ty || !from.attributesEqual(cast(TypeFunction) to))
+        if (from.ty != to.ty || !from.attributesEqual(cast(TypeFunction) to) ||
+            from.covariant(to) != Covariant.yes) // check parameters
             return MATCH.nomatch;
 
         return visitNext(from);
@@ -3877,7 +3874,7 @@ Type typeSemantic(Type type, Loc loc, Scope* sc)
                 sc2.inDefaultArg = true;
                 Initializer iz = new ExpInitializer(e.loc, e);
                 iz = iz.initializerSemantic(sc2, fparam.type, INITnointerpret, eSink);
-                e = iz.initializerToExpression();
+                e = iz.initializerToExpression(sc2, null, eSink);
                 sc2.pop();
             }
             if (e.op == EXP.function_) // https://issues.dlang.org/show_bug.cgi?id=4820
@@ -4936,7 +4933,7 @@ private enum LOGDEFAULTINIT = 0;
  * Use when we prefer the default initializer to be a literal,
  * rather than a global immutable variable.
  */
-Expression defaultInitLiteral(Type t, Loc loc)
+Expression defaultInitLiteral(Type t, Loc loc, const bool isCfile = false)
 {
 
     if (t.isTypeError())
@@ -4980,7 +4977,7 @@ Expression defaultInitLiteral(Type t, Loc loc)
                     e = vd.getConstInitializer(false);
             }
             else
-                e = vd.type.defaultInitLiteral(loc);
+                e = vd.type.defaultInitLiteral(loc, isCfile);
             if (e && e.op == EXP.error)
                 return e;
             if (e)
@@ -5007,7 +5004,7 @@ Expression defaultInitLiteral(Type t, Loc loc)
     {
         //printf("TypeVector::defaultInitLiteral()\n");
         assert(tv.basetype.ty == Tsarray);
-        Expression e = tv.basetype.defaultInitLiteral(loc);
+        Expression e = tv.basetype.defaultInitLiteral(loc, isCfile);
         auto ve = new VectorExp(loc, e, tv);
         ve.type = tv;
         ve.dim = cast(int)(tv.basetype.size(loc) / tv.elementType().size(loc));
@@ -5022,16 +5019,16 @@ Expression defaultInitLiteral(Type t, Loc loc)
         size_t d = cast(size_t)tsa.dim.toInteger();
         Expression elementinit;
         if (tsa.next.ty == Tvoid)
-            elementinit = Type.tuns8.defaultInitLiteral(loc);
+            elementinit = Type.tuns8.defaultInitLiteral(loc, isCfile);
         else
-            elementinit = tsa.next.defaultInitLiteral(loc);
+            elementinit = tsa.next.defaultInitLiteral(loc, isCfile);
         auto elements = new Expressions(d);
         foreach (ref e; *elements)
             e = null;
         auto ae = new ArrayLiteralExp(loc, tsa, elementinit, elements);
         return ae;
     }
-    return defaultInit(t, loc);
+    return defaultInit(t, loc, isCfile);
 }
 /***************************************
  * Calculate built-in properties which just the type is necessary.
@@ -6196,23 +6193,11 @@ Expression dotExp(Type mt, Scope* sc, Expression e, Identifier ident, DotExpFlag
 
     Expression visitType(Type mt)
     {
-        VarDeclaration v = null;
         static if (LOGDOTEXP)
         {
             printf("Type::dotExp(e = '%s', ident = '%s')\n", e.toChars(), ident.toChars());
         }
-        Expression ex = e.lastComma();
-        if (ex.op == EXP.dotVariable)
-        {
-            DotVarExp dv = cast(DotVarExp)ex;
-            v = dv.var.isVarDeclaration();
-        }
-        else if (ex.op == EXP.variable)
-        {
-            VarExp ve = cast(VarExp)ex;
-            v = ve.var.isVarDeclaration();
-        }
-        if (v)
+        if (auto v = isVarAccess(e.lastComma()))
         {
             if (ident == Id.offsetof ||
                 ident == Id.bitoffsetof ||
@@ -6520,7 +6505,7 @@ Expression dotExp(Type mt, Scope* sc, Expression e, Identifier ident, DotExpFlag
             if (e.op == EXP.string_)
             {
                 StringExp se = cast(StringExp)e;
-                return new IntegerExp(se.loc, se.len, Type.tsize_t);
+                return new IntegerExp(se.loc, se.length, Type.tsize_t);
             }
             if (e.op == EXP.null_)
             {
@@ -8969,7 +8954,8 @@ Type substWildTo(Type type, uint mod)
         //printf("+Type.substWildTo this = %s, mod = x%x\n", toChars(), mod);
         Type t;
 
-        if (Type tn = type.nextOf())
+        Type tn = type.ty == Tenum ? null : type.nextOf();
+        if (tn)
         {
             // substitution has no effect on function pointer type.
             if (type.ty == Tpointer && tn.ty == Tfunction)
@@ -9623,7 +9609,7 @@ Expression getMaxMinValue(EnumDeclaration ed, Loc loc, Identifier id)
     if (!(ed.memtype && ed.memtype.isIntegral()))
     {
         eSink.error(loc, "%s `%s` has no `.%s` property because base type `%s` is not an integral type", ed.kind, ed.toPrettyChars, id.toErrMsg(),
-              id.toErrMsg(), ed.memtype ? ed.memtype.toErrMsg() : "");
+              ed.memtype ? ed.memtype.toErrMsg() : "");
         return errorReturn();
     }
 

@@ -52,6 +52,17 @@ __gshared WasmBuffers buffers;
 
 extern (C):
 
+// wasi-libc's clock() lives in libwasi-emulated-process-clocks; the optimizer's
+// time budget is all that calls it
+import core.stdc.time : clock_t;
+clock_t clock() nothrow @nogc
+{
+    import core.sys.posix.time : clock_gettime, timespec, CLOCK_MONOTONIC;
+    timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return cast(clock_t) (ts.tv_sec * 1_000_000 + ts.tv_nsec / 1000);
+}
+
 ubyte* dmdwasm_input_buffer(size_t cap)
 {
     buffers.input = (cast(ubyte*) pureMallocLike(cap))[0 .. cap];
@@ -135,8 +146,8 @@ private void initFrontend(bool wasmTarget = false)
 
     if (wasmTarget)
     {
-        target.os = Target.OS.WASM;
-        target.setArch(wasm: true);
+        target.os = Target.OS.WASI;
+        target.setArch(Target.Arch.wasm32);
     }
     else
     {
@@ -652,8 +663,8 @@ int dmdwasm_init()
         import core.runtime : rt_init;
         import dmd.root.rmem : mem;
         rt_options = gcDisabled;
-        const ok = rt_init();
         mem.disableGC();
+        const ok = rt_init();
         return ok;
     }
 }

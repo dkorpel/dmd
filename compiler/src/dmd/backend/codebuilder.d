@@ -35,11 +35,22 @@ struct CodeBuilder
     code* head;
     code** pTail;
 
-    enum BADINS = 0x1234_5678;
-    //enum BADINS = 0x00_00_00_C7;
-
   nothrow:
   public:
+
+    @trusted
+    debug static void chkIop(uint op)
+    {
+        static if (0) if (op == 0xB940_03A1 &&
+            strcmp(funcsym_p.Sident.ptr, "_D4core8internal2gc4impl12conservativeQw3Gcx10smallAllocMFNbmKmkxC8TypeInfoZPv") == 0)
+        {
+            static int x;
+            printf("XXXXX %d %s\n", x + 1, funcsym_p.Sident.ptr);
+            if (++x == 24)
+                assert(0);
+        }
+    }
+
     //this() { pTail = &head; }
     //this(code* c);
 
@@ -111,7 +122,7 @@ struct CodeBuilder
         if (c)
         {
             CodeBuilder cdb;
-assert(c.Iop != BADINS);
+            debug chkIop(c.Iop);
             cdb.ctor(c);
             append(cdb);
         }
@@ -135,7 +146,7 @@ assert(c.Iop != BADINS);
         /* this is a high usage routine */
         debug assert(cs);
         //debug printf("gen(%08x)\n", cs.Iop);
-assert(cs.Iop != BADINS);
+        debug chkIop(cs.Iop);
         assert(I64 || cs.Irex == 0);
         code* ce = code_malloc();
         *ce = *cs;
@@ -152,7 +163,7 @@ assert(cs.Iop != BADINS);
     void gen1(opcode_t op)
     {
         //debug printf("gen1(%08x)\n", op);
-assert(op != BADINS);
+        debug chkIop(op);
         code* ce = code_calloc();
         ce.Iop = op;
         ccheck(ce);
@@ -164,7 +175,7 @@ assert(op != BADINS);
 
     void gen2(opcode_t op, uint rm)
     {
-assert(op != BADINS);
+        debug chkIop(op);
         code* ce = code_calloc();
         ce.Iop = op;
         ce.Iea = rm;
@@ -179,7 +190,7 @@ assert(op != BADINS);
      */
     void genf2(opcode_t op, uint rm)
     {
-assert(op != BADINS);
+        debug chkIop(op);
         genfwait(this);
         gen2(op, rm);
     }
@@ -188,7 +199,7 @@ assert(op != BADINS);
     {
         code* ce = code_calloc();
         ce.Iop = op;
-assert(op != BADINS);
+        debug chkIop(op);
         ce.Irm = cast(ubyte)rm;
         ce.Isib = cast(ubyte)sib;
         ce.Irex = cast(ubyte)((rm | (sib & (REX_B << 16))) >> 16);
@@ -246,7 +257,7 @@ assert(op != BADINS);
     @trusted
     void gencs1(opcode_t op, uint ea, FL FL1, Symbol* s)
     {
-assert(op != BADINS);
+        debug chkIop(op);
         code cs;
         cs.Iop = op;
         cs.Iflags = CF.zero;
@@ -262,7 +273,7 @@ assert(op != BADINS);
     @trusted
     void gencs(opcode_t op, uint ea, FL FL2, Symbol* s)
     {
-assert(op != BADINS);
+        debug chkIop(op);
         code cs;
         cs.Iop = op;
         cs.Iflags = CF.zero;
@@ -278,7 +289,7 @@ assert(op != BADINS);
     @trusted
     void genc2(opcode_t op, uint ea, targ_size_t EV2)
     {
-assert(op != BADINS);
+        debug chkIop(op);
         code cs;
         cs.Iop = op;
         cs.Iflags = CF.zero;
@@ -294,7 +305,7 @@ assert(op != BADINS);
     @trusted
     void genc1(opcode_t op, uint ea, FL FL1, targ_size_t EV1)
     {
-assert(op != BADINS);
+        debug chkIop(op);
         code cs;
         assert(FL1 < FL.max + 1);
         cs.Iop = op;
@@ -310,7 +321,7 @@ assert(op != BADINS);
     @trusted
     void genc(opcode_t op, uint ea, FL FL1, targ_size_t EV1, FL FL2, targ_size_t EV2)
     {
-assert(op != BADINS);
+        debug chkIop(op);
         code cs;
         assert(FL1 < FL.max + 1);
         cs.Iop = op;

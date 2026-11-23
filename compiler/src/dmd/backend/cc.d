@@ -201,11 +201,6 @@ nothrow:
 
         struct
         {
-            Symbol* catchvar;           // __throw() fills in this
-        }                               // BC.cpptry
-
-        struct
-        {
             Symbol* Bcatchtype;       // one type for each catch block
             Barray!uint* actionTable; // EH_DWARF: indices into typeTable
         }                             // BC.jcatch
@@ -247,16 +242,9 @@ nothrow:
         // CPP
         struct
         {
-            SYMIDX      Bsymstart;      // (symstart <= symnum < symend) Symbols
-            SYMIDX      Bsymend;        // are declared in this block
-            block*      Bendscope;      // block that forms the end of the
-                                        // scope for the declared Symbols
             uint        Bblknum;        // position of block from startblock
             Symbol*     Binitvar;       // !=NULL points to an auto variable with
                                         // an explicit or implicit initializer
-            block*      Bgotolist;      // BC.cpptry, BC.catch_: backward list of try scopes
-            block*      Bgotothread;    // BC.goto_: threaded list of goto's to
-                                        // unknown labels
         }
 
         // OPTIMIZER
@@ -290,7 +278,6 @@ nothrow:
             targ_size_t Boffset;        // code offset of start of this block
             targ_size_t Bsize;          // code size of this block
             con_t       Bregcon;        // register state at block exit
-            targ_size_t Btryoff;        // BC.cpptry: offset of try block data
         }
     }
 }
@@ -389,6 +376,7 @@ enum
     Feh_none         =  0x80_0000, // ehmethod==EH_NONE for this function only
     F3hiddenPtr      = 0x100_0000, // function has hidden pointer to return value
     F3safe           = 0x200_0000, // function is @safe
+    Fhasframe        = 0x400_0000, // function has standard stack frame
 }
 
 struct func_t
@@ -397,13 +385,10 @@ struct func_t
     symtab_t Flocsym;           // local Symbol table
     Srcpos Fstartline;          // starting line # of function
     Srcpos Fendline;            // line # of closing brace of function
-    Symbol* F__func__;          // symbol for __func__[] string
     func_flags_t Fflags;
 
     Classsym* Fclass;           // if member of a class, this is the class
                                 // (I think this is redundant with Sscope)
-    Funcsym* Falias;            // SCfuncalias: function Symbol referenced
-                                // by using-declaration
 
     char* Fredirect;            // redirect function name to this name in object
 
@@ -442,9 +427,6 @@ enum
 struct enum_t
 {
     enum_flags_t SEflags;
-    Symbol* SEalias;            // pointer to identifier E to use if
-                                // enum was defined as:
-                                //      typedef enum { ... } E;
     Barray!(Symbol*) SEenums;   // all members of enum
 }
 

@@ -101,6 +101,8 @@ private struct FUNCFLAG
     bool inlineScanned;      /// function has been scanned for inline possibilities
     bool hasCatches;         /// function has try-catch statements
     bool skipCodegen;        /// do not generate code for this function.
+    bool importCInlineReferenced; /// set by scanImportCInlineUsage while checking ImportC inline/__forceinline candidates for real uses
+    bool isImportCInlineCandidate; /// set by scanImportCInlineUsage while collecting ImportC inline/__forceinline candidates
     bool printf;             /// is a printf-like function
 
     bool scanf;              /// is a scanf-like function
@@ -287,7 +289,7 @@ extern(D) struct ParameterDFAInfo
     ///
     Fact notNullOut()
     {
-        return inferred.notNullOut > inferred.notNullOut ? inferred.notNullOut : userSupplied.notNullOut;
+        return inferred.notNullOut > userSupplied.notNullOut ? inferred.notNullOut : userSupplied.notNullOut;
     }
 
     bool escapeIntoNothing()
@@ -331,6 +333,9 @@ extern (C++) class FuncDeclaration : Declaration
     ILS inlineStatusExp = ILS.uninitialized;
     PINLINE inlining = PINLINE.default_;
 
+    /// set if this is a known, builtin function we can evaluate at compile time
+    BUILTIN builtin = BUILTIN.unknown;
+
     int inlineNest;                     /// !=0 if nested inline
 
     ForeachStatement fes;               /// if foreach body, this is the foreach
@@ -354,13 +359,8 @@ extern (C++) class FuncDeclaration : Declaration
 
     mixin FuncDeclarationExtra;
 
-    /// set if this is a known, builtin function we can evaluate at compile time
-    BUILTIN builtin = BUILTIN.unknown;
-
     /// set if someone took the address of this function
     int tookAddressOf;
-
-    bool requiresClosure;               // this function needs a closure
 
     /** local variables in this function which are referenced by nested functions
      * (They'll get put into the "closure" for this function.)
@@ -375,6 +375,22 @@ extern (C++) class FuncDeclaration : Declaration
     // Most recent encountered `main` (`WinMain` or `DllMain`) function.
     // Track it to give error messages for multiple entrypoints
     __gshared FuncDeclaration lastMain;
+
+    /// Functions seen while parsing ImportC that might be dead
+    /// inline/__forceinline candidates; checked for real once semantic
+    /// analysis of the whole program is done, in scanImportCInlineUsage.
+    extern (D) __gshared FuncDeclaration[] importCInlineCandidates;
+
+    /***********************************************************
+     * Register this as a possible ImportC inline/__forceinline dead-code
+     * candidate. Called from the parser, before fbody is attached; fbody
+     * and the other qualifying conditions are checked later, for real, in
+     * scanImportCInlineUsage().
+     */
+    extern (D) final void registerImportCInlineCandidate()
+    {
+        importCInlineCandidates ~= this;
+    }
 
     /// Sibling nested functions which called this one
     FuncDeclarations siblingCallers;
@@ -393,6 +409,8 @@ extern (C++) class FuncDeclaration : Declaration
     /// See the `FUNCFLAG` struct
     import dmd.common.bitfields;
     mixin(generateBitFields!(FUNCFLAG, uint));
+
+    bool requiresClosure;               // this function needs a closure
 
     /**
      * Data for a function declaration that is needed for the Objective-C
@@ -971,6 +989,8 @@ extern (C++) final class CtorDeclaration : FuncDeclaration
 {
     bool isCpCtor;    // copy constructor
     bool isMoveCtor;  // move constructor (aka rvalue constructor)
+    bool isCppBaseCtor; // Itanium C++ ABI base-object constructor (C2) generated for another constructor
+    CtorDeclaration cppBaseCtor; // the base-object constructor (C2) generated for this one
     extern (D) this(Loc loc, Loc endloc, STC stc, Type type)
     {
         super(loc, endloc, Id.ctor, stc, type);

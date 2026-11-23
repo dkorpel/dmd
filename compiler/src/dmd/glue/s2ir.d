@@ -38,7 +38,7 @@ import dmd.dsymbol;
 import dmd.dstruct;
 import dmd.dtemplate;
 import dmd.expression;
-import dmd.expressionsem : getDsymbol, toInteger;
+import dmd.expressionsem : canElideCopy, getDsymbol, toInteger;
 import dmd.func;
 import dmd.id;
 import dmd.init;
@@ -559,33 +559,39 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
     void visitReturn(ReturnStatement s)
     {
         //printf("s2ir.ReturnStatement: %s\n", toChars(s.exp));
-        BlockState* blx = irs.blx;
-        BC bc;
 
         incUsage(irs, s.loc);
-        void finish()
+        void finish(elem* e = null)
         {
-            block* finallyBlock;
+            BC bc = BC.ret;
+            BlockState* blx = irs.blx;
+
+            if (e)
+            {
+                elem_setLoc(e, s.loc);
+                block_appendexp(blx.curblock, e);
+                bc = BC.retexp;
+            }
+
             // EH_DWARF/EH_WASM/EH_NONE link finally successors in a later pass
             // (insertFinallyBlock{Calls,Gotos}); return blocks must have none yet.
             if (config.ehmethod != EHmethod.EH_DWARF &&
                 config.ehmethod != EHmethod.EH_WASM &&
                 config.ehmethod != EHmethod.EH_NONE &&
-                !irs.isNothrow() &&
-                (finallyBlock = stmtstate.getFinallyBlock()) != null)
+                !irs.isNothrow())
             {
-                assert(finallyBlock.bc == BC.finally_);
-                blx.curblock.Bsucc.push(finallyBlock);
+                if (block* finallyBlock = stmtstate.getFinallyBlock())
+                {
+                    assert(finallyBlock.bc == BC.finally_);
+                    blx.curblock.Bsucc.push(finallyBlock);
+                }
             }
 
             block_setLoc(blx.curblock, s.loc);
             block_next(blx, bc, null);
         }
         if (!s.exp)
-        {
-            bc = BC.ret;
             return finish();
-        }
 
         elem* e;
 
@@ -594,78 +600,30 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
         auto tf = func.type.isTypeFunction();
         assert(tf);
 
-        RET retmethod = retStyle(tf, func.needThis());
-        if (retmethod == RET.stack)
+        if (retStyle(tf, func.needThis()) == RET.stack)
         {
-            elem* es;
-            bool writetohp;
+            bool nrvo = func.isNRVO && func.nrvo_var;
+            bool urvo = !nrvo && canElideCopy(s.exp, s.exp.type);
 
-            /* If returning struct literal, write result
-             * directly into return value
-             */
-            if (auto sle = s.exp.isStructLiteralExp())
-            {
-                sle.sym = irs.shidden;
-                writetohp = true;
-            }
-            /* Detect function call that returns the same struct
-             * and construct directly into *shidden
-             */
-            else if (auto ce = s.exp.isCallExp())
-            {
-                if (ce.e1.op == EXP.variable || ce.e1.op == EXP.star)
-                {
-                    Type t = ce.e1.type.toBasetype();
-                    if (t.ty == Tdelegate)
-                        t = t.nextOf();
-                    if (t.ty == Tfunction && retStyle(cast(TypeFunction)t, ce.f && ce.f.needThis()) == RET.stack)
-                    {
-                        e = toElemDtor(s.exp, irs, el_var(irs.shidden));
-                        e = el_una(OPaddr, TYnptr, e);
-                        goto L1;
-                    }
-                }
-                else if (auto dve = ce.e1.isDotVarExp())
-                {
-                    auto fd = dve.var.isFuncDeclaration();
-                    if (fd && fd.isCtorDeclaration())
-                    {
-                        if (auto sle = dve.e1.isStructLiteralExp())
-                        {
-                            sle.sym = irs.shidden;
-                            writetohp = true;
-                        }
-                    }
-                    Type t = ce.e1.type.toBasetype();
-                    if (t.ty == Tdelegate)
-                        t = t.nextOf();
-                    if (t.ty == Tfunction && retStyle(cast(TypeFunction)t, fd && fd.needThis()) == RET.stack)
-                    {
-                        e = toElemDtor(s.exp, irs, el_var(irs.shidden));
-                        e = el_una(OPaddr, TYnptr, e);
-                        goto L1;
-                    }
-                }
-            }
-            e = toElemDtor(s.exp, irs);
+            // Pass shidden in ehidden for URVO
+            elem* ehidden = urvo ? el_var(irs.shidden) : null;
+            e = toElemDtor(s.exp, irs, ehidden);
             assert(e);
 
-            if (writetohp ||
-                (func.isNRVO && func.nrvo_var))
+            if (nrvo || urvo)
             {
-                // Return value via hidden pointer passed as parameter
-                // Write exp; return shidden;
-                es = e;
+                // For URVO, toElemDtor already returns the hidden pointer
+                // so there is no need to rewrite
+                e = el_una(OPaddr, TYnptr, e);
             }
             else
             {
                 // Return value via hidden pointer passed as parameter
                 // Write *shidden=exp; return shidden;
-                es = el_una(OPind,e.Ety,el_var(irs.shidden));
+                elem* es = el_una(OPind, e.Ety, el_var(irs.shidden));
                 es = elAssign(es, e, s.exp.type, null);
+                e = el_combine(es, el_var(irs.shidden));
             }
-            e = el_var(irs.shidden);
-            e = el_bin(OPcomma, e.Ety, es, e);
         }
         else if (tf.isRef)
         {
@@ -678,13 +636,8 @@ void Statement_toIR(Statement s, ref IRState irs, StmtState* stmtstate)
             e = toElemDtor(s.exp, irs);
             assert(e);
         }
-    L1:
-        elem_setLoc(e, s.loc);
-        block_appendexp(blx.curblock, e);
-        bc = BC.retexp;
-//        if (type_zeroCopy(Type_toCtype(s.exp.type)))
-//            bc = BC.ret;
-        finish();
+
+        finish(e);
     }
 
     /**************************************

@@ -27,21 +27,30 @@ immutable MetricDef[] initials = [
     MetricDef("compile_phobos_instr",         "compile Phobos (instr)",         "count", "cachegrind"),
     MetricDef("compile_phobos_codegen_instr", "compile Phobos codegen (instr)", "count", "cachegrind"),
     MetricDef("compile_vibed_instr",          "compile vibe.d (instr)",         "count", "cachegrind"),
+    MetricDef("compile_ctregex_instr",        "compile ctRegex tests (instr)",  "count", "cachegrind"),
     MetricDef("dmd_binary_size",              "dmd binary size (stripped)",     "bytes", "stat"),
     MetricDef("hello_binary_size",            "hello binary size (stripped)",   "bytes", "stat"),
     MetricDef("hello_max_rss",                "peak RSS (compile hello.d)",     "kb",    "time -v"),
     MetricDef("phobos_max_rss",               "peak RSS (compile Phobos)",      "kb",    "time -v"),
     MetricDef("vibed_max_rss",                "peak RSS (compile vibe.d)",      "kb",    "time -v"),
+    MetricDef("ctregex_max_rss",              "peak RSS (compile ctRegex tests)", "kb",  "time -v"),
+    MetricDef("hello_page_faults",            "page faults (compile hello.d)",  "faults", "time -v"),
+    MetricDef("phobos_page_faults",           "page faults (compile Phobos)",   "faults", "time -v"),
+    MetricDef("vibed_page_faults",            "page faults (compile vibe.d)",   "faults", "time -v"),
+    MetricDef("ctregex_page_faults",          "page faults (compile ctRegex tests)", "faults", "time -v"),
 ];
 
 immutable selfBuild = MetricDef("dmd_self_build_wall", "compile dmd itself (wall)", "ms", "wall");
 
 enum phobosFlags = ["-i=std", "-preview=dip1000"];
+enum ctregexFlags = ["-unittest"];
+enum ctregexTests = buildPath("std", "regex", "internal", "tests.d");
 
 struct Traces
 {
     Trace hello;
     Trace phobos;
+    Trace ctregex;
 }
 
 // Measure every metric for one dmd binary. `tag` ("base"/"head")
@@ -55,27 +64,39 @@ long[string] measure(string dmd, string workload, string phobos,
     auto vibeFlags = "-i" ~ vibedFlags;
     auto phobosInstr = instructions(dmd, phobosFlags, stdPackage, tmp, tag ~ "-phobos");
     auto phobosFrontend = instructions(dmd, "-o-" ~ phobosFlags, stdPackage, tmp, tag ~ "-phobos-fe");
+    auto helloTime = timeV(dmd, [], workload, tmp, tag);
+    auto phobosTime = timeV(dmd, phobosFlags, stdPackage, tmp, tag ~ "-phobos");
+    auto vibedTime = timeV(dmd, vibeFlags, vibed, tmp, tag ~ "-vibed");
+    auto ctregex = buildPath(phobos, ctregexTests);
+    auto ctregexTime = timeV(dmd, ctregexFlags, ctregex, tmp, tag ~ "-ctregex");
     return [
         "compile_hello_debug_instr":    instructions(dmd, [], workload, tmp, tag ~ "-dbg"),
         "compile_hello_release_instr":  instructions(dmd, ["-O", "-release"], workload, tmp, tag ~ "-rel"),
         "compile_phobos_instr":         phobosInstr,
         "compile_phobos_codegen_instr": phobosInstr - phobosFrontend,
         "compile_vibed_instr":          instructions(dmd, vibeFlags, vibed, tmp, tag ~ "-vibed"),
+        "compile_ctregex_instr":        instructions(dmd, ctregexFlags, ctregex, tmp, tag ~ "-ctregex"),
         "dmd_binary_size":              strippedSize(dmd, buildPath(tmp, tag ~ "-dmd")),
         "hello_binary_size":            helloSize(dmd, workload, tmp, tag),
-        "hello_max_rss":                maxRss(dmd, [], workload, tmp, tag),
-        "phobos_max_rss":               maxRss(dmd, phobosFlags, stdPackage, tmp, tag ~ "-phobos"),
-        "vibed_max_rss":                maxRss(dmd, vibeFlags, vibed, tmp, tag ~ "-vibed"),
+        "hello_max_rss":                parseMaxRss(helloTime),
+        "phobos_max_rss":               parseMaxRss(phobosTime),
+        "vibed_max_rss":                parseMaxRss(vibedTime),
+        "ctregex_max_rss":              parseMaxRss(ctregexTime),
+        "hello_page_faults":            parsePageFaults(helloTime),
+        "phobos_page_faults":           parsePageFaults(phobosTime),
+        "vibed_page_faults":            parsePageFaults(vibedTime),
+        "ctregex_page_faults":          parsePageFaults(ctregexTime),
     ];
 }
 
-// -ftime-trace phase times for hello and phobos
+// -ftime-trace phase times for hello, phobos and the ctRegex tests
 Traces collectTraces(string dmd, string workload, string phobos, string tmp, string tag)
 {
     auto stdPackage = buildPath(phobos, "std", "package.d");
     return Traces(
         collectTrace(dmd, [], workload, tmp, tag ~ "-hello"),
-        collectTrace(dmd, phobosFlags, stdPackage, tmp, tag ~ "-phobos"));
+        collectTrace(dmd, phobosFlags, stdPackage, tmp, tag ~ "-phobos"),
+        collectTrace(dmd, ctregexFlags, buildPath(phobos, ctregexTests), tmp, tag ~ "-ctregex"));
 }
 
 // Wall time (ms) for the host compiler to build dmd at `src`, min of 3 runs.
@@ -123,18 +144,19 @@ private void strip(string path)
         throw new Exception("strip failed:\n" ~ r.output);
 }
 
-// Peak RSS (KiB) of compiling the workload (/usr/bin/time)
-private long maxRss(string dmd, string[] dflags, string workload, string tmp, string tag)
+// `/usr/bin/time -v` report of compiling the workload, for peak RSS and page faults
+private string timeV(string dmd, string[] dflags, string workload, string tmp, string tag)
 {
     auto obj = buildPath(tmp, tag ~ "-rss.o");
     auto cmd = ["/usr/bin/time", "-v", dmd, "-c"] ~ dflags ~ [workload, "-of=" ~ obj];
     auto r = execute(cmd);
     if (r.status != 0)
         throw new Exception("/usr/bin/time failed:\n" ~ r.output);
-    return parseMaxRss(r.output);
+    return r.output;
 }
 
 private enum rssRe = ctRegex!(`Maximum resident set size \(kbytes\):\s+(\d+)`);
+private enum faultsRe = ctRegex!(`Minor \(reclaiming a frame\) page faults:\s+(\d+)`);
 
 // Pull the max-RSS value (KiB) out of `/usr/bin/time -v` output.
 long parseMaxRss(string output)
@@ -145,8 +167,18 @@ long parseMaxRss(string output)
     return m[1].to!long;
 }
 
+long parsePageFaults(string output)
+{
+    auto m = matchFirst(output, faultsRe);
+    if (m.empty)
+        throw new Exception("could not parse page faults");
+    return m[1].to!long;
+}
+
 unittest
 {
-    auto sample = "\tMaximum resident set size (kbytes): 184320\n";
+    auto sample = "\tMaximum resident set size (kbytes): 184320\n"
+        ~ "\tMinor (reclaiming a frame) page faults: 192744\n";
     assert(parseMaxRss(sample) == 184320);
+    assert(parsePageFaults(sample) == 192744);
 }

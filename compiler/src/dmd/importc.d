@@ -318,6 +318,11 @@ bool cTypeEquivalence(Type t1, Type t2)
     if (auto tf = t1.isTypeFunction())
         return cFuncEquivalence(tf, tf.isTypeFunction());
 
+    // Basic types (int, char, float, ...) have no further structure to
+    // compare once ty and mod already match above.
+    if (t1.isTypeBasic())
+        return true;
+
     return false;
 }
 
@@ -365,7 +370,7 @@ Dsymbol handleTagSymbols(ref Scope sc, Dsymbol s, Dsymbol s2, ScopeDsymbol sds)
     {
         printf("members: %p\n", sd.members);
         printf("symtab: %p\n", sd.symtab);
-        printf("endlinnum: %d\n", sd.endlinnum);
+        printf("endlinnum: %d\n", sd.endloc.linnum);
         printf("type: %s\n", sd.type.toChars());
         printf("memtype: %s\n", sd.memtype.toChars());
     }

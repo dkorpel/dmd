@@ -1095,12 +1095,8 @@ static if (0)
             if (!boolres(e2))
             {
                 div0:
-                    error(e.Esrcpos, "divide by zero");
-                    break;
-
                 overflow:
-                    error(e.Esrcpos, "integer overflow");
-                    break;
+                    return e; // don't error or const fold, it might be on a branch never taken
             }
         }
         if (uns)
@@ -1261,7 +1257,13 @@ static if (0)
         if (cast(targ_ullong) i2 > targ_ullong.sizeof * 8)
             i2 = targ_ullong.sizeof * 8;
         // Always unsigned
-        e.Vullong = (cast(targ_ullong) l1) >> i2;
+        {
+            targ_ullong u1 = cast(targ_ullong) l1;
+            const sz = tysize(tym);
+            if (sz > 0 && sz < targ_ullong.sizeof)
+                u1 &= (cast(targ_ullong) 1 << (sz * 8)) - 1;
+            e.Vullong = u1 >> i2;
+        }
         break;
 
     case OPbtst:
@@ -1713,6 +1715,8 @@ else
         e.Vint = boolres(e1);
         break;
     case OP32_16:
+        e.Vint = cast(ushort)l1;
+        break;
     case OPoffset:
         e.Vint = cast(targ_int)l1;
         break;

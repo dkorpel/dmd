@@ -721,20 +721,35 @@ void dsymbolSemantic(Dsymbol dsym, Scope* sc)
     dsym.accept(v);
 }
 
-// function used to call semantic3 on a module's dependencies
-void semantic3OnDependencies(Module m)
+/*************************************
+ * Run the semantic analysis CTFE needs on function or variable `s`.
+ * CTFE can call a function whose body is not analysed yet (e.g. one from an
+ * imported module), or read a variable whose initializer is still pending.
+ * The interpreter asks for that here instead of calling the semantic routines
+ * itself, so CTFE starts semantic in one place only.
+ * Returns: false on error
+ */
+bool ctfeSemantic(Dsymbol s)
 {
-    if (!m)
-        return;
+    if (auto fd = s.isFuncDeclaration())
+        return functionSemantic3(fd);
 
-    if (m.semanticRun > PASS.semantic3)
-        return;
-
-    m.semantic3(null);
-
-    foreach (i; 1 .. m.aimports.length)
-        semantic3OnDependencies(m.aimports[i]);
+    auto v = s.isVarDeclaration();
+    if (!v.originalType && v.semanticRun < PASS.semanticdone) // semantic() not yet run
+    {
+        v.dsymbolSemantic(null);
+        return v.type.ty != Terror;
+    }
+    if (v._init && v._scope) // might not be run on aggregate members
+    {
+        v.inuse++;
+        v._init = v._init.initializerSemantic(v._scope, v.type, INITinterpret, global.errorSink);
+        v.inuse--;
+    }
+    return true;
 }
+
+
 
 /*******************************************
  * Can't run semantic on s now, try again later.
@@ -1097,6 +1112,7 @@ private bool funcDeclEquals(const FuncDeclaration _this, const Dsymbol s)
 
     return faf1.toParent().equals(faf2.toParent()) &&
            faf1.ident.equals(faf2.ident) &&
+           faf1.localNum == faf2.localNum &&
            faf1.type.equals(faf2.type);
 }
 
@@ -2411,7 +2427,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
             }
             //printf("inferring type for %s with init %s\n", dsym.toChars(), dsym._init.toChars());
             dsym._init = dsym._init.inferInitializerType(sc, dsym.type, global.errorSink);
-            dsym.type = dsym._init.initializerToExpression(null, sc.inCfile).type;
+            dsym.type = dsym._init.initializerToExpression(sc, null, eSink).type;
 
             if (autoDollarDims.length)
             {
@@ -2567,7 +2583,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
                 Type next = tsa.next.toBasetype();
                 if (next.ty == TY.Tchar || next.ty == TY.Twchar || next.ty == TY.Tdchar)
                 {
-                    tsa.dim = new IntegerExp(loc, se.len, Type.tsize_t);
+                    tsa.dim = new IntegerExp(loc, se.length, Type.tsize_t);
                     return true;
                 }
                 return false;
@@ -2627,7 +2643,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
             }
             else
             {
-                Expression ie = dsym._init.initializerToExpression(tsa, sc.inCfile);
+                Expression ie = dsym._init.initializerToExpression(sc, tsa, eSink);
                 if (ie && ie.op != EXP.error)
                 {
                     // Infer from literal syntax first to avoid prematurely
@@ -2651,7 +2667,8 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
                         dsym.semanticRun = PASS.semanticdone;
                         return;
                     }
-                    if (auto ale = ie.isArrayLiteralExp())
+                    auto ale = ie.isArrayLiteralExp();
+                    if (ale && !dsym._init.isArrayInitializer())
                     {
                         // Fill null gaps left by sparse auto[$] inference,
                         // now that dimensions are fully resolved.
@@ -2783,7 +2800,7 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
              * and add those.
              */
             size_t nelems = Parameter.dim(tt.arguments);
-            Expression ie = (dsym._init && !dsym._init.isVoidInitializer()) ? dsym._init.initializerToExpression(null, sc.inCfile) : null;
+            Expression ie = (dsym._init && !dsym._init.isVoidInitializer()) ? dsym._init.initializerToExpression(sc, null, eSink) : null;
             if (ie)
                 ie = ie.expressionSemantic(sc);
             if (nelems > 0 && ie)
@@ -3290,14 +3307,14 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
                         ArrayInitializer ai = dsym._init.isArrayInitializer();
                         Expression e;
                         if (ai && tb.ty == Taarray)
-                            e = ai.toAssocArrayLiteral(tb, global.errorSink);
+                            e = ai.toAssocArrayLiteral(sc, tb, global.errorSink);
                         else
-                            e = dsym._init.initializerToExpression(dsym.type, sc.inCfile);
+                            e = dsym._init.initializerToExpression(sc, dsym.type, eSink);
                         if (!e)
                         {
                             // Run semantic, but don't need to interpret
                             dsym._init = dsym._init.initializerSemantic(sc, dsym.type, INITnointerpret, global.errorSink);
-                            e = dsym._init.initializerToExpression(null, sc.inCfile);
+                            e = dsym._init.initializerToExpression(sc, null, eSink);
                             if (!e)
                             {
                                 eSink.error(dsym.loc, "%s `%s` is not a static and cannot have static initializer", dsym.kind, dsym.toPrettyChars);
@@ -3441,14 +3458,6 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
                     // https://issues.dlang.org/show_bug.cgi?id=14166
                     // Don't run CTFE for the temporary variables inside typeof
                     dsym._init = dsym._init.initializerSemantic(sc, dsym.type, sc.intypeof == 1 ? INITnointerpret : INITinterpret, global.errorSink);
-                    import dmd.semantic2 : lowerStaticAAs;
-                    lowerStaticAAs(dsym, sc);
-                    auto init_err = dsym._init.isExpInitializer();
-                    if (init_err && init_err.exp.op == EXP.showCtfeContext)
-                    {
-                        init_err.exp = ErrorExp.get();
-                        eSink.errorSupplemental(dsym.loc, "compile time context created here");
-                    }
                 }
             }
             else if (parent.isAggregateDeclaration())
@@ -3573,9 +3582,9 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
 
         if(sc.scopesym && !sc.scopesym.isAggregateDeclaration())
         {
-            for (ScopeDsymbol sym = sc.scopesym; sym && dsym.endlinnum == 0;
+            for (ScopeDsymbol sym = sc.scopesym; sym && !dsym.endloc.isValid();
                  sym = sym.parent ? sym.parent.isScopeDsymbol() : null)
-                dsym.endlinnum = sym.endlinnum;
+                dsym.endloc = sym.endloc;
         }
     }
 
@@ -5153,6 +5162,17 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
             StructDeclaration sym = ts.sym;
             if (sd.isCsymbol() && sym.isCsymbol())
             {
+                // isCCompatible compares sizes directly for unions (they
+                // have no field order to walk), so it needs both sides
+                // already finalized; the struct path walks fields instead
+                // and does its own semantic work, so leave those alone.
+                if (sd.isUnionDeclaration() && sym.isUnionDeclaration())
+                {
+                    if (sd.sizeok != Sizeok.done)
+                        sd.finalizeSize();
+                    if (sym.sizeok != Sizeok.done)
+                        sym.finalizeSize();
+                }
 
                 if (!isCCompatible(sd, sym))
                 {
@@ -5261,19 +5281,38 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
             return isCCompatibleUnnamedStruct(a, b);
         }
 
-        if (a.fields.length != b.fields.length)
-        {
-            incompatError();
-            eSink.errorSupplemental(a.loc, "`%s` has %u field(s) while `%s` has %u field(s)",
-                    a.toPrettyChars(), cast(uint)a.fields.length, b.toPrettyChars(), cast(uint)b.fields.length);
-            return false;
-        }
         // both are structs or both are unions
         if ((a.isUnionDeclaration() is null) != (b.isUnionDeclaration() is null))
         {
             incompatError();
             eSink.errorSupplemental(a.loc, "`%s` is a %s while `%s` is a %s",
                     a.toPrettyChars(), a.kind, b.toPrettyChars(), b.kind);
+            return false;
+        }
+        if (a.isUnionDeclaration() && b.isUnionDeclaration())
+        {
+            // Unions have no member order or offsets to disagree on, so
+            // only the overall size and alignment need to match.
+            if (a.structsize == b.structsize && a.alignment == b.alignment)
+                return true;
+            incompatError();
+            eSink.errorSupplemental(a.loc, "`%s` is %u bytes, `%s` is %u bytes",
+                    a.toPrettyChars(), a.structsize, b.toPrettyChars(), b.structsize);
+            if (a.alignment.isDefault())
+                eSink.errorSupplemental(a.loc, "`%s` alignment: default", a.toPrettyChars());
+            else
+                eSink.errorSupplemental(a.loc, "`%s` alignment: %u", a.toPrettyChars(), cast(uint)a.alignment.get());
+            if (b.alignment.isDefault())
+                eSink.errorSupplemental(b.loc, "`%s` alignment: default", b.toPrettyChars());
+            else
+                eSink.errorSupplemental(b.loc, "`%s` alignment: %u", b.toPrettyChars(), cast(uint)b.alignment.get());
+            return false;
+        }
+        if (a.fields.length != b.fields.length)
+        {
+            incompatError();
+            eSink.errorSupplemental(a.loc, "`%s` has %u field(s) while `%s` has %u field(s)",
+                    a.toPrettyChars(), cast(uint)a.fields.length, b.toPrettyChars(), cast(uint)b.fields.length);
             return false;
         }
         if (a.alignment != b.alignment)
@@ -6027,12 +6066,8 @@ private extern(C++) final class DsymbolSemanticVisitor : Visitor
             }
         }
 
+        buildCppBaseCtors(cldec, sc2);
         buildDtors(cldec, sc2);
-
-        // If this class has no explicit cpp destructor, but the base class
-        // has, then set cppDtorVtblIndex, so destructors for fields can be called.
-        if (cldec.cppDtorVtblIndex == -1 && cldec.baseClass && cldec.dtor)
-            cldec.cppDtorVtblIndex = cldec.baseClass.cppDtorVtblIndex;
 
         if (cldec.classKind == ClassKind.cpp && cldec.cppDtorVtblIndex != -1)
         {
@@ -7953,6 +7988,23 @@ private extern(C++) class SearchVisitor : Visitor
                         if (s.isCsymbol() && s2.isCsymbol())
                             continue;
 
+                        /* A C symbol takes priority over an identically named
+                         * symbol from the implicit `object` import. Every
+                         * module (C ones included) is implicitly given
+                         * visibility of object's declarations, so object's
+                         * own convenience aliases (such as `size_t`) should
+                         * not conflict with an explicitly imported C header's
+                         * declaration of the same name.
+                         * https://issues.dlang.org/show_bug.cgi?id=20709
+                         */
+                        if (s.isCsymbol() && s2.getModule() && s2.getModule().ident == Id.object && !s2.getModule().parent)
+                            continue;
+                        if (s2.isCsymbol() && s.getModule() && s.getModule().ident == Id.object && !s.getModule().parent)
+                        {
+                            s = s2;
+                            continue;
+                        }
+
                         if (!(flags & SearchOpt.ignoreErrors))
                             ScopeDsymbol.multiplyDefined(loc, s, s2);
                         break;
@@ -8071,7 +8123,7 @@ private extern(C++) class SearchVisitor : Visitor
             /* array[e0, e1, e2, e3] where e0, e1, e2 are some function of $
              * $ is a opDollar!(dim)() where dim is the dimension(0,1,2,...)
              */
-            pvar = &ae.lengthVar;
+            pvar = &ass.dollarVar;
             ce = ae.e1;
         }
         else
@@ -8123,9 +8175,9 @@ private extern(C++) class SearchVisitor : Visitor
                 if (TemplateDeclaration td = s.isTemplateDeclaration())
                 {
                     dinteger_t dim = 0;
-                    if (auto ae = exp.isArrayExp())
+                    if (exp.isArrayExp())
                     {
-                        dim = ae.currentDimension;
+                        dim = ass.dollarDim;
                     }
                     else if (exp.isSliceExp())
                     {
@@ -8801,10 +8853,11 @@ extern (D) bool load(Import imp, Scope* sc)
     return global.errors != errors;
 }
 
-void setFieldOffset(Dsymbol d, AggregateDeclaration ad, FieldState* fieldState, bool isunion)
+bool setFieldOffset(Dsymbol d, AggregateDeclaration ad, FieldState* fieldState, bool isunion)
 {
     scope v = new SetFieldOffsetVisitor(ad, fieldState, isunion);
     d.accept(v);
+    return !v.hasErrors;
 }
 
 private extern(C++) class SetFieldOffsetVisitor : Visitor
@@ -8816,6 +8869,7 @@ private extern(C++) class SetFieldOffsetVisitor : Visitor
     AggregateDeclaration ad;
     FieldState* fieldState;
     bool isunion;
+    bool hasErrors;
 
     this(AggregateDeclaration ad, FieldState* fieldState, bool isunion) @safe
     {
@@ -8831,7 +8885,10 @@ private extern(C++) class SetFieldOffsetVisitor : Visitor
         //printf("Nspace::setFieldOffset() %s\n", toChars());
         if (ns._scope) // if fwd reference
             dsymbolSemantic(ns, null); // try to resolve it
-        ns.members.foreachDsymbol( s => s.setFieldOffset(ad, fieldState, isunion) );
+        ns.members.foreachDsymbol( (s) {
+            if (!s.setFieldOffset(ad, fieldState, isunion))
+                hasErrors = true;
+        });
     }
 
     override void visit(VarDeclaration vd)
@@ -8841,7 +8898,10 @@ private extern(C++) class SetFieldOffsetVisitor : Visitor
         if (vd.aliasTuple)
         {
             // If this variable was really a tuple, set the offsets for the tuple fields
-            vd.aliasTuple.foreachVar((s) { s.setFieldOffset(ad, fieldState, isunion); });
+            vd.aliasTuple.foreachVar((s) {
+                if (!s.setFieldOffset(ad, fieldState, isunion))
+                    hasErrors = true;
+            });
             return;
         }
 
@@ -8884,8 +8944,14 @@ private extern(C++) class SetFieldOffsetVisitor : Visitor
             assert(ts.sym != ad);   // already checked in ad.determineFields()
             if (!ts.sym.determineSize(vd.loc))
             {
-                vd.type = Type.terror;
-                vd.errors = true;
+                // Don't cache errors from speculative semantic, might be resolvable later.
+                // https://issues.dlang.org/show_bug.cgi?id=16574
+                if (!global.gag)
+                {
+                    vd.type = Type.terror;
+                    vd.errors = true;
+                }
+                hasErrors = true;
                 return;
             }
         }
@@ -9096,12 +9162,18 @@ private extern(C++) class SetFieldOffsetVisitor : Visitor
         if (tm._scope) // if fwd reference
             dsymbolSemantic(tm, null); // try to resolve it
 
-        tm.members.foreachDsymbol( (s) { s.setFieldOffset(ad, fieldState, isunion); } );
+        tm.members.foreachDsymbol( (s) {
+            if (!s.setFieldOffset(ad, fieldState, isunion))
+                hasErrors = true;
+        } );
     }
 
     override void visit(AttribDeclaration atd)
     {
-        atd.include(null).foreachDsymbol( s => s.setFieldOffset(ad, fieldState, isunion) );
+        atd.include(null).foreachDsymbol( (s) {
+            if (!s.setFieldOffset(ad, fieldState, isunion))
+                hasErrors = true;
+        } );
     }
 
     override void visit(AnonDeclaration anond)
@@ -9126,10 +9198,18 @@ private extern(C++) class SetFieldOffsetVisitor : Visitor
             FieldState fs;
             anond.decl.foreachDsymbol( (s)
             {
-                s.setFieldOffset(ad, &fs, anond.isunion);
+                if (!s.setFieldOffset(ad, &fs, anond.isunion))
+                    hasErrors = true;
                 if (anond.isunion)
                     fs.offset = 0;
             });
+
+            if (hasErrors)
+            {
+                ad.structsize = savestructsize;
+                ad.alignsize = savealignsize;
+                return;
+            }
 
             /* https://issues.dlang.org/show_bug.cgi?id=13613
              * If the fields in this.members had been already
@@ -9857,7 +9937,7 @@ private Expression callScopeDtor(VarDeclaration vd, Scope* sc)
         // delete this;
         Expression ec;
         ec = new VarExp(vd.loc, vd);
-        e = new DeleteExp(vd.loc, ec, true);
+        e = new DeleteExp(vd.loc, ec);
         break;
     }
     return e;
@@ -9917,7 +9997,7 @@ bool determineSize(AggregateDeclaration ad, Loc loc)
         ad.finalizeSize();
 
     // this aggregate type has:
-    if (ad.type.ty == Terror)
+    if (ad.type.ty == Terror || ad.errors)
         return false;   // marked as invalid during the finalizing.
     if (ad.sizeok == Sizeok.done)
         return true;    // succeeded to calculate instance size.
@@ -10358,9 +10438,9 @@ bool _isZeroInit(Expression exp)
             auto se = cast(StringExp)exp;
 
             if (se.type.toBasetype().ty == Tarray) // if initializing a dynamic array
-                return se.len == 0;
+                return se.length == 0;
 
-            foreach (i; 0 .. se.len)
+            foreach (i; 0 .. se.length)
             {
                 if (se.getIndex(i) != 0)
                     return false;
@@ -10574,7 +10654,29 @@ private extern(C++) class FinalizeSizeVisitor : Visitor
         fieldState.offset = outerCd.structsize;
         foreach (s; *(outerCd.members))
         {
-            s.setFieldOffset(outerCd, &fieldState, false);
+            const ok = s.setFieldOffset(outerCd, &fieldState, false);
+            if (outerCd.type.ty == Terror)
+            {
+                outerCd.errors = true;
+                return;
+            }
+            if (ok)
+                continue;
+
+            if (global.gag)
+            {
+                foreach (f; outerCd.fields)
+                    f.offset = 0;
+                outerCd.fields.setDim(0);
+                outerCd.structsize = 0;
+                outerCd.alignsize = 0;
+                outerCd.sizeok = Sizeok.none;
+            }
+            else
+            {
+                outerCd.errors = true;
+            }
+            return;
         }
 
         outerCd.sizeok = Sizeok.done;
@@ -10605,13 +10707,30 @@ private extern(C++) class FinalizeSizeVisitor : Visitor
         for (size_t i = 0; i < sd.members.length; i++)
         {
             Dsymbol s = (*sd.members)[i];
-            s.setFieldOffset(sd, &fieldState, isunion);
+            const ok = s.setFieldOffset(sd, &fieldState, isunion);
             if (sd.type.ty == Terror)
             {
                 eSink.errorSupplemental(s.loc, "error on member `%s`", s.toPrettyChars);
                 sd.errors = true;
                 return;
             }
+            if (ok)
+                continue;
+
+            if (global.gag)
+            {
+                foreach (f; sd.fields)
+                    f.offset = 0;
+                sd.fields.setDim(0);
+                sd.structsize = 0;
+                sd.alignsize = 0;
+                sd.sizeok = Sizeok.none;
+            }
+            else
+            {
+                sd.errors = true;
+            }
+            return;
         }
 
         if (sd.structsize == 0)

@@ -169,6 +169,10 @@ else version (CRuntime_Bionic)
         char*   pw_passwd;
         uid_t   pw_uid;
         gid_t   pw_gid;
+        version (D_LP64)
+            char* pw_gecos;
+        else
+            alias pw_gecos = pw_passwd;
         char*   pw_dir;
         char*   pw_shell;
     }
@@ -266,6 +270,8 @@ else version (Solaris)
 }
 else version (CRuntime_Bionic)
 {
+    int getpwnam_r(const scope char*, passwd*, char*, size_t, passwd**);
+    int getpwuid_r(uid_t, passwd*, char*, size_t, passwd**);
 }
 else version (CRuntime_Musl)
 {
@@ -329,13 +335,15 @@ else version (DragonFlyBSD)
 }
 else version (Solaris)
 {
-    void endpwent();
+    void    endpwent();
     passwd* getpwent();
-    void setpwent();
+    void    setpwent();
 }
 else version (CRuntime_Bionic)
 {
     void    endpwent();
+    passwd* getpwent();
+    void    setpwent();
 }
 else version (CRuntime_Musl)
 {
