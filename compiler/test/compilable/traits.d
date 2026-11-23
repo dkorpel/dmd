@@ -329,3 +329,9 @@ enum _ = __traits(compiles, arr[0] = 0);
 
 static assert(!__traits(isSame, "a", "a"w));
 static assert(!__traits(isSame, "a"w, "a"d));
+
+void fpCall(int function(ref int) f, int delegate(lazy int) dg, int x)
+{
+    static assert(__traits(getParameterStorageClasses, f(x), 0)[0] == "ref");
+    static assert(__traits(getParameterStorageClasses, dg(x), 0)[0] == "lazy");
+}

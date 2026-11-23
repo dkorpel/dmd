@@ -1580,7 +1580,10 @@ Expression semanticTraits(TraitsExp e, Scope* sc)
 
         if (ce)
         {
-            fparams = ce.f.getParameterList();
+            if (ce.f)
+                fparams = ce.f.getParameterList();
+            else if (auto tf = ce.e1.type.toBasetype().isFunction_Delegate_PtrToFunction())
+                fparams = tf.parameterList;
         }
         else
         {
