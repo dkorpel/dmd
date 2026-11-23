@@ -134,3 +134,13 @@ alias a = __traits(compiles, 1);
 alias b = __traits(isIntegral, 1.1);
 alias c = __traits(identifier, Object);
 pragma(msg, a, b, c);
+
+/********************************************
+TEST_OUTPUT:
+---
+fail_compilation/traits.d(801): Error: `bool` expected as third argument of `__traits(getOverloads)`, not `int`
+---
+*/
+#line 800
+class C8 { void g() {} }
+enum ov8 = __traits(getOverloads, C8, "g", int);

@@ -1082,6 +1082,11 @@ Expression semanticTraits(TraitsExp e, Scope* sc)
         if (dim == 3 && e.ident == Id.getOverloads)
         {
             auto b = isExpression((*e.args)[2]);
+            if (!b)
+            {
+                eSink.error(e.loc, "`bool` expected as third argument of `__traits(getOverloads)`, not `%s`", (*e.args)[2].toErrMsg());
+                return ErrorExp.get();
+            }
             b = b.ctfeInterpret();
             if (!b.type.equals(Type.tbool))
             {
