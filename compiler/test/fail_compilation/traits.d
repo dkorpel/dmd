@@ -160,3 +160,15 @@ int var9;
 enum id9 = __traits(identifier, Seq9!(var9, S9));
 enum at9 = __traits(getAttributes, Seq9!());
 enum vis9 = __traits(getVisibility, Seq9!(var9, S9));
+
+/********************************************
+TEST_OUTPUT:
+---
+fail_compilation/traits.d(1001): Error: expected 1 arguments for `isFuture` but had 2
+fail_compilation/traits.d(1002): Error: expected 1 arguments for `isDeprecated` but had 0
+---
+*/
+#line 1000
+@__future int fut10;
+enum fut10a = __traits(isFuture, fut10, fut10);
+enum dep10 = __traits(isDeprecated);

@@ -499,13 +499,17 @@ Expression semanticTraits(TraitsExp e, Scope* sc)
     }
     if (e.ident == Id.isDeprecated)
     {
+        if (dim != 1)
+            return dimError(1);
         if (isTypeX(t => t.isComplex() || t.isImaginary()).toBool().hasValue(true))
             return True();
         return isDsymX(t => t.isDeprecated());
     }
     if (e.ident == Id.isFuture)
     {
-       return isDeclX(t => t.isFuture());
+        if (dim != 1)
+            return dimError(1);
+        return isDeclX(t => t.isFuture());
     }
     if (e.ident == Id.isStaticArray)
     {
