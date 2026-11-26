@@ -78,7 +78,7 @@ void testBranches()
         zero_handler:
         nonzero:
         bit_clear:
-        bit_set:
+        bit_set: ;
         }
     }
 }

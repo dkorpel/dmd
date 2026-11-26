@@ -3236,6 +3236,8 @@ class Lexer
     bool parseSpecialTokenSequence()
     {
         Token n;
+        const start = p;
+        const startLinnum = linnum;
         scan(&n);
         if (n.value == TOK.identifier)
         {
@@ -3262,6 +3264,11 @@ class Lexer
                 error(locx, "token string requires valid D tokens, not `#if`");
             else
                 error(locx, "C preprocessor directive `#if` is not supported, use `version` or `static if`");
+        }
+        else if (linnum == startLinnum)
+        {
+            p = start;
+            tokenizeNewlines = false;
         }
         return false;
     }

@@ -2290,12 +2290,18 @@ uint codout(int seg, code* c, Barray!ubyte* disasmBuf, ref targ_size_t framehand
         if (ggen.available() < 4)
             ggen.flush();
 
-        if (isBranch(op) && c.IFL1 == FL.block)
-
+        const isBranch26 = (op & 0x7C00_0000) == 0x1400_0000;
+        const isBranch14 = (op & 0x7E00_0000) == 0x3600_0000;
+        if (c.IFL1 == FL.block && (isBranch(op) || isBranch26 || isBranch14))
         {
             ggen.flush();
-            int ad = cast(int)(c.IEV1.Vblock.Boffset - ggen.offset);
-            op |= ((ad >> 2) & 0x7FFFF) << 5; // imm19 in opcode
+            int ad = cast(int)(c.IEV1.Vblock.Boffset - ggen.offset) >> 2;
+            if (isBranch26)
+                op |= ad & 0x3FF_FFFF;
+            else if (isBranch14)
+                op |= (ad & 0x3FFF) << 5;
+            else
+                op |= (ad & 0x7FFFF) << 5;
             ggen.gen32(op);
         }
         else if (Symbol* s = c.IEV1.Vsym)

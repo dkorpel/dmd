@@ -25,6 +25,8 @@ import dmd.dinterpret;
 import dmd.dmdparams;
 import dmd.dscope;
 import dmd.dsymbol;
+import dmd.dsymbolsem : search;
+import dmd.func : FuncDeclaration;
 import dmd.errors;
 import dmd.expression;
 import dmd.expressionsem;
@@ -42,6 +44,7 @@ import dmd.tokens;
 import dmd.typesem : pointerTo, size, isIntegral;
 
 import dmd.root.ctfloat;
+import dmd.root.string : iequals;
 import dmd.common.outbuffer;
 import dmd.root.rmem;
 import dmd.rootobject;
@@ -144,6 +147,7 @@ private struct AArch64Operand
     // Register operands
     ubyte reg;          /// Register number (0-31)
     bool is64bit;       /// true for X registers, false for W registers
+    bool isSP;
 
     // Immediate operands
     long imm;           /// Immediate value
@@ -405,7 +409,7 @@ private bool parseRegisterName(const(char)[] name, out ubyte regNum, out bool is
 }
 
 /// Parse a register operand from the current token
-private bool parseRegister(out AArch64Operand op)
+private bool parseRegister(out AArch64Operand op, bool allowSP = false)
 {
     if (tokValue() != TOK.identifier)
     {
@@ -423,9 +427,17 @@ private bool parseRegister(out AArch64Operand op)
         return false;
     }
 
+    const isSP = regNum == Reg.SP && iequals(regName, "sp");
+    if (isSP && !allowSP)
+    {
+        error(asmstate.loc, "`sp` cannot be used here");
+        return false;
+    }
+
     op.type = AArch64Operand.Type.Register;
     op.reg = regNum;
     op.is64bit = is64bit;
+    op.isSP = isSP;
 
     asmNextToken();
     return true;
@@ -439,7 +451,7 @@ private bool parseRegister(out AArch64Operand op)
 private bool parseImmediate(out AArch64Operand op)
 {
     // Expect # prefix
-    if (tokValue() != TOK.identifier || asmstate.tok.ident.toString() != "#")
+    if (tokValue() != TOK.pound)
     {
         error(asmstate.loc, "immediate value must start with `#`");
         return false;
@@ -507,11 +519,12 @@ private bool validateImmediateRange(long value, long min, long max, const(char)*
  * Params:
  *   instrName = Name of instruction (for error messages)
  *   is64bit = Whether this is a 64-bit operation (affects max shift)
+ *   allowRor = Whether ROR is valid (logical instructions only)
  *   shift = Output: shift type (0=LSL, 1=LSR, 2=ASR, 3=ROR)
  *   amount = Output: shift amount (0-31 for 32-bit, 0-63 for 64-bit)
  * Returns: true if shift was successfully parsed (or no shift present), false on error
  */
-private bool parseOptionalShift(const(char)* instrName, bool is64bit, out uint shift, out uint amount)
+private bool parseOptionalShift(const(char)* instrName, bool is64bit, bool allowRor, out uint shift, out uint amount)
 {
     // Default values (no shift)
     shift = 0;   // LSL
@@ -530,26 +543,27 @@ private bool parseOptionalShift(const(char)* instrName, bool is64bit, out uint s
         return false;
     }
 
-    const(char)* shiftStr = asmstate.tok.ident.toChars();
+    const(char)[] shiftStr = asmstate.tok.ident.toString();
 
-    if (strcmp(shiftStr, "lsl") == 0)
+    if (iequals(shiftStr, "lsl"))
         shift = 0;
-    else if (strcmp(shiftStr, "lsr") == 0)
+    else if (iequals(shiftStr, "lsr"))
         shift = 1;
-    else if (strcmp(shiftStr, "asr") == 0)
+    else if (iequals(shiftStr, "asr"))
         shift = 2;
-    else if (strcmp(shiftStr, "ror") == 0)
+    else if (allowRor && iequals(shiftStr, "ror"))
         shift = 3;
     else
     {
-        error(asmstate.loc, "invalid shift type for `%s`, expected lsl/lsr/asr/ror", instrName);
+        error(asmstate.loc, "invalid shift type for `%s`, expected %s", instrName,
+            allowRor ? "lsl/lsr/asr/ror".ptr : "lsl/lsr/asr".ptr);
         return false;
     }
 
     asmNextToken();
 
     // Expect '#' before shift amount
-    if (tokValue() != TOK.identifier || asmstate.tok.ident.toString() != "#")
+    if (tokValue() != TOK.pound)
     {
         error(asmstate.loc, "`#` expected before shift amount in `%s`", instrName);
         return false;
@@ -589,23 +603,14 @@ private bool parseExtendOp(out ExtendOp extend)
         return false;
 
     const(char)[] extName = asmstate.tok.ident.toString();
-    import core.stdc.ctype : tolower;
 
-    // Convert to lowercase for comparison
-    char[4] lowerName;
-    size_t len = extName.length > 4 ? 4 : extName.length;
-    foreach (i; 0 .. len)
-        lowerName[i] = cast(char)tolower(extName[i]);
-
-    const(char)[] lower = lowerName[0 .. len];
-
-    if (lower == "lsl")
+    if (iequals(extName, "lsl"))
         extend = ExtendOp.LSL;
-    else if (lower == "uxtw")
+    else if (iequals(extName, "uxtw"))
         extend = ExtendOp.UXTW;
-    else if (lower == "sxtw")
+    else if (iequals(extName, "sxtw"))
         extend = ExtendOp.SXTW;
-    else if (lower == "sxtx")
+    else if (iequals(extName, "sxtx"))
         extend = ExtendOp.SXTX;
     else
         return false;
@@ -628,19 +633,12 @@ private bool parseMemoryOperand(out AArch64Operand op)
 
     // Parse base register
     AArch64Operand baseOp;
-    if (!parseRegister(baseOp))
+    if (!parseRegister(baseOp, true))
         return false;
 
-    if (baseOp.type != AArch64Operand.Type.Register)
+    if (!baseOp.is64bit || (baseOp.reg == Reg.ZR && !baseOp.isSP))
     {
-        error(asmstate.loc, "base register expected in memory operand");
-        return false;
-    }
-
-    // Base register should be 64-bit (X register or SP)
-    if (!baseOp.is64bit)
-    {
-        error(asmstate.loc, "64-bit register expected as base in memory operand");
+        error(asmstate.loc, "`x0`..`x30` or `sp` expected as base in memory operand");
         return false;
     }
 
@@ -658,7 +656,7 @@ private bool parseMemoryOperand(out AArch64Operand op)
         asmNextToken();
 
         // Check if it's an immediate or register
-        if (tokValue() == TOK.identifier && asmstate.tok.ident.toString() == "#")
+        if (tokValue() == TOK.pound)
         {
             // Immediate offset
             AArch64Operand immOp;
@@ -675,12 +673,6 @@ private bool parseMemoryOperand(out AArch64Operand op)
             if (!parseRegister(indexOp))
                 return false;
 
-            if (indexOp.type != AArch64Operand.Type.Register || !indexOp.is64bit)
-            {
-                error(asmstate.loc, "64-bit register expected as index in memory operand");
-                return false;
-            }
-
             op.indexReg = indexOp.reg;
             op.hasIndex = true;
 
@@ -695,7 +687,7 @@ private bool parseMemoryOperand(out AArch64Operand op)
                     op.extend = ext;
 
                     // Check for optional shift amount
-                    if (tokValue() == TOK.identifier && asmstate.tok.ident.toString() == "#")
+                    if (tokValue() == TOK.pound)
                     {
                         AArch64Operand shiftOp;
                         if (!parseImmediate(shiftOp))
@@ -715,6 +707,14 @@ private bool parseMemoryOperand(out AArch64Operand op)
                     error(asmstate.loc, "extend operation (LSL, UXTW, SXTW, SXTX) expected");
                     return false;
                 }
+            }
+
+            const wantW = op.extend == ExtendOp.UXTW || op.extend == ExtendOp.SXTW;
+            if (indexOp.is64bit == wantW)
+            {
+                error(asmstate.loc, wantW ? "32-bit index register expected for `uxtw`/`sxtw`"
+                                          : "64-bit index register expected");
+                return false;
             }
         }
     }
@@ -754,7 +754,7 @@ private bool parseMemoryOperand(out AArch64Operand op)
         asmNextToken();
 
         // Parse post-index immediate
-        if (tokValue() != TOK.identifier || asmstate.tok.ident.toString() != "#")
+        if (tokValue() != TOK.pound)
         {
             error(asmstate.loc, "immediate offset expected for post-indexed mode");
             return false;
@@ -772,6 +772,27 @@ private bool parseMemoryOperand(out AArch64Operand op)
     return true;
 }
 
+private bool checkReg31(ref const AArch64Operand op, bool isSPSlot)
+{
+    if (op.reg != Reg.SP || op.isSP == isSPSlot)
+        return true;
+    error(asmstate.loc, op.isSP ? "`sp` cannot be used here" : "`xzr`/`wzr` cannot be used here");
+    return false;
+}
+
+private bool parseOptionalExtendShift(const(char)* instrName, out uint amount)
+{
+    uint shift;
+    if (!parseOptionalShift(instrName, true, false, shift, amount))
+        return false;
+    if (shift != 0 || amount > 4)
+    {
+        error(asmstate.loc, "only `lsl #0`..`lsl #4` is allowed with `sp` in `%s`", instrName);
+        return false;
+    }
+    return true;
+}
+
 /*******************************
  * Instruction Encoding Helpers
  */
@@ -784,49 +805,44 @@ private code* emitInstruction(uint encoding)
     return c;
 }
 
-/// Encode a load/store instruction based on addressing mode
 /// Params:
-///   isLoad = true for LDR, false for STR
 ///   rt = target register
 ///   mem = memory operand
-///   is64bit = true for 64-bit operation, false for 32-bit
 /// Returns: encoded instruction or 0 on error
-private uint encodeLoadStore(bool isLoad)(bool is64bit, ubyte rt, ref const AArch64Operand mem)
+private uint encodeLoadStore(uint size, uint opc, ubyte rt, ref const AArch64Operand mem, const(char)* instrName)
 {
-    immutable uint size = getLSSize(is64bit);
-    immutable uint opc = isLoad ? 1 : 0;  // LDR=1, STR=0
-
     if (mem.hasIndex)
     {
-        // Register offset mode: [Xn, Xm{, extend #amount}]
+        if (mem.shiftAmount != 0 && mem.shiftAmount != size)
+        {
+            error(asmstate.loc, "shift amount for `%s` must be 0 or %u", instrName, size);
+            return 0;
+        }
         uint extend = mem.extend != ExtendOp.None ? mem.extend : ExtendOp.LSL;
-        uint S = mem.shiftAmount > 0 ? 1 : 0;
+        uint S = mem.shiftAmount != 0;
         return INSTR.ldst_regoff(size, 0, opc, mem.indexReg, extend, S, mem.baseReg, rt);
     }
-    else if (mem.addressingMode == AddressingMode.PostIndexed)
+
+    final switch (mem.addressingMode)
     {
-        // Post-indexed mode: [Xn], #imm
-        uint imm9;
-        if (!encodeImm9(mem.offset, imm9, isLoad ? "post-indexed ldr" : "post-indexed str"))
+        case AddressingMode.PreIndexed:
+        case AddressingMode.PostIndexed:
+            uint imm9;
+            if (!encodeImm9(mem.offset, imm9, instrName))
+                return 0;
+            return mem.addressingMode == AddressingMode.PreIndexed
+                ? INSTR.ldst_immpre(size, 0, opc, imm9, mem.baseReg, rt)
+                : INSTR.ldst_immpost(size, 0, opc, imm9, mem.baseReg, rt);
+
+        case AddressingMode.Offset:
+            const long offset = mem.offset;
+            const long scaled = offset >> size;
+            if (offset >= 0 && (scaled << size) == offset && scaled <= 0xFFF)
+                return INSTR.ldst_pos(size, 0, opc, cast(uint)scaled, mem.baseReg, rt);
+            if (offset >= ImmediateRange.PrePostIndex_Min && offset <= ImmediateRange.PrePostIndex_Max)
+                return INSTR.ldst_unscaled(size, 0, opc, offset & 0x1FF, mem.baseReg, rt);
+            error(asmstate.loc, "offset %lld out of range for `%s`", offset, instrName);
             return 0;
-        return INSTR.ldst_immpost(size, 0, opc, imm9, mem.baseReg, rt);
-    }
-    else if (mem.addressingMode == AddressingMode.PreIndexed)
-    {
-        // Pre-indexed mode: [Xn, #imm]!
-        uint imm9;
-        if (!encodeImm9(mem.offset, imm9, isLoad ? "pre-indexed ldr" : "pre-indexed str"))
-            return 0;
-        return INSTR.ldst_immpre(size, 0, opc, imm9, mem.baseReg, rt);
-    }
-    else
-    {
-        // Offset mode: [Xn] or [Xn, #imm]
-        ulong offset = mem.hasOffset ? mem.offset : 0;
-        static if (isLoad)
-            return INSTR.ldr_imm_gen(is64bit, rt, mem.baseReg, offset);
-        else
-            return INSTR.str_imm_gen(is64bit, rt, mem.baseReg, offset);
     }
 }
 
@@ -845,8 +861,7 @@ private code* parseInstr_mov()
 
     AArch64Operand dst, src;
 
-    // Parse destination and source registers
-    if (!parseRegister(dst) || !validateRegisterOperand(dst, "mov"))
+    if (!parseRegister(dst, true))
         return null;
 
     if (tokValue() != TOK.comma)
@@ -856,14 +871,21 @@ private code* parseInstr_mov()
     }
     asmNextToken();
 
-    if (!parseRegister(src) || !validateRegisterOperand(src, "mov"))
+    if (!parseRegister(src, true))
         return null;
 
-    // Validate register sizes match
     if (!validateRegisterSizeMatch(dst, src, "mov"))
         return null;
 
-    uint encoding = INSTR.mov_register(getSizeFlag(dst.is64bit), src.reg, dst.reg);
+    uint encoding;
+    if (dst.isSP || src.isSP)
+    {
+        if (!checkReg31(dst, true) || !checkReg31(src, true))
+            return null;
+        encoding = INSTR.add_addsub_imm(1, 0, 0, src.reg, dst.reg);
+    }
+    else
+        encoding = INSTR.mov_register(getSizeFlag(dst.is64bit), src.reg, dst.reg);
     return emitInstruction(encoding);
 }
 
@@ -895,7 +917,7 @@ private code* parseInstr_ldr()
         return null;
 
     // Encode using helper function
-    uint encoding = encodeLoadStore!true(dst.is64bit, dst.reg, mem);
+    uint encoding = encodeLoadStore(getLSSize(dst.is64bit), 1, dst.reg, mem, "ldr");
     if (encoding == 0)
         return null;
 
@@ -926,7 +948,7 @@ private code* parseInstr_str()
         return null;
 
     // Encode using helper function
-    uint encoding = encodeLoadStore!false(src.is64bit, src.reg, mem);
+    uint encoding = encodeLoadStore(getLSSize(src.is64bit), 0, src.reg, mem, "str");
     if (encoding == 0)
         return null;
 
@@ -979,7 +1001,15 @@ private code* parseLoadStorePair(bool isLoad)(const(char)* instrName)
 
     uint opc = rt1.is64bit ? LSPairOpc.DoubleWord : LSPairOpc.Word;
     uint L = isLoad ? 1 : 0;
-    uint imm7 = cast(uint)((mem.hasOffset ? mem.offset : 0) >> (rt1.is64bit ? 3 : 2)) & 0x7F;
+    const uint scale = rt1.is64bit ? 3 : 2;
+    const long scaled = mem.offset >> scale;
+    if ((scaled << scale) != mem.offset || scaled < -64 || scaled > 63)
+    {
+        error(asmstate.loc, "offset %lld for `%s` must be a multiple of %d in range %d..%d",
+            mem.offset, instrName, 1 << scale, -64 << scale, 63 << scale);
+        return null;
+    }
+    uint imm7 = cast(uint)scaled & 0x7F;
     uint encoding;
 
     if (mem.addressingMode == AddressingMode.PostIndexed)
@@ -1032,47 +1062,9 @@ private code* parseByteHalfwordLoadStore(LSSize size, bool isLoad)(const(char)* 
     if (!parseMemoryOperand(mem) || !validateMemoryOperand(mem, instrName))
         return null;
 
-    uint encoding;
-
-    if (mem.hasIndex)
-    {
-        uint extend = mem.extend != ExtendOp.None ? mem.extend : ExtendOp.LSL;
-        uint S = mem.shiftAmount > 0 ? 1 : 0;
-
-        static if (size == LSSize.Byte)
-        {
-            static if (isLoad)
-                encoding = INSTR.ldrb_reg(0, mem.indexReg, extend, S, mem.baseReg, rt.reg);
-            else
-                encoding = INSTR.strb_reg(mem.indexReg, extend, S, mem.baseReg, rt.reg);
-        }
-        else static if (size == LSSize.HalfWord)
-        {
-            static if (isLoad)
-                encoding = INSTR.ldrh_reg(0, mem.indexReg, extend, S, mem.baseReg, rt.reg);
-            else
-                encoding = INSTR.strh_reg(mem.indexReg, extend, S, mem.baseReg, rt.reg);
-        }
-    }
-    else
-    {
-        ulong offset = mem.hasOffset ? mem.offset : 0;
-
-        static if (size == LSSize.Byte)
-        {
-            static if (isLoad)
-                encoding = INSTR.ldrb_imm(0, rt.reg, mem.baseReg, offset);
-            else
-                encoding = INSTR.strb_imm(rt.reg, mem.baseReg, offset);
-        }
-        else static if (size == LSSize.HalfWord)
-        {
-            static if (isLoad)
-                encoding = INSTR.ldrh_imm(0, rt.reg, mem.baseReg, offset);
-            else
-                encoding = INSTR.strh_imm(rt.reg, mem.baseReg, offset);
-        }
-    }
+    uint encoding = encodeLoadStore(size, isLoad ? 1 : 0, rt.reg, mem, instrName);
+    if (encoding == 0)
+        return null;
 
     return emitInstruction(encoding);
 }
@@ -1123,28 +1115,9 @@ private code* parseSignedLoad(LSSize size)(const(char)* instrName)
     if (!parseMemoryOperand(mem) || !validateMemoryOperand(mem, instrName))
         return null;
 
-    uint encoding;
-    uint sz = dst.is64bit ? 0 : 1;  // 0 for 64-bit dest, 1 for 32-bit dest
-
-    if (mem.hasIndex)
-    {
-        uint extend = mem.extend != ExtendOp.None ? mem.extend : ExtendOp.LSL;
-        uint S = mem.shiftAmount > 0 ? 1 : 0;
-
-        static if (size == LSSize.Byte)
-            encoding = INSTR.ldrsb_reg(sz, mem.indexReg, extend, S, mem.baseReg, dst.reg);
-        else static if (size == LSSize.HalfWord)
-            encoding = INSTR.ldrsh_reg(sz, mem.indexReg, extend, S, mem.baseReg, dst.reg);
-    }
-    else
-    {
-        ulong offset = mem.hasOffset ? mem.offset : 0;
-
-        static if (size == LSSize.Byte)
-            encoding = INSTR.ldrsb_imm(sz, dst.reg, mem.baseReg, offset);
-        else static if (size == LSSize.HalfWord)
-            encoding = INSTR.ldrsh_imm(sz, dst.reg, mem.baseReg, offset);
-    }
+    uint encoding = encodeLoadStore(size, dst.is64bit ? 2 : 3, dst.reg, mem, instrName);
+    if (encoding == 0)
+        return null;
 
     return emitInstruction(encoding);
 }
@@ -1183,15 +1156,9 @@ private code* parseInstr_ldrsw()
     if (!parseMemoryOperand(mem) || !validateMemoryOperand(mem, "ldrsw"))
         return null;
 
-    // LDRSW only supports immediate offset (no register offset in basic form)
-    if (mem.hasIndex)
-    {
-        error(asmstate.loc, "register offset not supported for `ldrsw`");
+    uint encoding = encodeLoadStore(LSSize.Word, 2, dst.reg, mem, "ldrsw");
+    if (encoding == 0)
         return null;
-    }
-
-    uint imm12 = cast(uint)((mem.hasOffset ? mem.offset : 0) >> 2) & 0xFFF;
-    uint encoding = INSTR.ldrsw_imm(imm12, mem.baseReg, dst.reg);
 
     return emitInstruction(encoding);
 }
@@ -1212,17 +1179,9 @@ private code* parseArithmeticAddSub(const(char)* instrName, uint op, uint S)
 {
     AArch64Operand dst, src1, src2;
 
-    // Parse destination register
-    if (!parseRegister(dst))
+    if (!parseRegister(dst, true))
         return null;
 
-    if (dst.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as destination for `%s`", instrName);
-        return null;
-    }
-
-    // Expect comma
     if (tokValue() != TOK.comma)
     {
         error(asmstate.loc, "comma expected after destination register");
@@ -1230,24 +1189,12 @@ private code* parseArithmeticAddSub(const(char)* instrName, uint op, uint S)
     }
     asmNextToken();
 
-    // Parse first source register
-    if (!parseRegister(src1))
+    if (!parseRegister(src1, true))
         return null;
 
-    if (src1.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as first source for `%s`", instrName);
+    if (!validateRegisterSizeMatch(dst, src1, instrName))
         return null;
-    }
 
-    // Validate size match
-    if (dst.is64bit != src1.is64bit)
-    {
-        error(asmstate.loc, "register size mismatch in `%s` instruction", instrName);
-        return null;
-    }
-
-    // Expect comma
     if (tokValue() != TOK.comma)
     {
         error(asmstate.loc, "comma expected after first source register");
@@ -1258,44 +1205,43 @@ private code* parseArithmeticAddSub(const(char)* instrName, uint op, uint S)
     uint sf = dst.is64bit ? 1 : 0;
     uint encoding;
 
-    // Check if third operand is immediate or register
-    if (tokValue() == TOK.identifier && asmstate.tok.ident.toString() == "#")
+    if (tokValue() == TOK.pound)
     {
-        // Immediate form
         if (!parseImmediate(src2))
             return null;
 
-        // Validate immediate range (0-4095, or 0-4095 shifted left by 12)
         if (!validateImmediateRange(src2.imm, 0, 4095, instrName))
+            return null;
+
+        if (!checkReg31(dst, S == 0) || !checkReg31(src1, true))
             return null;
 
         encoding = INSTR.addsub_imm(sf, op, S, 0, cast(uint)src2.imm, src1.reg, dst.reg);
     }
     else
     {
-        // Register form
         if (!parseRegister(src2))
             return null;
 
-        if (src2.type != AArch64Operand.Type.Register)
+        if (!validateRegisterSizeMatch(dst, src2, instrName))
+            return null;
+
+        if (dst.isSP || src1.isSP)
         {
-            error(asmstate.loc, "register or immediate expected as second source for `%s`", instrName);
-            return null;
+            uint imm3;
+            if (!checkReg31(dst, S == 0) || !checkReg31(src1, true) ||
+                !parseOptionalExtendShift(instrName, imm3))
+                return null;
+            encoding = INSTR.addsub_ext(sf, op, S, 0, src2.reg, ExtendOp.LSL, imm3, src1.reg, dst.reg);
         }
-
-        // Validate size match
-        if (dst.is64bit != src2.is64bit)
+        else
         {
-            error(asmstate.loc, "register size mismatch in `%s` instruction", instrName);
-            return null;
+            uint shift, imm6;
+            if (!parseOptionalShift(instrName, dst.is64bit, false, shift, imm6))
+                return null;
+
+            encoding = INSTR.addsub_shift(sf, op, S, shift, src2.reg, imm6, src1.reg, dst.reg);
         }
-
-        // Parse optional shift
-        uint shift, imm6;
-        if (!parseOptionalShift(instrName, dst.is64bit, shift, imm6))
-            return null;
-
-        encoding = INSTR.addsub_shift(sf, op, S, shift, src2.reg, imm6, src1.reg, dst.reg);
     }
 
     return emitInstruction(encoding);
@@ -1881,7 +1827,7 @@ private code* parseInstr_neg()
 
     // Parse optional shift
     uint shift, imm6;
-    if (!parseOptionalShift("neg", dst.is64bit, shift, imm6))
+    if (!parseOptionalShift("neg", dst.is64bit, false, shift, imm6))
         return null;
 
     // NEG: Xd = 0 - Xm (with optional shift)
@@ -1937,7 +1883,7 @@ private code* parseInstr_negs()
 
     // Parse optional shift
     uint shift, imm6;
-    if (!parseOptionalShift("negs", dst.is64bit, shift, imm6))
+    if (!parseOptionalShift("negs", dst.is64bit, false, shift, imm6))
         return null;
 
     // NEGS: Xd = 0 - Xm (with optional shift), set flags
@@ -2322,7 +2268,7 @@ private code* parseInstr_bic()
 
     // Parse optional shift
     uint shift, imm6;
-    if (!parseOptionalShift("bic", dst.is64bit, shift, imm6))
+    if (!parseOptionalShift("bic", dst.is64bit, true, shift, imm6))
         return null;
 
     // BIC: Xd = Xn & ~Xm (with optional shift on Xm)
@@ -2377,7 +2323,7 @@ private code* parseInstr_tst()
 
     // Parse optional shift
     uint shift, imm6;
-    if (!parseOptionalShift("tst", src1.is64bit, shift, imm6))
+    if (!parseOptionalShift("tst", src1.is64bit, true, shift, imm6))
         return null;
 
     // TST: Flags = Xn & Xm (with optional shift on Xm)
@@ -2397,88 +2343,23 @@ private code* parseInstr_tst()
 private code* parseInstr_cmp()
 {
     asmNextToken(); // Skip 'cmp'
-
-    AArch64Operand src1, src2;
-
-    // Parse first source register
-    if (!parseRegister(src1))
-        return null;
-
-    if (src1.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as first operand for `cmp`");
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after first operand");
-        return null;
-    }
-    asmNextToken();
-
-    uint sf = src1.is64bit ? 1 : 0;
-    uint encoding;
-
-    // Check if second operand is immediate or register
-    if (tokValue() == TOK.identifier && asmstate.tok.ident.toString() == "#")
-    {
-        // Immediate form
-        if (!parseImmediate(src2))
-            return null;
-
-        // Validate immediate range (0-4095)
-        if (!validateImmediateRange(src2.imm, 0, 4095, "cmp"))
-            return null;
-
-        // CMP with immediate
-        encoding = INSTR.cmp_imm(sf, 0, cast(uint)src2.imm, src1.reg);
-    }
-    else
-    {
-        // Register form
-        if (!parseRegister(src2))
-            return null;
-
-        if (src2.type != AArch64Operand.Type.Register)
-        {
-            error(asmstate.loc, "register or immediate expected as second operand for `cmp`");
-            return null;
-        }
-
-        // Validate size match
-        if (src1.is64bit != src2.is64bit)
-        {
-            error(asmstate.loc, "register size mismatch in `cmp` instruction");
-            return null;
-        }
-
-        // CMP with register (no shift)
-        encoding = INSTR.cmp_subs_addsub_shift(sf, src2.reg, 0, 0, src1.reg);
-    }
-
-    return emitInstruction(encoding);
+    return parseCompare("cmp", 1);
 }
 
 /// CMN instruction: cmn Xn, #imm|Xm (compare negative - adds and sets flags, discards result)
 private code* parseInstr_cmn()
 {
     asmNextToken(); // Skip 'cmn'
+    return parseCompare("cmn", 0);
+}
 
+private code* parseCompare(const(char)* instrName, uint op)
+{
     AArch64Operand src1, src2;
 
-    // Parse first source register
-    if (!parseRegister(src1))
+    if (!parseRegister(src1, true))
         return null;
 
-    if (src1.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as first operand for `cmn`");
-        return null;
-    }
-
-    // Expect comma
     if (tokValue() != TOK.comma)
     {
         error(asmstate.loc, "comma expected after first operand");
@@ -2489,46 +2370,42 @@ private code* parseInstr_cmn()
     uint sf = src1.is64bit ? 1 : 0;
     uint encoding;
 
-    // Check if second operand is immediate or register
-    if (tokValue() == TOK.identifier && asmstate.tok.ident.toString() == "#")
+    if (tokValue() == TOK.pound)
     {
-        // Immediate form
         if (!parseImmediate(src2))
             return null;
 
-        // Validate immediate range (0-4095)
-        if (!validateImmediateRange(src2.imm, 0, 4095, "cmn"))
+        if (!validateImmediateRange(src2.imm, 0, 4095, instrName))
             return null;
 
-        // CMN with immediate: ADDS XZR, Xn, #imm (op=0, S=1, Rd=31)
-        encoding = INSTR.addsub_imm(sf, 0, 1, 0, cast(uint)src2.imm, src1.reg, 31);
+        if (!checkReg31(src1, true))
+            return null;
+
+        encoding = INSTR.addsub_imm(sf, op, 1, 0, cast(uint)src2.imm, src1.reg, Reg.ZR);
     }
     else
     {
-        // Register form
         if (!parseRegister(src2))
             return null;
 
-        if (src2.type != AArch64Operand.Type.Register)
+        if (!validateRegisterSizeMatch(src1, src2, instrName))
+            return null;
+
+        if (src1.isSP)
         {
-            error(asmstate.loc, "register or immediate expected as second operand for `cmn`");
-            return null;
+            uint imm3;
+            if (!parseOptionalExtendShift(instrName, imm3))
+                return null;
+            encoding = INSTR.addsub_ext(sf, op, 1, 0, src2.reg, ExtendOp.LSL, imm3, src1.reg, Reg.ZR);
         }
-
-        // Validate size match
-        if (src1.is64bit != src2.is64bit)
+        else
         {
-            error(asmstate.loc, "register size mismatch in `cmn` instruction");
-            return null;
+            uint shift, imm6;
+            if (!parseOptionalShift(instrName, src1.is64bit, false, shift, imm6))
+                return null;
+
+            encoding = INSTR.addsub_shift(sf, op, 1, shift, src2.reg, imm6, src1.reg, Reg.ZR);
         }
-
-        // Parse optional shift
-        uint shift, imm6;
-        if (!parseOptionalShift("cmn", src1.is64bit, shift, imm6))
-            return null;
-
-        // CMN with register: ADDS XZR, Xn, Xm (op=0, S=1, Rd=31)
-        encoding = INSTR.addsub_shift(sf, 0, 1, shift, src2.reg, imm6, src1.reg, 31);
     }
 
     return emitInstruction(encoding);
@@ -2592,7 +2469,7 @@ private code* parseInstr_lsl()
     uint encoding;
 
     // Check if third operand is immediate or register
-    if (tokValue() == TOK.identifier && asmstate.tok.ident.toString() == "#")
+    if (tokValue() == TOK.pound)
     {
         // Immediate form: lsl Xd, Xn, #shift
         if (!parseImmediate(shiftOp))
@@ -2688,7 +2565,7 @@ private code* parseInstr_lsr()
     uint encoding;
 
     // Check if third operand is immediate or register
-    if (tokValue() == TOK.identifier && asmstate.tok.ident.toString() == "#")
+    if (tokValue() == TOK.pound)
     {
         // Immediate form: lsr Xd, Xn, #shift
         if (!parseImmediate(shiftOp))
@@ -2784,7 +2661,7 @@ private code* parseInstr_asr()
     uint encoding;
 
     // Check if third operand is immediate or register
-    if (tokValue() == TOK.identifier && asmstate.tok.ident.toString() == "#")
+    if (tokValue() == TOK.pound)
     {
         // Immediate form: asr Xd, Xn, #shift
         if (!parseImmediate(shiftOp))
@@ -2880,7 +2757,7 @@ private code* parseInstr_ror()
     uint encoding;
 
     // Check if third operand is immediate or register
-    if (tokValue() == TOK.identifier && asmstate.tok.ident.toString() == "#")
+    if (tokValue() == TOK.pound)
     {
         // Immediate form: ror Xd, Xn, #shift
         if (!parseImmediate(shiftOp))
@@ -2998,7 +2875,7 @@ private code* parseInstr_extr()
     asmNextToken();
 
     // Parse immediate LSB
-    if (tokValue() != TOK.identifier || asmstate.tok.ident.toString() != "#")
+    if (tokValue() != TOK.pound)
     {
         error(asmstate.loc, "immediate value expected for LSB in `extr`");
         return null;
@@ -3071,7 +2948,7 @@ private code* parseInstr_ubfm()
     asmNextToken();
 
     // Parse immr
-    if (tokValue() != TOK.identifier || asmstate.tok.ident.toString() != "#")
+    if (tokValue() != TOK.pound)
     {
         error(asmstate.loc, "immediate value expected for immr in `ubfm`");
         return null;
@@ -3096,7 +2973,7 @@ private code* parseInstr_ubfm()
     asmNextToken();
 
     // Parse imms
-    if (tokValue() != TOK.identifier || asmstate.tok.ident.toString() != "#")
+    if (tokValue() != TOK.pound)
     {
         error(asmstate.loc, "immediate value expected for imms in `ubfm`");
         return null;
@@ -3168,7 +3045,7 @@ private code* parseInstr_sbfm()
     asmNextToken();
 
     // Parse immr
-    if (tokValue() != TOK.identifier || asmstate.tok.ident.toString() != "#")
+    if (tokValue() != TOK.pound)
     {
         error(asmstate.loc, "immediate value expected for immr in `sbfm`");
         return null;
@@ -3193,7 +3070,7 @@ private code* parseInstr_sbfm()
     asmNextToken();
 
     // Parse imms
-    if (tokValue() != TOK.identifier || asmstate.tok.ident.toString() != "#")
+    if (tokValue() != TOK.pound)
     {
         error(asmstate.loc, "immediate value expected for imms in `sbfm`");
         return null;
@@ -3265,7 +3142,7 @@ private code* parseInstr_bfm()
     asmNextToken();
 
     // Parse immr
-    if (tokValue() != TOK.identifier || asmstate.tok.ident.toString() != "#")
+    if (tokValue() != TOK.pound)
     {
         error(asmstate.loc, "immediate value expected for immr in `bfm`");
         return null;
@@ -3290,7 +3167,7 @@ private code* parseInstr_bfm()
     asmNextToken();
 
     // Parse imms
-    if (tokValue() != TOK.identifier || asmstate.tok.ident.toString() != "#")
+    if (tokValue() != TOK.pound)
     {
         error(asmstate.loc, "immediate value expected for imms in `bfm`");
         return null;
@@ -3315,64 +3192,43 @@ private code* parseInstr_bfm()
  * Branch Instructions
  */
 
+private bool parseBranchLabel(code* c, const(char)* instrName)
+{
+    if (tokValue() != TOK.identifier)
+    {
+        error(asmstate.loc, "label expected for `%s`", instrName);
+        return false;
+    }
+
+    LabelDsymbol label = asmstate.sc.func.searchLabel(asmstate.tok.ident, asmstate.loc);
+    label.iasm = true;
+    c.IFL1 = FL.block;
+    c.IEV1.Vlsym = cast(_LabelDsymbol*)label;
+    asmNextToken();
+    return true;
+}
+
 /// B instruction: b[.cond] label
 private code* parseInstr_b()
 {
-    // The mnemonic might be "b" or "b.eq", "b.ne", etc.
-    // Check if there's a dot followed by a condition code
-    const(char)[] mnemonic = asmstate.tok.ident.toString();
-    asmNextToken(); // Skip mnemonic
+    asmNextToken();
 
-    CondCode cond = CondCode.AL;  // Default: always (unconditional)
-    bool hasCondition = false;
-
-    // Check if mnemonic contains a dot (e.g., "b.eq")
-    foreach (i, c; mnemonic)
+    uint encoding = INSTR.b_uncond(0);
+    if (tokValue() == TOK.dot)
     {
-        if (c == '.')
+        asmNextToken();
+        CondCode cond;
+        if (tokValue() != TOK.identifier || !parseConditionCode(asmstate.tok.ident.toString(), cond))
         {
-            if (i + 1 < mnemonic.length)
-            {
-                const(char)[] condStr = mnemonic[i + 1 .. $];
-                if (parseConditionCode(condStr, cond))
-                {
-                    hasCondition = true;
-                }
-                else
-                {
-                    error(asmstate.loc, "unknown condition code `%s`", condStr.ptr);
-                    return null;
-                }
-            }
-            break;
+            error(asmstate.loc, "condition code expected after `b.`");
+            return null;
         }
-    }
-
-    // Parse label operand
-    if (tokValue() != TOK.identifier)
-    {
-        error(asmstate.loc, "label expected for `b` instruction");
-        return null;
-    }
-
-    // Note: Full label resolution requires backend integration
-    // For now, emit a placeholder instruction with offset 0
-    uint encoding;
-    if (hasCondition)
-    {
-        // Conditional branch: b.cond label
-        // Use b_cond encoding with offset 0 as placeholder
+        asmNextToken();
         encoding = INSTR.b_cond(0, cond);
     }
-    else
-    {
-        // Unconditional branch: b label
-        encoding = INSTR.b_uncond(0);
-    }
 
-    asmNextToken(); // Skip label
-
-    return emitInstruction(encoding);
+    code* c = emitInstruction(encoding);
+    return parseBranchLabel(c, "b") ? c : null;
 }
 
 /// CBZ instruction: cbz Xt, label (compare and branch if zero)
@@ -3400,20 +3256,9 @@ private code* parseInstr_cbz()
     }
     asmNextToken();
 
-    // Parse label
-    if (tokValue() != TOK.identifier)
-    {
-        error(asmstate.loc, "label expected for `cbz`");
-        return null;
-    }
-
-    // Encode cbz with offset 0 as placeholder
     uint sf = reg.is64bit ? 1 : 0;
-    uint encoding = INSTR.compbranch(sf, 0, 0, reg.reg);
-
-    asmNextToken(); // Skip label
-
-    return emitInstruction(encoding);
+    code* c = emitInstruction(INSTR.compbranch(sf, 0, 0, reg.reg));
+    return parseBranchLabel(c, "cbz") ? c : null;
 }
 
 /// CBNZ instruction: cbnz Xt, label (compare and branch if non-zero)
@@ -3441,20 +3286,9 @@ private code* parseInstr_cbnz()
     }
     asmNextToken();
 
-    // Parse label
-    if (tokValue() != TOK.identifier)
-    {
-        error(asmstate.loc, "label expected for `cbnz`");
-        return null;
-    }
-
-    // Encode cbnz with offset 0 as placeholder
     uint sf = reg.is64bit ? 1 : 0;
-    uint encoding = INSTR.compbranch(sf, 1, 0, reg.reg);
-
-    asmNextToken(); // Skip label
-
-    return emitInstruction(encoding);
+    code* c = emitInstruction(INSTR.compbranch(sf, 1, 0, reg.reg));
+    return parseBranchLabel(c, "cbnz") ? c : null;
 }
 
 /// TBZ instruction: tbz Xt, #imm, label (test bit and branch if zero)
@@ -3503,21 +3337,10 @@ private code* parseInstr_tbz()
     }
     asmNextToken();
 
-    // Parse label
-    if (tokValue() != TOK.identifier)
-    {
-        error(asmstate.loc, "label expected for `tbz`");
-        return null;
-    }
-
-    // Encode tbz with offset 0 as placeholder
     uint b5 = (bitImm.imm >> 5) & 1;
     uint b40 = bitImm.imm & 0x1F;
-    uint encoding = INSTR.testbranch(b5, 0, b40, 0, reg.reg);
-
-    asmNextToken(); // Skip label
-
-    return emitInstruction(encoding);
+    code* c = emitInstruction(INSTR.testbranch(b5, 0, b40, 0, reg.reg));
+    return parseBranchLabel(c, "tbz") ? c : null;
 }
 
 /// TBNZ instruction: tbnz Xt, #imm, label (test bit and branch if non-zero)
@@ -3566,21 +3389,10 @@ private code* parseInstr_tbnz()
     }
     asmNextToken();
 
-    // Parse label
-    if (tokValue() != TOK.identifier)
-    {
-        error(asmstate.loc, "label expected for `tbnz`");
-        return null;
-    }
-
-    // Encode tbnz with offset 0 as placeholder
     uint b5 = (bitImm.imm >> 5) & 1;
     uint b40 = bitImm.imm & 0x1F;
-    uint encoding = INSTR.testbranch(b5, 1, b40, 0, reg.reg);
-
-    asmNextToken(); // Skip label
-
-    return emitInstruction(encoding);
+    code* c = emitInstruction(INSTR.testbranch(b5, 1, b40, 0, reg.reg));
+    return parseBranchLabel(c, "tbnz") ? c : null;
 }
 
 /*******************************
@@ -3592,21 +3404,27 @@ private code* parseInstr_bl()
 {
     asmNextToken(); // Skip 'bl'
 
-    // Parse label operand
     if (tokValue() != TOK.identifier)
     {
-        error(asmstate.loc, "label expected for `bl` instruction");
+        error(asmstate.loc, "function name expected for `bl`");
         return null;
     }
 
-    // Note: Full label resolution requires backend integration
-    // For now, emit a placeholder instruction with offset 0
-    // The imm26 field represents PC-relative offset in 4-byte instructions
-    uint encoding = INSTR.bl(0);
+    Dsymbol pscopesym;
+    Dsymbol s = asmstate.sc.search(asmstate.loc, asmstate.tok.ident, pscopesym);
+    FuncDeclaration fd = s ? s.isFuncDeclaration() : null;
+    if (!fd)
+    {
+        error(asmstate.loc, "function expected for `bl`, not `%s`", asmstate.tok.ident.toChars());
+        return null;
+    }
+    asmNextToken();
 
-    asmNextToken(); // Skip label
-
-    return emitInstruction(encoding);
+    code* c = emitInstruction(INSTR.bl(0));
+    c.IFL1 = FL.func;
+    c.Iflags |= CF.selfrel | CF.off | CF.selfrel26;
+    c.IEV1.Vdsym = cast(_Declaration*)fd;
+    return c;
 }
 
 /// BLR instruction: blr Xn (branch with link to register)
@@ -3728,14 +3546,6 @@ private immutable InstrHandler[] instrTable =
 private InstrHandlerFunc lookupInstruction(const(char)[] mnemonic)
 {
     import core.stdc.ctype : tolower;
-
-    // Check for conditional branch (b.eq, b.ne, etc.)
-    // These should all use the 'b' handler
-    if (mnemonic.length > 2 && mnemonic[0] == 'b' && mnemonic[1] == '.')
-    {
-        // It's a conditional branch like "b.eq", use the 'b' handler
-        return &parseInstr_b;
-    }
 
     foreach (ref handler; instrTable)
     {
@@ -4433,20 +4243,10 @@ unittest
 {
     // Test instruction lookup for conditional branches
     assert(lookupInstruction("b") !is null);
-    assert(lookupInstruction("b.eq") !is null);
-    assert(lookupInstruction("b.ne") !is null);
-    assert(lookupInstruction("b.gt") !is null);
-    assert(lookupInstruction("b.le") !is null);
-    assert(lookupInstruction("b.ge") !is null);
-    assert(lookupInstruction("b.lt") !is null);
     assert(lookupInstruction("cbz") !is null);
     assert(lookupInstruction("cbnz") !is null);
     assert(lookupInstruction("tbz") !is null);
     assert(lookupInstruction("tbnz") !is null);
-
-    // Verify b.eq and b both return the same handler (the b handler)
-    assert(lookupInstruction("b") == lookupInstruction("b.eq"));
-    assert(lookupInstruction("b") == lookupInstruction("b.ne"));
 }
 
 unittest
