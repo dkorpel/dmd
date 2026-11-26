@@ -1452,10 +1452,10 @@ void disassemble(uint c) @trusted
         p2 = regString(sf, Rd);
         p3 = regString(sf, Rn);
         p4 = regString(sf, Rm);
-        string[4] shiftstring = [ "", "lsr ", "asr ", "ror " ];
+        string[4] shiftstring = [ "lsl", "lsr", "asr", "ror" ];
         if (imm6)
         {
-            const n = snprintf(P5.ptr, P5.length, ((imm6 < 10) ? "%s #%d" : "#0x%X"), shiftstring[shift].ptr, imm6);
+            const n = snprintf(P5.ptr, P5.length, "%s #%d", shiftstring[shift].ptr, imm6);
             p5 = P5[0 .. n];
         }
         if (((opc << 1) | N) == 2 && Rn == 0x1F)
@@ -1495,7 +1495,7 @@ void disassemble(uint c) @trusted
         if (immed6) // defaults to 0
         {
             string[4] tab2 = [ "lsl", "lsr", "asr", "reserved" ];
-            const n = snprintf(P5buf.ptr, P5buf.length, ((immed6 < 10) ? "%s #%d".ptr : "#0x%X".ptr), tab2[shift].ptr, immed6);
+            const n = snprintf(P5buf.ptr, P5buf.length, "%s #%d", tab2[shift].ptr, immed6);
             p5 = P5buf[0 .. n];
         }
 
@@ -1561,7 +1561,7 @@ void disassemble(uint c) @trusted
             p5 = extend;
         else
         {
-            const n = snprintf(P5buf2.ptr, P5buf2.length, ((imm3 < 10) ? "%s #%d" : "#0x%X"), extend.ptr, imm3);
+            const n = snprintf(P5buf2.ptr, P5buf2.length, "%s #%d", extend.ptr, imm3);
             p5 = P5buf2[0 .. n];
         }
 
@@ -3231,7 +3231,7 @@ unittest
 unittest
 {
     int line64 = __LINE__;
-    string[116] cases64 =      // 64 bit code gen
+    string[119] cases64 =      // 64 bit code gen
     [
         "1E 61 04 00         fccmp  d0,d1,#0x0,eq",
         "1E 65 64 A0         fccmp  d5,d5,#0x0,vs",
@@ -3322,6 +3322,9 @@ unittest
 
         "B2 50 AF E0         mov  x0,#0xFFFF00000FFFFFFF",
         "EB 03 08 9F         cmp  x4,x3,lsl #2",
+        "8B 82 FC 20         add  x0,x1,x2,asr #63",
+        "8A 22 FC 20         bic  x0,x1,x2,lsl #63",
+        "8A 02 0C 20         and  x0,x1,x2,lsl #3",
         "F1 00 08 7F         cmp  x3,#2",
         "91 00 0C 00         add  x0,x0,#3",
         "9A C1 28 02         asr  x2,x0,x1",
