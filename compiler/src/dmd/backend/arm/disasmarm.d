@@ -2598,39 +2598,26 @@ void disassemble(uint c) @trusted
 
         uint ldr(uint size, uint VR, uint opc) { return (size << 3) | (VR << 2) | opc; }
 
-        uint factor = 4;
         const(char)* format = "%s_imm";
         switch (ldr(size, VR, opc))
         {
-            case ldr(0,0,0): p1 = "strb";  goto Lldr8;  // https://www.scs.stanford.edu/~zyedidia/arm64/strb_imm.html
-            case ldr(0,0,1): p1 = "ldrb";  goto Lldr8;
-            Lldr8:
-                p2 = regString(factor == 8, Rt);
-                p3 = eaString(0, cast(ubyte)Rn, imm12);
-                break;
-
-            case ldr(0,0,2): p1 = "ldrsb"; goto Lldr64;
+            case ldr(0,0,0): p1 = "strb";  goto Lldr;  // https://www.scs.stanford.edu/~zyedidia/arm64/strb_imm.html
+            case ldr(0,0,1): p1 = "ldrb";  goto Lldr;
+            case ldr(0,0,2):
             case ldr(0,0,3): p1 = "ldrsb"; goto Lldr;
-            case ldr(1,0,0): p1 = "strh";  factor = 2; goto Lldr;
+            case ldr(1,0,0): p1 = "strh";  goto Lldr;
             case ldr(1,0,1): p1 = "ldrh";  goto Lldr;
-            case ldr(1,0,2): p1 = "ldrsh"; goto Lldr64;
-            case ldr(1,0,3): p1 = "ldrsh"; factor = 2; goto Lldr;
+            case ldr(1,0,2):
+            case ldr(1,0,3): p1 = "ldrsh"; goto Lldr;
             case ldr(2,0,0): p1 = "str";   format = "%s_imm_gen"; goto Lldr;
             case ldr(2,0,1): p1 = "ldr";   format = "%s_imm_gen"; goto Lldr;
-            case ldr(2,0,2): p1 = "ldrsw"; goto Lldrsw;
-            case ldr(3,0,0): p1 = "str";   format = "%s_imm_gen"; goto Lldr64;
-            case ldr(3,0,1): p1 = "ldr";   format = "%s_imm_gen"; goto Lldr64;
+            case ldr(2,0,2): p1 = "ldrsw"; goto Lldr;
+            case ldr(3,0,0): p1 = "str";   format = "%s_imm_gen"; goto Lldr;
+            case ldr(3,0,1): p1 = "ldr";   format = "%s_imm_gen"; goto Lldr;
             //case ldr(3,0,2): p1 = "prfm";
-            Lldrsw:
-                p2 = regString(true, Rt);
-                p3 = eaString(0, cast(ubyte)Rn, imm12 * 4);
-                break;
-
-            Lldr64:
-                factor = 8;
             Lldr:
-                p2 = regString(factor == 8, Rt);
-                p3 = eaString(0, cast(ubyte)Rn, imm12 * factor);
+                p2 = regString(size == 3 || opc == 2, Rt);
+                p3 = eaString(0, cast(ubyte)Rn, imm12 << size);
                 break;
 
             case ldr(0,1,0): p1 = "str";  goto LsimdFp;
@@ -3244,7 +3231,7 @@ unittest
 unittest
 {
     int line64 = __LINE__;
-    string[110] cases64 =      // 64 bit code gen
+    string[116] cases64 =      // 64 bit code gen
     [
         "1E 61 04 00         fccmp  d0,d1,#0x0,eq",
         "1E 65 64 A0         fccmp  d5,d5,#0x0,vs",
@@ -3266,6 +3253,12 @@ unittest
         "F8 62 C8 20         ldr    x0,[x1, w2, sxtw]",
         "38 62 78 20         ldrb   w0,[x1, x2, lsl #0]",
         "F8 22 F8 20         str    x0,[x1, x2, sxtx #3]",
+        "39 80 63 A1         ldrsb  x1,[x29,#0x18]",
+        "39 C0 63 A1         ldrsb  w1,[x29,#0x18]",
+        "79 40 0C 20         ldrh   w0,[x1,#6]",
+        "79 80 08 20         ldrsh  x0,[x1,#4]",
+        "B9 80 08 20         ldrsw  x0,[x1,#8]",
+        "39 40 1C 20         ldrb   w0,[x1,#7]",
         "38 00 14 3F         strb   wzr,[x1],#1",
         "79 00 5B A2         strh   w2,[x29,#0x2C]",
         "D3 7E 7C 43         ubfiz  x3,x2,#2,#0x20",
