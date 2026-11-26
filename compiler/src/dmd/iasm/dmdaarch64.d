@@ -413,7 +413,7 @@ private bool parseRegister(out AArch64Operand op, bool allowSP = false)
 {
     if (tokValue() != TOK.identifier)
     {
-        error(asmstate.loc, "register expected, not `%s`", asmstate.tok.toChars());
+        error(asmstate.loc, "register expected, not `%s`", asmstate.tok ? asmstate.tok.toChars() : ";");
         return false;
     }
 
