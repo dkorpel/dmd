@@ -2541,39 +2541,35 @@ void disassemble(uint c) @trusted
         uint Rn     = field(ins, 9, 5);
         uint Rt     = field(ins, 4, 0);
 
-        string[4] tab = [ "uxtw", "lsl", "sxtw", "sxtx" ];
+        string[8] tab = [ null, null, "uxtw", "lsl", null, null, "sxtw", "sxtx" ];
 
         uint cases(uint size, uint VR, uint opc) { return (size << 3) | (VR << 2) | opc; }
-        switch (cases(size, VR, opc))
+        switch (option & 2 ? cases(size, VR, opc) : ~0)
         {
             case cases(0,0,0):  p1 = "strb";  url2 = "strb_reg";      goto Lldst;
             case cases(0,0,1):  p1 = "ldrb";  url2 = "ldrb_reg";      goto Lldst;
             case cases(0,0,2):  p1 = "ldrsb"; url2 = "ldrsb_reg";     goto Lldst;
             case cases(0,0,3):  p1 = "ldrsb"; url2 = "ldrsb_reg";     goto Lldst;
-
-            case cases(1,0,0):  p1 = "strh";  url2 = "strh_reg";      goto Lldst2;
-            case cases(1,0,1):  p1 = "ldrh";  url2 = "ldrh_reg";      goto Lldst2;
-            Lldst2:
-                p2 = regString(0,Rt);
-                goto Lldst3;
-
+            case cases(1,0,0):  p1 = "strh";  url2 = "strh_reg";      goto Lldst;
+            case cases(1,0,1):  p1 = "ldrh";  url2 = "ldrh_reg";      goto Lldst;
+            case cases(1,0,2):  p1 = "ldrsh"; url2 = "ldrsh_reg";     goto Lldst;
+            case cases(1,0,3):  p1 = "ldrsh"; url2 = "ldrsh_reg";     goto Lldst;
             case cases(2,0,0):  p1 = "str";   url2 = "str_reg_gen";   goto Lldst;
             case cases(2,0,1):  p1 = "ldr";   url2 = "ldr_reg_gen";   goto Lldst;
             case cases(2,0,2):  p1 = "ldrsw"; url2 = "ldrsw_reg_gen"; goto Lldst;
             case cases(3,0,0):  p1 = "str";   url2 = "str_reg_gen";   goto Lldst;
             case cases(3,0,1):  p1 = "ldr";   url2 = "ldr_reg_gen";   goto Lldst;
             Lldst:
-                p2 = regString(size & 1,Rt);
-            Lldst3:
+                p2 = regString(size == 3 || opc == 2, Rt);
+                const base = regString(1,Rn).ptr;
+                const index = regString(option & 1,Rm).ptr;
+                int n;
                 if (option == 3 && !S)
-                {
-                    const n = snprintf(P5buf5.ptr, P5buf5.length, "[%s, %s]", regString(1,Rn).ptr, regString(1,Rm).ptr);
-                    p3 = P5buf5[0 .. n];
-                    break;
-                }
-
-                const(char)[] extend = tab[option];
-                const n = snprintf(P5buf5.ptr, P5buf5.length, "[%s, %s, %s #%d]", regString(1,Rn).ptr, regString(1,Rm).ptr, extend.ptr, S * (2 + (size & 1)));
+                    n = snprintf(P5buf5.ptr, P5buf5.length, "[%s, %s]", base, index);
+                else if (S)
+                    n = snprintf(P5buf5.ptr, P5buf5.length, "[%s, %s, %s #%d]", base, index, tab[option].ptr, size);
+                else
+                    n = snprintf(P5buf5.ptr, P5buf5.length, "[%s, %s, %s]", base, index, tab[option].ptr);
                 p3 = P5buf5[0 .. n];
                 break;
 
@@ -2602,39 +2598,26 @@ void disassemble(uint c) @trusted
 
         uint ldr(uint size, uint VR, uint opc) { return (size << 3) | (VR << 2) | opc; }
 
-        uint factor = 4;
         const(char)* format = "%s_imm";
         switch (ldr(size, VR, opc))
         {
-            case ldr(0,0,0): p1 = "strb";  goto Lldr8;  // https://www.scs.stanford.edu/~zyedidia/arm64/strb_imm.html
-            case ldr(0,0,1): p1 = "ldrb";  goto Lldr8;
-            Lldr8:
-                p2 = regString(factor == 8, Rt);
-                p3 = eaString(0, cast(ubyte)Rn, imm12);
-                break;
-
-            case ldr(0,0,2): p1 = "ldrsb"; goto Lldr64;
+            case ldr(0,0,0): p1 = "strb";  goto Lldr;  // https://www.scs.stanford.edu/~zyedidia/arm64/strb_imm.html
+            case ldr(0,0,1): p1 = "ldrb";  goto Lldr;
+            case ldr(0,0,2):
             case ldr(0,0,3): p1 = "ldrsb"; goto Lldr;
-            case ldr(1,0,0): p1 = "strh";  factor = 2; goto Lldr;
+            case ldr(1,0,0): p1 = "strh";  goto Lldr;
             case ldr(1,0,1): p1 = "ldrh";  goto Lldr;
-            case ldr(1,0,2): p1 = "ldrsh"; goto Lldr64;
-            case ldr(1,0,3): p1 = "ldrsh"; factor = 2; goto Lldr;
+            case ldr(1,0,2):
+            case ldr(1,0,3): p1 = "ldrsh"; goto Lldr;
             case ldr(2,0,0): p1 = "str";   format = "%s_imm_gen"; goto Lldr;
             case ldr(2,0,1): p1 = "ldr";   format = "%s_imm_gen"; goto Lldr;
-            case ldr(2,0,2): p1 = "ldrsw"; goto Lldrsw;
-            case ldr(3,0,0): p1 = "str";   format = "%s_imm_gen"; goto Lldr64;
-            case ldr(3,0,1): p1 = "ldr";   format = "%s_imm_gen"; goto Lldr64;
+            case ldr(2,0,2): p1 = "ldrsw"; goto Lldr;
+            case ldr(3,0,0): p1 = "str";   format = "%s_imm_gen"; goto Lldr;
+            case ldr(3,0,1): p1 = "ldr";   format = "%s_imm_gen"; goto Lldr;
             //case ldr(3,0,2): p1 = "prfm";
-            Lldrsw:
-                p2 = regString(true, Rt);
-                p3 = eaString(0, cast(ubyte)Rn, imm12 * 4);
-                break;
-
-            Lldr64:
-                factor = 8;
             Lldr:
-                p2 = regString(factor == 8, Rt);
-                p3 = eaString(0, cast(ubyte)Rn, imm12 * factor);
+                p2 = regString(size == 3 || opc == 2, Rt);
+                p3 = eaString(0, cast(ubyte)Rn, imm12 << size);
                 break;
 
             case ldr(0,1,0): p1 = "str";  goto LsimdFp;
@@ -3248,7 +3231,7 @@ unittest
 unittest
 {
     int line64 = __LINE__;
-    string[100] cases64 =      // 64 bit code gen
+    string[116] cases64 =      // 64 bit code gen
     [
         "1E 61 04 00         fccmp  d0,d1,#0x0,eq",
         "1E 65 64 A0         fccmp  d5,d5,#0x0,vs",
@@ -3260,6 +3243,22 @@ unittest
         "78 24 68 43         strh   w3,[x2, x4]",
         "38 64 68 23         ldrb   w3,[x1, x4]",
         "38 24 68 43         strb   w3,[x2, x4] ",
+        "38 A2 68 20         ldrsb  x0,[x1, x2]",
+        "38 E2 68 20         ldrsb  w0,[x1, x2]",
+        "78 E2 78 20         ldrsh  w0,[x1, x2, lsl #1]",
+        "78 A2 C8 20         ldrsh  x0,[x1, w2, sxtw]",
+        "B8 A2 78 20         ldrsw  x0,[x1, x2, lsl #2]",
+        "F8 62 78 20         ldr    x0,[x1, x2, lsl #3]",
+        "B8 62 58 20         ldr    w0,[x1, w2, uxtw #2]",
+        "F8 62 C8 20         ldr    x0,[x1, w2, sxtw]",
+        "38 62 78 20         ldrb   w0,[x1, x2, lsl #0]",
+        "F8 22 F8 20         str    x0,[x1, x2, sxtx #3]",
+        "39 80 63 A1         ldrsb  x1,[x29,#0x18]",
+        "39 C0 63 A1         ldrsb  w1,[x29,#0x18]",
+        "79 40 0C 20         ldrh   w0,[x1,#6]",
+        "79 80 08 20         ldrsh  x0,[x1,#4]",
+        "B9 80 08 20         ldrsw  x0,[x1,#8]",
+        "39 40 1C 20         ldrb   w0,[x1,#7]",
         "38 00 14 3F         strb   wzr,[x1],#1",
         "79 00 5B A2         strh   w2,[x29,#0x2C]",
         "D3 7E 7C 43         ubfiz  x3,x2,#2,#0x20",
