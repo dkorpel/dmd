@@ -1773,7 +1773,7 @@ void cdshtlng(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
         Extend extend = e1.Eoper == OPs8_16 ? Extend.SXTB : Extend.SXTH;
         cs.Sextend = cast(ubyte)((cs.Sextend & 8) | extend);  // preserve S bit
         reg_t reg = allocreg(cdb,retregs,TYint);
-        loadFromEA(cs,reg,8,tysize(e1.Ety));
+        loadFromEA(cs,reg,8,tysize(e1.E1.Ety));
         cdb.gen(&cs);
         freenode(e1.E1);
         freenode(e1);
@@ -1842,7 +1842,7 @@ void cdshtlng(ref CGstate cg, ref CodeBuilder cdb,elem* e,ref regm_t pretregs)
                     }
                     else
                     {
-                        // TODO AArch64: not generating LDRSH
+                        cs.Sextend = cast(ubyte)((cs.Sextend & 8) | Extend.SXTH);
                         loadFromEA(cs,reg,8,2);               // LDRSH Xreg,[sp,#8]
                         cdb.gen(&cs);
                     }
