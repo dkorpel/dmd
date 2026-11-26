@@ -66,15 +66,8 @@ import dmd.backend.arm.instr : INSTR;
 /// Immediate value range constants
 private enum ImmediateRange
 {
-    AddSub12Bit_Min = 0,
-    AddSub12Bit_Max = 4095,
-
     PrePostIndex_Min = -256,
     PrePostIndex_Max = 255,
-
-    MaxShiftAmount = 4,
-    MaxBitPos64 = 63,
-    MaxBitPos32 = 31,
 }
 
 /// Register constants
@@ -83,13 +76,6 @@ private enum Reg : ubyte
     SP = 31,   /// Stack pointer register number
     ZR = 31,   /// Zero register number
     LR = 30,   /// Link register (x30)
-}
-
-/// AArch64 register size encoding
-private enum RegSize : ubyte
-{
-    W = 0,     /// 32-bit (W registers) - sf=0
-    X = 1,     /// 64-bit (X registers) - sf=1
 }
 
 /// Load/Store size encoding
@@ -133,24 +119,10 @@ private enum AddressingMode : ubyte
 /// Represents a parsed operand in an AArch64 instruction
 private struct AArch64Operand
 {
-    enum Type
-    {
-        None,
-        Register,
-        Immediate,
-        Memory,
-        Label
-    }
-
-    Type type;
-
     // Register operands
     ubyte reg;          /// Register number (0-31)
     bool is64bit;       /// true for X registers, false for W registers
     bool isSP;
-
-    // Immediate operands
-    long imm;           /// Immediate value
 
     // Memory operands
     ubyte baseReg;      /// Base register
@@ -164,8 +136,6 @@ private struct AArch64Operand
     ubyte shiftAmount;  /// Shift amount for extend operation
     AddressingMode addressingMode;  /// Offset, pre-indexed, or post-indexed
 
-    // Label operands
-    Identifier label;   /// Label identifier
 }
 
 /// State for parsing a single asm statement
@@ -265,345 +235,192 @@ private bool hadErrors()
     return global.errors > asmstate.startErrors;
 }
 
-/*******************************
- * Validation Helper Functions
- */
-
-/// Validate that an operand is a register
-private bool validateRegisterOperand(ref const AArch64Operand op, const(char)* instrName)
+private const(char)* tokChars()
 {
-    if (op.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected for `%s` instruction", instrName);
-        return false;
-    }
-    return true;
+    return asmstate.tok ? asmstate.tok.toChars() : ";";
 }
 
-/// Validate that an operand is a 64-bit register
+private bool parseComma()
+{
+    if (tokValue() == TOK.comma)
+    {
+        asmNextToken();
+        return true;
+    }
+    error(asmstate.loc, "`,` expected, not `%s`", tokChars());
+    return false;
+}
+
 private bool validate64BitRegister(ref const AArch64Operand op, const(char)* instrName)
 {
-    if (!validateRegisterOperand(op, instrName))
-        return false;
-
-    if (!op.is64bit)
-    {
-        error(asmstate.loc, "64-bit register expected for `%s` instruction", instrName);
-        return false;
-    }
-    return true;
+    if (op.is64bit)
+        return true;
+    error(asmstate.loc, "64-bit register expected for `%s` instruction", instrName);
+    return false;
 }
 
-/// Validate that two registers have the same size
 private bool validateRegisterSizeMatch(ref const AArch64Operand op1, ref const AArch64Operand op2,
                                        const(char)* instrName)
 {
-    if (op1.is64bit != op2.is64bit)
-    {
-        error(asmstate.loc, "register size mismatch in `%s` instruction", instrName);
-        return false;
-    }
-    return true;
+    if (op1.is64bit == op2.is64bit)
+        return true;
+    error(asmstate.loc, "register size mismatch in `%s` instruction", instrName);
+    return false;
 }
 
-/// Validate that a memory operand is valid
-private bool validateMemoryOperand(ref const AArch64Operand op, const(char)* instrName)
-{
-    if (op.type != AArch64Operand.Type.Memory)
-    {
-        error(asmstate.loc, "memory operand expected for `%s` instruction", instrName);
-        return false;
-    }
-    return true;
-}
-
-/// Get the size encoding for a register (0=32-bit, 1=64-bit)
-private uint getSizeFlag(bool is64bit)
-{
-    return is64bit ? RegSize.X : RegSize.W;
-}
-
-/// Get the load/store size encoding for a register
-private uint getLSSize(bool is64bit)
-{
-    return is64bit ? LSSize.DoubleWord : LSSize.Word;
-}
-
-/// Validate and encode an imm9 value for pre/post-indexed addressing
-private bool encodeImm9(long offset, out uint imm9, const(char)* context)
-{
-    if (!validateImmediateRange(offset, ImmediateRange.PrePostIndex_Min,
-                                ImmediateRange.PrePostIndex_Max, context))
-        return false;
-
-    imm9 = cast(uint)(offset & 0x1FF);
-    return true;
-}
-
-/*******************************
- * Register Parsing
- */
-
-/// Parse a register name and extract register number and size
 private bool parseRegisterName(const(char)[] name, out ubyte regNum, out bool is64bit)
 {
     import core.stdc.ctype : tolower;
 
-    if (name.length < 2)
+    if (iequals(name, "sp"))
+    {
+        regNum = Reg.SP;
+        is64bit = true;
+        return true;
+    }
+
+    if (name.length < 2 || (tolower(name[0]) != 'x' && tolower(name[0]) != 'w'))
         return false;
+    is64bit = tolower(name[0]) == 'x';
 
-    char prefix = cast(char)tolower(name[0]);
-
-    // Check for special 2-character register: sp
-    if (name.length == 2)
+    if (iequals(name[1 .. $], "zr"))
     {
-        if ((name[0] == 's' || name[0] == 'S') &&
-            (name[1] == 'p' || name[1] == 'P'))
-        {
-            regNum = 31;
-            is64bit = true;
-            return true;
-        }
+        regNum = Reg.ZR;
+        return true;
     }
 
-    // Check for special 3-character registers: xzr or wzr
-    if (name.length == 3)
+    uint num = 0;
+    foreach (c; name[1 .. $])
     {
-        if ((name[0] == 'x' || name[0] == 'X' || name[0] == 'w' || name[0] == 'W') &&
-            (name[1] == 'z' || name[1] == 'Z') &&
-            (name[2] == 'r' || name[2] == 'R'))
-        {
-            is64bit = (name[0] == 'x' || name[0] == 'X');
-            regNum = 31;
-            return true;
-        }
+        if (c < '0' || c > '9')
+            return false;
+        num = num * 10 + (c - '0');
+        if (num > 30)
+            return false;
     }
-
-    // Check for x0-x30 or w0-w30
-    if ((prefix == 'x' || prefix == 'w') && name.length >= 2)
-    {
-        is64bit = (prefix == 'x');
-
-        // Parse register number
-        uint num = 0;
-        foreach (i, c; name[1 .. $])
-        {
-            if (c < '0' || c > '9')
-                return false;
-            num = num * 10 + (c - '0');
-            if (num > 31)
-                return false;
-        }
-
-        if (name.length == 2 && name[1] == '0')
-            num = 0;
-
-        if (num <= 30)
-        {
-            regNum = cast(ubyte)num;
-            return true;
-        }
-    }
-
-    return false;
+    regNum = cast(ubyte)num;
+    return true;
 }
 
-/// Parse a register operand from the current token
 private bool parseRegister(out AArch64Operand op, bool allowSP = false)
 {
     if (tokValue() != TOK.identifier)
     {
-        error(asmstate.loc, "register expected, not `%s`", asmstate.tok ? asmstate.tok.toChars() : ";");
+        error(asmstate.loc, "register expected, not `%s`", tokChars());
         return false;
     }
 
-    ubyte regNum;
-    bool is64bit;
     const(char)[] regName = asmstate.tok.ident.toString();
-
-    if (!parseRegisterName(regName, regNum, is64bit))
+    if (!parseRegisterName(regName, op.reg, op.is64bit))
     {
         error(asmstate.loc, "unknown register `%s`", regName.ptr);
         return false;
     }
 
-    const isSP = regNum == Reg.SP && iequals(regName, "sp");
-    if (isSP && !allowSP)
+    op.isSP = op.reg == Reg.SP && iequals(regName, "sp");
+    if (op.isSP && !allowSP)
     {
         error(asmstate.loc, "`sp` cannot be used here");
         return false;
     }
 
-    op.type = AArch64Operand.Type.Register;
-    op.reg = regNum;
-    op.is64bit = is64bit;
-    op.isSP = isSP;
-
     asmNextToken();
     return true;
 }
 
-/*******************************
- * Immediate Parsing
- */
-
-/// Parse an immediate value (expecting # prefix)
-private bool parseImmediate(out AArch64Operand op)
+private bool parseRegs(const(char)* instrName, AArch64Operand[] r, size_t zr = size_t.max)
 {
-    // Expect # prefix
+    const size_t first = zr == 0;
+    foreach (i, ref op; r)
+    {
+        if (i == zr)
+            continue;
+        if (i != first && !parseComma())
+            return false;
+        if (!parseRegister(op) || !validateRegisterSizeMatch(r[first], op, instrName))
+            return false;
+    }
+    if (zr < r.length)
+    {
+        r[zr].reg = Reg.ZR;
+        r[zr].is64bit = r[first].is64bit;
+    }
+    return true;
+}
+
+private bool parseImmediate(out long imm)
+{
     if (tokValue() != TOK.pound)
     {
         error(asmstate.loc, "immediate value must start with `#`");
         return false;
     }
-
     asmNextToken();
 
-    // Parse the numeric value
-    if (tokValue() == TOK.int32Literal || tokValue() == TOK.int64Literal)
-    {
-        op.type = AArch64Operand.Type.Immediate;
-        op.imm = asmstate.tok.intvalue;
+    const neg = tokValue() == TOK.min;
+    if (neg)
         asmNextToken();
-        return true;
-    }
-    else if (tokValue() == TOK.uns32Literal || tokValue() == TOK.uns64Literal)
-    {
-        op.type = AArch64Operand.Type.Immediate;
-        op.imm = cast(long)asmstate.tok.unsvalue;
-        asmNextToken();
-        return true;
-    }
-    else if (tokValue() == TOK.min)
-    {
-        // Handle negative numbers (- token followed by number)
-        asmNextToken();
-        if (tokValue() == TOK.int32Literal || tokValue() == TOK.int64Literal)
-        {
-            op.type = AArch64Operand.Type.Immediate;
-            op.imm = -asmstate.tok.intvalue;
-            asmNextToken();
-            return true;
-        }
-        else if (tokValue() == TOK.uns32Literal || tokValue() == TOK.uns64Literal)
-        {
-            op.type = AArch64Operand.Type.Immediate;
-            op.imm = -cast(long)asmstate.tok.unsvalue;
-            asmNextToken();
-            return true;
-        }
-    }
 
-    error(asmstate.loc, "numeric value expected after `#`");
+    switch (tokValue())
+    {
+        case TOK.int32Literal, TOK.int64Literal, TOK.uns32Literal, TOK.uns64Literal:
+            imm = neg ? -asmstate.tok.intvalue : asmstate.tok.intvalue;
+            asmNextToken();
+            return true;
+        default:
+            error(asmstate.loc, "numeric value expected after `#`");
+            return false;
+    }
+}
+
+private bool validateImmediateRange(long value, long min, long max, const(char)* context)
+{
+    if (value >= min && value <= max)
+        return true;
+    error(asmstate.loc, "immediate value %lld out of range for `%s` (must be %lld..%lld)",
+          value, context, min, max);
     return false;
 }
 
-/// Validate immediate is within range
-private bool validateImmediateRange(long value, long min, long max, const(char)* context)
+private bool parseImmRange(out uint value, uint max, const(char)* instrName)
 {
-    if (value < min || value > max)
-    {
-        error(asmstate.loc, "immediate value %lld out of range for `%s` (must be %lld..%lld)",
-              cast(long)value, context, cast(long)min, cast(long)max);
+    long imm;
+    if (!parseImmediate(imm) || !validateImmediateRange(imm, 0, max, instrName))
         return false;
-    }
+    value = cast(uint)imm;
     return true;
 }
 
-/*******************************
- * Shift Parsing
- */
-
-/**
- * Parse optional shift operand: [, shift_type #amount]
- * Params:
- *   instrName = Name of instruction (for error messages)
- *   is64bit = Whether this is a 64-bit operation (affects max shift)
- *   allowRor = Whether ROR is valid (logical instructions only)
- *   shift = Output: shift type (0=LSL, 1=LSR, 2=ASR, 3=ROR)
- *   amount = Output: shift amount (0-31 for 32-bit, 0-63 for 64-bit)
- * Returns: true if shift was successfully parsed (or no shift present), false on error
- */
 private bool parseOptionalShift(const(char)* instrName, bool is64bit, bool allowRor, out uint shift, out uint amount)
 {
-    // Default values (no shift)
-    shift = 0;   // LSL
-    amount = 0;  // No shift
-
-    // Check for optional shift (comma followed by shift type)
     if (tokValue() != TOK.comma)
-        return true;  // No shift present, that's OK
-
+        return true;
     asmNextToken();
 
-    // Expect shift type identifier (lsl, lsr, asr, ror)
-    if (tokValue() != TOK.identifier)
+    static immutable string[4] names = ["lsl", "lsr", "asr", "ror"];
+    if (tokValue() == TOK.identifier)
     {
-        error(asmstate.loc, "shift type expected after comma in `%s`", instrName);
-        return false;
+        foreach (i, n; names[0 .. allowRor ? 4 : 3])
+        {
+            if (iequals(asmstate.tok.ident.toString(), n))
+            {
+                asmNextToken();
+                shift = cast(uint)i;
+                return parseImmRange(amount, is64bit ? 63 : 31, instrName);
+            }
+        }
     }
-
-    const(char)[] shiftStr = asmstate.tok.ident.toString();
-
-    if (iequals(shiftStr, "lsl"))
-        shift = 0;
-    else if (iequals(shiftStr, "lsr"))
-        shift = 1;
-    else if (iequals(shiftStr, "asr"))
-        shift = 2;
-    else if (allowRor && iequals(shiftStr, "ror"))
-        shift = 3;
-    else
-    {
-        error(asmstate.loc, "invalid shift type for `%s`, expected %s", instrName,
-            allowRor ? "lsl/lsr/asr/ror".ptr : "lsl/lsr/asr".ptr);
-        return false;
-    }
-
-    asmNextToken();
-
-    // Expect '#' before shift amount
-    if (tokValue() != TOK.pound)
-    {
-        error(asmstate.loc, "`#` expected before shift amount in `%s`", instrName);
-        return false;
-    }
-    asmNextToken();
-
-    // Parse shift amount
-    if (tokValue() != TOK.int32Literal && tokValue() != TOK.int64Literal &&
-        tokValue() != TOK.uns32Literal && tokValue() != TOK.uns64Literal)
-    {
-        error(asmstate.loc, "shift amount expected in `%s`", instrName);
-        return false;
-    }
-
-    amount = cast(uint)asmstate.tok.unsvalue;
-
-    // Validate shift amount range
-    uint maxShift = is64bit ? 63 : 31;
-    if (amount > maxShift)
-    {
-        error(asmstate.loc, "shift amount %u out of range for `%s` (0-%u)", amount, instrName, maxShift);
-        return false;
-    }
-
-    asmNextToken();
-    return true;
+    error(asmstate.loc, "invalid shift type for `%s`, expected %s", instrName,
+        allowRor ? "lsl/lsr/asr/ror".ptr : "lsl/lsr/asr".ptr);
+    return false;
 }
 
-/*******************************
- * Memory Operand Parsing
- */
-
-/// Parse an extend operation (LSL, UXTW, SXTW, SXTX)
 private bool parseExtendOp(out ExtendOp extend)
 {
     if (tokValue() != TOK.identifier)
         return false;
 
     const(char)[] extName = asmstate.tok.ident.toString();
-
     if (iequals(extName, "lsl"))
         extend = ExtendOp.LSL;
     else if (iequals(extName, "uxtw"))
@@ -619,11 +436,8 @@ private bool parseExtendOp(out ExtendOp extend)
     return true;
 }
 
-/// Parse a memory operand: [Xn], [Xn, #imm], or [Xn, Xm]
-/// Also supports extended modes: [Xn, Xm, extend #amount], [Xn, #imm]!, [Xn], #imm
-private bool parseMemoryOperand(out AArch64Operand op)
+private bool parseMemoryOperand(out AArch64Operand op, const(char)* instrName)
 {
-    // Expect opening bracket
     if (tokValue() != TOK.leftBracket)
     {
         error(asmstate.loc, "`[` expected for memory operand");
@@ -631,7 +445,6 @@ private bool parseMemoryOperand(out AArch64Operand op)
     }
     asmNextToken();
 
-    // Parse base register
     AArch64Operand baseOp;
     if (!parseRegister(baseOp, true))
         return false;
@@ -641,34 +454,20 @@ private bool parseMemoryOperand(out AArch64Operand op)
         error(asmstate.loc, "`x0`..`x30` or `sp` expected as base in memory operand");
         return false;
     }
-
-    op.type = AArch64Operand.Type.Memory;
     op.baseReg = baseOp.reg;
-    op.hasIndex = false;
-    op.hasOffset = false;
-    op.extend = ExtendOp.None;
-    op.shiftAmount = 0;
-    op.addressingMode = AddressingMode.Offset;
 
-    // Check for offset or index
     if (tokValue() == TOK.comma)
     {
         asmNextToken();
 
-        // Check if it's an immediate or register
         if (tokValue() == TOK.pound)
         {
-            // Immediate offset
-            AArch64Operand immOp;
-            if (!parseImmediate(immOp))
+            if (!parseImmediate(op.offset))
                 return false;
-
-            op.offset = immOp.imm;
             op.hasOffset = true;
         }
         else
         {
-            // Register offset
             AArch64Operand indexOp;
             if (!parseRegister(indexOp))
                 return false;
@@ -676,37 +475,18 @@ private bool parseMemoryOperand(out AArch64Operand op)
             op.indexReg = indexOp.reg;
             op.hasIndex = true;
 
-            // Check for optional extend operation: [Xn, Xm, LSL #amount]
             if (tokValue() == TOK.comma)
             {
                 asmNextToken();
-
-                ExtendOp ext;
-                if (parseExtendOp(ext))
-                {
-                    op.extend = ext;
-
-                    // Check for optional shift amount
-                    if (tokValue() == TOK.pound)
-                    {
-                        AArch64Operand shiftOp;
-                        if (!parseImmediate(shiftOp))
-                            return false;
-
-                        // Validate shift amount (typically 0-3 for load/store)
-                        if (shiftOp.imm < 0 || shiftOp.imm > 4)
-                        {
-                            error(asmstate.loc, "shift amount must be 0-4");
-                            return false;
-                        }
-                        op.shiftAmount = cast(ubyte)shiftOp.imm;
-                    }
-                }
-                else
+                if (!parseExtendOp(op.extend))
                 {
                     error(asmstate.loc, "extend operation (LSL, UXTW, SXTW, SXTX) expected");
                     return false;
                 }
+                uint amount;
+                if (tokValue() == TOK.pound && !parseImmRange(amount, 4, instrName))
+                    return false;
+                op.shiftAmount = cast(ubyte)amount;
             }
 
             const wantW = op.extend == ExtendOp.UXTW || op.extend == ExtendOp.SXTW;
@@ -719,7 +499,6 @@ private bool parseMemoryOperand(out AArch64Operand op)
         }
     }
 
-    // Expect closing bracket
     if (tokValue() != TOK.rightBracket)
     {
         error(asmstate.loc, "`]` expected to close memory operand");
@@ -727,44 +506,32 @@ private bool parseMemoryOperand(out AArch64Operand op)
     }
     asmNextToken();
 
-    // Check for pre-indexed or post-indexed modes
-    if (tokValue() == TOK.not)  // '!' for pre-indexed
+    if (tokValue() == TOK.not)
     {
         if (!op.hasOffset)
         {
             error(asmstate.loc, "pre-indexed mode requires immediate offset");
             return false;
         }
-        if (op.hasIndex)
-        {
-            error(asmstate.loc, "pre-indexed mode cannot use register offset");
-            return false;
-        }
         op.addressingMode = AddressingMode.PreIndexed;
         asmNextToken();
     }
-    else if (tokValue() == TOK.comma)  // Post-indexed: [Xn], #imm
+    else if (tokValue() == TOK.comma)
     {
         if (op.hasOffset || op.hasIndex)
         {
             error(asmstate.loc, "post-indexed mode cannot have offset inside brackets");
             return false;
         }
-
         asmNextToken();
 
-        // Parse post-index immediate
         if (tokValue() != TOK.pound)
         {
             error(asmstate.loc, "immediate offset expected for post-indexed mode");
             return false;
         }
-
-        AArch64Operand postOp;
-        if (!parseImmediate(postOp))
+        if (!parseImmediate(op.offset))
             return false;
-
-        op.offset = postOp.imm;
         op.hasOffset = true;
         op.addressingMode = AddressingMode.PostIndexed;
     }
@@ -793,11 +560,6 @@ private bool parseOptionalExtendShift(const(char)* instrName, out uint amount)
     return true;
 }
 
-/*******************************
- * Instruction Encoding Helpers
- */
-
-/// Create a code structure with the encoded instruction
 private code* emitInstruction(uint encoding)
 {
     code* c = code_calloc();
@@ -805,10 +567,6 @@ private code* emitInstruction(uint encoding)
     return c;
 }
 
-/// Params:
-///   rt = target register
-///   mem = memory operand
-/// Returns: encoded instruction or 0 on error
 private uint encodeLoadStore(uint size, uint opc, ubyte rt, ref const AArch64Operand mem, const(char)* instrName)
 {
     if (mem.hasIndex)
@@ -827,9 +585,10 @@ private uint encodeLoadStore(uint size, uint opc, ubyte rt, ref const AArch64Ope
     {
         case AddressingMode.PreIndexed:
         case AddressingMode.PostIndexed:
-            uint imm9;
-            if (!encodeImm9(mem.offset, imm9, instrName))
+            if (!validateImmediateRange(mem.offset, ImmediateRange.PrePostIndex_Min,
+                                        ImmediateRange.PrePostIndex_Max, instrName))
                 return 0;
+            const imm9 = cast(uint)(mem.offset & 0x1FF);
             return mem.addressingMode == AddressingMode.PreIndexed
                 ? INSTR.ldst_immpre(size, 0, opc, imm9, mem.baseReg, rt)
                 : INSTR.ldst_immpost(size, 0, opc, imm9, mem.baseReg, rt);
@@ -846,2567 +605,253 @@ private uint encodeLoadStore(uint size, uint opc, ubyte rt, ref const AArch64Ope
     }
 }
 
-/*******************************
- * Instruction Handlers
- */
-
-/*******************************
- * Data Movement Instructions
- */
-
-/// MOV instruction: mov Xd, Xn
-private code* parseInstr_mov()
+private code* parseInstr_mov(const(char)* name)
 {
-    asmNextToken(); // Skip 'mov'
-
     AArch64Operand dst, src;
-
-    if (!parseRegister(dst, true))
+    if (!parseRegister(dst, true) || !parseComma() || !parseRegister(src, true) ||
+        !validateRegisterSizeMatch(dst, src, name))
         return null;
 
-    if (tokValue() != TOK.comma)
+    if (!dst.isSP && !src.isSP)
+        return emitInstruction(INSTR.mov_register(dst.is64bit, src.reg, dst.reg));
+    if (!checkReg31(dst, true) || !checkReg31(src, true))
+        return null;
+    return emitInstruction(INSTR.add_addsub_imm(1, 0, 0, src.reg, dst.reg));
+}
+
+private code* parseLoadStore(int size, int opc)(const(char)* name)
+{
+    AArch64Operand rt, mem;
+    if (!parseRegister(rt))
+        return null;
+
+    static if (size >= 0 && opc >= 0)
     {
-        error(asmstate.loc, "comma expected after destination register");
-        return null;
-    }
-    asmNextToken();
-
-    if (!parseRegister(src, true))
-        return null;
-
-    if (!validateRegisterSizeMatch(dst, src, "mov"))
-        return null;
-
-    uint encoding;
-    if (dst.isSP || src.isSP)
-    {
-        if (!checkReg31(dst, true) || !checkReg31(src, true))
+        if (rt.is64bit != (opc == 2))
+        {
+            error(asmstate.loc, "%d-bit register expected for `%s`", rt.is64bit ? 32 : 64, name);
             return null;
-        encoding = INSTR.add_addsub_imm(1, 0, 0, src.reg, dst.reg);
+        }
     }
-    else
-        encoding = INSTR.mov_register(getSizeFlag(dst.is64bit), src.reg, dst.reg);
-    return emitInstruction(encoding);
+
+    if (!parseComma() || !parseMemoryOperand(mem, name))
+        return null;
+
+    const uint sz = size >= 0 ? size : rt.is64bit ? LSSize.DoubleWord : LSSize.Word;
+    const uint op = opc >= 0 ? opc : rt.is64bit ? 2 : 3;
+    const encoding = encodeLoadStore(sz, op, rt.reg, mem, name);
+    return encoding ? emitInstruction(encoding) : null;
 }
 
-/*******************************
- * Memory Access Instructions
- */
-
-/// LDR instruction: ldr Xt, [Xn{, #imm|Xm}] with all addressing modes
-private code* parseInstr_ldr()
+private code* parseLoadStorePair(uint L)(const(char)* name)
 {
-    asmNextToken(); // Skip 'ldr'
-
-    AArch64Operand dst, mem;
-
-    // Parse destination register
-    if (!parseRegister(dst) || !validateRegisterOperand(dst, "ldr"))
+    AArch64Operand[2] rt;
+    AArch64Operand mem;
+    if (!parseRegs(name, rt[]) || !parseComma() || !parseMemoryOperand(mem, name))
         return null;
 
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after destination register");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse memory operand
-    if (!parseMemoryOperand(mem) || !validateMemoryOperand(mem, "ldr"))
-        return null;
-
-    // Encode using helper function
-    uint encoding = encodeLoadStore(getLSSize(dst.is64bit), 1, dst.reg, mem, "ldr");
-    if (encoding == 0)
-        return null;
-
-    return emitInstruction(encoding);
-}
-
-/// STR instruction: str Xt, [Xn{, #imm|Xm}] with all addressing modes
-private code* parseInstr_str()
-{
-    asmNextToken(); // Skip 'str'
-
-    AArch64Operand src, mem;
-
-    // Parse source register
-    if (!parseRegister(src) || !validateRegisterOperand(src, "str"))
-        return null;
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after source register");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse memory operand
-    if (!parseMemoryOperand(mem) || !validateMemoryOperand(mem, "str"))
-        return null;
-
-    // Encode using helper function
-    uint encoding = encodeLoadStore(getLSSize(src.is64bit), 0, src.reg, mem, "str");
-    if (encoding == 0)
-        return null;
-
-    return emitInstruction(encoding);
-}
-
-/// Helper template for load/store pair instructions
-private code* parseLoadStorePair(bool isLoad)(const(char)* instrName)
-{
-    asmNextToken();
-
-    AArch64Operand rt1, rt2, mem;
-
-    // Parse first register
-    if (!parseRegister(rt1) || !validateRegisterOperand(rt1, instrName))
-        return null;
-
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after first register");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse second register
-    if (!parseRegister(rt2) || !validateRegisterOperand(rt2, instrName))
-        return null;
-
-    // Both registers must be same size
-    if (!validateRegisterSizeMatch(rt1, rt2, instrName))
-        return null;
-
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after second register");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse memory operand
-    if (!parseMemoryOperand(mem) || !validateMemoryOperand(mem, instrName))
-        return null;
-
-    // Load/store pair doesn't support register offset
     if (mem.hasIndex)
     {
-        error(asmstate.loc, "register offset not supported for `%s`", instrName);
+        error(asmstate.loc, "register offset not supported for `%s`", name);
         return null;
     }
 
-    uint opc = rt1.is64bit ? LSPairOpc.DoubleWord : LSPairOpc.Word;
-    uint L = isLoad ? 1 : 0;
-    const uint scale = rt1.is64bit ? 3 : 2;
+    const uint scale = rt[0].is64bit ? 3 : 2;
     const long scaled = mem.offset >> scale;
     if ((scaled << scale) != mem.offset || scaled < -64 || scaled > 63)
     {
         error(asmstate.loc, "offset %lld for `%s` must be a multiple of %d in range %d..%d",
-            mem.offset, instrName, 1 << scale, -64 << scale, 63 << scale);
+            mem.offset, name, 1 << scale, -64 << scale, 63 << scale);
         return null;
     }
-    uint imm7 = cast(uint)scaled & 0x7F;
-    uint encoding;
 
-    if (mem.addressingMode == AddressingMode.PostIndexed)
-        encoding = INSTR.ldstpair_post(opc, 0, L, imm7, rt2.reg, mem.baseReg, rt1.reg);
-    else if (mem.addressingMode == AddressingMode.PreIndexed)
-        encoding = INSTR.ldstpair_pre(opc, 0, L, imm7, rt2.reg, mem.baseReg, rt1.reg);
-    else
-        encoding = INSTR.ldstpair_off(opc, 0, L, imm7, rt2.reg, mem.baseReg, rt1.reg);
-
-    return emitInstruction(encoding);
-}
-
-/// LDP instruction: ldp Xt1, Xt2, [Xn{, #imm}] (load pair)
-private code* parseInstr_ldp()
-{
-    return parseLoadStorePair!true("ldp");
-}
-
-/// STP instruction: stp Xt1, Xt2, [Xn{, #imm}] (store pair)
-private code* parseInstr_stp()
-{
-    return parseLoadStorePair!false("stp");
-}
-
-/// Helper template for byte/halfword load/store instructions
-private code* parseByteHalfwordLoadStore(LSSize size, bool isLoad)(const(char)* instrName)
-{
-    asmNextToken();
-
-    AArch64Operand rt, mem;
-
-    // Parse register (must be W register)
-    if (!parseRegister(rt) || !validateRegisterOperand(rt, instrName))
-        return null;
-
-    if (rt.is64bit)
+    const uint opc = rt[0].is64bit ? LSPairOpc.DoubleWord : LSPairOpc.Word;
+    const uint imm7 = cast(uint)scaled & 0x7F;
+    final switch (mem.addressingMode)
     {
-        error(asmstate.loc, "32-bit register expected for `%s` (use W register)", instrName);
-        return null;
+        case AddressingMode.PostIndexed:
+            return emitInstruction(INSTR.ldstpair_post(opc, 0, L, imm7, rt[1].reg, mem.baseReg, rt[0].reg));
+        case AddressingMode.PreIndexed:
+            return emitInstruction(INSTR.ldstpair_pre(opc, 0, L, imm7, rt[1].reg, mem.baseReg, rt[0].reg));
+        case AddressingMode.Offset:
+            return emitInstruction(INSTR.ldstpair_off(opc, 0, L, imm7, rt[1].reg, mem.baseReg, rt[0].reg));
     }
-
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after %s register", isLoad ? "destination".ptr : "source".ptr);
-        return null;
-    }
-    asmNextToken();
-
-    // Parse memory operand
-    if (!parseMemoryOperand(mem) || !validateMemoryOperand(mem, instrName))
-        return null;
-
-    uint encoding = encodeLoadStore(size, isLoad ? 1 : 0, rt.reg, mem, instrName);
-    if (encoding == 0)
-        return null;
-
-    return emitInstruction(encoding);
 }
 
-/// LDRB instruction: ldrb Wt, [Xn{, #imm|Xm}] (load byte)
-private code* parseInstr_ldrb()
-{
-    return parseByteHalfwordLoadStore!(LSSize.Byte, true)("ldrb");
-}
-
-/// STRB instruction: strb Wt, [Xn{, #imm|Xm}] (store byte)
-private code* parseInstr_strb()
-{
-    return parseByteHalfwordLoadStore!(LSSize.Byte, false)("strb");
-}
-
-/// LDRH instruction: ldrh Wt, [Xn{, #imm|Xm}] (load halfword)
-private code* parseInstr_ldrh()
-{
-    return parseByteHalfwordLoadStore!(LSSize.HalfWord, true)("ldrh");
-}
-
-/// STRH instruction: strh Wt, [Xn{, #imm|Xm}] (store halfword)
-private code* parseInstr_strh()
-{
-    return parseByteHalfwordLoadStore!(LSSize.HalfWord, false)("strh");
-}
-
-/// Helper template for signed byte/halfword load instructions
-private code* parseSignedLoad(LSSize size)(const(char)* instrName)
-{
-    asmNextToken();
-
-    AArch64Operand dst, mem;
-
-    // Parse destination register (can be W or X)
-    if (!parseRegister(dst) || !validateRegisterOperand(dst, instrName))
-        return null;
-
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after destination register");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse memory operand
-    if (!parseMemoryOperand(mem) || !validateMemoryOperand(mem, instrName))
-        return null;
-
-    uint encoding = encodeLoadStore(size, dst.is64bit ? 2 : 3, dst.reg, mem, instrName);
-    if (encoding == 0)
-        return null;
-
-    return emitInstruction(encoding);
-}
-
-/// LDRSB instruction: ldrsb Xt, [Xn{, #imm|Xm}] (load signed byte)
-private code* parseInstr_ldrsb()
-{
-    return parseSignedLoad!(LSSize.Byte)("ldrsb");
-}
-
-/// LDRSH instruction: ldrsh Xt, [Xn{, #imm|Xm}] (load signed halfword)
-private code* parseInstr_ldrsh()
-{
-    return parseSignedLoad!(LSSize.HalfWord)("ldrsh");
-}
-
-/// LDRSW instruction: ldrsw Xt, [Xn{, #imm}] (load signed word)
-private code* parseInstr_ldrsw()
-{
-    asmNextToken(); // Skip 'ldrsw'
-
-    AArch64Operand dst, mem;
-
-    // Parse destination register (must be X register)
-    if (!parseRegister(dst) || !validate64BitRegister(dst, "ldrsw"))
-        return null;
-
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after destination register");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse memory operand
-    if (!parseMemoryOperand(mem) || !validateMemoryOperand(mem, "ldrsw"))
-        return null;
-
-    uint encoding = encodeLoadStore(LSSize.Word, 2, dst.reg, mem, "ldrsw");
-    if (encoding == 0)
-        return null;
-
-    return emitInstruction(encoding);
-}
-
-/*******************************
- * Arithmetic Instructions
- */
-
-/**
- * Helper function for ADD/ADDS/SUB/SUBS style instructions
- * Params:
- *   instrName = instruction name for error messages
- *   op = 0 for ADD, 1 for SUB
- *   S = 0 for non-flag-setting, 1 for flag-setting
- * Returns: encoded instruction or null on error
- */
-private code* parseArithmeticAddSub(const(char)* instrName, uint op, uint S)
+private code* parseAddSub(uint op, uint S, bool cmp = false)(const(char)* name)
 {
     AArch64Operand dst, src1, src2;
-
-    if (!parseRegister(dst, true))
-        return null;
-
-    if (tokValue() != TOK.comma)
+    static if (cmp)
     {
-        error(asmstate.loc, "comma expected after destination register");
-        return null;
+        if (!parseRegister(src1, true) || !parseComma())
+            return null;
+        dst.reg = Reg.ZR;
+        dst.is64bit = src1.is64bit;
     }
-    asmNextToken();
-
-    if (!parseRegister(src1, true))
-        return null;
-
-    if (!validateRegisterSizeMatch(dst, src1, instrName))
-        return null;
-
-    if (tokValue() != TOK.comma)
+    else
     {
-        error(asmstate.loc, "comma expected after first source register");
-        return null;
+        if (!parseRegister(dst, true) || !parseComma() || !parseRegister(src1, true) ||
+            !validateRegisterSizeMatch(dst, src1, name) || !parseComma())
+            return null;
     }
-    asmNextToken();
 
-    uint sf = dst.is64bit ? 1 : 0;
-    uint encoding;
-
+    const sf = dst.is64bit;
     if (tokValue() == TOK.pound)
     {
-        if (!parseImmediate(src2))
+        uint imm12;
+        if (!parseImmRange(imm12, 4095, name) || !checkReg31(dst, S == 0) || !checkReg31(src1, true))
             return null;
+        return emitInstruction(INSTR.addsub_imm(sf, op, S, 0, imm12, src1.reg, dst.reg));
+    }
 
-        if (!validateImmediateRange(src2.imm, 0, 4095, instrName))
+    if (!parseRegister(src2) || !validateRegisterSizeMatch(dst, src2, name))
+        return null;
+
+    if (dst.isSP || src1.isSP)
+    {
+        uint imm3;
+        if (!checkReg31(dst, S == 0) || !checkReg31(src1, true) || !parseOptionalExtendShift(name, imm3))
             return null;
-
-        if (!checkReg31(dst, S == 0) || !checkReg31(src1, true))
-            return null;
-
-        encoding = INSTR.addsub_imm(sf, op, S, 0, cast(uint)src2.imm, src1.reg, dst.reg);
-    }
-    else
-    {
-        if (!parseRegister(src2))
-            return null;
-
-        if (!validateRegisterSizeMatch(dst, src2, instrName))
-            return null;
-
-        if (dst.isSP || src1.isSP)
-        {
-            uint imm3;
-            if (!checkReg31(dst, S == 0) || !checkReg31(src1, true) ||
-                !parseOptionalExtendShift(instrName, imm3))
-                return null;
-            encoding = INSTR.addsub_ext(sf, op, S, 0, src2.reg, ExtendOp.LSL, imm3, src1.reg, dst.reg);
-        }
-        else
-        {
-            uint shift, imm6;
-            if (!parseOptionalShift(instrName, dst.is64bit, false, shift, imm6))
-                return null;
-
-            encoding = INSTR.addsub_shift(sf, op, S, shift, src2.reg, imm6, src1.reg, dst.reg);
-        }
+        return emitInstruction(INSTR.addsub_ext(sf, op, S, 0, src2.reg, ExtendOp.LSL, imm3, src1.reg, dst.reg));
     }
 
-    return emitInstruction(encoding);
-}
-
-/**
- * Helper function for ADC/ADCS/SBC/SBCS style instructions
- * Params:
- *   instrName = instruction name for error messages
- *   op = 0 for ADC, 1 for SBC
- *   S = 0 for non-flag-setting, 1 for flag-setting
- * Returns: encoded instruction or null on error
- */
-private code* parseArithmeticCarry(const(char)* instrName, uint op, uint S)
-{
-    AArch64Operand dst, src1, src2;
-
-    // Parse destination register
-    if (!parseRegister(dst))
-        return null;
-
-    if (dst.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as destination for `%s`", instrName);
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after destination register");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse first source register
-    if (!parseRegister(src1))
-        return null;
-
-    if (src1.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as first source for `%s`", instrName);
-        return null;
-    }
-
-    // Validate size match
-    if (dst.is64bit != src1.is64bit)
-    {
-        error(asmstate.loc, "register size mismatch in `%s` instruction", instrName);
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after first source register");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse second source register
-    if (!parseRegister(src2))
-        return null;
-
-    if (src2.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as second source for `%s`", instrName);
-        return null;
-    }
-
-    // Validate size match
-    if (dst.is64bit != src2.is64bit)
-    {
-        error(asmstate.loc, "register size mismatch in `%s` instruction", instrName);
-        return null;
-    }
-
-    uint sf = dst.is64bit ? 1 : 0;
-    uint encoding = (op == 0) ?
-        (S == 0 ? INSTR.adc(sf, src2.reg, src1.reg, dst.reg) : INSTR.adcs(sf, src2.reg, src1.reg, dst.reg)) :
-        (S == 0 ? INSTR.sbc(sf, src2.reg, src1.reg, dst.reg) : INSTR.sbcs(sf, src2.reg, src1.reg, dst.reg));
-
-    return emitInstruction(encoding);
-}
-
-/// ADD instruction: add Xd, Xn, #imm|Xm
-private code* parseInstr_add()
-{
-    asmNextToken(); // Skip 'add'
-    return parseArithmeticAddSub("add", 0, 0); // op=0 (ADD), S=0 (no flags)
-}
-
-/// ADDS instruction: adds Xd, Xn, #imm|Xm (add and set flags)
-private code* parseInstr_adds()
-{
-    asmNextToken(); // Skip 'adds'
-    return parseArithmeticAddSub("adds", 0, 1); // op=0 (ADD), S=1 (set flags)
-}
-
-/// SUB instruction: sub Xd, Xn, #imm|Xm
-private code* parseInstr_sub()
-{
-    asmNextToken(); // Skip 'sub'
-    return parseArithmeticAddSub("sub", 1, 0); // op=1 (SUB), S=0 (no flags)
-}
-
-/// SUBS instruction: subs Xd, Xn, #imm|Xm (subtract and set flags)
-private code* parseInstr_subs()
-{
-    asmNextToken(); // Skip 'subs'
-    return parseArithmeticAddSub("subs", 1, 1); // op=1 (SUB), S=1 (set flags)
-}
-
-/*******************************
- * Multiply Instructions
- */
-
-/// MUL instruction: mul Xd, Xn, Xm (multiply, encoded as MADD with Ra=XZR)
-private code* parseInstr_mul()
-{
-    asmNextToken(); // Skip 'mul'
-
-    AArch64Operand dst, src1, src2;
-
-    // Parse destination register
-    if (!parseRegister(dst))
-        return null;
-
-    if (dst.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as destination for `mul`");
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after destination register");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse first source register
-    if (!parseRegister(src1))
-        return null;
-
-    if (src1.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as first source for `mul`");
-        return null;
-    }
-
-    // Validate size match
-    if (dst.is64bit != src1.is64bit)
-    {
-        error(asmstate.loc, "register size mismatch in `mul` instruction");
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after first source register");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse second source register
-    if (!parseRegister(src2))
-        return null;
-
-    if (src2.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as second source for `mul`");
-        return null;
-    }
-
-    // Validate size match
-    if (dst.is64bit != src2.is64bit)
-    {
-        error(asmstate.loc, "register size mismatch in `mul` instruction");
-        return null;
-    }
-
-    // MUL is encoded as MADD with Ra=XZR (register 31)
-    uint sf = dst.is64bit ? 1 : 0;
-    uint encoding = INSTR.madd(sf, src2.reg, 31, src1.reg, dst.reg);
-
-    return emitInstruction(encoding);
-}
-
-/// MADD instruction: madd Xd, Xn, Xm, Xa (Xd = Xa + Xn * Xm)
-private code* parseInstr_madd()
-{
-    asmNextToken(); // Skip 'madd'
-
-    AArch64Operand dst, src1, src2, src3;
-
-    // Parse destination register
-    if (!parseRegister(dst))
-        return null;
-
-    if (dst.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as destination for `madd`");
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after destination register");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse first source register (Xn)
-    if (!parseRegister(src1))
-        return null;
-
-    if (src1.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as first source for `madd`");
-        return null;
-    }
-
-    // Validate size match
-    if (dst.is64bit != src1.is64bit)
-    {
-        error(asmstate.loc, "register size mismatch in `madd` instruction");
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after first source register");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse second source register (Xm)
-    if (!parseRegister(src2))
-        return null;
-
-    if (src2.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as second source for `madd`");
-        return null;
-    }
-
-    // Validate size match
-    if (dst.is64bit != src2.is64bit)
-    {
-        error(asmstate.loc, "register size mismatch in `madd` instruction");
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after second source register");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse third source register (Xa - addend)
-    if (!parseRegister(src3))
-        return null;
-
-    if (src3.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as third source for `madd`");
-        return null;
-    }
-
-    // Validate size match
-    if (dst.is64bit != src3.is64bit)
-    {
-        error(asmstate.loc, "register size mismatch in `madd` instruction");
-        return null;
-    }
-
-    // MADD: Xd = Xa + Xn * Xm
-    // Encoding: madd(sf, Rm, Ra, Rn, Rd)
-    uint sf = dst.is64bit ? 1 : 0;
-    uint encoding = INSTR.madd(sf, src2.reg, src3.reg, src1.reg, dst.reg);
-
-    return emitInstruction(encoding);
-}
-
-/// MSUB instruction: msub Xd, Xn, Xm, Xa (Xd = Xa - Xn * Xm)
-private code* parseInstr_msub()
-{
-    asmNextToken(); // Skip 'msub'
-
-    AArch64Operand dst, src1, src2, src3;
-
-    // Parse destination register
-    if (!parseRegister(dst))
-        return null;
-
-    if (dst.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as destination for `msub`");
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after destination register");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse first source register (Xn)
-    if (!parseRegister(src1))
-        return null;
-
-    if (src1.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as first source for `msub`");
-        return null;
-    }
-
-    // Validate size match
-    if (dst.is64bit != src1.is64bit)
-    {
-        error(asmstate.loc, "register size mismatch in `msub` instruction");
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after first source register");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse second source register (Xm)
-    if (!parseRegister(src2))
-        return null;
-
-    if (src2.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as second source for `msub`");
-        return null;
-    }
-
-    // Validate size match
-    if (dst.is64bit != src2.is64bit)
-    {
-        error(asmstate.loc, "register size mismatch in `msub` instruction");
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after second source register");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse third source register (Xa - minuend)
-    if (!parseRegister(src3))
-        return null;
-
-    if (src3.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as third source for `msub`");
-        return null;
-    }
-
-    // Validate size match
-    if (dst.is64bit != src3.is64bit)
-    {
-        error(asmstate.loc, "register size mismatch in `msub` instruction");
-        return null;
-    }
-
-    // MSUB: Xd = Xa - Xn * Xm
-    // Encoding: msub(sf, Rm, Ra, Rn, Rd)
-    uint sf = dst.is64bit ? 1 : 0;
-    uint encoding = INSTR.msub(sf, src2.reg, src3.reg, src1.reg, dst.reg);
-
-    return emitInstruction(encoding);
-}
-
-/// SDIV instruction: sdiv Xd, Xn, Xm (Xd = Xn / Xm, signed)
-private code* parseInstr_sdiv()
-{
-    asmNextToken(); // Skip 'sdiv'
-
-    AArch64Operand dst, src1, src2;
-
-    // Parse destination register
-    if (!parseRegister(dst))
-        return null;
-
-    if (dst.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as destination for `sdiv`");
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after destination register");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse first source register (dividend)
-    if (!parseRegister(src1))
-        return null;
-
-    if (src1.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as first source for `sdiv`");
-        return null;
-    }
-
-    // Validate size match
-    if (dst.is64bit != src1.is64bit)
-    {
-        error(asmstate.loc, "register size mismatch in `sdiv` instruction");
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after first source register");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse second source register (divisor)
-    if (!parseRegister(src2))
-        return null;
-
-    if (src2.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as second source for `sdiv`");
-        return null;
-    }
-
-    // Validate size match
-    if (dst.is64bit != src2.is64bit)
-    {
-        error(asmstate.loc, "register size mismatch in `sdiv` instruction");
-        return null;
-    }
-
-    // SDIV: Xd = Xn / Xm (signed)
-    // Encoding: sdiv_udiv(sf, uns, Rm, Rn, Rd)
-    uint sf = dst.is64bit ? 1 : 0;
-    uint encoding = INSTR.sdiv_udiv(sf, false, src2.reg, src1.reg, dst.reg);
-
-    return emitInstruction(encoding);
-}
-
-/// UDIV instruction: udiv Xd, Xn, Xm (Xd = Xn / Xm, unsigned)
-private code* parseInstr_udiv()
-{
-    asmNextToken(); // Skip 'udiv'
-
-    AArch64Operand dst, src1, src2;
-
-    // Parse destination register
-    if (!parseRegister(dst))
-        return null;
-
-    if (dst.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as destination for `udiv`");
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after destination register");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse first source register (dividend)
-    if (!parseRegister(src1))
-        return null;
-
-    if (src1.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as first source for `udiv`");
-        return null;
-    }
-
-    // Validate size match
-    if (dst.is64bit != src1.is64bit)
-    {
-        error(asmstate.loc, "register size mismatch in `udiv` instruction");
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after first source register");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse second source register (divisor)
-    if (!parseRegister(src2))
-        return null;
-
-    if (src2.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as second source for `udiv`");
-        return null;
-    }
-
-    // Validate size match
-    if (dst.is64bit != src2.is64bit)
-    {
-        error(asmstate.loc, "register size mismatch in `udiv` instruction");
-        return null;
-    }
-
-    // UDIV: Xd = Xn / Xm (unsigned)
-    // Encoding: sdiv_udiv(sf, uns, Rm, Rn, Rd)
-    uint sf = dst.is64bit ? 1 : 0;
-    uint encoding = INSTR.sdiv_udiv(sf, true, src2.reg, src1.reg, dst.reg);
-
-    return emitInstruction(encoding);
-}
-
-/// NEG instruction: neg Xd, Xm[, shift #amount] (Xd = 0 - Xm)
-private code* parseInstr_neg()
-{
-    asmNextToken(); // Skip 'neg'
-
-    AArch64Operand dst, src;
-
-    // Parse destination register
-    if (!parseRegister(dst))
-        return null;
-
-    if (dst.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as destination for `neg`");
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after destination register");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse source register
-    if (!parseRegister(src))
-        return null;
-
-    if (src.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as source for `neg`");
-        return null;
-    }
-
-    // Validate size match
-    if (dst.is64bit != src.is64bit)
-    {
-        error(asmstate.loc, "register size mismatch in `neg` instruction");
-        return null;
-    }
-
-    // Parse optional shift
     uint shift, imm6;
-    if (!parseOptionalShift("neg", dst.is64bit, false, shift, imm6))
+    if (!parseOptionalShift(name, sf, false, shift, imm6))
         return null;
-
-    // NEG: Xd = 0 - Xm (with optional shift)
-    // Encoding: neg_sub_addsub_shift(sf, S, shift, Rm, imm6, Rd)
-    // S=0 for NEG (don't set flags), S=1 for NEGS (set flags)
-    uint sf = dst.is64bit ? 1 : 0;
-    uint encoding = INSTR.neg_sub_addsub_shift(sf, 0, shift, src.reg, imm6, dst.reg);
-
-    return emitInstruction(encoding);
+    return emitInstruction(INSTR.addsub_shift(sf, op, S, shift, src2.reg, imm6, src1.reg, dst.reg));
 }
 
-/// NEGS instruction: negs Xd, Xm (negate and set flags)
-private code* parseInstr_negs()
+private code* parseNeg(uint S)(const(char)* name)
 {
-    asmNextToken(); // Skip 'negs'
-
-    AArch64Operand dst, src;
-
-    // Parse destination register
-    if (!parseRegister(dst))
-        return null;
-
-    if (dst.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as destination for `negs`");
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after destination register");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse source register
-    if (!parseRegister(src))
-        return null;
-
-    if (src.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as source for `negs`");
-        return null;
-    }
-
-    // Validate size match
-    if (dst.is64bit != src.is64bit)
-    {
-        error(asmstate.loc, "register size mismatch in `negs` instruction");
-        return null;
-    }
-
-    // Parse optional shift
+    AArch64Operand[2] r;
     uint shift, imm6;
-    if (!parseOptionalShift("negs", dst.is64bit, false, shift, imm6))
+    if (!parseRegs(name, r[]) || !parseOptionalShift(name, r[0].is64bit, false, shift, imm6))
         return null;
-
-    // NEGS: Xd = 0 - Xm (with optional shift), set flags
-    // Encoding: neg_sub_addsub_shift(sf, S, shift, Rm, imm6, Rd)
-    // S=1 for NEGS (set flags)
-    uint sf = dst.is64bit ? 1 : 0;
-    uint encoding = INSTR.neg_sub_addsub_shift(sf, 1, shift, src.reg, imm6, dst.reg);
-
-    return emitInstruction(encoding);
+    return emitInstruction(INSTR.neg_sub_addsub_shift(r[0].is64bit, S, shift, r[1].reg, imm6, r[0].reg));
 }
 
-/// ADC instruction: adc Xd, Xn, Xm (add with carry)
-private code* parseInstr_adc()
+private code* parseLogical(uint opc, uint N, size_t zr = size_t.max)(const(char)* name)
 {
-    asmNextToken(); // Skip 'adc'
-    return parseArithmeticCarry("adc", 0, 0); // op=0 (ADC), S=0 (no flags)
-}
-
-/// SBC instruction: sbc Xd, Xn, Xm (subtract with carry)
-private code* parseInstr_sbc()
-{
-    asmNextToken(); // Skip 'sbc'
-    return parseArithmeticCarry("sbc", 1, 0); // op=1 (SBC), S=0 (no flags)
-}
-
-/// ADCS instruction: adcs Xd, Xn, Xm (add with carry and set flags)
-private code* parseInstr_adcs()
-{
-    asmNextToken(); // Skip 'adcs'
-    return parseArithmeticCarry("adcs", 0, 1); // op=0 (ADC), S=1 (set flags)
-}
-
-/// SBCS instruction: sbcs Xd, Xn, Xm (subtract with carry and set flags)
-private code* parseInstr_sbcs()
-{
-    asmNextToken(); // Skip 'sbcs'
-    return parseArithmeticCarry("sbcs", 1, 1); // op=1 (SBC), S=1 (set flags)
-}
-
-/*******************************
- * Logical Instructions
- */
-
-/// AND instruction: and Xd, Xn, Xm (bitwise and)
-private code* parseInstr_and()
-{
-    asmNextToken(); // Skip 'and'
-
-    AArch64Operand dst, src1, src2;
-
-    // Parse destination register
-    if (!parseRegister(dst))
-        return null;
-
-    if (dst.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as destination for `and`");
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after destination register");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse first source register
-    if (!parseRegister(src1))
-        return null;
-
-    if (src1.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as first source for `and`");
-        return null;
-    }
-
-    // Validate size match
-    if (dst.is64bit != src1.is64bit)
-    {
-        error(asmstate.loc, "register size mismatch in `and` instruction");
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after first source register");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse second source register
-    if (!parseRegister(src2))
-        return null;
-
-    if (src2.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as second source for `and`");
-        return null;
-    }
-
-    // Validate size match
-    if (dst.is64bit != src2.is64bit)
-    {
-        error(asmstate.loc, "register size mismatch in `and` instruction");
-        return null;
-    }
-
-    // AND: log_shift(sf, opc=0, shift=0, N=0, Rm, imm6=0, Rn, Rd)
-    uint sf = dst.is64bit ? 1 : 0;
-    uint encoding = INSTR.log_shift(sf, 0, 0, 0, src2.reg, 0, src1.reg, dst.reg);
-
-    return emitInstruction(encoding);
-}
-
-/// ORR instruction: orr Xd, Xn, Xm (bitwise or)
-private code* parseInstr_orr()
-{
-    asmNextToken(); // Skip 'orr'
-
-    AArch64Operand dst, src1, src2;
-
-    // Parse destination register
-    if (!parseRegister(dst))
-        return null;
-
-    if (dst.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as destination for `orr`");
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after destination register");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse first source register
-    if (!parseRegister(src1))
-        return null;
-
-    if (src1.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as first source for `orr`");
-        return null;
-    }
-
-    // Validate size match
-    if (dst.is64bit != src1.is64bit)
-    {
-        error(asmstate.loc, "register size mismatch in `orr` instruction");
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after first source register");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse second source register
-    if (!parseRegister(src2))
-        return null;
-
-    if (src2.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as second source for `orr`");
-        return null;
-    }
-
-    // Validate size match
-    if (dst.is64bit != src2.is64bit)
-    {
-        error(asmstate.loc, "register size mismatch in `orr` instruction");
-        return null;
-    }
-
-    // ORR: log_shift(sf, opc=1, shift=0, N=0, Rm, imm6=0, Rn, Rd)
-    uint sf = dst.is64bit ? 1 : 0;
-    uint encoding = INSTR.log_shift(sf, 1, 0, 0, src2.reg, 0, src1.reg, dst.reg);
-
-    return emitInstruction(encoding);
-}
-
-/// EOR instruction: eor Xd, Xn, Xm (bitwise exclusive or)
-private code* parseInstr_eor()
-{
-    asmNextToken(); // Skip 'eor'
-
-    AArch64Operand dst, src1, src2;
-
-    // Parse destination register
-    if (!parseRegister(dst))
-        return null;
-
-    if (dst.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as destination for `eor`");
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after destination register");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse first source register
-    if (!parseRegister(src1))
-        return null;
-
-    if (src1.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as first source for `eor`");
-        return null;
-    }
-
-    // Validate size match
-    if (dst.is64bit != src1.is64bit)
-    {
-        error(asmstate.loc, "register size mismatch in `eor` instruction");
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after first source register");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse second source register
-    if (!parseRegister(src2))
-        return null;
-
-    if (src2.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as second source for `eor`");
-        return null;
-    }
-
-    // Validate size match
-    if (dst.is64bit != src2.is64bit)
-    {
-        error(asmstate.loc, "register size mismatch in `eor` instruction");
-        return null;
-    }
-
-    // EOR: log_shift(sf, opc=2, shift=0, N=0, Rm, imm6=0, Rn, Rd)
-    uint sf = dst.is64bit ? 1 : 0;
-    uint encoding = INSTR.log_shift(sf, 2, 0, 0, src2.reg, 0, src1.reg, dst.reg);
-
-    return emitInstruction(encoding);
-}
-
-/// MVN instruction: mvn Xd, Xm (bitwise NOT, encoded as ORN with Rn=XZR)
-private code* parseInstr_mvn()
-{
-    asmNextToken(); // Skip 'mvn'
-
-    AArch64Operand dst, src;
-
-    // Parse destination register
-    if (!parseRegister(dst))
-        return null;
-
-    if (dst.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as destination for `mvn`");
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after destination register");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse source register
-    if (!parseRegister(src))
-        return null;
-
-    if (src.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as source for `mvn`");
-        return null;
-    }
-
-    // Validate size match
-    if (dst.is64bit != src.is64bit)
-    {
-        error(asmstate.loc, "register size mismatch in `mvn` instruction");
-        return null;
-    }
-
-    // MVN is encoded as ORN (ORR-NOT) with Rn=XZR (register 31)
-    // log_shift(sf, opc=1 (ORR), shift=0, N=1 (NOT), Rm, imm6=0, Rn=31, Rd)
-    uint sf = dst.is64bit ? 1 : 0;
-    uint encoding = INSTR.log_shift(sf, 1, 0, 1, src.reg, 0, 31, dst.reg);
-
-    return emitInstruction(encoding);
-}
-
-/// BIC instruction: bic Xd, Xn, Xm[, shift #amount] (bit clear: Xd = Xn & ~Xm)
-private code* parseInstr_bic()
-{
-    asmNextToken(); // Skip 'bic'
-
-    AArch64Operand dst, src1, src2;
-
-    // Parse destination register
-    if (!parseRegister(dst))
-        return null;
-
-    if (dst.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as destination for `bic`");
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after destination register");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse first source register
-    if (!parseRegister(src1))
-        return null;
-
-    if (src1.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as first source for `bic`");
-        return null;
-    }
-
-    // Validate size match
-    if (dst.is64bit != src1.is64bit)
-    {
-        error(asmstate.loc, "register size mismatch in `bic` instruction");
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after first source register");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse second source register
-    if (!parseRegister(src2))
-        return null;
-
-    if (src2.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as second source for `bic`");
-        return null;
-    }
-
-    // Validate size match
-    if (dst.is64bit != src2.is64bit)
-    {
-        error(asmstate.loc, "register size mismatch in `bic` instruction");
-        return null;
-    }
-
-    // Parse optional shift
+    AArch64Operand[3] r;
     uint shift, imm6;
-    if (!parseOptionalShift("bic", dst.is64bit, true, shift, imm6))
+    if (!parseRegs(name, r[], zr) || !parseOptionalShift(name, r[0].is64bit, true, shift, imm6))
         return null;
-
-    // BIC: Xd = Xn & ~Xm (with optional shift on Xm)
-    // Encoding: log_shift(sf, opc=0 (AND), shift, N=1 (NOT), Rm, imm6, Rn, Rd)
-    uint sf = dst.is64bit ? 1 : 0;
-    uint encoding = INSTR.log_shift(sf, 0, shift, 1, src2.reg, imm6, src1.reg, dst.reg);
-
-    return emitInstruction(encoding);
+    return emitInstruction(INSTR.log_shift(r[0].is64bit, opc, shift, N, r[2].reg, imm6, r[1].reg, r[0].reg));
 }
 
-/// TST instruction: tst Xn, Xm[, shift #amount] (test bits: flags = Xn & Xm)
-private code* parseInstr_tst()
+private code* parseReg3(alias encode)(const(char)* name)
 {
-    asmNextToken(); // Skip 'tst'
-
-    AArch64Operand src1, src2;
-
-    // Parse first source register
-    if (!parseRegister(src1))
+    AArch64Operand[3] r;
+    if (!parseRegs(name, r[]))
         return null;
-
-    if (src1.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as first source for `tst`");
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after first source register");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse second source register
-    if (!parseRegister(src2))
-        return null;
-
-    if (src2.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as second source for `tst`");
-        return null;
-    }
-
-    // Validate size match
-    if (src1.is64bit != src2.is64bit)
-    {
-        error(asmstate.loc, "register size mismatch in `tst` instruction");
-        return null;
-    }
-
-    // Parse optional shift
-    uint shift, imm6;
-    if (!parseOptionalShift("tst", src1.is64bit, true, shift, imm6))
-        return null;
-
-    // TST: Flags = Xn & Xm (with optional shift on Xm)
-    // Encoding: log_shift(sf, opc=3 (ANDS), shift, N=0, Rm, imm6, Rn, Rd=31 (XZR))
-    // Rd is XZR because TST only sets flags, doesn't write result
-    uint sf = src1.is64bit ? 1 : 0;
-    uint encoding = INSTR.log_shift(sf, 3, shift, 0, src2.reg, imm6, src1.reg, 31);
-
-    return emitInstruction(encoding);
+    return emitInstruction(encode(r[0].is64bit, r[2].reg, r[1].reg, r[0].reg));
 }
 
-/*******************************
- * Compare Instructions
- */
-
-/// CMP instruction: cmp Xn, #imm or cmp Xn, Xm (compare)
-private code* parseInstr_cmp()
+private code* parseMulAdd(alias encode, size_t zr = size_t.max)(const(char)* name)
 {
-    asmNextToken(); // Skip 'cmp'
-    return parseCompare("cmp", 1);
+    AArch64Operand[4] r;
+    if (!parseRegs(name, r[], zr))
+        return null;
+    return emitInstruction(encode(r[0].is64bit, r[2].reg, r[3].reg, r[1].reg, r[0].reg));
 }
 
-/// CMN instruction: cmn Xn, #imm|Xm (compare negative - adds and sets flags, discards result)
-private code* parseInstr_cmn()
+private code* parseShift(alias encodeImm, alias encodeReg)(const(char)* name)
 {
-    asmNextToken(); // Skip 'cmn'
-    return parseCompare("cmn", 0);
-}
-
-private code* parseCompare(const(char)* instrName, uint op)
-{
-    AArch64Operand src1, src2;
-
-    if (!parseRegister(src1, true))
+    AArch64Operand[2] r;
+    if (!parseRegs(name, r[]) || !parseComma())
         return null;
 
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after first operand");
-        return null;
-    }
-    asmNextToken();
-
-    uint sf = src1.is64bit ? 1 : 0;
-    uint encoding;
-
+    const sf = r[0].is64bit;
     if (tokValue() == TOK.pound)
     {
-        if (!parseImmediate(src2))
+        uint amount;
+        if (!parseImmRange(amount, sf ? 63 : 31, name))
             return null;
-
-        if (!validateImmediateRange(src2.imm, 0, 4095, instrName))
-            return null;
-
-        if (!checkReg31(src1, true))
-            return null;
-
-        encoding = INSTR.addsub_imm(sf, op, 1, 0, cast(uint)src2.imm, src1.reg, Reg.ZR);
-    }
-    else
-    {
-        if (!parseRegister(src2))
-            return null;
-
-        if (!validateRegisterSizeMatch(src1, src2, instrName))
-            return null;
-
-        if (src1.isSP)
-        {
-            uint imm3;
-            if (!parseOptionalExtendShift(instrName, imm3))
-                return null;
-            encoding = INSTR.addsub_ext(sf, op, 1, 0, src2.reg, ExtendOp.LSL, imm3, src1.reg, Reg.ZR);
-        }
-        else
-        {
-            uint shift, imm6;
-            if (!parseOptionalShift(instrName, src1.is64bit, false, shift, imm6))
-                return null;
-
-            encoding = INSTR.addsub_shift(sf, op, 1, shift, src2.reg, imm6, src1.reg, Reg.ZR);
-        }
+        return emitInstruction(encodeImm(sf, amount, r[1].reg, r[0].reg));
     }
 
-    return emitInstruction(encoding);
+    AArch64Operand rm;
+    if (!parseRegister(rm) || !validateRegisterSizeMatch(r[0], rm, name))
+        return null;
+    return emitInstruction(encodeReg(sf, rm.reg, r[1].reg, r[0].reg));
 }
 
-/*******************************
- * Shift and Bit Manipulation Instructions
- */
-
-/// LSL instruction: lsl Xd, Xn, #shift or lsl Xd, Xn, Xm
-private code* parseInstr_lsl()
+private code* parseInstr_extr(const(char)* name)
 {
-    asmNextToken(); // Skip 'lsl'
-
-    AArch64Operand dst, src, shiftOp;
-
-    // Parse destination register
-    if (!parseRegister(dst))
+    AArch64Operand[3] r;
+    uint lsb;
+    if (!parseRegs(name, r[]) || !parseComma() || !parseImmRange(lsb, r[0].is64bit ? 63 : 31, name))
         return null;
-
-    if (dst.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as destination for `lsl`");
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after destination register");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse source register
-    if (!parseRegister(src))
-        return null;
-
-    if (src.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as source for `lsl`");
-        return null;
-    }
-
-    // Validate size match
-    if (dst.is64bit != src.is64bit)
-    {
-        error(asmstate.loc, "register size mismatch in `lsl` instruction");
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after source register");
-        return null;
-    }
-    asmNextToken();
-
-    uint sf = dst.is64bit ? 1 : 0;
-    uint encoding;
-
-    // Check if third operand is immediate or register
-    if (tokValue() == TOK.pound)
-    {
-        // Immediate form: lsl Xd, Xn, #shift
-        if (!parseImmediate(shiftOp))
-            return null;
-
-        uint maxShift = dst.is64bit ? 63 : 31;
-        if (shiftOp.imm < 0 || shiftOp.imm > maxShift)
-        {
-            error(asmstate.loc, "shift amount out of range (0-%u) for `lsl`", maxShift);
-            return null;
-        }
-
-        // LSL Rd, Rn, #shift is an alias for UBFM
-        encoding = INSTR.lsl_ubfm(sf, cast(uint)shiftOp.imm, src.reg, dst.reg);
-    }
-    else
-    {
-        // Register form: lsl Xd, Xn, Xm
-        if (!parseRegister(shiftOp))
-            return null;
-
-        if (shiftOp.type != AArch64Operand.Type.Register)
-        {
-            error(asmstate.loc, "register or immediate expected as shift amount for `lsl`");
-            return null;
-        }
-
-        // Validate size match
-        if (dst.is64bit != shiftOp.is64bit)
-        {
-            error(asmstate.loc, "register size mismatch in `lsl` instruction");
-            return null;
-        }
-
-        // LSL Rd, Rn, Rm uses LSLV
-        encoding = INSTR.lslv(sf, shiftOp.reg, src.reg, dst.reg);
-    }
-
-    return emitInstruction(encoding);
+    return emitInstruction(INSTR.extr(r[0].is64bit, r[2].reg, lsb, r[1].reg, r[0].reg));
 }
 
-/// LSR instruction: lsr Xd, Xn, #shift or lsr Xd, Xn, Xm
-private code* parseInstr_lsr()
+private code* parseBitfield(alias encode)(const(char)* name)
 {
-    asmNextToken(); // Skip 'lsr'
-
-    AArch64Operand dst, src, shiftOp;
-
-    // Parse destination register
-    if (!parseRegister(dst))
+    AArch64Operand[2] r;
+    uint immr, imms;
+    if (!parseRegs(name, r[]) || !parseComma())
         return null;
-
-    if (dst.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as destination for `lsr`");
+    const max = r[0].is64bit ? 63 : 31;
+    if (!parseImmRange(immr, max, name) || !parseComma() || !parseImmRange(imms, max, name))
         return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after destination register");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse source register
-    if (!parseRegister(src))
-        return null;
-
-    if (src.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as source for `lsr`");
-        return null;
-    }
-
-    // Validate size match
-    if (dst.is64bit != src.is64bit)
-    {
-        error(asmstate.loc, "register size mismatch in `lsr` instruction");
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after source register");
-        return null;
-    }
-    asmNextToken();
-
-    uint sf = dst.is64bit ? 1 : 0;
-    uint encoding;
-
-    // Check if third operand is immediate or register
-    if (tokValue() == TOK.pound)
-    {
-        // Immediate form: lsr Xd, Xn, #shift
-        if (!parseImmediate(shiftOp))
-            return null;
-
-        uint maxShift = dst.is64bit ? 63 : 31;
-        if (shiftOp.imm < 0 || shiftOp.imm > maxShift)
-        {
-            error(asmstate.loc, "shift amount out of range (0-%u) for `lsr`", maxShift);
-            return null;
-        }
-
-        // LSR Rd, Rn, #shift is an alias for UBFM
-        encoding = INSTR.lsr_ubfm(sf, cast(uint)shiftOp.imm, src.reg, dst.reg);
-    }
-    else
-    {
-        // Register form: lsr Xd, Xn, Xm
-        if (!parseRegister(shiftOp))
-            return null;
-
-        if (shiftOp.type != AArch64Operand.Type.Register)
-        {
-            error(asmstate.loc, "register or immediate expected as shift amount for `lsr`");
-            return null;
-        }
-
-        // Validate size match
-        if (dst.is64bit != shiftOp.is64bit)
-        {
-            error(asmstate.loc, "register size mismatch in `lsr` instruction");
-            return null;
-        }
-
-        // LSR Rd, Rn, Rm uses LSRV
-        encoding = INSTR.lsrv(sf, shiftOp.reg, src.reg, dst.reg);
-    }
-
-    return emitInstruction(encoding);
+    return emitInstruction(encode(r[0].is64bit, r[0].is64bit, immr, imms, r[1].reg, r[0].reg));
 }
 
-/// ASR instruction: asr Xd, Xn, #shift or asr Xd, Xn, Xm
-private code* parseInstr_asr()
-{
-    asmNextToken(); // Skip 'asr'
-
-    AArch64Operand dst, src, shiftOp;
-
-    // Parse destination register
-    if (!parseRegister(dst))
-        return null;
-
-    if (dst.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as destination for `asr`");
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after destination register");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse source register
-    if (!parseRegister(src))
-        return null;
-
-    if (src.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as source for `asr`");
-        return null;
-    }
-
-    // Validate size match
-    if (dst.is64bit != src.is64bit)
-    {
-        error(asmstate.loc, "register size mismatch in `asr` instruction");
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after source register");
-        return null;
-    }
-    asmNextToken();
-
-    uint sf = dst.is64bit ? 1 : 0;
-    uint encoding;
-
-    // Check if third operand is immediate or register
-    if (tokValue() == TOK.pound)
-    {
-        // Immediate form: asr Xd, Xn, #shift
-        if (!parseImmediate(shiftOp))
-            return null;
-
-        uint maxShift = dst.is64bit ? 63 : 31;
-        if (shiftOp.imm < 0 || shiftOp.imm > maxShift)
-        {
-            error(asmstate.loc, "shift amount out of range (0-%u) for `asr`", maxShift);
-            return null;
-        }
-
-        // ASR Rd, Rn, #shift is an alias for SBFM
-        encoding = INSTR.asr_sbfm(sf, cast(uint)shiftOp.imm, src.reg, dst.reg);
-    }
-    else
-    {
-        // Register form: asr Xd, Xn, Xm
-        if (!parseRegister(shiftOp))
-            return null;
-
-        if (shiftOp.type != AArch64Operand.Type.Register)
-        {
-            error(asmstate.loc, "register or immediate expected as shift amount for `asr`");
-            return null;
-        }
-
-        // Validate size match
-        if (dst.is64bit != shiftOp.is64bit)
-        {
-            error(asmstate.loc, "register size mismatch in `asr` instruction");
-            return null;
-        }
-
-        // ASR Rd, Rn, Rm uses ASRV
-        encoding = INSTR.asrv(sf, shiftOp.reg, src.reg, dst.reg);
-    }
-
-    return emitInstruction(encoding);
-}
-
-/// ROR instruction: ror Xd, Xn, #shift or ror Xd, Xn, Xm
-private code* parseInstr_ror()
-{
-    asmNextToken(); // Skip 'ror'
-
-    AArch64Operand dst, src, shiftOp;
-
-    // Parse destination register
-    if (!parseRegister(dst))
-        return null;
-
-    if (dst.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as destination for `ror`");
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after destination register");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse source register
-    if (!parseRegister(src))
-        return null;
-
-    if (src.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as source for `ror`");
-        return null;
-    }
-
-    // Validate size match
-    if (dst.is64bit != src.is64bit)
-    {
-        error(asmstate.loc, "register size mismatch in `ror` instruction");
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after source register");
-        return null;
-    }
-    asmNextToken();
-
-    uint sf = dst.is64bit ? 1 : 0;
-    uint encoding;
-
-    // Check if third operand is immediate or register
-    if (tokValue() == TOK.pound)
-    {
-        // Immediate form: ror Xd, Xn, #shift
-        if (!parseImmediate(shiftOp))
-            return null;
-
-        uint maxShift = dst.is64bit ? 63 : 31;
-        if (shiftOp.imm < 0 || shiftOp.imm > maxShift)
-        {
-            error(asmstate.loc, "shift amount out of range (0-%u) for `ror`", maxShift);
-            return null;
-        }
-
-        // ROR Rd, Rn, #shift is an alias for EXTR
-        encoding = INSTR.ror_extr(sf, cast(uint)shiftOp.imm, src.reg, dst.reg);
-    }
-    else
-    {
-        // Register form: ror Xd, Xn, Xm
-        if (!parseRegister(shiftOp))
-            return null;
-
-        if (shiftOp.type != AArch64Operand.Type.Register)
-        {
-            error(asmstate.loc, "register or immediate expected as shift amount for `ror`");
-            return null;
-        }
-
-        // Validate size match
-        if (dst.is64bit != shiftOp.is64bit)
-        {
-            error(asmstate.loc, "register size mismatch in `ror` instruction");
-            return null;
-        }
-
-        // ROR Rd, Rn, Rm uses RORV
-        encoding = INSTR.rorv(sf, shiftOp.reg, src.reg, dst.reg);
-    }
-
-    return emitInstruction(encoding);
-}
-
-/// EXTR instruction: extr Xd, Xn, Xm, #lsb
-private code* parseInstr_extr()
-{
-    asmNextToken(); // Skip 'extr'
-
-    AArch64Operand dst, src1, src2, lsbOp;
-
-    // Parse destination register
-    if (!parseRegister(dst))
-        return null;
-
-    if (dst.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as destination for `extr`");
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after destination register");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse first source register
-    if (!parseRegister(src1))
-        return null;
-
-    if (src1.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as first source for `extr`");
-        return null;
-    }
-
-    // Validate size match
-    if (dst.is64bit != src1.is64bit)
-    {
-        error(asmstate.loc, "register size mismatch in `extr` instruction");
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after first source register");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse second source register
-    if (!parseRegister(src2))
-        return null;
-
-    if (src2.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as second source for `extr`");
-        return null;
-    }
-
-    // Validate size match
-    if (dst.is64bit != src2.is64bit)
-    {
-        error(asmstate.loc, "register size mismatch in `extr` instruction");
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after second source register");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse immediate LSB
-    if (tokValue() != TOK.pound)
-    {
-        error(asmstate.loc, "immediate value expected for LSB in `extr`");
-        return null;
-    }
-
-    if (!parseImmediate(lsbOp))
-        return null;
-
-    uint maxLsb = dst.is64bit ? 63 : 31;
-    if (lsbOp.imm < 0 || lsbOp.imm > maxLsb)
-    {
-        error(asmstate.loc, "LSB out of range (0-%u) for `extr`", maxLsb);
-        return null;
-    }
-
-    uint sf = dst.is64bit ? 1 : 0;
-    uint encoding = INSTR.extr(sf, src2.reg, cast(uint)lsbOp.imm, src1.reg, dst.reg);
-
-    return emitInstruction(encoding);
-}
-
-/// UBFM instruction: ubfm Xd, Xn, #immr, #imms (unsigned bitfield move)
-private code* parseInstr_ubfm()
-{
-    asmNextToken(); // Skip 'ubfm'
-
-    AArch64Operand dst, src, immrOp, immsOp;
-
-    // Parse destination register
-    if (!parseRegister(dst))
-        return null;
-
-    if (dst.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as destination for `ubfm`");
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after destination register");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse source register
-    if (!parseRegister(src))
-        return null;
-
-    if (src.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as source for `ubfm`");
-        return null;
-    }
-
-    // Validate size match
-    if (dst.is64bit != src.is64bit)
-    {
-        error(asmstate.loc, "register size mismatch in `ubfm` instruction");
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after source register");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse immr
-    if (tokValue() != TOK.pound)
-    {
-        error(asmstate.loc, "immediate value expected for immr in `ubfm`");
-        return null;
-    }
-
-    if (!parseImmediate(immrOp))
-        return null;
-
-    uint maxImm = dst.is64bit ? 63 : 31;
-    if (immrOp.imm < 0 || immrOp.imm > maxImm)
-    {
-        error(asmstate.loc, "immr out of range (0-%u) for `ubfm`", maxImm);
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after immr");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse imms
-    if (tokValue() != TOK.pound)
-    {
-        error(asmstate.loc, "immediate value expected for imms in `ubfm`");
-        return null;
-    }
-
-    if (!parseImmediate(immsOp))
-        return null;
-
-    if (immsOp.imm < 0 || immsOp.imm > maxImm)
-    {
-        error(asmstate.loc, "imms out of range (0-%u) for `ubfm`", maxImm);
-        return null;
-    }
-
-    uint sf = dst.is64bit ? 1 : 0;
-    uint encoding = INSTR.ubfm(sf, sf, cast(uint)immrOp.imm, cast(uint)immsOp.imm, src.reg, dst.reg);
-
-    return emitInstruction(encoding);
-}
-
-/// SBFM instruction: sbfm Xd, Xn, #immr, #imms (signed bitfield move)
-private code* parseInstr_sbfm()
-{
-    asmNextToken(); // Skip 'sbfm'
-
-    AArch64Operand dst, src, immrOp, immsOp;
-
-    // Parse destination register
-    if (!parseRegister(dst))
-        return null;
-
-    if (dst.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as destination for `sbfm`");
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after destination register");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse source register
-    if (!parseRegister(src))
-        return null;
-
-    if (src.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as source for `sbfm`");
-        return null;
-    }
-
-    // Validate size match
-    if (dst.is64bit != src.is64bit)
-    {
-        error(asmstate.loc, "register size mismatch in `sbfm` instruction");
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after source register");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse immr
-    if (tokValue() != TOK.pound)
-    {
-        error(asmstate.loc, "immediate value expected for immr in `sbfm`");
-        return null;
-    }
-
-    if (!parseImmediate(immrOp))
-        return null;
-
-    uint maxImm = dst.is64bit ? 63 : 31;
-    if (immrOp.imm < 0 || immrOp.imm > maxImm)
-    {
-        error(asmstate.loc, "immr out of range (0-%u) for `sbfm`", maxImm);
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after immr");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse imms
-    if (tokValue() != TOK.pound)
-    {
-        error(asmstate.loc, "immediate value expected for imms in `sbfm`");
-        return null;
-    }
-
-    if (!parseImmediate(immsOp))
-        return null;
-
-    if (immsOp.imm < 0 || immsOp.imm > maxImm)
-    {
-        error(asmstate.loc, "imms out of range (0-%u) for `sbfm`", maxImm);
-        return null;
-    }
-
-    uint sf = dst.is64bit ? 1 : 0;
-    uint encoding = INSTR.sbfm(sf, sf, cast(uint)immrOp.imm, cast(uint)immsOp.imm, src.reg, dst.reg);
-
-    return emitInstruction(encoding);
-}
-
-/// BFM instruction: bfm Xd, Xn, #immr, #imms (bitfield move/insert)
-private code* parseInstr_bfm()
-{
-    asmNextToken(); // Skip 'bfm'
-
-    AArch64Operand dst, src, immrOp, immsOp;
-
-    // Parse destination register
-    if (!parseRegister(dst))
-        return null;
-
-    if (dst.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as destination for `bfm`");
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after destination register");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse source register
-    if (!parseRegister(src))
-        return null;
-
-    if (src.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected as source for `bfm`");
-        return null;
-    }
-
-    // Validate size match
-    if (dst.is64bit != src.is64bit)
-    {
-        error(asmstate.loc, "register size mismatch in `bfm` instruction");
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after source register");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse immr
-    if (tokValue() != TOK.pound)
-    {
-        error(asmstate.loc, "immediate value expected for immr in `bfm`");
-        return null;
-    }
-
-    if (!parseImmediate(immrOp))
-        return null;
-
-    uint maxImm = dst.is64bit ? 63 : 31;
-    if (immrOp.imm < 0 || immrOp.imm > maxImm)
-    {
-        error(asmstate.loc, "immr out of range (0-%u) for `bfm`", maxImm);
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after immr");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse imms
-    if (tokValue() != TOK.pound)
-    {
-        error(asmstate.loc, "immediate value expected for imms in `bfm`");
-        return null;
-    }
-
-    if (!parseImmediate(immsOp))
-        return null;
-
-    if (immsOp.imm < 0 || immsOp.imm > maxImm)
-    {
-        error(asmstate.loc, "imms out of range (0-%u) for `bfm`", maxImm);
-        return null;
-    }
-
-    uint sf = dst.is64bit ? 1 : 0;
-    uint encoding = INSTR.bfm(sf, sf, cast(uint)immrOp.imm, cast(uint)immsOp.imm, src.reg, dst.reg);
-
-    return emitInstruction(encoding);
-}
-
-/*******************************
- * Branch Instructions
- */
-
-private bool parseBranchLabel(code* c, const(char)* instrName)
+private code* parseBranchLabel(uint encoding, const(char)* name)
 {
     if (tokValue() != TOK.identifier)
     {
-        error(asmstate.loc, "label expected for `%s`", instrName);
-        return false;
+        error(asmstate.loc, "label expected for `%s`", name);
+        return null;
     }
 
     LabelDsymbol label = asmstate.sc.func.searchLabel(asmstate.tok.ident, asmstate.loc);
     label.iasm = true;
+    code* c = emitInstruction(encoding);
     c.IFL1 = FL.block;
     c.IEV1.Vlsym = cast(_LabelDsymbol*)label;
     asmNextToken();
-    return true;
+    return c;
 }
 
-/// B instruction: b[.cond] label
-private code* parseInstr_b()
+private code* parseInstr_b(const(char)* name)
 {
+    if (tokValue() != TOK.dot)
+        return parseBranchLabel(INSTR.b_uncond(0), name);
+
     asmNextToken();
-
-    uint encoding = INSTR.b_uncond(0);
-    if (tokValue() == TOK.dot)
+    CondCode cond;
+    if (tokValue() != TOK.identifier || !parseConditionCode(asmstate.tok.ident.toString(), cond))
     {
-        asmNextToken();
-        CondCode cond;
-        if (tokValue() != TOK.identifier || !parseConditionCode(asmstate.tok.ident.toString(), cond))
-        {
-            error(asmstate.loc, "condition code expected after `b.`");
-            return null;
-        }
-        asmNextToken();
-        encoding = INSTR.b_cond(0, cond);
+        error(asmstate.loc, "condition code expected after `b.`");
+        return null;
     }
-
-    code* c = emitInstruction(encoding);
-    return parseBranchLabel(c, "b") ? c : null;
+    asmNextToken();
+    return parseBranchLabel(INSTR.b_cond(0, cond), name);
 }
 
-/// CBZ instruction: cbz Xt, label (compare and branch if zero)
-private code* parseInstr_cbz()
+private code* parseCompBranch(uint op)(const(char)* name)
 {
-    asmNextToken(); // Skip 'cbz'
-
-    AArch64Operand reg;
-
-    // Parse register to test
-    if (!parseRegister(reg))
+    AArch64Operand rt;
+    if (!parseRegister(rt) || !parseComma())
         return null;
-
-    if (reg.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected for `cbz`");
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after register");
-        return null;
-    }
-    asmNextToken();
-
-    uint sf = reg.is64bit ? 1 : 0;
-    code* c = emitInstruction(INSTR.compbranch(sf, 0, 0, reg.reg));
-    return parseBranchLabel(c, "cbz") ? c : null;
+    return parseBranchLabel(INSTR.compbranch(rt.is64bit, op, 0, rt.reg), name);
 }
 
-/// CBNZ instruction: cbnz Xt, label (compare and branch if non-zero)
-private code* parseInstr_cbnz()
+private code* parseTestBranch(uint op)(const(char)* name)
 {
-    asmNextToken(); // Skip 'cbnz'
-
-    AArch64Operand reg;
-
-    // Parse register to test
-    if (!parseRegister(reg))
+    AArch64Operand rt;
+    uint bit;
+    if (!parseRegister(rt) || !parseComma() || !parseImmRange(bit, rt.is64bit ? 63 : 31, name) || !parseComma())
         return null;
-
-    if (reg.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected for `cbnz`");
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after register");
-        return null;
-    }
-    asmNextToken();
-
-    uint sf = reg.is64bit ? 1 : 0;
-    code* c = emitInstruction(INSTR.compbranch(sf, 1, 0, reg.reg));
-    return parseBranchLabel(c, "cbnz") ? c : null;
+    return parseBranchLabel(INSTR.testbranch(bit >> 5, op, bit & 0x1F, 0, rt.reg), name);
 }
 
-/// TBZ instruction: tbz Xt, #imm, label (test bit and branch if zero)
-private code* parseInstr_tbz()
+private code* parseInstr_bl(const(char)* name)
 {
-    asmNextToken(); // Skip 'tbz'
-
-    AArch64Operand reg, bitImm;
-
-    // Parse register to test
-    if (!parseRegister(reg))
-        return null;
-
-    if (reg.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected for `tbz`");
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after register");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse bit number immediate
-    if (!parseImmediate(bitImm))
-        return null;
-
-    // Validate bit number range
-    uint maxBit = reg.is64bit ? 63 : 31;
-    if (bitImm.imm < 0 || bitImm.imm > maxBit)
-    {
-        error(asmstate.loc, "bit number %lld out of range for `tbz` (must be 0..%u)",
-              cast(long)bitImm.imm, maxBit);
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after bit number");
-        return null;
-    }
-    asmNextToken();
-
-    uint b5 = (bitImm.imm >> 5) & 1;
-    uint b40 = bitImm.imm & 0x1F;
-    code* c = emitInstruction(INSTR.testbranch(b5, 0, b40, 0, reg.reg));
-    return parseBranchLabel(c, "tbz") ? c : null;
-}
-
-/// TBNZ instruction: tbnz Xt, #imm, label (test bit and branch if non-zero)
-private code* parseInstr_tbnz()
-{
-    asmNextToken(); // Skip 'tbnz'
-
-    AArch64Operand reg, bitImm;
-
-    // Parse register to test
-    if (!parseRegister(reg))
-        return null;
-
-    if (reg.type != AArch64Operand.Type.Register)
-    {
-        error(asmstate.loc, "register expected for `tbnz`");
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after register");
-        return null;
-    }
-    asmNextToken();
-
-    // Parse bit number immediate
-    if (!parseImmediate(bitImm))
-        return null;
-
-    // Validate bit number range
-    uint maxBit = reg.is64bit ? 63 : 31;
-    if (bitImm.imm < 0 || bitImm.imm > maxBit)
-    {
-        error(asmstate.loc, "bit number %lld out of range for `tbnz` (must be 0..%u)",
-              cast(long)bitImm.imm, maxBit);
-        return null;
-    }
-
-    // Expect comma
-    if (tokValue() != TOK.comma)
-    {
-        error(asmstate.loc, "comma expected after bit number");
-        return null;
-    }
-    asmNextToken();
-
-    uint b5 = (bitImm.imm >> 5) & 1;
-    uint b40 = bitImm.imm & 0x1F;
-    code* c = emitInstruction(INSTR.testbranch(b5, 1, b40, 0, reg.reg));
-    return parseBranchLabel(c, "tbnz") ? c : null;
-}
-
-/*******************************
- * Function Call Instructions (Phase 6)
- */
-
-/// BL instruction: bl label (branch with link)
-private code* parseInstr_bl()
-{
-    asmNextToken(); // Skip 'bl'
-
     if (tokValue() != TOK.identifier)
     {
-        error(asmstate.loc, "function name expected for `bl`");
+        error(asmstate.loc, "function name expected for `%s`", name);
         return null;
     }
 
@@ -3415,7 +860,7 @@ private code* parseInstr_bl()
     FuncDeclaration fd = s ? s.isFuncDeclaration() : null;
     if (!fd)
     {
-        error(asmstate.loc, "function expected for `bl`, not `%s`", asmstate.tok.ident.toChars());
+        error(asmstate.loc, "function expected for `%s`, not `%s`", name, asmstate.tok.ident.toChars());
         return null;
     }
     asmNextToken();
@@ -3427,58 +872,18 @@ private code* parseInstr_bl()
     return c;
 }
 
-/// BLR instruction: blr Xn (branch with link to register)
-private code* parseInstr_blr()
+private code* parseBranchReg(alias encode, bool optional = false)(const(char)* name)
 {
-    asmNextToken(); // Skip 'blr'
+    if (optional && tokValue() == TOK.endOfFile)
+        return emitInstruction(encode(Reg.LR));
 
-    AArch64Operand target;
-    if (!parseRegister(target) || !validate64BitRegister(target, "blr"))
+    AArch64Operand rn;
+    if (!parseRegister(rn) || !validate64BitRegister(rn, name))
         return null;
-
-    return emitInstruction(INSTR.blr(target.reg));
+    return emitInstruction(encode(rn.reg));
 }
 
-/// BR instruction: br Xn (branch to register)
-private code* parseInstr_br()
-{
-    asmNextToken(); // Skip 'br'
-
-    AArch64Operand target;
-    if (!parseRegister(target) || !validate64BitRegister(target, "br"))
-        return null;
-
-    return emitInstruction(INSTR.br(target.reg));
-}
-
-/// RET instruction: ret [Xn] (return from subroutine)
-private code* parseInstr_ret()
-{
-    asmNextToken(); // Skip 'ret'
-
-    ubyte returnReg = Reg.LR;  // Default to x30 (link register)
-
-    // Check if a register is specified (optional)
-    if (tokValue() == TOK.identifier)
-    {
-        AArch64Operand target;
-        if (parseRegister(target))
-        {
-            if (!validate64BitRegister(target, "ret"))
-                return null;
-            returnReg = target.reg;
-        }
-        // If parseRegister fails, assume it's not a register and use default
-    }
-
-    return emitInstruction(INSTR.ret(returnReg));
-}
-
-/*******************************
- * Instruction Dispatch Table
- */
-
-alias InstrHandlerFunc = code* function();
+alias InstrHandlerFunc = code* function(const(char)* name);
 
 private struct InstrHandler
 {
@@ -3489,83 +894,64 @@ private struct InstrHandler
 private immutable InstrHandler[] instrTable =
 [
     InstrHandler("mov",   &parseInstr_mov),
-    InstrHandler("ldr",   &parseInstr_ldr),
-    InstrHandler("str",   &parseInstr_str),
-    InstrHandler("ldp",   &parseInstr_ldp),
-    InstrHandler("stp",   &parseInstr_stp),
-    InstrHandler("ldrb",  &parseInstr_ldrb),
-    InstrHandler("strb",  &parseInstr_strb),
-    InstrHandler("ldrh",  &parseInstr_ldrh),
-    InstrHandler("strh",  &parseInstr_strh),
-    InstrHandler("ldrsb", &parseInstr_ldrsb),
-    InstrHandler("ldrsh", &parseInstr_ldrsh),
-    InstrHandler("ldrsw", &parseInstr_ldrsw),
-    InstrHandler("add",   &parseInstr_add),
-    InstrHandler("adds",  &parseInstr_adds),
-    InstrHandler("sub",  &parseInstr_sub),
-    InstrHandler("subs",  &parseInstr_subs),
-    InstrHandler("mul",  &parseInstr_mul),
-    InstrHandler("madd", &parseInstr_madd),
-    InstrHandler("msub", &parseInstr_msub),
-    InstrHandler("sdiv", &parseInstr_sdiv),
-    InstrHandler("udiv", &parseInstr_udiv),
-    InstrHandler("neg",  &parseInstr_neg),
-    InstrHandler("negs", &parseInstr_negs),
-    InstrHandler("adc",  &parseInstr_adc),
-    InstrHandler("adcs",  &parseInstr_adcs),
-    InstrHandler("sbc",  &parseInstr_sbc),
-    InstrHandler("sbcs",  &parseInstr_sbcs),
-    InstrHandler("and",  &parseInstr_and),
-    InstrHandler("orr",  &parseInstr_orr),
-    InstrHandler("eor",  &parseInstr_eor),
-    InstrHandler("mvn",  &parseInstr_mvn),
-    InstrHandler("bic",  &parseInstr_bic),
-    InstrHandler("tst",  &parseInstr_tst),
-    InstrHandler("cmp",  &parseInstr_cmp),
-    InstrHandler("cmn",  &parseInstr_cmn),
-    InstrHandler("lsl",  &parseInstr_lsl),
-    InstrHandler("lsr",  &parseInstr_lsr),
-    InstrHandler("asr",  &parseInstr_asr),
-    InstrHandler("ror",  &parseInstr_ror),
-    InstrHandler("extr", &parseInstr_extr),
-    InstrHandler("ubfm", &parseInstr_ubfm),
-    InstrHandler("sbfm", &parseInstr_sbfm),
-    InstrHandler("bfm",  &parseInstr_bfm),
-    InstrHandler("b",    &parseInstr_b),
-    InstrHandler("cbz",  &parseInstr_cbz),
-    InstrHandler("cbnz", &parseInstr_cbnz),
-    InstrHandler("tbz",  &parseInstr_tbz),
-    InstrHandler("tbnz", &parseInstr_tbnz),
-    InstrHandler("bl",   &parseInstr_bl),
-    InstrHandler("blr",  &parseInstr_blr),
-    InstrHandler("br",   &parseInstr_br),
-    InstrHandler("ret",  &parseInstr_ret),
+    InstrHandler("ldr",   &parseLoadStore!(-1, 1)),
+    InstrHandler("str",   &parseLoadStore!(-1, 0)),
+    InstrHandler("ldp",   &parseLoadStorePair!1),
+    InstrHandler("stp",   &parseLoadStorePair!0),
+    InstrHandler("ldrb",  &parseLoadStore!(LSSize.Byte, 1)),
+    InstrHandler("strb",  &parseLoadStore!(LSSize.Byte, 0)),
+    InstrHandler("ldrh",  &parseLoadStore!(LSSize.HalfWord, 1)),
+    InstrHandler("strh",  &parseLoadStore!(LSSize.HalfWord, 0)),
+    InstrHandler("ldrsb", &parseLoadStore!(LSSize.Byte, -1)),
+    InstrHandler("ldrsh", &parseLoadStore!(LSSize.HalfWord, -1)),
+    InstrHandler("ldrsw", &parseLoadStore!(LSSize.Word, 2)),
+    InstrHandler("add",   &parseAddSub!(0, 0)),
+    InstrHandler("adds",  &parseAddSub!(0, 1)),
+    InstrHandler("sub",   &parseAddSub!(1, 0)),
+    InstrHandler("subs",  &parseAddSub!(1, 1)),
+    InstrHandler("cmp",   &parseAddSub!(1, 1, true)),
+    InstrHandler("cmn",   &parseAddSub!(0, 1, true)),
+    InstrHandler("mul",   &parseMulAdd!(INSTR.madd, 3)),
+    InstrHandler("madd",  &parseMulAdd!(INSTR.madd)),
+    InstrHandler("msub",  &parseMulAdd!(INSTR.msub)),
+    InstrHandler("sdiv",  &parseReg3!((sf, m, n, d) => INSTR.sdiv_udiv(sf, false, m, n, d))),
+    InstrHandler("udiv",  &parseReg3!((sf, m, n, d) => INSTR.sdiv_udiv(sf, true, m, n, d))),
+    InstrHandler("neg",   &parseNeg!0),
+    InstrHandler("negs",  &parseNeg!1),
+    InstrHandler("adc",   &parseReg3!(INSTR.adc)),
+    InstrHandler("adcs",  &parseReg3!(INSTR.adcs)),
+    InstrHandler("sbc",   &parseReg3!(INSTR.sbc)),
+    InstrHandler("sbcs",  &parseReg3!(INSTR.sbcs)),
+    InstrHandler("and",   &parseLogical!(0, 0)),
+    InstrHandler("orr",   &parseLogical!(1, 0)),
+    InstrHandler("eor",   &parseLogical!(2, 0)),
+    InstrHandler("bic",   &parseLogical!(0, 1)),
+    InstrHandler("mvn",   &parseLogical!(1, 1, 1)),
+    InstrHandler("tst",   &parseLogical!(3, 0, 0)),
+    InstrHandler("lsl",   &parseShift!(INSTR.lsl_ubfm, INSTR.lslv)),
+    InstrHandler("lsr",   &parseShift!(INSTR.lsr_ubfm, INSTR.lsrv)),
+    InstrHandler("asr",   &parseShift!(INSTR.asr_sbfm, INSTR.asrv)),
+    InstrHandler("ror",   &parseShift!(INSTR.ror_extr, INSTR.rorv)),
+    InstrHandler("extr",  &parseInstr_extr),
+    InstrHandler("ubfm",  &parseBitfield!(INSTR.ubfm)),
+    InstrHandler("sbfm",  &parseBitfield!(INSTR.sbfm)),
+    InstrHandler("bfm",   &parseBitfield!(INSTR.bfm)),
+    InstrHandler("b",     &parseInstr_b),
+    InstrHandler("cbz",   &parseCompBranch!0),
+    InstrHandler("cbnz",  &parseCompBranch!1),
+    InstrHandler("tbz",   &parseTestBranch!0),
+    InstrHandler("tbnz",  &parseTestBranch!1),
+    InstrHandler("bl",    &parseInstr_bl),
+    InstrHandler("blr",   &parseBranchReg!(INSTR.blr)),
+    InstrHandler("br",    &parseBranchReg!(INSTR.br)),
+    InstrHandler("ret",   &parseBranchReg!(INSTR.ret, true)),
 ];
 
-/// Look up an instruction handler by mnemonic (case-insensitive)
-private InstrHandlerFunc lookupInstruction(const(char)[] mnemonic)
+private immutable(InstrHandler)* lookupInstruction(const(char)[] mnemonic)
 {
-    import core.stdc.ctype : tolower;
-
-    foreach (ref handler; instrTable)
-    {
-        if (handler.mnemonic.length != mnemonic.length)
-            continue;
-
-        bool match = true;
-        foreach (i, c; handler.mnemonic)
-        {
-            if (tolower(c) != tolower(mnemonic[i]))
-            {
-                match = false;
-                break;
-            }
-        }
-
-        if (match)
-            return handler.handler;
-    }
-
+    foreach (ref h; instrTable)
+        if (iequals(h.mnemonic, mnemonic))
+            return &h;
     return null;
 }
 
@@ -3648,16 +1034,15 @@ public Statement inlineAsmAArch64Semantic(InlineAsmStatement s, Scope* sc)
 
     const(char)[] mnemonic = asmstate.tok.ident.toString();
 
-    // Look up instruction handler
-    InstrHandlerFunc handler = lookupInstruction(mnemonic);
+    auto handler = lookupInstruction(mnemonic);
     if (!handler)
     {
         error(asmstate.loc, "unknown AArch64 instruction `%s`", mnemonic.ptr);
         return ErrorStatement.get();
     }
 
-    // Call instruction handler
-    code* c = handler();
+    asmNextToken();
+    code* c = handler.handler(handler.mnemonic.ptr);
 
     // Check for errors
     if (hadErrors() || !c)
