@@ -1604,7 +1604,7 @@ struct INSTR
         // ldrsb Rt,[Xn,#offset]
         uint size = 0;
         uint imm12 = cast(uint)offset & 0xFFF;
-        return ldst_pos(size, 0, 2 + is64, imm12, Rn, Rt);
+        return ldst_pos(size, 0, is64 ? 2 : 3, imm12, Rn, Rt);
     }
 
     /* LDRH(immediate) Unsigned offset
@@ -1626,7 +1626,7 @@ struct INSTR
         // ldrsh Rt,[Xn,#offset]
         uint size = 1;
         uint imm12 = cast(uint)offset & 0xFFF;
-        return ldst_pos(size, 0, 2 + is64, imm12, Rn, Rt);
+        return ldst_pos(size, 0, is64 ? 2 : 3, imm12, Rn, Rt);
     }
 
     /* LDR (immediate) Unsigned offset
@@ -1684,10 +1684,10 @@ struct INSTR
      * https://www.scs.stanford.edu/~zyedidia/arm64/encodingindex.html#ldst_regoff
      * https://www.scs.stanford.edu/~zyedidia/arm64/ldrsb_reg.html
      */
-    static uint ldrsb_reg(uint sz,reg_t Rindex,uint extend,uint S,reg_t Rbase,reg_t Rt)
+    static uint ldrsb_reg(uint is64,reg_t Rindex,uint extend,uint S,reg_t Rbase,reg_t Rt)
     {
         // LDRB Rt,Rbase,Rindex,extend S
-        return ldst_regoff(0, 0, 2 + (sz == 8), Rindex, extend, S, Rbase, Rt);
+        return ldst_regoff(0, 0, is64 ? 2 : 3, Rindex, extend, S, Rbase, Rt);
     }
 
     /* LDRH (register) Extended register
@@ -1704,10 +1704,10 @@ struct INSTR
      * https://www.scs.stanford.edu/~zyedidia/arm64/encodingindex.html#ldst_regoff
      * https://www.scs.stanford.edu/~zyedidia/arm64/ldrsh_reg.html
      */
-    static uint ldrsh_reg(uint sz,reg_t Rindex,uint extend,uint S,reg_t Rbase,reg_t Rt)
+    static uint ldrsh_reg(uint is64,reg_t Rindex,uint extend,uint S,reg_t Rbase,reg_t Rt)
     {
         // LDRSH Rt,Rbase,Rindex,extend S
-        return ldst_regoff(1, 0, 2 + (sz == 8), Rindex, extend, S, Rbase, Rt);
+        return ldst_regoff(1, 0, is64 ? 2 : 3, Rindex, extend, S, Rbase, Rt);
     }
 
     /* LDR (register)

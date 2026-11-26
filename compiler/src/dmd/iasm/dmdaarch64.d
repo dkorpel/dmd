@@ -1124,7 +1124,7 @@ private code* parseSignedLoad(LSSize size)(const(char)* instrName)
         return null;
 
     uint encoding;
-    uint sz = dst.is64bit ? 0 : 1;  // 0 for 64-bit dest, 1 for 32-bit dest
+    uint sz = dst.is64bit;
 
     if (mem.hasIndex)
     {
@@ -5070,13 +5070,13 @@ unittest
 unittest
 {
     // Test that signed loads with W vs X destinations differ
-    uint ldrsb_w = INSTR.ldrsb_imm(1, 0, 1, 0);  // sz=1 for W dest
-    uint ldrsb_x = INSTR.ldrsb_imm(0, 0, 1, 0);  // sz=0 for X dest
+    uint ldrsb_w = INSTR.ldrsb_imm(0, 0, 1, 0);
+    uint ldrsb_x = INSTR.ldrsb_imm(1, 0, 1, 0);
 
     assert(ldrsb_w != ldrsb_x, "W and X destinations should differ");
 
-    uint ldrsh_w = INSTR.ldrsh_imm(1, 0, 1, 0);
-    uint ldrsh_x = INSTR.ldrsh_imm(0, 0, 1, 0);
+    uint ldrsh_w = INSTR.ldrsh_imm(0, 0, 1, 0);
+    uint ldrsh_x = INSTR.ldrsh_imm(1, 0, 1, 0);
 
     assert(ldrsh_w != ldrsh_x, "W and X destinations should differ");
 }
